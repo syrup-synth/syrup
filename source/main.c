@@ -21,6 +21,9 @@
 //   Circle pad: left/right pitch bend, up/down = STICK mod source
 
 #include <3ds.h>
+#include <citro3d.h>
+#include <citro2d.h>
+#include <stddef.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,6 +68,7 @@ static void fft(cpx* a, int n, int inv) {
 	}
 }
 
+static int gGpuOK = 0, gGpuFx = 1;   // graphics-chip visuals (see visFrame)
 static LightLock gMipsLock;   // guards the shared FFT buffers (worker on core 1 vs main core)
 static Thread gWorker = NULL;
 
@@ -160,11 +164,16 @@ static void genBuiltin(Table* tb, int t) {
 				}
 				amp[1] = 0.6f; nh = 96;
 			}
-			for (int n = 0; n < CYC; n++) {
-				float p = n / (float)CYC, s = 0;
-				for (int k = 1; k <= nh; k++) if (amp[k] != 0) s += amp[k] * sinf(TWO_PI * k * p + (t == T_DIGITAL ? k * 1.3f : 0));
-				fr[n] = s;
+			// sum of sines via one inverse FFT (was ~100k sinf calls per frame)
+			static cpx gb[CYC];
+			memset(gb, 0, sizeof(gb));
+			for (int k = 1; k <= nh && k < CYC / 2; k++) if (amp[k] != 0) {
+				float ph = t == T_DIGITAL ? k * 1.3f : 0, a = amp[k] * 0.5f;
+				gb[k].re = a * sinf(ph); gb[k].im = -a * cosf(ph);
+				gb[CYC - k].re = gb[k].re; gb[CYC - k].im = -gb[k].im;
 			}
+			fft(gb, CYC, 1);
+			for (int n = 0; n < CYC; n++) fr[n] = gb[n].re;
 			continue;
 		}
 		for (int n = 0; n < CYC; n++) {
@@ -251,17 +260,42 @@ static void scanTables(void) {
 	closedir(d);
 }
 
+// cache: built-in tables are generated once; the last few SD wavetables stay in memory
+static float* gBuiltCache[T_BUILTIN];
+#define WCACHE 4
+static struct { int idx, nFrames; float* frames; char name[40]; unsigned used; } gWCache[WCACHE];
+static unsigned gWClock = 0;
 static void tableSelect(Table* tb, int idx) {
-	if (idx < T_BUILTIN) genBuiltin(tb, idx);
-	else {
+	if (idx < T_BUILTIN) {
+		if (gBuiltCache[idx]) { memcpy(tb->frames, gBuiltCache[idx], sizeof(float) * CYC * 64); tb->nFrames = 64; snprintf(tb->name, sizeof(tb->name), "%s", BUILTIN_NAMES[idx]); }
+		else {
+			genBuiltin(tb, idx);
+			gBuiltCache[idx] = (float*)malloc(sizeof(float) * CYC * 64);
+			if (gBuiltCache[idx]) memcpy(gBuiltCache[idx], tb->frames, sizeof(float) * CYC * 64);
+		}
+	} else {
+		for (int i = 0; i < WCACHE; i++) if (gWCache[i].frames && gWCache[i].idx == idx) {
+			memcpy(tb->frames, gWCache[i].frames, sizeof(float) * CYC * gWCache[i].nFrames);
+			tb->nFrames = gWCache[i].nFrames; snprintf(tb->name, sizeof(tb->name), "%s", gWCache[i].name); gWCache[i].used = ++gWClock;
+			goto peak;
+		}
 		char path[128]; snprintf(path, sizeof(path), "sdmc:/3ds/syrup/%s", gFiles[idx - T_BUILTIN]);
 		if (loadWav(tb, path)) {
 			char nm[64]; snprintf(nm, sizeof(nm), "%s", gFiles[idx - T_BUILTIN]);
 			nm[strlen(nm) - 4] = 0;
 			for (char* c = nm; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
 			snprintf(tb->name, sizeof(tb->name), "%.22s", nm);
+			int slot = 0; for (int i = 1; i < WCACHE; i++) if (gWCache[i].used < gWCache[slot].used) slot = i;
+			free(gWCache[slot].frames);
+			gWCache[slot].frames = (float*)malloc(sizeof(float) * CYC * tb->nFrames);
+			if (gWCache[slot].frames) {
+				memcpy(gWCache[slot].frames, tb->frames, sizeof(float) * CYC * tb->nFrames);
+				gWCache[slot].idx = idx; gWCache[slot].nFrames = tb->nFrames; gWCache[slot].used = ++gWClock;
+				snprintf(gWCache[slot].name, sizeof(gWCache[slot].name), "%s", tb->name);
+			}
 		} else { genBuiltin(tb, T_BASIC); snprintf(tb->name, sizeof(tb->name), "LOAD FAILED"); }
 	}
+peak:;
 	float pk = 0;
 	for (int i = 0; i < tb->nFrames * CYC; i += 4) { float v = fabsf(tb->frames[i]); if (v > pk) pk = v; }
 	tb->peak = pk > 1e-4f ? pk : 1.0f;
@@ -792,6 +826,144 @@ static void voicesUpdate(float dt, float bend) {
 	if (gCsndOK && any) csndExecCmds(false);
 }
 
+// ---------------------------------------------------------------- scales, arpeggiator, step sequencer
+static const char* NOTE_NAMES[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+#define NSCALES 14
+static const char* SCALE_NAMES[NSCALES] = {"CHROMATIC", "MAJOR", "MINOR", "DORIAN", "PHRYGIAN", "LYDIAN", "MIXOLYDIAN",
+	"HARM MINOR", "MAJ PENTA", "MIN PENTA", "BLUES", "WHOLE TONE", "JAPANESE", "ARABIC"};
+static const s8 SCALES[NSCALES][13] = {
+	{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, -1}, {0, 2, 4, 5, 7, 9, 11, -1}, {0, 2, 3, 5, 7, 8, 10, -1}, {0, 2, 3, 5, 7, 9, 10, -1},
+	{0, 1, 3, 5, 7, 8, 10, -1}, {0, 2, 4, 6, 7, 9, 11, -1}, {0, 2, 4, 5, 7, 9, 10, -1}, {0, 2, 3, 5, 7, 8, 11, -1},
+	{0, 2, 4, 7, 9, -1}, {0, 3, 5, 7, 10, -1}, {0, 3, 5, 6, 7, 10, -1}, {0, 2, 4, 6, 8, 10, -1},
+	{0, 1, 5, 7, 8, -1}, {0, 1, 4, 5, 7, 8, 11, -1}};
+static int gRoot = 0, gScale = 0;
+static int scaleLen(void) { int n = 0; while (n < 12 && SCALES[gScale][n] >= 0) n++; return n; }
+static int scaleNote(int rootNote, int deg) {   // degree -> MIDI note (any degree, negative ok)
+	int n = scaleLen(), o = deg >= 0 ? deg / n : -((-deg + n - 1) / n);
+	return rootNote + 12 * o + SCALES[gScale][deg - o * n];
+}
+static int inScale(int note) { int pc = ((note - gRoot) % 12 + 12) % 12; for (int i = 0; SCALES[gScale][i] >= 0; i++) if (SCALES[gScale][i] == pc) return 1; return 0; }
+static int snapScale(int note) { if (!gScale) return note; for (int d = 0; d < 6; d++) { if (inScale(note - d)) return note - d; if (inScale(note + d)) return note + d; } return note; }
+static int gKeyDeg = 0;   // degree of the last pad pressed in scale mode
+
+// chord tones: chromatic chords, or chords stacked inside the scale when a scale is on
+static int chordNotes(int key, int* out) {
+	int n = 0;
+	if (!gScale || gChord == 3) { for (int i = 0; i < 4; i++) if (CHORDS[gChord][i] >= 0) out[n++] = key + CHORDS[gChord][i]; return n; }
+	static const s8 DEG[5][4] = {{0, -1, -1, -1}, {0, 2, 4, 6}, {0, 2, 4, -1}, {0, -1, -1, -1}, {0, 3, 4, -1}};
+	int rootNote = key - scaleNote(0, gKeyDeg);   // = base + root
+	for (int i = 0; i < 4; i++) if (DEG[gChord][i] >= 0) out[n++] = rootNote + scaleNote(0, gKeyDeg + DEG[gChord][i]);
+	return n;
+}
+
+// ---- tempo + arpeggiator
+#define NARPM 7
+static const char* ARP_NAMES[NARPM] = {"OFF", "UP", "DOWN", "UP+DOWN", "RANDOM", "AS PLAYED", "CHORD"};
+static const char* RATE_NAMES[6] = {"1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32"};
+static const float RATE_BEATS[6] = {1.0f, 0.5f, 1.0f / 3, 0.25f, 1.0f / 6, 0.125f};
+static int gArp = 0, gArpRate = 3, gArpOct = 1, gBPM = 120;
+static float gArpGate = 0.5f;
+static int gArpPool[8], gArpN = 0;   // notes the arp is cycling through (held keys or the current sequencer step)
+static float gArpVel = 0.8f, gArpPh = 0;
+static int gArpIdx = 0, gArpDir = 1, gArpFresh = 0;
+static int gArpOn[8], gArpOnN = 0;
+static int gBeatFlash = 0;   // set on each arp/seq step (UI blink)
+
+static void arpRelease(void) { for (int i = 0; i < gArpOnN; i++) voiceOff(gArpOn[i]); gArpOnN = 0; }
+static void arpSetPool(const int* notes, int n, float vel) {
+	if (n > 8) n = 8;
+	int was = gArpN;
+	for (int i = 0; i < n; i++) gArpPool[i] = notes[i];
+	gArpN = n; gArpVel = vel;
+	if (!was && n) { gArpIdx = 0; gArpDir = 1; gArpFresh = 1; }   // start on the first press
+	if (!n) arpRelease();
+}
+static void arpStep(void) {
+	arpRelease();
+	int s[8], n = gArpN;
+	for (int i = 0; i < n; i++) s[i] = gArpPool[i];
+	if (gArp == 6) {   // CHORD: retrigger the whole chord
+		for (int i = 0; i < n; i++) { voiceOn(s[i], gArpVel); gArpOn[gArpOnN++] = s[i]; }
+		return;
+	}
+	if (gArp != 5) for (int i = 1; i < n; i++) for (int j = i; j > 0 && s[j] < s[j - 1]; j--) { int t = s[j]; s[j] = s[j - 1]; s[j - 1] = t; }
+	int tot = n * gArpOct, k;
+	if (tot <= 0) return;
+	if (gArp == 4) k = rand() % tot;
+	else if (gArp == 3 && tot > 1) {
+		if (gArpIdx >= tot) { gArpIdx = tot - 2; gArpDir = -1; }
+		if (gArpIdx < 0) { gArpIdx = 1; gArpDir = 1; }
+		k = gArpIdx; gArpIdx += gArpDir;
+	} else { k = gArpIdx % tot; gArpIdx = (gArpIdx + 1) % tot; }
+	if (gArp == 2) k = tot - 1 - k;
+	int note = s[k % n] + 12 * (k / n);
+	voiceOn(note, gArpVel); gArpOn[gArpOnN++] = note;
+}
+static void arpTick(float dt) {
+	if (!gArp || !gArpN) { if (gArpOnN) arpRelease(); gArpPh = 0; return; }
+	float stepsPerSec = gBPM / 60.0f / RATE_BEATS[gArpRate];
+	if (gArpFresh) { gArpFresh = 0; gArpPh = 0; arpStep(); gBeatFlash = 1; return; }
+	float before = gArpPh;
+	gArpPh += dt * stepsPerSec;
+	if (before < gArpGate && gArpPh >= gArpGate && gArpGate < 0.99f) arpRelease();
+	if (gArpPh >= 1) { gArpPh -= floorf(gArpPh); arpStep(); gBeatFlash = 1; }
+}
+
+// ---- held notes (keys or sequencer) -> voices or arp
+static int gHeld[8], gHeldN = 0;
+static void playSet(const int* notes, int n, float vel) {
+	for (int i = 0; i < gHeldN; i++) voiceOff(gHeld[i]);
+	gHeldN = 0;
+	if (gArp) { arpSetPool(notes, n, vel); return; }
+	if (gArpN) arpSetPool(NULL, 0, vel);
+	for (int i = 0; i < n && i < 8; i++) { gHeld[gHeldN++] = notes[i]; voiceOn(notes[i], vel); }
+}
+
+// ---- 16-step sequencer (step record, keys transpose while playing)
+typedef struct { s8 n; u8 note[4]; u8 vel; } Step;
+#define NSTEP 16
+static const char* SEQ_NAMES[3] = {"OFF", "PLAY", "REC"};
+static Step gSeq[NSTEP];
+static int gSeqMode = 0, gSeqLen = 8, gSeqPos = -1, gRecPos = 0, gSeqBase = -1, gSeqTr = 0;
+static float gSeqGate = 0.6f, gSwing = 0.0f, gSeqPh = 0;
+static int gSeqPlaying = 0;
+
+static void seqDefault(void) {   // a little pattern so PLAY makes sound straight away
+	static const int pat[8] = {0, -1, 7, 12, -1, 10, 7, 3};
+	memset(gSeq, 0, sizeof(gSeq));
+	for (int i = 0; i < 8; i++) if (pat[i] >= 0) { gSeq[i].n = 1; gSeq[i].note[0] = 48 + pat[i]; gSeq[i].vel = 200; }
+	gSeqLen = 8; gSeqBase = 48;
+}
+static void seqRecord(const int* notes, int n, float vel) {
+	Step* s = &gSeq[gRecPos];
+	s->n = n > 4 ? 4 : n;
+	for (int i = 0; i < s->n; i++) s->note[i] = notes[i] < 0 ? 0 : (notes[i] > 127 ? 127 : notes[i]);
+	s->vel = (u8)(vel * 255);
+	if (gRecPos == 0) gSeqBase = notes[0];
+	gRecPos++;
+	gSeqLen = gRecPos;
+	if (gRecPos >= NSTEP) gRecPos = 0;
+}
+static void seqRest(void) { gSeq[gRecPos].n = 0; gRecPos++; gSeqLen = gRecPos; if (gRecPos >= NSTEP) gRecPos = 0; }
+static void seqClear(void) { memset(gSeq, 0, sizeof(gSeq)); gRecPos = 0; gSeqLen = 1; gSeqBase = -1; gSeqTr = 0; }
+static void seqStop(void) { if (gSeqPlaying) playSet(NULL, 0, 0.8f); gSeqPlaying = 0; gSeqPos = -1; gSeqPh = 0; }
+static void seqFire(void) {
+	Step* s = &gSeq[gSeqPos];
+	int notes[4], n = 0;
+	for (int i = 0; i < s->n; i++) notes[n++] = snapScale(s->note[i] + gSeqTr);
+	playSet(notes, n, s->n ? s->vel / 255.0f : 0.8f);
+	gBeatFlash = 1;
+}
+static void seqTick(float dt) {
+	if (gSeqMode != 1) { if (gSeqPlaying) seqStop(); return; }
+	if (!gSeqPlaying) { gSeqPlaying = 1; gSeqPos = 0; gSeqPh = 0; seqFire(); return; }
+	float len = (gSeqPos & 1) ? 1.0f - gSwing : 1.0f + gSwing;   // in 16ths
+	float before = gSeqPh;
+	gSeqPh += dt * gBPM / 60.0f * 4.0f;
+	if (!gArp && before < len * gSeqGate && gSeqPh >= len * gSeqGate) playSet(NULL, 0, 0.8f);
+	if (gSeqPh >= len) { gSeqPh -= len; gSeqPos = (gSeqPos + 1) % (gSeqLen < 1 ? 1 : gSeqLen); seqFire(); }
+}
+
 // ---------------------------------------------------------------- presets (organised by style, like Serum's browser)
 typedef struct {
 	int on, table, warp, oct, semi, uni;
@@ -808,8 +980,12 @@ typedef struct {
 	ModSlot mod[4];
 	int voiceMode, chord, fx, echoT, drive, bendRange;
 	float glide, chorus, revSize, revDamp, fxMix, driveAmt, master;
+	int arp, arpRate, arpOct, bpm;   // bpm 0 = keep the current tempo
+	float arpGate;
 } SPatch;
-#define PATCH_MAGIC 0x53595231   // "SYR1"
+#define PATCH_MAGIC 0x53595232   // "SYR2"
+#define PATCH_MAGIC1 0x53595231  // v1 (no arp fields)
+#define PATCH_V1_SIZE offsetof(SPatch, arp)
 
 static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no effects
 	memset(p, 0, sizeof(*p));
@@ -831,6 +1007,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->mod[3] = (ModSlot){SRC_OFF, DST_PITCH, 0.0f};
 	p->bendRange = 2; p->chorus = 0.2f; p->revSize = 0.5f; p->revDamp = 0.5f; p->fxMix = 0.5f;
 	p->driveAmt = 0.4f; p->master = 0.8f; p->echoT = 1;
+	p->arp = 0; p->arpRate = 3; p->arpOct = 1; p->arpGate = 0.5f; p->bpm = 0;
 }
 
 #define OA p->osc[0]
@@ -1012,9 +1189,22 @@ static void pr_rain(SPatch* p) { OA.pos = SINE; OA.level = 0.5f; p->noiseType = 
 	ENV1(0.002f, 0, 0.5f, 0.3f, 0.8f); p->fx = 3; p->fxMix = 0.5f; }
 static void pr_lullaby(SPatch* p) { pr_marimba(p); p->revSize = 1.0f; p->fxMix = 0.6f; p->chorus = 0.3f; }
 
+// ---- ARP (patches that drive the arpeggiator; the chord sets which notes one key gives it)
+#define ARPSET(m, r, o, g, b) do { p->arp = m; p->arpRate = r; p->arpOct = o; p->arpGate = g; p->bpm = b; } while (0)
+static void pa_trance(SPatch* p) { pr_supersaw(p); p->chord = 1; p->master = 0.65f; ARPSET(6, 3, 1, 0.35f, 138); p->fx = 3; p->fxMix = 0.35f; }
+static void pa_berlin(SPatch* p) { OA.uni = 2; OA.detune = 8; p->cutoff = 0.25f; p->res = 0.45f; ENV2(0, 0, 0.15f, 0, 0.1f); MOD(0, SRC_ENV2, DST_CUTOFF, 0.55f);
+	LFO(0, 0, 0, 0.1f); MOD(2, SRC_LFO1, DST_CUTOFF, 0.25f); ENV1(0.002f, 0, 0.25f, 0.3f, 0.12f); p->chord = 1; ARPSET(1, 3, 2, 0.6f, 120); p->fx = 1; p->echoT = 1; p->fxMix = 0.3f; }
+static void pa_crystal(SPatch* p) { pr_bell(p); p->chord = 2; ARPSET(3, 4, 3, 0.5f, 100); p->master = 0.75f; }
+static void pa_glassrain(SPatch* p) { pr_glass(p); p->master = 1.7f; ENV1(0.01f, 0, 0.5f, 0.3f, 0.6f); p->chord = 4; ARPSET(4, 3, 2, 0.4f, 110); }
+static void pa_chip(SPatch* p) { pr_8bitlead(p); p->voiceMode = 0; p->chord = 2; ARPSET(1, 5, 2, 0.8f, 140); p->master = 0.7f; }
+static void pa_synthwave(SPatch* p) { pr_80spoly(p); p->chord = 1; ARPSET(1, 1, 2, 0.6f, 100); p->revSize = 0.8f; p->fxMix = 0.4f; }
+static void pa_dubecho(SPatch* p) { pr_syruppluck(p); p->chord = 1; ARPSET(5, 1, 1, 0.4f, 90); p->fx = 1; p->echoT = 1; p->fxMix = 0.6f; }
+static void pa_ripple(SPatch* p) { pr_syruppad(p); ENV1(0.05f, 0, 0.8f, 0.6f, 1.0f); p->chord = 4; ARPSET(4, 3, 3, 1.0f, 96); p->master = 0.7f; }
+static void pa_bassoct(SPatch* p) { pr_pluckbass(p); p->chord = 0; ARPSET(1, 3, 2, 0.5f, 124); }
+static void pa_marimba(SPatch* p) { pr_marimba(p); p->chord = 2; ARPSET(3, 3, 2, 0.6f, 112); }
 #define MAXPRE 12
-#define NSTYLES 10   // last style = USER
-static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "PLUCK", "KEYS", "CHORDS", "RETRO", "AMBIENT", "FX", "USER"};
+#define NSTYLES 11   // last style = USER
+static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "PLUCK", "KEYS", "CHORDS", "ARP", "RETRO", "AMBIENT", "FX", "USER"};
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB WOBBLE", pr_subwob}, {"REESE", pr_reese}, {"FM GROWL", pr_fmgrowl}, {"808 SUB", pr_808}, {"ACID", pr_acid},
 	 {"WOBBLE 1/8", pr_wob8}, {"DIGI BASS", pr_digibass}, {"SINE BASS", pr_sinebass}, {"PLUCK BASS", pr_pluckbass}, {"HOOVER", pr_hoover}},
@@ -1028,6 +1218,8 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"DARK RHODES", pr_rhodesdark}, {"WURLI", pr_wurli}, {"CHURCH ORGAN", pr_church}, {"HARPSICHORD", pr_harpsi}, {"LOFI PIANO", pr_lofipiano}},
 	{{"HOUSE ORGAN", pr_houseorgan}, {"NEO SOUL", pr_neosoul}, {"POWER", pr_power}, {"SUS SHIMMER", pr_shimmer}, {"DUB CHORDS", pr_dubchord},
 	 {"MIN7 PAD", pr_min7pad}, {"MAJ7 KEYS", pr_maj7keys}, {"POWER PLUCK", pr_powerpluck}, {"SUS ORGAN", pr_susorgan}, {"TECHNO STAB", pr_technostab}},
+	{{"TRANCE GATE", pa_trance}, {"BERLIN SEQ", pa_berlin}, {"CRYSTAL ARP", pa_crystal}, {"GLASS RAIN", pa_glassrain}, {"CHIP ARP", pa_chip},
+	 {"SYNTHWAVE ARP", pa_synthwave}, {"DUB ECHO ARP", pa_dubecho}, {"PAD RIPPLE", pa_ripple}, {"BASS OCTAVES", pa_bassoct}, {"MARIMBA RUN", pa_marimba}},
 	{{"8-BIT LEAD", pr_8bitlead}, {"8-BIT BASS", pr_8bitbass}, {"VGM BRASS", pr_vgmbrass}, {"ARCADE", pr_arcade},
 	 {"80S POLY", pr_80spoly}, {"SYNTHWAVE", pr_synthwave}, {"CHIP BELL", pr_chipbell}, {"GB WAVE", pr_gbwave}},
 	{{"OCEAN", pr_ocean}, {"AURORA", pr_aurora}, {"DUST", pr_dust}, {"SLOW BLOOM", pr_bloom},
@@ -1046,8 +1238,18 @@ static void userLoad(void) {
 	for (int i = 0; i < NUSER; i++) { patchInit(&gUser[i]); snprintf(gUser[i].name, sizeof(gUser[i].name), "EMPTY %d", i + 1); gUser[i].magic = 0; }
 	FILE* f = fopen(USER_PATH, "rb");
 	if (!f) return;
-	SPatch tmp[NUSER];
-	if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
+	fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);
+	if (len == (long)(sizeof(SPatch) * NUSER)) {
+		SPatch tmp[NUSER];
+		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER)) {   // older save file: keep the patches, arp off
+		for (int i = 0; i < NUSER; i++) {
+			SPatch t; patchInit(&t);
+			if (fread(&t, PATCH_V1_SIZE, 1, f) == 1 && t.magic == PATCH_MAGIC1) {
+				t.magic = PATCH_MAGIC; t.arp = 0; t.arpRate = 3; t.arpOct = 1; t.arpGate = 0.5f; t.bpm = 0; gUser[i] = t;
+			}
+		}
+	}
 	fclose(f);
 }
 static int userSave(void) {
@@ -1074,6 +1276,7 @@ static void patchCapture(SPatch* p) {
 	for (int i = 0; i < 4; i++) p->mod[i] = gMod[i];
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
 	p->glide = gGlide; p->chorus = gChorus; p->revSize = gRevSize; p->revDamp = gRevDamp; p->fxMix = gFxMix; p->driveAmt = gDriveAmt; p->master = gMaster;
+	p->arp = gArp; p->arpRate = gArpRate; p->arpOct = gArpOct; p->arpGate = gArpGate; p->bpm = gBPM;
 }
 
 static int gForceBuild = 3;
@@ -1095,6 +1298,8 @@ static void patchApply(const SPatch* p) {
 	for (int i = 0; i < 4; i++) gMod[i] = p->mod[i];
 	gVoiceMode = p->voiceMode; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
+	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate; if (p->bpm >= 40) gBPM = p->bpm;
+	gArpN = 0; gArpOnN = 0; gHeldN = 0;
 	if (subChg) buildSub();
 	LightLock_Unlock(&gMipsLock);
 	if (noiseChg) buildNoise();
@@ -1115,144 +1320,6 @@ static void presetLoad(int style, int idx) {
 	patchApply(&p);
 }
 static const char* presetName(int style, int idx) { return style == NSTYLES - 1 ? gUser[idx].name : PRESETS[style][idx].name; }
-
-// ---------------------------------------------------------------- scales, arpeggiator, step sequencer
-static const char* NOTE_NAMES[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-#define NSCALES 14
-static const char* SCALE_NAMES[NSCALES] = {"CHROMATIC", "MAJOR", "MINOR", "DORIAN", "PHRYGIAN", "LYDIAN", "MIXOLYDIAN",
-	"HARM MINOR", "MAJ PENTA", "MIN PENTA", "BLUES", "WHOLE TONE", "JAPANESE", "ARABIC"};
-static const s8 SCALES[NSCALES][13] = {
-	{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, -1}, {0, 2, 4, 5, 7, 9, 11, -1}, {0, 2, 3, 5, 7, 8, 10, -1}, {0, 2, 3, 5, 7, 9, 10, -1},
-	{0, 1, 3, 5, 7, 8, 10, -1}, {0, 2, 4, 6, 7, 9, 11, -1}, {0, 2, 4, 5, 7, 9, 10, -1}, {0, 2, 3, 5, 7, 8, 11, -1},
-	{0, 2, 4, 7, 9, -1}, {0, 3, 5, 7, 10, -1}, {0, 3, 5, 6, 7, 10, -1}, {0, 2, 4, 6, 8, 10, -1},
-	{0, 1, 5, 7, 8, -1}, {0, 1, 4, 5, 7, 8, 11, -1}};
-static int gRoot = 0, gScale = 0;
-static int scaleLen(void) { int n = 0; while (n < 12 && SCALES[gScale][n] >= 0) n++; return n; }
-static int scaleNote(int rootNote, int deg) {   // degree -> MIDI note (any degree, negative ok)
-	int n = scaleLen(), o = deg >= 0 ? deg / n : -((-deg + n - 1) / n);
-	return rootNote + 12 * o + SCALES[gScale][deg - o * n];
-}
-static int inScale(int note) { int pc = ((note - gRoot) % 12 + 12) % 12; for (int i = 0; SCALES[gScale][i] >= 0; i++) if (SCALES[gScale][i] == pc) return 1; return 0; }
-static int snapScale(int note) { if (!gScale) return note; for (int d = 0; d < 6; d++) { if (inScale(note - d)) return note - d; if (inScale(note + d)) return note + d; } return note; }
-static int gKeyDeg = 0;   // degree of the last pad pressed in scale mode
-
-// chord tones: chromatic chords, or chords stacked inside the scale when a scale is on
-static int chordNotes(int key, int* out) {
-	int n = 0;
-	if (!gScale || gChord == 3) { for (int i = 0; i < 4; i++) if (CHORDS[gChord][i] >= 0) out[n++] = key + CHORDS[gChord][i]; return n; }
-	static const s8 DEG[5][4] = {{0, -1, -1, -1}, {0, 2, 4, 6}, {0, 2, 4, -1}, {0, -1, -1, -1}, {0, 3, 4, -1}};
-	int rootNote = key - scaleNote(0, gKeyDeg);   // = base + root
-	for (int i = 0; i < 4; i++) if (DEG[gChord][i] >= 0) out[n++] = rootNote + scaleNote(0, gKeyDeg + DEG[gChord][i]);
-	return n;
-}
-
-// ---- tempo + arpeggiator
-#define NARPM 7
-static const char* ARP_NAMES[NARPM] = {"OFF", "UP", "DOWN", "UP+DOWN", "RANDOM", "AS PLAYED", "CHORD"};
-static const char* RATE_NAMES[6] = {"1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32"};
-static const float RATE_BEATS[6] = {1.0f, 0.5f, 1.0f / 3, 0.25f, 1.0f / 6, 0.125f};
-static int gArp = 0, gArpRate = 3, gArpOct = 1, gBPM = 120;
-static float gArpGate = 0.5f;
-static int gArpPool[8], gArpN = 0;   // notes the arp is cycling through (held keys or the current sequencer step)
-static float gArpVel = 0.8f, gArpPh = 0;
-static int gArpIdx = 0, gArpDir = 1, gArpFresh = 0;
-static int gArpOn[8], gArpOnN = 0;
-static int gBeatFlash = 0;   // set on each arp/seq step (UI blink)
-
-static void arpRelease(void) { for (int i = 0; i < gArpOnN; i++) voiceOff(gArpOn[i]); gArpOnN = 0; }
-static void arpSetPool(const int* notes, int n, float vel) {
-	if (n > 8) n = 8;
-	int was = gArpN;
-	for (int i = 0; i < n; i++) gArpPool[i] = notes[i];
-	gArpN = n; gArpVel = vel;
-	if (!was && n) { gArpIdx = 0; gArpDir = 1; gArpFresh = 1; }   // start on the first press
-	if (!n) arpRelease();
-}
-static void arpStep(void) {
-	arpRelease();
-	int s[8], n = gArpN;
-	for (int i = 0; i < n; i++) s[i] = gArpPool[i];
-	if (gArp == 6) {   // CHORD: retrigger the whole chord
-		for (int i = 0; i < n; i++) { voiceOn(s[i], gArpVel); gArpOn[gArpOnN++] = s[i]; }
-		return;
-	}
-	if (gArp != 5) for (int i = 1; i < n; i++) for (int j = i; j > 0 && s[j] < s[j - 1]; j--) { int t = s[j]; s[j] = s[j - 1]; s[j - 1] = t; }
-	int tot = n * gArpOct, k;
-	if (tot <= 0) return;
-	if (gArp == 4) k = rand() % tot;
-	else if (gArp == 3 && tot > 1) {
-		if (gArpIdx >= tot) { gArpIdx = tot - 2; gArpDir = -1; }
-		if (gArpIdx < 0) { gArpIdx = 1; gArpDir = 1; }
-		k = gArpIdx; gArpIdx += gArpDir;
-	} else { k = gArpIdx % tot; gArpIdx = (gArpIdx + 1) % tot; }
-	if (gArp == 2) k = tot - 1 - k;
-	int note = s[k % n] + 12 * (k / n);
-	voiceOn(note, gArpVel); gArpOn[gArpOnN++] = note;
-}
-static void arpTick(float dt) {
-	if (!gArp || !gArpN) { if (gArpOnN) arpRelease(); gArpPh = 0; return; }
-	float stepsPerSec = gBPM / 60.0f / RATE_BEATS[gArpRate];
-	if (gArpFresh) { gArpFresh = 0; gArpPh = 0; arpStep(); gBeatFlash = 1; return; }
-	float before = gArpPh;
-	gArpPh += dt * stepsPerSec;
-	if (before < gArpGate && gArpPh >= gArpGate && gArpGate < 0.99f) arpRelease();
-	if (gArpPh >= 1) { gArpPh -= floorf(gArpPh); arpStep(); gBeatFlash = 1; }
-}
-
-// ---- held notes (keys or sequencer) -> voices or arp
-static int gHeld[8], gHeldN = 0;
-static void playSet(const int* notes, int n, float vel) {
-	for (int i = 0; i < gHeldN; i++) voiceOff(gHeld[i]);
-	gHeldN = 0;
-	if (gArp) { arpSetPool(notes, n, vel); return; }
-	if (gArpN) arpSetPool(NULL, 0, vel);
-	for (int i = 0; i < n && i < 8; i++) { gHeld[gHeldN++] = notes[i]; voiceOn(notes[i], vel); }
-}
-
-// ---- 16-step sequencer (step record, keys transpose while playing)
-typedef struct { s8 n; u8 note[4]; u8 vel; } Step;
-#define NSTEP 16
-static const char* SEQ_NAMES[3] = {"OFF", "PLAY", "REC"};
-static Step gSeq[NSTEP];
-static int gSeqMode = 0, gSeqLen = 8, gSeqPos = -1, gRecPos = 0, gSeqBase = -1, gSeqTr = 0;
-static float gSeqGate = 0.6f, gSwing = 0.0f, gSeqPh = 0;
-static int gSeqPlaying = 0;
-
-static void seqDefault(void) {   // a little pattern so PLAY makes sound straight away
-	static const int pat[8] = {0, -1, 7, 12, -1, 10, 7, 3};
-	memset(gSeq, 0, sizeof(gSeq));
-	for (int i = 0; i < 8; i++) if (pat[i] >= 0) { gSeq[i].n = 1; gSeq[i].note[0] = 48 + pat[i]; gSeq[i].vel = 200; }
-	gSeqLen = 8; gSeqBase = 48;
-}
-static void seqRecord(const int* notes, int n, float vel) {
-	Step* s = &gSeq[gRecPos];
-	s->n = n > 4 ? 4 : n;
-	for (int i = 0; i < s->n; i++) s->note[i] = notes[i] < 0 ? 0 : (notes[i] > 127 ? 127 : notes[i]);
-	s->vel = (u8)(vel * 255);
-	if (gRecPos == 0) gSeqBase = notes[0];
-	gRecPos++;
-	gSeqLen = gRecPos;
-	if (gRecPos >= NSTEP) gRecPos = 0;
-}
-static void seqRest(void) { gSeq[gRecPos].n = 0; gRecPos++; gSeqLen = gRecPos; if (gRecPos >= NSTEP) gRecPos = 0; }
-static void seqClear(void) { memset(gSeq, 0, sizeof(gSeq)); gRecPos = 0; gSeqLen = 1; gSeqBase = -1; gSeqTr = 0; }
-static void seqStop(void) { if (gSeqPlaying) playSet(NULL, 0, 0.8f); gSeqPlaying = 0; gSeqPos = -1; gSeqPh = 0; }
-static void seqFire(void) {
-	Step* s = &gSeq[gSeqPos];
-	int notes[4], n = 0;
-	for (int i = 0; i < s->n; i++) notes[n++] = snapScale(s->note[i] + gSeqTr);
-	playSet(notes, n, s->n ? s->vel / 255.0f : 0.8f);
-	gBeatFlash = 1;
-}
-static void seqTick(float dt) {
-	if (gSeqMode != 1) { if (gSeqPlaying) seqStop(); return; }
-	if (!gSeqPlaying) { gSeqPlaying = 1; gSeqPos = 0; gSeqPh = 0; seqFire(); return; }
-	float len = (gSeqPos & 1) ? 1.0f - gSwing : 1.0f + gSwing;   // in 16ths
-	float before = gSeqPh;
-	gSeqPh += dt * gBPM / 60.0f * 4.0f;
-	if (!gArp && before < len * gSeqGate && gSeqPh >= len * gSeqGate) playSet(NULL, 0, 0.8f);
-	if (gSeqPh >= len) { gSeqPh -= len; gSeqPos = (gSeqPos + 1) % (gSeqLen < 1 ? 1 : gSeqLen); seqFire(); }
-}
 
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
@@ -1317,7 +1384,7 @@ static const char* BEND_NAMES[13] = {"0", "1", "2", "3", "4", "5", "6", "7", "8"
 static Param P_VOICE[] = {
 	PE("MODE", &gVoiceMode, 3, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0),
 	PE("BEND RANGE", &gBendRange, 13, BEND_NAMES, 0), PE("CHORD", &gChord, 5, CHORD_NAMES, 0),
-	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("FX", &gFx, 4, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
+	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("GPU VISUALS", &gGpuFx, 2, ONOFF, 0), PE("FX", &gFx, 4, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
 	PF("REV SIZE", &gRevSize, 0, 1, 0.02f, "%", 0), PF("REV DAMP", &gRevDamp, 0, 1, 0.02f, "%", 0), PF("FX MIX", &gFxMix, 0, 1, 0.02f, "%", 0),
 	PE("DRIVE", &gDrive, 5, DRIVE_TYPES, D_A | D_B), PF("DRIVE AMT", &gDriveAmt, 0, 1, 0.02f, "%", D_A | D_B),
 	PF("MASTER", &gMaster, 0, 1.5f, 0.02f, "%", 0),
@@ -1437,6 +1504,7 @@ static void drawStack(const Osc* o, float pos, int ox, int oy, int W, int H) {
 }
 
 static float gPosEff[2];
+static int visActive(int page);
 static void drawTop(int page, int sel, int oct, int latch) {
 	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
 	rect(0, 0, 400, 240, BG);
@@ -1486,13 +1554,17 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		drawWave(gOsc[0].mips.lev[2], LEVN[2], 8, 184, 188, 42, gOsc[0].on);
 	} else if (page == 1 || page == 2) {
 		Osc* o = &gOsc[focus];
-		drawWave(o->mips.lev[2], LEVN[2], 4, 16, 196, 100, o->on);
-		text(8, 19, o->on ? (focus ? "OSC B" : "OSC A") : (focus ? "OSC B OFF" : "OSC A OFF"), 1, DIM);
-		drawStack(o, gPosEff[focus], 4, 218, 150, 20);
+		if (!visActive(page)) {
+			drawWave(o->mips.lev[2], LEVN[2], 4, 16, 196, 100, o->on);
+			text(8, 19, o->on ? (focus ? "OSC B" : "OSC A") : (focus ? "OSC B OFF" : "OSC A OFF"), 1, DIM);
+			drawStack(o, gPosEff[focus], 4, 218, 150, 20);
+		}
 		text(4, 228, o->tb.name, 1, DIM);
 	} else {
-		drawWave(gOsc[0].mips.lev[2], LEVN[2], 4, 16, 196, 66, gOsc[0].on); text(8, 19, "A", 1, DIM);
-		drawWave(gOsc[1].mips.lev[2], LEVN[2], 4, 86, 196, 66, gOsc[1].on); text(8, 89, "B", 1, DIM);
+		if (!visActive(page)) {
+			drawWave(gOsc[0].mips.lev[2], LEVN[2], 4, 16, 196, 66, gOsc[0].on); text(8, 19, "A", 1, DIM);
+			drawWave(gOsc[1].mips.lev[2], LEVN[2], 4, 86, 196, 66, gOsc[1].on); text(8, 89, "B", 1, DIM);
+		}
 		char s[40];
 		snprintf(s, sizeof(s), "%s  OCT %+d%s", VOICE_MODES[gVoiceMode], oct, latch ? "  LATCH" : "");
 		text(6, 166, s, 1, TXT);
@@ -1616,6 +1688,193 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	char c[8]; snprintf(c, sizeof(c), "C%d", base / 12 - 1); text(3, 228, c, 1, 120, 90, 50);
 }
 
+// ---------------------------------------------------------------- graphics chip (PICA200) visuals
+// The UI is still drawn by the CPU. The left panel of the top screen is rendered by the GPU through
+// citro2d into an off-screen target at 2x size; the display-transfer engine scales it down (free
+// anti-aliasing) into a linear buffer laid out like the framebuffer, which is then copied into the
+// panel. Glow and trails use additive blending, done by the GPU.
+#define VIS_W 200      // screen columns covered (x VIS_X .. VIS_X+VIS_W), multiple of 8
+#define VIS_X 4
+#define VIS_SS 2
+static C3D_RenderTarget* gVisTgt = NULL;
+static u8* gVisLin = NULL;
+static float gVisT = 0, gVisEnv = 0;
+#define TRAILS 10
+#define TPTS 64
+static float gTrail[2][TRAILS][TPTS], gTrailPos[2][TRAILS];
+static int gTrailHead[2], gTrailN[2];
+static float gTrailLastPos[2] = {-1, -1}, gTrailLastSum[2];
+
+static void gpuInit(void) {
+	if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) return;
+	if (!C2D_Init(8192)) { C3D_Fini(); return; }
+	C2D_Prepare();
+	gVisTgt = C3D_RenderTargetCreate(240 * VIS_SS, VIS_W * VIS_SS, GPU_RB_RGBA8, GPU_RB_DEPTH16);
+	gVisLin = (u8*)linearAlloc(240 * VIS_W * 3);
+	gGpuOK = gVisTgt && gVisLin;
+}
+static void gpuExit(void) {
+	if (gVisTgt) C3D_RenderTargetDelete(gVisTgt);
+	if (gVisLin) linearFree(gVisLin);
+	if (gGpuOK || gVisTgt) { C2D_Fini(); C3D_Fini(); }
+}
+
+static inline u32 rgba(float r, float g, float b, float a) {
+	if (r > 1) r = 1;
+	if (g > 1) g = 1;
+	if (b > 1) b = 1;
+	if (a > 1) a = 1;
+	if (a < 0) a = 0;
+	return C2D_Color32f(r, g, b, a);
+}
+static void vLine(float x0, float y0, float x1, float y1, u32 c, float th) { C2D_DrawLine(x0 * VIS_SS, y0 * VIS_SS, c, x1 * VIS_SS, y1 * VIS_SS, c, th * VIS_SS, 0.5f); }
+static void vTri(float x0, float y0, float x1, float y1, float x2, float y2, u32 c) { C2D_DrawTriangle(x0 * VIS_SS, y0 * VIS_SS, c, x1 * VIS_SS, y1 * VIS_SS, c, x2 * VIS_SS, y2 * VIS_SS, c, 0.5f); }
+static void vRect(float x, float y, float w, float h, u32 c) { C2D_DrawRectSolid(x * VIS_SS, y * VIS_SS, 0.5f, w * VIS_SS, h * VIS_SS, c); }
+static void blendAdd(int on) {
+	C2D_Flush();
+	if (on) C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE, GPU_SRC_ALPHA, GPU_ONE);
+	else C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+}
+// amber -> magenta -> cyan as the filter opens / the envelope rises
+static void hue(float t, float* r, float* g, float* b) {
+	if (t < 0) t = 0;
+	if (t > 1) t = 1;
+	if (t < 0.5f) { float u = t * 2; *r = 1.0f; *g = 0.62f * (1 - u) + 0.3f * u; *b = 0.15f * (1 - u) + 0.8f * u; }
+	else { float u = (t - 0.5f) * 2; *r = 1.0f * (1 - u) + 0.3f * u; *g = 0.3f * (1 - u) + 0.95f * u; *b = 0.8f * (1 - u) + 1.0f * u; }
+}
+static void glowLine(const float* xs, const float* ys, int n, float r, float g, float b, float k) {
+	blendAdd(1);
+	static const float TH[3] = {7.0f, 3.5f, 1.4f}, AL[3] = {0.12f, 0.28f, 1.0f};
+	for (int p = 0; p < 3; p++) {
+		u32 c = rgba(r * (p == 2 ? 1 : 0.9f) + (p == 2 ? 0.25f : 0), g + (p == 2 ? 0.2f : 0), b + (p == 2 ? 0.2f : 0), AL[p] * k);
+		for (int i = 0; i + 1 < n; i++) vLine(xs[i], ys[i], xs[i + 1], ys[i + 1], c, TH[p]);
+	}
+	blendAdd(0);
+}
+static void sampleCycle(const float* cyc, float* out, float* peakOut) {
+	float pk = 0;
+	for (int i = 0; i < CYC; i += 8) { float v = fabsf(cyc[i]); if (v > pk) pk = v; }
+	if (pk < 1e-4f) pk = 1;
+	for (int i = 0; i < TPTS; i++) out[i] = cyc[i * (CYC - 1) / (TPTS - 1)] / pk;
+	if (peakOut) *peakOut = pk;
+}
+static void trailPush(int o, float pos) {
+	float s[TPTS]; sampleCycle(gOsc[o].cyc, s, NULL);
+	float sum = 0; for (int i = 0; i < TPTS; i += 4) sum += s[i];
+	if (fabsf(pos - gTrailLastPos[o]) < 0.004f && fabsf(sum - gTrailLastSum[o]) < 0.05f) return;
+	gTrailLastPos[o] = pos; gTrailLastSum[o] = sum;
+	gTrailHead[o] = (gTrailHead[o] + 1) % TRAILS;
+	memcpy(gTrail[o][gTrailHead[o]], s, sizeof(s)); gTrailPos[o][gTrailHead[o]] = pos;
+	if (gTrailN[o] < TRAILS) gTrailN[o]++;
+}
+
+// 3D wavetable: slices stacked in depth, drawn back to front as solid ribbons, slowly swaying
+typedef struct { float yaw, cx, cy, cs, sn; } Proj;
+static void proj(const Proj* P, float xn, float v, float z, float* sx, float* sy) {
+	float X = xn * 74, Z = (z - 0.5f) * 120, Y = v * 26;
+	float cs = P->cs, sn = P->sn;
+	float xr = X * cs - Z * sn, zr = X * sn + Z * cs;
+	float p = 1.0f / (1.0f + zr / 420.0f);
+	*sx = P->cx + xr * p; *sy = P->cy - Y * p - zr * 0.52f * p;
+}
+static void visWavetable(int o) {
+	Osc* os = &gOsc[o]; Table* tb = &os->tb;
+	float cr, cg, cb; hue(gCutoff * 0.7f + gVisEnv * 0.3f, &cr, &cg, &cb);
+	Proj P = {0.55f + 0.22f * sinf(gVisT * 0.45f), 98, 128};
+	P.cs = cosf(P.yaw); P.sn = sinf(P.yaw);
+	int nf = tb->nFrames < 1 ? 1 : tb->nFrames, S = nf < 28 ? nf : 28;
+	float pk = tb->peak > 1e-4f ? tb->peak : 1;
+	float xs[48], ys[48], bx[48], by[48];
+	for (int s = S - 1; s >= 0; s--) {
+		float z = S > 1 ? s / (float)(S - 1) : 0;
+		int f = S > 1 ? (int)(z * (nf - 1) + 0.5f) : 0;
+		const float* fr = tb->frames + f * CYC;
+		for (int i = 0; i < 48; i++) {
+			float xn = i / 47.0f * 2 - 1, v = os->on ? fr[i * (CYC - 1) / 47] / pk : 0;
+			proj(&P, xn, v, z, &xs[i], &ys[i]);
+			proj(&P, xn, -1.15f, z, &bx[i], &by[i]);
+		}
+		float near = 1.0f - fabsf(z - gPosEff[o]) * 6; if (near < 0) near = 0;
+		float depth = 0.35f + 0.65f * (1 - z);
+		u32 fill = rgba(0.07f + 0.05f * near, 0.045f + 0.03f * near, 0.02f, 0.96f);
+		for (int i = 0; i + 1 < 48; i++) { vTri(xs[i], ys[i], xs[i + 1], ys[i + 1], bx[i], by[i], fill); vTri(xs[i + 1], ys[i + 1], bx[i + 1], by[i + 1], bx[i], by[i], fill); }
+		u32 lc = rgba(cr * depth * (0.45f + 0.55f * near), cg * depth * (0.45f + 0.55f * near), cb * depth * (0.45f + 0.55f * near), 1);
+		for (int i = 0; i + 1 < 48; i++) vLine(xs[i], ys[i], xs[i + 1], ys[i + 1], lc, 0.9f + near);
+	}
+	// trails of where the (warped) cycle has been, then the live cycle with glow
+	blendAdd(1);
+	for (int k = 1; k < gTrailN[o]; k++) {
+		int idx = (gTrailHead[o] - k + TRAILS) % TRAILS;
+		float a = 0.45f * (1 - k / (float)TRAILS);
+		u32 c = rgba(cr, cg, cb, a);
+		float px = 0, py = 0;
+		for (int i = 0; i < TPTS; i++) {
+			float sx, sy; proj(&P, i / (float)(TPTS - 1) * 2 - 1, gTrail[o][idx][i], gTrailPos[o][idx], &sx, &sy);
+			if (i) vLine(px, py, sx, sy, c, 1.2f);
+			px = sx; py = sy;
+		}
+	}
+	blendAdd(0);
+	float cyc[TPTS]; sampleCycle(os->cyc, cyc, NULL);
+	float lx[TPTS], ly[TPTS];
+	for (int i = 0; i < TPTS; i++) proj(&P, i / (float)(TPTS - 1) * 2 - 1, os->on ? cyc[i] : 0, gPosEff[o], &lx[i], &ly[i]);
+	glowLine(lx, ly, TPTS, cr, cg, cb, 0.8f + gVisEnv * 0.6f);
+}
+
+// scope boxes for OSC A and B with phosphor-style trails
+static void visScopes(void) {
+	float cr, cg, cb; hue(gCutoff * 0.7f + gVisEnv * 0.3f, &cr, &cg, &cb);
+	for (int o = 0; o < 2; o++) {
+		float y0 = 16 + o * 70, h = 66, mid = y0 + h / 2;
+		vRect(0, y0, 196, h, rgba(0.07f, 0.045f, 0.02f, 1));
+		u32 grid = rgba(0.16f, 0.1f, 0.04f, 1);
+		for (int g = 1; g < 6; g++) vLine(g * 196 / 6.0f, y0, g * 196 / 6.0f, y0 + h, grid, 0.6f);
+		vLine(0, mid, 196, mid, grid, 0.8f);
+		if (!gOsc[o].on) continue;
+		float amp = (h / 2 - 6) * (0.75f + 0.25f * gVisEnv);
+		blendAdd(1);
+		for (int k = 1; k < gTrailN[o]; k++) {
+			int idx = (gTrailHead[o] - k + TRAILS) % TRAILS;
+			u32 c = rgba(cr, cg, cb, 0.35f * (1 - k / (float)TRAILS));
+			for (int i = 0; i + 1 < TPTS; i++)
+				vLine(i * 196.0f / (TPTS - 1), mid - gTrail[o][idx][i] * amp, (i + 1) * 196.0f / (TPTS - 1), mid - gTrail[o][idx][i + 1] * amp, c, 1.0f);
+		}
+		blendAdd(0);
+		float s[TPTS], xs[TPTS], ys[TPTS]; sampleCycle(gOsc[o].cyc, s, NULL);
+		for (int i = 0; i < TPTS; i++) { xs[i] = i * 196.0f / (TPTS - 1); ys[i] = mid - s[i] * amp; }
+		glowLine(xs, ys, TPTS, cr, cg, cb, 0.75f + gVisEnv * 0.6f);
+	}
+}
+
+// copy rows y0..y1 (screen) of the rendered panel into the top framebuffer
+static void visBlit(int y0, int y1) {
+	u8* fbp = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
+	GSPGPU_InvalidateDataCache(gVisLin, 240 * VIS_W * 3);
+	int m0 = 239 - y1, m1 = 239 - y0;
+	for (int x = 0; x < VIS_W; x++) memcpy(fbp + ((VIS_X + x) * 240 + m0) * 3, gVisLin + (x * 240 + m0) * 3, (m1 - m0 + 1) * 3);
+}
+
+static int visActive(int page) { return gGpuOK && gGpuFx && page >= 1 && page <= 6; }
+static void visFrame(int page, float dt) {
+	gVisT += dt;
+	float e = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho) e += gV[i].env;
+	if (e > 1) e = 1;
+	gVisEnv += (e - gVisEnv) * (e > gVisEnv ? 0.5f : 0.08f);
+	for (int o = 0; o < 2; o++) trailPush(o, gPosEff[o]);
+	C3D_FrameBegin(0);
+	C2D_TargetClear(gVisTgt, C2D_Color32(0x14, 0x0d, 0x06, 0xff));
+	C2D_SceneBegin(gVisTgt);
+	C2D_SceneSize(240 * VIS_SS, VIS_W * VIS_SS, true);   // tilted like a real screen target
+	if (page == 1 || page == 2) visWavetable(page - 1);
+	else visScopes();
+	C3D_FrameEnd(0);
+	C3D_SyncDisplayTransfer((u32*)gVisTgt->frameBuf.colorBuf, GX_BUFFER_DIM(240 * VIS_SS, VIS_W * VIS_SS), (u32*)gVisLin, GX_BUFFER_DIM(240, VIS_W),
+		GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
+		GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_XY));
+	if (page == 1 || page == 2) visBlit(16, 216);
+	else visBlit(16, 152);
+}
+
 // ---------------------------------------------------------------- second CPU core: waveform rebuild worker
 // Morph + warp + FFT band-limiting run on core 1 (the system core; the app gets up to 80% of it via
 // APT_SetAppCpuTimeLimit). The main core only posts jobs. gMipsLock guards the shared FFT buffers.
@@ -1667,6 +1926,7 @@ int main(void) {
 	gfxInitDefault();
 	gfxSetDoubleBuffering(GFX_TOP, true);     // draw into the hidden buffer, swap on vblank: no tearing
 	gfxSetDoubleBuffering(GFX_BOTTOM, true);
+	gpuInit();
 	fontGfx = consoleGetDefault()->font.gfx;
 	fftInit();
 	for (int o = 0; o < 2; o++) { gOsc[o].tb.frames = (float*)malloc(sizeof(float) * CYC * MAXFR); mipsInit(&gOsc[o].mips); }
@@ -1853,7 +2113,20 @@ int main(void) {
 		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note < 128) on[gV[i].note] = 1;
 		if (memcmp(on, onPrev, sizeof(on))) { memcpy(onPrev, on, sizeof(on)); botDirty = 1; topDirty = 1; }
 
-		if (topDirty || topAgain) { if (helpOn) drawHelp(); else drawTop(page, sel[page], oct, latch); topAgain = topDirty; topDirty = 0; }
+		if (!helpOn && visActive(page)) topDirty = 1;   // animated panel: redraw every frame
+		if (topDirty || topAgain) {
+			if (helpOn) drawHelp();
+			else {
+				drawTop(page, sel[page], oct, latch);
+				if (visActive(page)) {
+					visFrame(page, dt);
+					fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
+					if (page <= 2) { Osc* o = &gOsc[page - 1]; text(8, 19, o->on ? (page == 2 ? "OSC B" : "OSC A") : (page == 2 ? "OSC B OFF" : "OSC A OFF"), 1, DIM); }
+					else { text(8, 19, "A", 1, DIM); text(8, 89, "B", 1, DIM); }
+				}
+			}
+			topAgain = topDirty; topDirty = 0;
+		}
 		if (botDirty || botAgain) { drawBottom(base, on, helpOn, latch); botAgain = botDirty; botDirty = 0; }
 
 		gfxFlushBuffers();
@@ -1864,6 +2137,7 @@ int main(void) {
 	if (gWorker) { ASET(gWorkerQuit, 1); LightEvent_Signal(&gJobEv); threadJoin(gWorker, U64_MAX); threadFree(gWorker); }
 	if (gCsndOK) { for (int c = 0; c < NCS; c++) if (csUsable(c)) CSND_SetPlayState(c, 0); csndExecCmds(true); csndExit(); }
 	if (gAudioOK) { for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }
+	gpuExit();
 	gfxExit();
 	return 0;
 }

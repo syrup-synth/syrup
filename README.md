@@ -18,6 +18,10 @@ Waveform rebuilds run on the 3DS's second CPU core (a worker thread on core 1, w
 - **SEQ:** 16 steps. REC: each key (or chord) you play writes the next step; ADD REST inserts a rest; the pattern length follows what you record. PLAY: keys transpose the pattern live. SEQ GATE, SWING and BPM. With ARP on, each step is arpeggiated.
 - **OCT- / OCT+** tabs on the touch screen shift the keyboard (also L / R).
 
+## Graphics chip visuals
+
+On the OSC and sound pages the left panel of the top screen is drawn by the 3DS's GPU (PICA200, via citro2d): a slowly swaying 3D wavetable with the live (warped) cycle glowing and leaving trails, and glowing scopes with phosphor trails on the other pages. It's rendered at 2x and scaled down by the display-transfer hardware for smooth lines; colour follows the filter and envelope. Turn it off with GPU VISUALS on the VOICE+FX page.
+
 ## Presets
 
 Page 1 is a preset browser organised by style. Use the D-pad to pick a style and a patch; the patch loads immediately, so you can play keys to audition it.
@@ -29,6 +33,7 @@ Page 1 is a preset browser organised by style. Use the D-pad to pick a style and
 | PAD | Syrup Pad, Glass, Choir, Warm Strings, Dark Drone, Vapor Pad, Sweep Pad, Formant Pad, Shimmer Pad, PWM Pad |
 | PLUCK | Syrup Pluck, Marimba, Kalimba, Harp, Dub Stab, Bell, Steel Drum, Synth Pluck, Muted, Pizz |
 | KEYS | E Piano, Organ, Clav, Acordeon, Vinyl Keys, Dark Rhodes, Wurli, Church Organ, Harpsichord, Lofi Piano |
+| ARP | Trance Gate, Berlin Seq, Crystal Arp, Glass Rain, Chip Arp, Synthwave Arp, Dub Echo Arp, Pad Ripple, Bass Octaves, Marimba Run (these set the arpeggiator, rate, octaves and tempo) |
 | CHORDS | House Organ, Neo Soul, Power, Sus Shimmer, Dub Chords, Min7 Pad, Maj7 Keys, Power Pluck, Sus Organ, Techno Stab |
 | RETRO | 8-Bit Lead, 8-Bit Bass, VGM Brass, Arcade, 80s Poly, Synthwave, Chip Bell, GB Wave |
 | AMBIENT | Ocean, Aurora, Dust, Slow Bloom, Dream Keys, Deep Space, Rain, Lullaby |
