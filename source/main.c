@@ -27,6 +27,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <strings.h>
+#include <sys/stat.h>
 
 #define TWO_PI   6.28318530718f
 #define CYC      2048
@@ -724,6 +725,8 @@ static void voicesUpdate(float dt, float bend) {
 		float res = gRes + modSum(DST_RES, v);
 		if (res < 0) res = 0;
 		if (res > 1) res = 1;
+		// level compensation: resonance boosts the peak (LP/HP), band pass thins the level
+		float fcomp = gFiltType <= 1 ? 1.0f / (1.0f + res * 3.5f) : (gFiltType == 2 ? 2.2f : 1.0f);
 		float panMod = modSum(DST_PAN, v) * 0.5f;
 		float aLev = gOsc[0].level * (1 + modSum(DST_ALEV, v)); if (aLev < 0) aLev = 0;
 		float bLev = gOsc[1].level * (1 + modSum(DST_BLEV, v)); if (bLev < 0) bLev = 0;
@@ -745,6 +748,7 @@ static void voicesUpdate(float dt, float bend) {
 			if (pan < 0) pan = 0;
 			if (pan > 1) pan = 1;
 			float g = vg * ug * lv;
+			if (v->bk[k] == BK_DSP) g *= fcomp;
 			float L = g * sqrtf(1 - pan) * 1.41f, R = g * sqrtf(pan) * 1.41f;
 			float rate = f * pm * powf(2.0f, det / 1200.0f) * LEVN[v->lev[k]];
 			if (v->bk[k] == BK_DSP) {
@@ -759,7 +763,8 @@ static void voicesUpdate(float dt, float bend) {
 		}
 	}
 	if (gNoiseOn) {
-		float g = gNoiseLevel * 0.5f * gMaster * (noiseAmt > 1.2f ? 1.2f : noiseAmt);
+		float nc = gFiltType <= 1 ? 1.0f / (1.0f + gRes * 3.5f) : (gFiltType == 2 ? 2.5f : 1.0f);
+		float g = gNoiseLevel * 0.8f * gMaster * nc * (noiseAmt > 1.2f ? 1.2f : noiseAmt);
 		dL[NOISE_CH] = dR[NOISE_CH] = g;
 		filterSet(NOISE_CH, baseCutoff() * powf(2.0f, modSum(DST_CUTOFF, NULL) * 5.0f), gRes);
 	}
@@ -769,7 +774,7 @@ static void voicesUpdate(float dt, float bend) {
 	for (int c = 0; c < NCS; c++) if (cL[c] >= 0) { sl += cL[c] * cL[c]; sr += cR[c] * cR[c]; al += cL[c]; ar += cR[c]; }
 	float estL = sqrtf(sl) * 0.9f + al * 0.5f, estR = sqrtf(sr) * 0.9f + ar * 0.5f;
 	float est = estL > estR ? estL : estR;
-	float target = est > 0.95f ? 0.95f / est : 1.0f;
+	float target = est > 0.8f ? 0.8f / est : 1.0f;
 	gAutoGain += (target - gAutoGain) * (target < gAutoGain ? 0.6f : 0.05f);
 	for (int c = 0; c < NCH; c++) if (dL[c] >= 0) {
 		float mix[12] = {0};
@@ -787,9 +792,333 @@ static void voicesUpdate(float dt, float bend) {
 	if (gCsndOK && any) csndExecCmds(false);
 }
 
+// ---------------------------------------------------------------- presets (organised by style, like Serum's browser)
+typedef struct {
+	int on, table, warp, oct, semi, uni;
+	float pos, warpAmt, level, fine, detune, blend, width;
+} OscP;
+typedef struct {
+	u32 magic;
+	char name[20];
+	OscP osc[2];
+	int subShape, subOct, noiseType, filtType;
+	float subLevel, noiseLevel, cutoff, res, keytrack;
+	AHDSR env1, env2;
+	int lfoShape[2], lfoMode[2]; float lfoRate[2];
+	ModSlot mod[4];
+	int voiceMode, chord, fx, echoT, drive, bendRange;
+	float glide, chorus, revSize, revDamp, fxMix, driveAmt, master;
+} SPatch;
+#define PATCH_MAGIC 0x53595231   // "SYR1"
+
+static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no effects
+	memset(p, 0, sizeof(*p));
+	p->magic = PATCH_MAGIC;
+	snprintf(p->name, sizeof(p->name), "INIT");
+	for (int o = 0; o < 2; o++) {
+		OscP* q = &p->osc[o];
+		q->on = (o == 0); q->table = T_BASIC; q->pos = 0.66f; q->level = 0.8f; q->uni = 1;
+		q->detune = 14; q->blend = 0.6f; q->width = 0.8f;
+	}
+	p->subShape = 0; p->subOct = -1; p->noiseType = 0;
+	p->filtType = 0; p->cutoff = 0.8f; p->res = 0.1f; p->keytrack = 0.3f;
+	p->env1 = (AHDSR){0.005f, 0, 0.6f, 0.7f, 0.35f};
+	p->env2 = (AHDSR){0.002f, 0, 0.45f, 0.2f, 0.4f};
+	p->lfoShape[0] = 0; p->lfoRate[0] = 0.6f; p->lfoShape[1] = 0; p->lfoRate[1] = 5.0f;
+	p->mod[0] = (ModSlot){SRC_ENV2, DST_CUTOFF, 0.0f};
+	p->mod[1] = (ModSlot){SRC_STICK, DST_APOS, 0.5f};
+	p->mod[2] = (ModSlot){SRC_OFF, DST_BPOS, 0.0f};
+	p->mod[3] = (ModSlot){SRC_OFF, DST_PITCH, 0.0f};
+	p->bendRange = 2; p->chorus = 0.2f; p->revSize = 0.5f; p->revDamp = 0.5f; p->fxMix = 0.5f;
+	p->driveAmt = 0.4f; p->master = 0.8f; p->echoT = 1;
+}
+
+#define OA p->osc[0]
+#define OB p->osc[1]
+#define MOD(i, s, d, a) p->mod[i] = (ModSlot){s, d, a}
+#define ENV1(A, H, D, S, R) p->env1 = (AHDSR){A, H, D, S, R}
+#define ENV2(A, H, D, S, R) p->env2 = (AHDSR){A, H, D, S, R}
+#define LFO(i, sh, md, rt) do { p->lfoShape[i] = sh; p->lfoMode[i] = md; p->lfoRate[i] = rt; } while (0)
+#define SAW 0.66f
+#define SINE 0.0f
+#define TRI 0.33f
+#define SQR 1.0f
+
+// ---- BASS
+static void pr_subwob(SPatch* p) { p->master = 0.5f; OA.table = T_GROWL; OA.pos = 0.3f; OA.oct = -1; p->subLevel = 0.7f; p->cutoff = 0.35f; p->res = 0.35f;
+	LFO(0, 0, 1, 4.0f); MOD(0, SRC_LFO1, DST_CUTOFF, 0.5f); ENV1(0.003f, 0, 0.3f, 0.9f, 0.15f); }
+static void pr_reese(SPatch* p) { OA.oct = -1; OA.uni = 3; OA.detune = 22; OA.width = 0.4f; p->cutoff = 0.42f; p->res = 0.15f; p->chorus = 0.4f;
+	p->subLevel = 0.4f; ENV1(0.005f, 0, 0.3f, 1.0f, 0.2f); LFO(0, 0, 0, 0.2f); MOD(2, SRC_LFO1, DST_CUTOFF, 0.15f); }
+static void pr_fmgrowl(SPatch* p) { p->master = 0.55f; OA.table = T_GROWL; OA.oct = -1; OA.warp = W_FM; OA.warpAmt = 0.4f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = -1;
+	LFO(0, 0, 1, 2.0f); MOD(2, SRC_LFO1, DST_AWARP, 0.6f); MOD(3, SRC_LFO1, DST_APOS, 0.3f); p->cutoff = 0.55f; p->drive = 1; p->driveAmt = 0.4f;
+	ENV1(0.003f, 0, 0.3f, 0.9f, 0.15f); }
+static void pr_808(SPatch* p) { OA.pos = SINE; OA.oct = -1; ENV1(0.002f, 0, 1.2f, 0.0f, 0.3f); ENV2(0.0f, 0, 0.06f, 0, 0.1f);
+	MOD(0, SRC_ENV2, DST_PITCH, 0.1f); p->drive = 1; p->driveAmt = 0.3f; p->cutoff = 0.6f; }
+static void pr_acid(SPatch* p) { OA.oct = -1; p->cutoff = 0.25f; p->res = 0.7f; p->keytrack = 0.5f; ENV2(0.0f, 0, 0.2f, 0, 0.2f);
+	MOD(0, SRC_ENV2, DST_CUTOFF, 0.7f); p->voiceMode = 1; p->glide = 0.08f; p->drive = 2; p->driveAmt = 0.25f; ENV1(0.002f, 0, 0.3f, 0.8f, 0.08f); }
+// ---- LEAD
+static void pr_supersaw(SPatch* p) { p->master = 0.75f; OA.uni = 3; OA.detune = 25; OA.blend = 0.7f; OA.width = 0.9f; OB.on = 1; OB.oct = 1; OB.uni = 3; OB.detune = 18; OB.level = 0.4f;
+	p->cutoff = 0.8f; p->chorus = 0.3f; p->fx = 3; p->revSize = 0.5f; p->fxMix = 0.3f; ENV1(0.01f, 0, 0.3f, 0.9f, 0.3f); }
+static void pr_syncscream(SPatch* p) { OA.table = T_SYNC; OA.warp = W_SYNC; OA.warpAmt = 0.3f; LFO(0, 1, 0, 0.3f); MOD(2, SRC_LFO1, DST_AWARP, 0.5f);
+	p->voiceMode = 2; p->glide = 0.06f; p->cutoff = 0.75f; p->res = 0.2f; p->fx = 1; p->echoT = 1; p->fxMix = 0.35f; }
+static void pr_vowellead(SPatch* p) { OA.table = T_VOWELS; OA.uni = 2; OA.detune = 10; LFO(0, 1, 0, 0.7f); MOD(2, SRC_LFO1, DST_APOS, 0.45f);
+	LFO(1, 0, 0, 5.5f); MOD(3, SRC_LFO2, DST_PITCH, 0.02f); p->fx = 1; p->fxMix = 0.3f; p->voiceMode = 2; p->glide = 0.05f; }
+static void pr_chip(SPatch* p) { OA.table = T_PWM; OA.pos = 0; OA.warp = W_QUANT; OA.warpAmt = 0.5f; p->cutoff = 1.0f; p->voiceMode = 1;
+	p->fx = 1; p->echoT = 0; p->fxMix = 0.3f; ENV1(0.002f, 0, 0.2f, 0.8f, 0.08f); p->chorus = 0; }
+static void pr_digipipe(SPatch* p) { OA.table = T_DIGITAL; OA.pos = 0.2f; OA.warp = W_MIRROR; OA.warpAmt = 0.5f; OA.uni = 2; OA.detune = 6;
+	LFO(1, 0, 0, 5.0f); MOD(3, SRC_LFO2, DST_PITCH, 0.015f); p->fx = 3; p->fxMix = 0.4f; }
+// ---- PAD
+static void pr_syruppad(SPatch* p) { OA.uni = 3; OB.on = 1; OB.table = T_HARMONIX; OB.pos = 0.4f; OB.oct = 1; OB.uni = 3; OB.detune = 10; OB.level = 0.5f;
+	p->cutoff = 0.55f; ENV1(0.8f, 0, 1.0f, 0.85f, 1.5f); LFO(0, 0, 0, 0.15f); MOD(2, SRC_LFO1, DST_APOS, 0.25f); p->chorus = 0.5f;
+	p->fx = 3; p->revSize = 0.8f; p->fxMix = 0.45f; }
+static void pr_glass(SPatch* p) { p->master = 1.2f; OA.table = T_DIGITAL; OA.pos = 0.5f; OA.uni = 3; OA.detune = 8; OA.warp = W_BENDP; OA.warpAmt = 0.3f; p->cutoff = 0.85f;
+	ENV1(0.5f, 0, 1.0f, 0.8f, 2.0f); LFO(0, 0, 0, 0.1f); MOD(2, SRC_LFO1, DST_APOS, 0.4f); p->fx = 3; p->revSize = 0.9f; p->revDamp = 0.2f; p->fxMix = 0.5f; }
+static void pr_choir(SPatch* p) { p->master = 1.1f; OA.table = T_VOWELS; OA.pos = 0.2f; OA.uni = 3; OA.detune = 12; LFO(0, 0, 0, 0.08f); MOD(2, SRC_LFO1, DST_APOS, 0.5f);
+	ENV1(0.9f, 0, 1.0f, 0.9f, 1.5f); p->fx = 3; p->revSize = 0.7f; p->fxMix = 0.45f; }
+static void pr_strings(SPatch* p) { OA.uni = 3; OA.detune = 18; OA.width = 1.0f; OB.on = 1; OB.table = T_PWM; OB.pos = 0.3f; OB.uni = 2; OB.level = 0.4f;
+	p->cutoff = 0.5f; p->keytrack = 0.5f; ENV1(0.6f, 0, 1.0f, 0.9f, 1.2f); p->chorus = 0.6f; p->fx = 3; p->revSize = 0.6f; p->fxMix = 0.4f; }
+static void pr_drone(SPatch* p) { OA.table = T_GROWL; OA.pos = 0.2f; OA.uni = 3; OA.detune = 30; p->subShape = 1; p->subOct = -2; p->subLevel = 0.4f;
+	p->cutoff = 0.3f; p->res = 0.3f; LFO(0, 0, 0, 0.05f); MOD(2, SRC_LFO1, DST_CUTOFF, 0.4f); p->noiseType = 1; p->noiseLevel = 0.1f;
+	ENV1(2.0f, 0, 1.0f, 1.0f, 3.0f); p->fx = 3; p->revSize = 1.0f; p->fxMix = 0.5f; }
+// ---- PLUCK
+static void pr_syruppluck(SPatch* p) { OA.table = T_HARMONIX; OA.pos = 0.5f; OA.uni = 2; OA.detune = 8; ENV1(0.002f, 0, 0.35f, 0, 0.3f);
+	ENV2(0, 0, 0.25f, 0, 0.2f); MOD(0, SRC_ENV2, DST_CUTOFF, 0.6f); p->cutoff = 0.3f; p->fx = 3; p->fxMix = 0.35f; }
+static void pr_marimba(SPatch* p) { OA.pos = SINE; OB.on = 1; OB.pos = SINE; OB.oct = 2; OB.level = 0.3f; ENV1(0.001f, 0, 0.5f, 0, 0.25f);
+	p->fx = 3; p->revSize = 0.3f; p->fxMix = 0.3f; p->chorus = 0; }
+static void pr_kalimba(SPatch* p) { OA.table = T_HARMONIX; OA.pos = 0.1f; OA.warp = W_FM; OA.warpAmt = 0.2f; OB.pos = SINE; OB.oct = 1;
+	ENV1(0.001f, 0, 0.8f, 0, 0.4f); p->fx = 2; p->fxMix = 0.5f; p->chorus = 0; }
+static void pr_harp(SPatch* p) { OA.pos = TRI; p->cutoff = 0.7f; p->keytrack = 0.7f; ENV1(0.002f, 0, 1.2f, 0, 0.6f); p->fx = 3; p->revSize = 0.6f; p->fxMix = 0.4f; }
+static void pr_dubstab(SPatch* p) { p->master = 0.72f; OA.uni = 3; OA.detune = 15; p->chord = 1; ENV1(0.003f, 0, 0.25f, 0, 0.2f); p->cutoff = 0.45f;
+	ENV2(0, 0, 0.2f, 0, 0.2f); MOD(0, SRC_ENV2, DST_CUTOFF, 0.5f); p->fx = 1; p->echoT = 1; p->fxMix = 0.5f; }
+// ---- KEYS
+static void pr_epiano(SPatch* p) { OA.pos = SINE; OA.warp = W_FM; OA.warpAmt = 0.35f; OB.pos = SINE; ENV1(0.002f, 0, 1.5f, 0.2f, 0.5f);
+	p->chorus = 0.4f; LFO(1, 0, 0, 5.0f); MOD(3, SRC_LFO2, DST_PAN, 0.3f); p->fx = 3; p->revSize = 0.4f; p->fxMix = 0.3f; MOD(0, SRC_VEL, DST_CUTOFF, 0.3f); }
+static void pr_organ(SPatch* p) { p->master = 0.68f; OA.table = T_HARMONIX; OA.pos = 0.1f; OB.on = 1; OB.table = T_HARMONIX; OB.pos = 0.05f; OB.oct = 1; OB.level = 0.5f;
+	ENV1(0.005f, 0, 0.2f, 1.0f, 0.08f); p->chorus = 0.7f; LFO(1, 0, 0, 6.0f); MOD(3, SRC_LFO2, DST_PAN, 0.4f); }
+static void pr_clav(SPatch* p) { OA.table = T_PWM; OA.pos = 0.7f; p->filtType = 2; p->res = 0.3f; p->cutoff = 0.55f; ENV1(0.002f, 0, 0.3f, 0.1f, 0.1f);
+	p->drive = 2; p->driveAmt = 0.2f; p->chorus = 0; }
+static void pr_acordeon(SPatch* p) { p->master = 0.62f; OA.table = T_PWM; OA.pos = 0.4f; OA.uni = 2; OA.detune = 12; OB.on = 1; OB.table = T_PWM; OB.pos = 0.4f; OB.oct = 1; OB.level = 0.5f;
+	p->cutoff = 0.6f; ENV1(0.04f, 0, 0.3f, 0.9f, 0.12f); LFO(1, 0, 0, 6.0f); MOD(3, SRC_LFO2, DST_ALEV, 0.15f); p->chorus = 0.2f; }
+static void pr_vinylkeys(SPatch* p) { pr_epiano(p); p->noiseType = 2; p->noiseLevel = 0.25f; p->cutoff = 0.45f; p->revSize = 0.5f; p->fxMix = 0.45f; }
+// ---- FX
+static void pr_riser(SPatch* p) { OA.table = T_SYNC; OA.pos = 0; OA.warp = W_SYNC; LFO(0, 2, 1, 0.25f); MOD(2, SRC_LFO1, DST_AWARP, 1.0f);
+	MOD(3, SRC_LFO1, DST_PITCH, 0.25f); p->noiseLevel = 0.3f; p->fx = 3; p->revSize = 1.0f; p->fxMix = 0.5f; ENV1(0.5f, 0, 1, 1, 1.5f); }
+static void pr_laser(SPatch* p) { OA.pos = SAW; ENV1(0.001f, 0, 0.3f, 0, 0.2f); ENV2(0, 0, 0.15f, 0, 0.1f); MOD(0, SRC_ENV2, DST_PITCH, 1.0f);
+	p->fx = 1; p->echoT = 0; p->fxMix = 0.5f; }
+static void pr_wind(SPatch* p) { OA.level = 0; p->noiseType = 0; p->noiseLevel = 1.0f; p->filtType = 2; p->res = 0.25f; p->cutoff = 0.55f; p->master = 1.5f;
+	LFO(0, 0, 0, 0.2f); MOD(2, SRC_LFO1, DST_CUTOFF, 0.4f); ENV1(1.0f, 0, 1, 1, 2.0f); }
+static void pr_radio(SPatch* p) { OA.table = T_DIGITAL; OA.pos = 0.5f; LFO(1, 4, 0, 8.0f); MOD(3, SRC_LFO2, DST_APOS, 0.5f); p->filtType = 2; p->cutoff = 0.6f;
+	p->res = 0.3f; p->noiseType = 2; p->noiseLevel = 0.3f; p->drive = 3; p->driveAmt = 0.5f; p->master = 1.4f; }
+static void pr_robot(SPatch* p) { OA.table = T_VOWELS; LFO(1, 4, 0, 6.0f); MOD(3, SRC_LFO2, DST_APOS, 0.6f); OA.warp = W_QUANT; OA.warpAmt = 0.6f; p->voiceMode = 1; }
+// ---- CHORDS
+static void pr_houseorgan(SPatch* p) { p->master = 0.6f; p->chord = 1; OA.table = T_HARMONIX; OA.pos = 0.15f; ENV1(0.003f, 0, 0.25f, 0.3f, 0.15f); p->cutoff = 0.6f; p->fx = 2; p->fxMix = 0.4f; }
+static void pr_neosoul(SPatch* p) { p->master = 0.7f; p->chord = 2; OA.pos = TRI; OB.on = 1; OB.pos = SINE; OB.oct = 1; OB.level = 0.4f; ENV1(0.01f, 0, 1.0f, 0.4f, 0.6f);
+	p->chorus = 0.5f; p->fx = 3; p->revSize = 0.5f; p->fxMix = 0.4f; p->cutoff = 0.55f; }
+static void pr_power(SPatch* p) { p->master = 0.55f; p->chord = 3; OA.uni = 3; p->drive = 1; p->driveAmt = 0.6f; p->cutoff = 0.6f; ENV1(0.005f, 0, 0.4f, 0.8f, 0.25f); }
+static void pr_shimmer(SPatch* p) { p->chord = 4; OA.table = T_DIGITAL; OA.pos = 0.4f; OA.uni = 3; ENV1(0.2f, 0, 1, 0.8f, 2.0f); p->fx = 3; p->revSize = 1.0f; p->fxMix = 0.6f; }
+static void pr_dubchord(SPatch* p) { p->master = 0.72f; p->chord = 1; OA.table = T_HARMONIX; OA.pos = 0.3f; OA.uni = 2; ENV1(0.002f, 0, 0.18f, 0, 0.15f); p->cutoff = 0.4f;
+	ENV2(0, 0, 0.15f, 0, 0.1f); MOD(0, SRC_ENV2, DST_CUTOFF, 0.4f); p->fx = 1; p->echoT = 2; p->fxMix = 0.6f; }
+
+typedef struct { const char* name; void (*fn)(SPatch*); } PresetDef;
+// ---- more BASS
+static void pr_wob8(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.oct = -1; OA.uni = 2; OA.detune = 10; p->subLevel = 0.5f;
+	p->cutoff = 0.3f; p->res = 0.3f; LFO(0, 1, 1, 6.0f); MOD(0, SRC_LFO1, DST_CUTOFF, 0.55f); ENV1(0.003f, 0, 0.3f, 0.9f, 0.12f); }
+static void pr_digibass(SPatch* p) { OA.table = T_DIGITAL; OA.pos = 0.3f; OA.oct = -1; OA.warp = W_QUANT; OA.warpAmt = 0.45f; p->subLevel = 0.4f; p->cutoff = 0.6f;
+	ENV1(0.002f, 0, 0.4f, 0.7f, 0.1f); p->chorus = 0; }
+static void pr_sinebass(SPatch* p) { OA.pos = SINE; OA.oct = -1; p->voiceMode = 2; p->glide = 0.07f; p->drive = 1; p->driveAmt = 0.25f; p->cutoff = 0.7f;
+	ENV1(0.003f, 0, 0.5f, 0.9f, 0.12f); p->chorus = 0; }
+static void pr_pluckbass(SPatch* p) { OA.oct = -1; p->cutoff = 0.22f; p->res = 0.25f; ENV2(0, 0, 0.18f, 0, 0.1f); MOD(0, SRC_ENV2, DST_CUTOFF, 0.65f);
+	ENV1(0.002f, 0, 0.35f, 0.2f, 0.12f); p->subLevel = 0.35f; p->chorus = 0; }
+static void pr_hoover(SPatch* p) { p->master = 0.65f; OA.table = T_PWM; OA.pos = 0.3f; OA.uni = 3; OA.detune = 40; OA.width = 1.0f; OA.oct = -1;
+	p->voiceMode = 2; p->glide = 0.15f; LFO(0, 0, 1, 0.4f); MOD(2, SRC_LFO1, DST_APOS, 0.4f); p->chorus = 0.6f; p->cutoff = 0.7f; }
+// ---- more LEAD
+static void pr_brasslead(SPatch* p) { OA.uni = 2; OA.detune = 8; p->cutoff = 0.35f; ENV2(0.05f, 0, 0.4f, 0.5f, 0.3f); MOD(0, SRC_ENV2, DST_CUTOFF, 0.55f);
+	ENV1(0.03f, 0, 0.3f, 0.85f, 0.2f); p->fx = 3; p->fxMix = 0.25f; }
+static void pr_whistle(SPatch* p) { OA.pos = SINE; LFO(1, 0, 0, 5.5f); MOD(3, SRC_LFO2, DST_PITCH, 0.025f); ENV1(0.06f, 0, 0.2f, 0.9f, 0.25f);
+	p->voiceMode = 2; p->glide = 0.06f; p->fx = 3; p->revSize = 0.6f; p->fxMix = 0.45f; p->chorus = 0; }
+static void pr_glidesq(SPatch* p) { OA.table = T_PWM; OA.pos = 0.15f; p->voiceMode = 2; p->glide = 0.2f; p->cutoff = 0.65f; p->fx = 1; p->echoT = 2; p->fxMix = 0.35f; }
+static void pr_fuzzlead(SPatch* p) { p->master = 0.65f; OA.uni = 2; OA.detune = 12; p->drive = 2; p->driveAmt = 0.7f; p->cutoff = 0.6f; p->voiceMode = 1; p->fx = 1; p->fxMix = 0.3f; }
+static void pr_fifths(SPatch* p) { OB.on = 1; OB.semi = 7; OB.level = 0.6f; OA.uni = 2; OB.uni = 2; p->cutoff = 0.7f; p->voiceMode = 2; p->glide = 0.05f; p->fx = 3; p->fxMix = 0.3f; }
+// ---- more PAD
+static void pr_vapor(SPatch* p) { OA.pos = TRI; OA.uni = 3; OA.detune = 20; p->noiseType = 2; p->noiseLevel = 0.2f; p->cutoff = 0.45f; ENV1(1.0f, 0, 1, 0.9f, 2.0f);
+	p->chorus = 0.8f; p->fx = 3; p->revSize = 0.9f; p->fxMix = 0.5f; }
+static void pr_sweeppad(SPatch* p) { OA.uni = 3; OA.detune = 16; p->cutoff = 0.35f; p->res = 0.3f; LFO(0, 1, 0, 0.07f); MOD(2, SRC_LFO1, DST_CUTOFF, 0.6f);
+	ENV1(0.8f, 0, 1, 0.9f, 1.8f); p->fx = 3; p->revSize = 0.7f; p->fxMix = 0.4f; }
+static void pr_formantpad(SPatch* p) { OA.table = T_VOWELS; OA.uni = 3; OA.detune = 10; LFO(1, 4, 0, 0.6f); MOD(3, SRC_LFO2, DST_APOS, 0.5f); ENV1(0.7f, 0, 1, 0.9f, 1.6f);
+	p->fx = 3; p->revSize = 0.8f; p->fxMix = 0.45f; }
+static void pr_shimmerpad(SPatch* p) { OA.table = T_DIGITAL; OA.pos = 0.35f; OA.uni = 3; OB.on = 1; OB.pos = SINE; OB.oct = 2; OB.level = 0.35f; ENV1(1.2f, 0, 1, 0.9f, 2.5f);
+	p->fx = 3; p->revSize = 1.0f; p->revDamp = 0.1f; p->fxMix = 0.6f; }
+static void pr_pwmpad(SPatch* p) { OA.table = T_PWM; OA.uni = 3; OA.detune = 12; LFO(0, 0, 0, 0.25f); MOD(2, SRC_LFO1, DST_APOS, 0.4f); p->cutoff = 0.55f;
+	ENV1(0.5f, 0, 1, 0.85f, 1.2f); p->chorus = 0.5f; p->fx = 3; p->fxMix = 0.35f; }
+// ---- more PLUCK
+static void pr_bell(SPatch* p) { OA.pos = SINE; OA.warp = W_FM; OA.warpAmt = 0.6f; OB.pos = SINE; OB.oct = 2; ENV1(0.001f, 0, 1.8f, 0, 1.0f);
+	p->fx = 3; p->revSize = 0.7f; p->fxMix = 0.45f; p->chorus = 0; }
+static void pr_steeldrum(SPatch* p) { OA.table = T_HARMONIX; OA.pos = 0.2f; OA.warp = W_FM; OA.warpAmt = 0.3f; OB.pos = SINE; OB.oct = 1; ENV1(0.001f, 0, 0.6f, 0, 0.3f);
+	p->fx = 2; p->fxMix = 0.4f; p->chorus = 0; }
+static void pr_synthpluck(SPatch* p) { OA.uni = 2; OA.detune = 10; p->cutoff = 0.25f; ENV2(0, 0, 0.15f, 0, 0.1f); MOD(0, SRC_ENV2, DST_CUTOFF, 0.7f);
+	ENV1(0.002f, 0, 0.3f, 0, 0.25f); p->fx = 1; p->echoT = 0; p->fxMix = 0.35f; }
+static void pr_muted(SPatch* p) { OA.table = T_PWM; OA.pos = 0.5f; p->cutoff = 0.35f; p->keytrack = 0.6f; ENV1(0.001f, 0, 0.2f, 0, 0.1f); p->chorus = 0; }
+static void pr_pizz(SPatch* p) { OA.uni = 2; OA.detune = 14; p->cutoff = 0.5f; ENV1(0.002f, 0, 0.25f, 0, 0.3f); p->fx = 3; p->revSize = 0.5f; p->fxMix = 0.4f; }
+// ---- more KEYS
+static void pr_rhodesdark(SPatch* p) { pr_epiano(p); p->cutoff = 0.4f; p->chorus = 0.5f; }
+static void pr_wurli(SPatch* p) { OA.table = T_PWM; OA.pos = 0.55f; ENV1(0.002f, 0, 0.9f, 0.3f, 0.3f); p->drive = 1; p->driveAmt = 0.3f; p->cutoff = 0.55f;
+	LFO(1, 0, 0, 4.5f); MOD(3, SRC_LFO2, DST_ALEV, 0.15f); }
+static void pr_church(SPatch* p) { p->master = 0.7f; OA.table = T_HARMONIX; OA.pos = 0.2f; OB.on = 1; OB.table = T_HARMONIX; OB.pos = 0.1f; OB.oct = 1; OB.level = 0.5f;
+	p->subLevel = 0.4f; ENV1(0.08f, 0, 0.3f, 1.0f, 0.6f); p->fx = 3; p->revSize = 1.0f; p->fxMix = 0.5f; }
+static void pr_harpsi(SPatch* p) { OA.table = T_PWM; OA.pos = 0.85f; OB.on = 1; OB.table = T_PWM; OB.pos = 0.85f; OB.oct = 1; OB.level = 0.5f;
+	ENV1(0.001f, 0, 0.8f, 0, 0.3f); p->cutoff = 0.8f; p->chorus = 0; }
+static void pr_lofipiano(SPatch* p) { OA.pos = TRI; OA.uni = 2; OA.detune = 9; p->noiseType = 2; p->noiseLevel = 0.25f; p->cutoff = 0.4f; ENV1(0.002f, 0, 1.2f, 0.2f, 0.5f);
+	p->chorus = 0.6f; p->fx = 3; p->fxMix = 0.3f; }
+// ---- more FX
+static void pr_siren(SPatch* p) { OA.pos = SAW; LFO(0, 1, 1, 0.5f); MOD(2, SRC_LFO1, DST_PITCH, 0.5f); p->cutoff = 0.7f; p->fx = 1; p->fxMix = 0.3f; }
+static void pr_bubbles(SPatch* p) { OA.pos = SINE; LFO(1, 4, 0, 10.0f); MOD(3, SRC_LFO2, DST_PITCH, 0.3f); ENV1(0.002f, 0, 0.6f, 0.4f, 0.4f); p->fx = 2; p->fxMix = 0.5f; }
+static void pr_noisesweep(SPatch* p) { OA.level = 0; p->noiseLevel = 1.0f; p->filtType = 2; p->res = 0.4f; LFO(0, 2, 1, 0.3f); MOD(2, SRC_LFO1, DST_CUTOFF, 0.8f);
+	p->master = 1.8f; ENV1(0.05f, 0, 1, 1, 1.0f); p->fx = 3; p->fxMix = 0.4f; }
+static void pr_alarm(SPatch* p) { OA.table = T_PWM; OA.pos = 0; LFO(0, 3, 1, 4.0f); MOD(2, SRC_LFO1, DST_PITCH, 0.1f); p->cutoff = 0.75f; }
+static void pr_spacedrone(SPatch* p) { p->master = 1.5f; OA.table = T_GROWL; OA.uni = 3; OA.detune = 25; LFO(0, 0, 0, 0.06f); MOD(2, SRC_LFO1, DST_APOS, 0.5f); p->cutoff = 0.4f;
+	ENV1(2.0f, 0, 1, 1, 3.0f); p->fx = 3; p->revSize = 1.0f; p->fxMix = 0.6f; }
+// ---- more CHORDS
+static void pr_min7pad(SPatch* p) { pr_syruppad(p); p->chord = 1; p->master = 0.7f; }
+static void pr_maj7keys(SPatch* p) { pr_epiano(p); p->chord = 2; p->master = 0.7f; }
+static void pr_powerpluck(SPatch* p) { pr_synthpluck(p); p->chord = 3; p->master = 0.6f; }
+static void pr_susorgan(SPatch* p) { pr_organ(p); p->chord = 4; p->master = 0.48f; }
+static void pr_technostab(SPatch* p) { p->chord = 1; OA.uni = 2; OA.detune = 12; ENV1(0.002f, 0, 0.15f, 0, 0.1f); p->cutoff = 0.5f; p->res = 0.2f;
+	p->fx = 1; p->echoT = 2; p->fxMix = 0.55f; p->master = 0.6f; }
+// ---- RETRO
+static void pr_8bitlead(SPatch* p) { OA.table = T_PWM; OA.pos = 0.5f; OA.warp = W_QUANT; OA.warpAmt = 0.55f; p->voiceMode = 1; p->cutoff = 1.0f; p->chorus = 0;
+	ENV1(0.001f, 0, 0.2f, 0.8f, 0.05f); LFO(1, 0, 0, 6.0f); MOD(3, SRC_LFO2, DST_PITCH, 0.015f); }
+static void pr_8bitbass(SPatch* p) { OA.table = T_PWM; OA.pos = 0.5f; OA.oct = -1; OA.warp = W_QUANT; OA.warpAmt = 0.6f; p->cutoff = 1.0f; p->chorus = 0;
+	ENV1(0.001f, 0, 0.2f, 0.9f, 0.05f); }
+static void pr_vgmbrass(SPatch* p) { OA.pos = SAW; OA.warp = W_FM; OA.warpAmt = 0.25f; OB.pos = SINE; ENV1(0.02f, 0, 0.3f, 0.8f, 0.15f); p->cutoff = 0.65f; p->chorus = 0.2f; }
+static void pr_arcade(SPatch* p) { OA.table = T_PWM; OA.pos = 0.3f; OA.warp = W_QUANT; OA.warpAmt = 0.5f; LFO(0, 3, 1, 12.0f); MOD(2, SRC_LFO1, DST_PITCH, 0.5f);
+	ENV1(0.001f, 0, 0.4f, 0.6f, 0.1f); p->chorus = 0; }
+static void pr_80spoly(SPatch* p) { OA.uni = 2; OA.detune = 10; p->cutoff = 0.4f; ENV2(0.01f, 0, 0.5f, 0.3f, 0.4f); MOD(0, SRC_ENV2, DST_CUTOFF, 0.4f);
+	ENV1(0.01f, 0, 0.6f, 0.7f, 0.4f); p->chorus = 0.8f; p->fx = 3; p->fxMix = 0.3f; }
+static void pr_synthwave(SPatch* p) { pr_supersaw(p); p->cutoff = 0.55f; LFO(0, 0, 0, 0.1f); MOD(2, SRC_LFO1, DST_CUTOFF, 0.3f); p->revSize = 0.9f; p->fxMix = 0.45f; }
+static void pr_chipbell(SPatch* p) { OA.table = T_PWM; OA.pos = 0.75f; OA.warp = W_QUANT; OA.warpAmt = 0.5f; ENV1(0.001f, 0, 0.6f, 0, 0.2f); p->fx = 1; p->echoT = 0; p->fxMix = 0.4f; p->chorus = 0; }
+static void pr_gbwave(SPatch* p) { OA.table = T_DIGITAL; OA.pos = 0.6f; OA.warp = W_QUANT; OA.warpAmt = 0.7f; ENV1(0.001f, 0, 0.3f, 0.8f, 0.08f); p->voiceMode = 1; p->chorus = 0; }
+// ---- AMBIENT
+static void pr_ocean(SPatch* p) { OA.pos = TRI; OA.uni = 3; OA.level = 0.4f; p->noiseType = 1; p->noiseLevel = 0.6f; p->cutoff = 0.4f; LFO(0, 0, 0, 0.08f);
+	MOD(2, SRC_LFO1, DST_CUTOFF, 0.5f); ENV1(1.2f, 0, 1, 1, 3.0f); p->fx = 3; p->revSize = 1.0f; p->fxMix = 0.5f; p->master = 1.6f; }
+static void pr_aurora(SPatch* p) { OA.table = T_VOWELS; OA.uni = 3; OA.detune = 18; LFO(0, 1, 0, 0.05f); MOD(2, SRC_LFO1, DST_APOS, 0.5f); ENV1(1.0f, 0, 1, 0.9f, 3.0f);
+	p->fx = 3; p->revSize = 1.0f; p->revDamp = 0.3f; p->fxMix = 0.6f; p->master = 1.3f; }
+static void pr_dust(SPatch* p) { pr_glass(p); p->noiseType = 2; p->noiseLevel = 0.3f; p->cutoff = 0.6f; p->master = 1.3f; }
+static void pr_bloom(SPatch* p) { OA.uni = 3; OA.detune = 12; p->cutoff = 0.15f; ENV2(3.0f, 0, 2.0f, 0.8f, 2.0f); MOD(0, SRC_ENV2, DST_CUTOFF, 0.7f);
+	ENV1(3.0f, 0, 1, 1, 3.0f); p->fx = 3; p->revSize = 0.9f; p->fxMix = 0.5f; }
+static void pr_dreamkeys(SPatch* p) { pr_epiano(p); p->revSize = 1.0f; p->fxMix = 0.65f; p->chorus = 0.7f; }
+static void pr_deepspace(SPatch* p) { OA.table = T_GROWL; OA.pos = 0.1f; OA.oct = -1; OA.uni = 3; OA.detune = 35; p->subShape = 0; p->subOct = -1; p->subLevel = 0.3f;
+	p->cutoff = 0.3f; LFO(0, 0, 0, 0.03f); MOD(2, SRC_LFO1, DST_APOS, 0.4f); ENV1(3.0f, 0, 1, 1, 4.0f); p->fx = 3; p->revSize = 1.0f; p->fxMix = 0.6f; }
+static void pr_rain(SPatch* p) { OA.pos = SINE; OA.level = 0.5f; p->noiseType = 2; p->noiseLevel = 0.6f; LFO(1, 4, 0, 7.0f); MOD(3, SRC_LFO2, DST_PITCH, 0.2f);
+	ENV1(0.002f, 0, 0.5f, 0.3f, 0.8f); p->fx = 3; p->fxMix = 0.5f; }
+static void pr_lullaby(SPatch* p) { pr_marimba(p); p->revSize = 1.0f; p->fxMix = 0.6f; p->chorus = 0.3f; }
+
+#define MAXPRE 12
+#define NSTYLES 10   // last style = USER
+static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "PLUCK", "KEYS", "CHORDS", "RETRO", "AMBIENT", "FX", "USER"};
+static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
+	{{"SUB WOBBLE", pr_subwob}, {"REESE", pr_reese}, {"FM GROWL", pr_fmgrowl}, {"808 SUB", pr_808}, {"ACID", pr_acid},
+	 {"WOBBLE 1/8", pr_wob8}, {"DIGI BASS", pr_digibass}, {"SINE BASS", pr_sinebass}, {"PLUCK BASS", pr_pluckbass}, {"HOOVER", pr_hoover}},
+	{{"SUPERSAW", pr_supersaw}, {"SYNC SCREAM", pr_syncscream}, {"VOWEL LEAD", pr_vowellead}, {"CHIP SQUARE", pr_chip}, {"DIGI PIPE", pr_digipipe},
+	 {"BRASS LEAD", pr_brasslead}, {"WHISTLE", pr_whistle}, {"GLIDE SQUARE", pr_glidesq}, {"FUZZ LEAD", pr_fuzzlead}, {"FIFTHS", pr_fifths}},
+	{{"SYRUP PAD", pr_syruppad}, {"GLASS", pr_glass}, {"CHOIR", pr_choir}, {"WARM STRINGS", pr_strings}, {"DARK DRONE", pr_drone},
+	 {"VAPOR PAD", pr_vapor}, {"SWEEP PAD", pr_sweeppad}, {"FORMANT PAD", pr_formantpad}, {"SHIMMER PAD", pr_shimmerpad}, {"PWM PAD", pr_pwmpad}},
+	{{"SYRUP PLUCK", pr_syruppluck}, {"MARIMBA", pr_marimba}, {"KALIMBA", pr_kalimba}, {"HARP", pr_harp}, {"DUB STAB", pr_dubstab},
+	 {"BELL", pr_bell}, {"STEEL DRUM", pr_steeldrum}, {"SYNTH PLUCK", pr_synthpluck}, {"MUTED", pr_muted}, {"PIZZ", pr_pizz}},
+	{{"E PIANO", pr_epiano}, {"ORGAN", pr_organ}, {"CLAV", pr_clav}, {"ACORDEON", pr_acordeon}, {"VINYL KEYS", pr_vinylkeys},
+	 {"DARK RHODES", pr_rhodesdark}, {"WURLI", pr_wurli}, {"CHURCH ORGAN", pr_church}, {"HARPSICHORD", pr_harpsi}, {"LOFI PIANO", pr_lofipiano}},
+	{{"HOUSE ORGAN", pr_houseorgan}, {"NEO SOUL", pr_neosoul}, {"POWER", pr_power}, {"SUS SHIMMER", pr_shimmer}, {"DUB CHORDS", pr_dubchord},
+	 {"MIN7 PAD", pr_min7pad}, {"MAJ7 KEYS", pr_maj7keys}, {"POWER PLUCK", pr_powerpluck}, {"SUS ORGAN", pr_susorgan}, {"TECHNO STAB", pr_technostab}},
+	{{"8-BIT LEAD", pr_8bitlead}, {"8-BIT BASS", pr_8bitbass}, {"VGM BRASS", pr_vgmbrass}, {"ARCADE", pr_arcade},
+	 {"80S POLY", pr_80spoly}, {"SYNTHWAVE", pr_synthwave}, {"CHIP BELL", pr_chipbell}, {"GB WAVE", pr_gbwave}},
+	{{"OCEAN", pr_ocean}, {"AURORA", pr_aurora}, {"DUST", pr_dust}, {"SLOW BLOOM", pr_bloom},
+	 {"DREAM KEYS", pr_dreamkeys}, {"DEEP SPACE", pr_deepspace}, {"RAIN", pr_rain}, {"LULLABY", pr_lullaby}},
+	{{"RISER", pr_riser}, {"LASER", pr_laser}, {"WIND", pr_wind}, {"RADIO", pr_radio}, {"ROBOT", pr_robot},
+	 {"SIREN", pr_siren}, {"BUBBLES", pr_bubbles}, {"NOISE SWEEP", pr_noisesweep}, {"ALARM", pr_alarm}, {"SPACE DRONE", pr_spacedrone}},
+};
+#define NUSER 8
+static SPatch gUser[NUSER];
+static int gStyle = 2, gPreset = 0;      // style + patch index shown in the browser
+static char gPatchName[24] = "INIT";
+static int gSaveSlot = 0;
+static const char* USER_PATH = "sdmc:/3ds/syrup/user_presets.bin";
+
+static void userLoad(void) {
+	for (int i = 0; i < NUSER; i++) { patchInit(&gUser[i]); snprintf(gUser[i].name, sizeof(gUser[i].name), "EMPTY %d", i + 1); gUser[i].magic = 0; }
+	FILE* f = fopen(USER_PATH, "rb");
+	if (!f) return;
+	SPatch tmp[NUSER];
+	if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
+	fclose(f);
+}
+static int userSave(void) {
+	mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777);
+	FILE* f = fopen(USER_PATH, "wb");
+	if (!f) return 0;
+	int ok = fwrite(gUser, sizeof(SPatch), NUSER, f) == NUSER;
+	fclose(f);
+	return ok;
+}
+
+static void patchCapture(SPatch* p) {
+	p->magic = PATCH_MAGIC;
+	snprintf(p->name, sizeof(p->name), "%.19s", gPatchName);
+	for (int o = 0; o < 2; o++) {
+		Osc* s = &gOsc[o]; OscP* q = &p->osc[o];
+		q->on = s->on; q->table = s->table < T_BUILTIN ? s->table : T_BASIC; q->warp = s->warp; q->oct = s->oct; q->semi = s->semi; q->uni = s->uni;
+		q->pos = s->pos; q->warpAmt = s->warpAmt; q->level = s->level; q->fine = s->fine; q->detune = s->detune; q->blend = s->blend; q->width = s->width;
+	}
+	p->subShape = gSubShape; p->subOct = gSubOct; p->noiseType = gNoiseType; p->filtType = gFiltType;
+	p->subLevel = gSubLevel; p->noiseLevel = gNoiseLevel; p->cutoff = gCutoff; p->res = gRes; p->keytrack = gKeytrack;
+	p->env1 = gEnv1; p->env2 = gEnv2;
+	for (int i = 0; i < 2; i++) { p->lfoShape[i] = gLfo[i].shape; p->lfoMode[i] = gLfo[i].mode; p->lfoRate[i] = gLfo[i].rate; }
+	for (int i = 0; i < 4; i++) p->mod[i] = gMod[i];
+	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
+	p->glide = gGlide; p->chorus = gChorus; p->revSize = gRevSize; p->revDamp = gRevDamp; p->fxMix = gFxMix; p->driveAmt = gDriveAmt; p->master = gMaster;
+}
+
+static int gForceBuild = 3;
+static void patchApply(const SPatch* p) {
+	allOff();
+	LightLock_Lock(&gMipsLock);
+	for (int o = 0; o < 2; o++) {
+		Osc* s = &gOsc[o]; const OscP* q = &p->osc[o];
+		int newTable = q->table != s->table;
+		s->on = q->on; s->table = q->table; s->warp = q->warp; s->oct = q->oct; s->semi = q->semi; s->uni = q->uni < 1 ? 1 : (q->uni > 3 ? 3 : q->uni);
+		s->pos = q->pos; s->warpAmt = q->warpAmt; s->level = q->level; s->fine = q->fine; s->detune = q->detune; s->blend = q->blend; s->width = q->width;
+		if (newTable || !s->tb.nFrames) tableSelect(&s->tb, s->table);
+	}
+	int subChg = p->subShape != gSubShape, noiseChg = p->noiseType != gNoiseType;
+	gSubShape = p->subShape; gSubOct = p->subOct; gNoiseType = p->noiseType; gFiltType = p->filtType;
+	gSubLevel = p->subLevel; gNoiseLevel = p->noiseLevel; gCutoff = p->cutoff; gRes = p->res; gKeytrack = p->keytrack;
+	gEnv1 = p->env1; gEnv2 = p->env2;
+	for (int i = 0; i < 2; i++) { gLfo[i].shape = p->lfoShape[i]; gLfo[i].mode = p->lfoMode[i]; gLfo[i].rate = p->lfoRate[i]; }
+	for (int i = 0; i < 4; i++) gMod[i] = p->mod[i];
+	gVoiceMode = p->voiceMode; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
+	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
+	if (subChg) buildSub();
+	LightLock_Unlock(&gMipsLock);
+	if (noiseChg) buildNoise();
+	snprintf(gPatchName, sizeof(gPatchName), "%s", p->name);
+	gForceBuild = 3;
+}
+
+static int presetCount(int style) {
+	if (style == NSTYLES - 1) return NUSER;
+	int n = 0; while (n < MAXPRE && PRESETS[style][n].name) n++;
+	return n;
+}
+static void presetLoad(int style, int idx) {
+	if (style == NSTYLES - 1) { if (gUser[idx].magic == PATCH_MAGIC) patchApply(&gUser[idx]); return; }
+	SPatch p; patchInit(&p);
+	PRESETS[style][idx].fn(&p);
+	snprintf(p.name, sizeof(p.name), "%s", PRESETS[style][idx].name);
+	patchApply(&p);
+}
+static const char* presetName(int style, int idx) { return style == NSTYLES - 1 ? gUser[idx].name : PRESETS[style][idx].name; }
+
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
-enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32 };
+enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
 
 #define PF(n, ptr, mn, mx, st, unit, d) {n, PT_F, ptr, mn, mx, st, NULL, unit, d}
@@ -800,6 +1129,9 @@ typedef struct { const char* name; int type; void* p; float mn, mx, step; const 
 static const char* ONOFF[2] = {"OFF", "ON"};
 static int gTableCount = T_BUILTIN;
 static const char* TABLE_NAME_DUMMY[1] = {""};
+static const char* PRESET_DUMMY[1] = {""};
+static const char* PRESS_RIGHT[1] = {"PRESS >"};
+static const char* SLOT_NAMES[NUSER] = {"USER 1", "USER 2", "USER 3", "USER 4", "USER 5", "USER 6", "USER 7", "USER 8"};
 
 #define OSC_PAGE(o, D, DT) { \
 	PE("ON", &gOsc[o].on, 2, ONOFF, D), \
@@ -853,15 +1185,24 @@ static Param P_VOICE[] = {
 	PF("MASTER", &gMaster, 0, 1.5f, 0.02f, "%", 0),
 	PEND};
 
-#define NPAGES 6
-static Param* PAGES[NPAGES] = {P_OSCA, P_OSCB, P_SUBN, P_FILT, P_MOD, P_VOICE};
-static const char* PAGE_NAMES[NPAGES] = {"OSC A", "OSC B", "SUB+NOISE", "FILT+ENV", "LFO+MOD", "VOICE+FX"};
+static Param P_PRESET[] = {
+	PE("STYLE", &gStyle, NSTYLES, STYLE_NAMES, D_STYLE),
+	{"PATCH", PT_E, &gPreset, 0, 0, 1, PRESET_DUMMY, "", D_PRESET},
+	PE("SAVE SLOT", &gSaveSlot, NUSER, SLOT_NAMES, 0),
+	{"SAVE NOW", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_SAVE},
+	{"INIT PATCH", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_INIT},
+	PEND};
+#define NPAGES 7
+static Param* PAGES[NPAGES] = {P_PRESET, P_OSCA, P_OSCB, P_SUBN, P_FILT, P_MOD, P_VOICE};
+static const char* PAGE_NAMES[NPAGES] = {"PRESETS", "OSC A", "OSC B", "SUB+NOISE", "FILT+ENV", "LFO+MOD", "VOICE+FX"};
 static int pageLen(int pg) { int n = 0; while (PAGES[pg][n].name) n++; return n; }
 
 static void paramFmt(const Param* p, char* out, int len) {
 	if (p->type == PT_E) {
 		int v = *(int*)p->p;
 		if (p->names == TABLE_NAME_DUMMY) snprintf(out, len, "%.16s", p->p == &gOsc[0].table ? gOsc[0].tb.name : gOsc[1].tb.name);
+		else if (p->names == PRESET_DUMMY) snprintf(out, len, "%.16s", presetName(gStyle, gPreset));
+		else if (p->names == PRESS_RIGHT) snprintf(out, len, "PRESS >");
 		else snprintf(out, len, "%s", p->names[v]);
 		return;
 	}
@@ -886,6 +1227,8 @@ static int paramChange(Param* p, int dir, int fast) {
 	int* v = (int*)p->p;
 	int mx = (int)p->mx;
 	if (p->names == TABLE_NAME_DUMMY) mx = gTableCount - 1;
+	if (p->names == PRESET_DUMMY) mx = presetCount(gStyle) - 1;
+	if (p->names == PRESS_RIGHT) return 0;
 	int nv = *v + dir;
 	if (p->type == PT_E) { if (nv < 0) nv = mx; if (nv > mx) nv = 0; }
 	else { if (nv < (int)p->mn) nv = (int)p->mn; if (nv > mx) nv = mx; }
@@ -954,8 +1297,25 @@ static void drawTop(int page, int sel, int oct, int latch) {
 	char pg[48]; snprintf(pg, sizeof(pg), "< %s >", PAGE_NAMES[page]);
 	text(58, 3, pg, 1, 255, 200, 120);
 	char pn[8]; snprintf(pn, sizeof(pn), "%d/%d", page + 1, NPAGES); text(170, 3, pn, 1, DIM);
-	int focus = (page == 1) ? 1 : 0;
-	if (page == 0 || page == 1) {
+	text(396 - (int)strlen(gPatchName) * 8, 3, gPatchName, 1, TXT);
+	int focus = (page == 2) ? 1 : 0;
+	if (page == 0) {   // preset browser: styles | patches
+		rect(4, 16, 196, 214, PANEL);
+		for (int i = 0; i < NSTYLES; i++) {
+			int y = 21 + i * 13;
+			if (i == gStyle) rect(6, y - 3, 76, 13, 90, 56, 16);
+			text(10, y, STYLE_NAMES[i], 1, i == gStyle ? 255 : 150, i == gStyle ? 210 : 100, i == gStyle ? 130 : 40);
+		}
+		for (int i = 0; i < presetCount(gStyle); i++) {
+			int y = 21 + i * 13;
+			int cur = i == gPreset;
+			if (cur) rect(86, y - 3, 112, 13, 120, 74, 20);
+			char nm[16]; snprintf(nm, sizeof(nm), "%.13s", presetName(gStyle, i));
+			text(90, y, nm, 1, cur ? 255 : 220, cur ? 230 : 190, cur ? 170 : 140);
+		}
+		char cnt[24]; snprintf(cnt, sizeof(cnt), "%d PATCHES", presetCount(gStyle)); text(10, 160, cnt, 1, DIM);
+		drawWave(gOsc[0].mips.lev[2], LEVN[2], 8, 176, 188, 50, gOsc[0].on);
+	} else if (page == 1 || page == 2) {
 		Osc* o = &gOsc[focus];
 		drawWave(o->mips.lev[2], LEVN[2], 4, 16, 196, 100, o->on);
 		text(8, 19, o->on ? (focus ? "OSC B" : "OSC A") : (focus ? "OSC B OFF" : "OSC A OFF"), 1, DIM);
@@ -1139,6 +1499,8 @@ int main(void) {
 	B->on = 0; B->table = T_HARMONIX; B->pos = 0.3f; B->level = 0.5f; B->oct = 1; B->uni = 1; B->detune = 10; B->blend = 0.5f; B->width = 0.6f;
 	tableSelect(&A->tb, A->table); tableSelect(&B->tb, B->table);
 	LightLock_Init(&gMipsLock);
+	userLoad();
+	presetLoad(gStyle, gPreset);   // start on PAD / SYRUP PAD
 	LightEvent_Init(&gJobEv, RESET_ONESHOT);
 	APT_SetAppCpuTimeLimit(80);
 	{
@@ -1159,7 +1521,6 @@ int main(void) {
 	int held[4] = {-1, -1, -1, -1}, heldN = 0, curKey = -1;
 	int topDirty = 1, botDirty = 1;
 	float repeatT = 0, lastPos[2] = {-1, -1}, lastWarp[2] = {-1, -1};
-	int forceBuild = 3;
 	u8 on[128], onPrev[128]; memset(onPrev, 0, sizeof(onPrev));
 	u64 last = osGetTime();
 
@@ -1187,13 +1548,19 @@ int main(void) {
 		else if (kHeld & (KEY_DLEFT | KEY_DRIGHT)) { repeatT -= dt; if (repeatT <= 0) { dir = (kHeld & KEY_DRIGHT) ? 1 : -1; repeatT = 0.05f; fast = 1; } }
 		if (dir) {
 			Param* p = &PAGES[page][sel[page]];
-			if (paramChange(p, dir, fast)) {
+			if ((p->dirty & (D_SAVE | D_INIT)) && dir > 0 && !fast) {
+				if (p->dirty & D_SAVE) { patchCapture(&gUser[gSaveSlot]); userSave(); gStyle = NSTYLES - 1; gPreset = gSaveSlot; }
+				else { SPatch ip; patchInit(&ip); patchApply(&ip); }
+				curKey = -1; heldN = 0; topDirty = 1;
+			} else if (paramChange(p, dir, fast)) {
+				if (p->dirty & D_STYLE) { gPreset = 0; presetLoad(gStyle, 0); curKey = -1; heldN = 0; }
+				if (p->dirty & D_PRESET) { presetLoad(gStyle, gPreset); curKey = -1; heldN = 0; }
 				if (p->dirty & (D_TBLA | D_TBLB)) LightLock_Lock(&gMipsLock);
 				if (p->dirty & D_TBLA) tableSelect(&A->tb, A->table);
 				if (p->dirty & D_TBLB) tableSelect(&B->tb, B->table);
 				if (p->dirty & (D_TBLA | D_TBLB)) LightLock_Unlock(&gMipsLock);
-				if (p->dirty & (D_A | D_TBLA)) forceBuild |= 1;
-				if (p->dirty & (D_B | D_TBLB)) forceBuild |= 2;
+				if (p->dirty & (D_A | D_TBLA)) gForceBuild |= 1;
+				if (p->dirty & (D_B | D_TBLB)) gForceBuild |= 2;
 				if (p->dirty & D_SUB) { LightLock_Lock(&gMipsLock); buildSub(); LightLock_Unlock(&gMipsLock); }
 				if (p->dirty & D_NOISE) buildNoise();
 				if (p->p == &gVoiceMode || p->p == &gFx || p->p == &A->on || p->p == &B->on || p->p == &A->uni || p->p == &B->uni) { allOff(); curKey = -1; heldN = 0; }
@@ -1255,7 +1622,7 @@ int main(void) {
 			if (we[o] > 1) we[o] = 1;
 		}
 		int chg[2];
-		for (int o = 0; o < 2; o++) chg[o] = (forceBuild & (1 << o)) || fabsf(pe[o] - lastPos[o]) > 0.002f || fabsf(we[o] - lastWarp[o]) > 0.002f;
+		for (int o = 0; o < 2; o++) chg[o] = (gForceBuild & (1 << o)) || fabsf(pe[o] - lastPos[o]) > 0.002f || fabsf(we[o] - lastWarp[o]) > 0.002f;
 		if (chg[1] && A->warp >= W_FM) chg[0] = 1;
 		if (chg[0] && B->warp >= W_FM) chg[1] = 1;
 		if ((chg[0] || chg[1]) && !AGET(gJobBusy)) {
@@ -1266,7 +1633,7 @@ int main(void) {
 			}
 			if (gWorker) { gJob = j; ASET(gJobBusy, 1); LightEvent_Signal(&gJobEv); }   // core 1
 			else { LightLock_Lock(&gMipsLock); doRebuild(&j); LightLock_Unlock(&gMipsLock); ASET(gJobDone, 1); }
-			forceBuild = 0;
+			gForceBuild = 0;
 		}
 		if (AGET(gJobDone)) { ASET(gJobDone, 0); topDirty = 1; }
 

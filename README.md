@@ -11,6 +11,25 @@ The 3DS's DSP chip plays the oscillators: each voice layer is a DSP channel loop
 
 Waveform rebuilds run on the 3DS's second CPU core (a worker thread on core 1, with the app given up to 80% of that core), so wavetable sweeps and modulation don't load the main core.
 
+## Presets
+
+Page 1 is a preset browser organised by style. Use the D-pad to pick a style and a patch; the patch loads immediately, so you can play keys to audition it.
+
+| Style | Patches |
+|---|---|
+| BASS | Sub Wobble, Reese, FM Growl, 808 Sub, Acid, Wobble 1/8, Digi Bass, Sine Bass, Pluck Bass, Hoover |
+| LEAD | Supersaw, Sync Scream, Vowel Lead, Chip Square, Digi Pipe, Brass Lead, Whistle, Glide Square, Fuzz Lead, Fifths |
+| PAD | Syrup Pad, Glass, Choir, Warm Strings, Dark Drone, Vapor Pad, Sweep Pad, Formant Pad, Shimmer Pad, PWM Pad |
+| PLUCK | Syrup Pluck, Marimba, Kalimba, Harp, Dub Stab, Bell, Steel Drum, Synth Pluck, Muted, Pizz |
+| KEYS | E Piano, Organ, Clav, Acordeon, Vinyl Keys, Dark Rhodes, Wurli, Church Organ, Harpsichord, Lofi Piano |
+| CHORDS | House Organ, Neo Soul, Power, Sus Shimmer, Dub Chords, Min7 Pad, Maj7 Keys, Power Pluck, Sus Organ, Techno Stab |
+| RETRO | 8-Bit Lead, 8-Bit Bass, VGM Brass, Arcade, 80s Poly, Synthwave, Chip Bell, GB Wave |
+| AMBIENT | Ocean, Aurora, Dust, Slow Bloom, Dream Keys, Deep Space, Rain, Lullaby |
+| FX | Riser, Laser, Wind, Radio, Robot, Siren, Bubbles, Noise Sweep, Alarm, Space Drone |
+| USER | 8 save slots |
+
+To save, pick a SAVE SLOT and press right on SAVE NOW. User patches are stored in `sdmc:/3ds/syrup/user_presets.bin`. INIT PATCH resets to a single saw.
+
 ## Engine (laid out like Serum)
 
 | Section | What's there |
