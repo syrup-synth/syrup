@@ -23,7 +23,7 @@ The 3DS's DSP chip plays the oscillators: each voice layer is a DSP channel loop
 | LFO 1-2 | Sine, triangle, saw, square, S&H; free or retrigger |
 | MOD MATRIX | 4 slots. Sources: LFO 1, LFO 2, ENV 2, velocity, circle pad, XY pad. Destinations: A/B WT POS, A/B warp, cutoff, resonance, pitch, A/B level, pan |
 | VOICING | Poly, mono, legato; glide; bend range; chord mode |
-| FX | Chorus, echo (ping-pong), space (early reflections), drive (tube, hard, fold, rectify), master |
+| FX | Chorus, echo (ping-pong), space (early reflections), reverb (size, damp), FX mix, drive (tube, hard, fold, rectify), master |
 
 ## Controls
 
@@ -56,6 +56,7 @@ FBI > Remote Install > Scan QR Code, and scan `install-qr.png`. Sound needs the 
 
 - WT POS and warp modulation are shared by all notes playing (one cycle per oscillator). Filter, pitch, level and pan modulation are per note.
 - FM / AM / RM from the other oscillator use whole-octave ratios.
-- 24 DSP channels in total. With full unison on both oscillators plus sub and noise, a note uses 8 channels.
-- Effects are built from extra DSP voices (homebrew can't route the DSP's effect buses back for processing), and drive is applied to the waveform.
+- Two sound units are used together: the DSP (24 filtered channels) plays OSC A / OSC B plus one shared noise channel; CSND (the 3DS's second sound unit, ~24 channels, no filter) plays the sub and all effect taps. CSND layers are "filtered" by picking a darker band-limited copy of the waveform to match the cutoff.
+- With full unison on both oscillators a note uses 6 DSP channels, so 4 such notes fit; with 3-voice unison on A alone, 8.
+- Effects are built from extra voices (homebrew can't route the DSP's effect buses back for processing). REVERB is 8 diffuse taps per note: spread, slightly detuned, each darker and with a longer release. Drive is applied to the waveform.
 - Envelopes and LFOs run at about 60 Hz.

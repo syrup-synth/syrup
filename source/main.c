@@ -285,7 +285,7 @@ static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VE
 enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_COUNT };
 static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN"};
 static const char* VOICE_MODES[3] = {"POLY", "MONO", "LEGATO"};
-static const char* FX_NAMES[3] = {"OFF", "ECHO", "SPACE"};
+static const char* FX_NAMES[4] = {"OFF", "ECHO", "SPACE", "REVERB"};
 static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
 static const float ECHO_T[3] = {0.25f, 0.375f, 0.5f};
 static const char* DRIVE_TYPES[5] = {"OFF", "TUBE", "HARD", "FOLD", "RECTIFY"};
@@ -402,26 +402,40 @@ static void buildNoise(void) {
 	DSP_FlushDataCache(gNoise, gNoiseLen * sizeof(s16));
 }
 
-// ---------------------------------------------------------------- voices on DSP channels
-#define NVS 32
-enum { R_A0, R_A1, R_A2, R_B0, R_B1, R_B2, R_SUB, R_NOISE, R_COUNT };
+// ---------------------------------------------------------------- voices: DSP + CSND channels
+// DSP (24 ch, filtered): OSC A / OSC B unison layers, plus one shared NOISE channel for all notes.
+// CSND (~24 ch, no filter): SUB layers and the ECHO / SPACE / REVERB taps. Their "filter" is
+// the mip level: a darker (fewer-harmonic) copy of the cycle chosen to match the cutoff.
+#define NVS 48
+#define NCS 32
+#define NOISE_CH 23
+enum { R_A0, R_A1, R_A2, R_B0, R_B1, R_B2, R_SUB, R_TAP, R_COUNT };
+enum { BK_DSP, BK_CSND };
 typedef struct {
 	int active, started, note, stage, stage2, isEcho, nch;
-	int ch[R_COUNT], role[R_COUNT], lev[R_COUNT];
-	float env, env2, freq, cur, gain, pan, cutMul, startDelay, gate, held, vel, hold1, hold2;
+	int ch[R_COUNT], bk[R_COUNT], role[R_COUNT], lev[R_COUNT];
+	float env, env2, freq, cur, gain, pan, cutMul, startDelay, gate, held, vel, hold1, hold2, relMul, tapDet;
 	unsigned parent, id, age;
 } SVoice;
 static SVoice gV[NVS];
-static int gChOwner[NCH];
+static int gDspOwner[NCH], gCsOwner[NCS];
 static unsigned gAge = 0, gIdc = 0;
 static ndspWaveBuf gWB[NCH];
-static int gAudioOK = 0;
+static int gAudioOK = 0, gCsndOK = 0, gNoiseOn = 0;
 static float gStick = 0, gXYmod = 0, gChorusPh = 0;
 static float gAutoGain = 1.0f;
+static float gRevSize = 0.5f, gRevDamp = 0.5f, gFxMix = 0.5f;
 
 static float mtof(float n) { return 440.0f * powf(2.0f, (n - 69) / 12.0f); }
 static int levelFor(float f) { for (int L = 0; L < NLEV; L++) if (f * LEVN[L] <= 2.0f * DSPRATE) return L; return NLEV - 1; }
+// darkest level whose harmonics still reach `cut` (CSND layers have no filter); CSND needs >= ~1.1 kHz rate
+static int levelDamped(float f, float cut) {
+	int L = levelFor(f);
+	while (L + 1 < NLEV && f * LEVN[L + 1] * 0.25f >= cut && f * LEVN[L + 1] >= 1100.0f) L++;
+	return L;
+}
 static float oscTune(int o) { return powf(2.0f, gOsc[o].oct + gOsc[o].semi / 12.0f + gOsc[o].fine / 1200.0f); }
+static float baseCutoff(void) { return 60.0f * powf(15000.0f / 60.0f, gCutoff); }
 
 static void uniParams(const Osc* o, int u, float* det, float* pan, float* gain) {
 	int n = o->uni;
@@ -431,18 +445,34 @@ static void uniParams(const Osc* o, int u, float* det, float* pan, float* gain) 
 	else { *det = (u == 1 ? -1.0f : 1.0f) * o->detune; *pan = 0.5f + (u == 1 ? -0.5f : 0.5f) * o->width; *gain = 0.35f + 0.5f * o->blend; }
 }
 
+static void stopCh(int bk, int ch) {
+	if (bk == BK_DSP) { ndspChnWaveBufClear(ch); gDspOwner[ch] = -1; }
+	else { CSND_SetPlayState(ch, 0); gCsOwner[ch] = -1; }
+}
+
 static void freeVoice(SVoice* v) {
-	if (v->started) for (int i = 0; i < v->nch; i++) if (v->ch[i] >= 0) { ndspChnWaveBufClear(v->ch[i]); gChOwner[v->ch[i]] = -1; v->ch[i] = -1; }
+	if (v->started) for (int i = 0; i < v->nch; i++) if (v->ch[i] >= 0) { stopCh(v->bk[i], v->ch[i]); v->ch[i] = -1; }
 	v->active = 0; v->started = 0;
 }
-static int freeChannels(void) { int n = 0; for (int c = 0; c < NCH; c++) if (gChOwner[c] < 0) n++; return n; }
-static int stealFor(int n, int self) {
-	while (freeChannels() < n) {
+
+static int dspUsable(int c) { return !(gNoiseOn && c == NOISE_CH); }
+static int csUsable(int c) { return gCsndOK && (csndChannels & BIT(c)); }
+static int freeCount(int bk) {
+	int n = 0;
+	if (bk == BK_DSP) { for (int c = 0; c < NCH; c++) if (dspUsable(c) && gDspOwner[c] < 0) n++; }
+	else for (int c = 0; c < NCS; c++) if (csUsable(c) && gCsOwner[c] < 0) n++;
+	return n;
+}
+static int voiceUses(const SVoice* v, int bk) { for (int i = 0; i < v->nch; i++) if (v->bk[i] == bk) return 1; return 0; }
+
+// make room for n channels on a backend: oldest tap, then oldest releasing voice, then oldest
+static int stealFor(int bk, int n, int self) {
+	while (freeCount(bk) < n) {
 		int vi = -1; unsigned best = 0xffffffff;
 		for (int pass = 0; pass < 3 && vi < 0; pass++)
 			for (int i = 0; i < NVS; i++) {
 				SVoice* v = &gV[i];
-				if (i == self || !v->active || !v->started) continue;
+				if (i == self || !v->active || !v->started || !voiceUses(v, bk)) continue;
 				if (pass == 0 && !v->isEcho) continue;
 				if (pass == 1 && v->stage != 4) continue;
 				if (v->age < best) { best = v->age; vi = i; }
@@ -451,6 +481,11 @@ static int stealFor(int n, int self) {
 		freeVoice(&gV[vi]);
 	}
 	return 1;
+}
+static int takeCh(int bk, int vi) {
+	if (bk == BK_DSP) { for (int c = 0; c < NCH; c++) if (dspUsable(c) && gDspOwner[c] < 0) { gDspOwner[c] = vi; return c; } }
+	else for (int c = 0; c < NCS; c++) if (csUsable(c) && gCsOwner[c] < 0) { gCsOwner[c] = vi; return c; }
+	return -1;
 }
 
 static void filterSet(int ch, float hz, float res) {
@@ -467,45 +502,59 @@ static void filterSet(int ch, float hz, float res) {
 	ndspChnIirBiquadSetEnable(ch, true);
 }
 
-static const s16* roleBuf(int role, int lev, int* N) {
-	if (role == R_NOISE) { *N = gNoiseLen; return gNoise; }
-	Mips* m = role == R_SUB ? &gSubMips : &gOsc[role >= R_B0].mips;
-	if (!(m->built & (1u << lev))) mipsBuildLevel(m, lev);
-	*N = LEVN[lev];
-	return m->lev[lev];
+static Mips* roleMips(int role) {
+	if (role == R_SUB) return &gSubMips;
+	if (role == R_TAP) return &gOsc[gOsc[0].on ? 0 : 1].mips;
+	return &gOsc[role >= R_B0].mips;
+}
+static float roleFreq(const SVoice* v, int role) {
+	float f = v->cur;
+	if (role <= R_A2) return f * oscTune(0);
+	if (role <= R_B2) return f * oscTune(1);
+	if (role == R_SUB) return f * powf(2.0f, (float)gSubOct);
+	return f * oscTune(gOsc[0].on ? 0 : 1);
+}
+
+static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
+	int ch = takeCh(bk, vi);
+	v->ch[i] = ch; v->bk[i] = bk; v->role[i] = role;
+	float f = roleFreq(v, role);
+	v->lev[i] = (role == R_TAP || (role == R_SUB && bk == BK_CSND)) ? levelDamped(f, baseCutoff() * v->cutMul + 200) : levelFor(f * 1.03f);
+	Mips* m = roleMips(role);
+	if (!(m->built & (1u << v->lev[i]))) mipsBuildLevel(m, v->lev[i]);
+	int N = LEVN[v->lev[i]];
+	if (bk == BK_DSP) {
+		float mix[12] = {0};
+		ndspChnSetMix(ch, mix);
+		ndspChnSetRate(ch, f * N);
+		filterSet(ch, 2000, 0);
+		memset(&gWB[ch], 0, sizeof(ndspWaveBuf));
+		gWB[ch].data_vaddr = m->lev[v->lev[i]];
+		gWB[ch].nsamples = N;
+		gWB[ch].looping = true;
+		ndspChnWaveBufAdd(ch, &gWB[ch]);
+	} else {
+		u32 pa = osConvertVirtToPhys(m->lev[v->lev[i]]);
+		u32 timer = CSND_TIMER(f * N);
+		if (timer < 0x42) timer = 0x42;
+		if (timer > 0xFFFF) timer = 0xFFFF;
+		u32 flags = SOUND_FORMAT_16BIT | SOUND_REPEAT | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(ch) | (timer << 16);
+		CSND_SetChnRegs(flags, pa, pa, N * 2, 0, 0);
+	}
 }
 
 static void startVoice(int vi) {
 	SVoice* v = &gV[vi];
-	int roles[R_COUNT], nr = 0;
-	if (v->isEcho) { if (gOsc[0].on) roles[nr++] = R_A0; else if (gOsc[1].on) roles[nr++] = R_B0; }
+	int roles[R_COUNT], bks[R_COUNT], nr = 0, nd = 0, nc = 0;
+	if (v->isEcho) { if (!gOsc[0].on && !gOsc[1].on) { v->active = 0; return; } roles[nr] = R_TAP; bks[nr++] = gCsndOK ? BK_CSND : BK_DSP; }
 	else {
-		for (int o = 0; o < 2; o++) if (gOsc[o].on) for (int u = 0; u < gOsc[o].uni; u++) roles[nr++] = (o ? R_B0 : R_A0) + u;
-		if (gSubLevel > 0.01f) roles[nr++] = R_SUB;
-		if (gNoiseLevel > 0.01f) roles[nr++] = R_NOISE;
+		for (int o = 0; o < 2; o++) if (gOsc[o].on) for (int u = 0; u < gOsc[o].uni; u++) { roles[nr] = (o ? R_B0 : R_A0) + u; bks[nr++] = BK_DSP; }
+		if (gSubLevel > 0.01f) { roles[nr] = R_SUB; bks[nr++] = gCsndOK ? BK_CSND : BK_DSP; }
 	}
-	if (nr == 0 || !stealFor(nr, vi)) { v->active = 0; return; }
+	for (int i = 0; i < nr; i++) { if (bks[i] == BK_DSP) nd++; else nc++; }
+	if (nr == 0 || (nd && !stealFor(BK_DSP, nd, vi)) || (nc && !stealFor(BK_CSND, nc, vi))) { v->active = 0; return; }
 	v->nch = nr;
-	for (int i = 0; i < nr; i++) {
-		int ch = -1; for (int c = 0; c < NCH; c++) if (gChOwner[c] < 0) { ch = c; break; }
-		gChOwner[ch] = vi; v->ch[i] = ch; v->role[i] = roles[i];
-		int role = roles[i];
-		float f = v->freq;
-		if (role <= R_A2) f *= oscTune(0);
-		else if (role <= R_B2) f *= oscTune(1);
-		else if (role == R_SUB) f *= powf(2.0f, (float)gSubOct);
-		v->lev[i] = role == R_NOISE ? 0 : levelFor(f * 1.03f);
-		int N; const s16* buf = roleBuf(role, v->lev[i], &N);
-		float mix[12] = {0};
-		ndspChnSetMix(ch, mix);
-		ndspChnSetRate(ch, role == R_NOISE ? DSPRATE : f * N);
-		filterSet(ch, 2000, 0);
-		memset(&gWB[ch], 0, sizeof(ndspWaveBuf));
-		gWB[ch].data_vaddr = buf;
-		gWB[ch].nsamples = N;
-		gWB[ch].looping = true;
-		ndspChnWaveBufAdd(ch, &gWB[ch]);
-	}
+	for (int i = 0; i < nr; i++) startLayer(v, vi, i, roles[i], bks[i]);
 	v->started = 1;
 }
 
@@ -522,10 +571,34 @@ static void initVoice(SVoice* v) {
 	memset(v, 0, sizeof(*v));
 	for (int i = 0; i < R_COUNT; i++) v->ch[i] = -1;
 	v->active = 1; v->stage = 1; v->stage2 = 1; v->age = gAge++; v->id = ++gIdc; v->gate = -1;
-	v->gain = 1; v->cutMul = 1;
+	v->gain = 1; v->cutMul = 1; v->relMul = 1;
 }
 
 static void lfoTrig(void) { for (int i = 0; i < 2; i++) if (gLfo[i].mode == 1) gLfo[i].ph = 0; }
+
+static void addTaps(SVoice* v) {
+	int ne = 0; float t[8], g[8], p[8], c[8], rm[8], dt[8];
+	float mix = gFxMix * 2.0f;
+	if (gFx == 1) { float d = ECHO_T[gEchoT]; for (int k = 0; k < 3; k++) { t[k] = d * (k + 1); g[k] = 0.6f * powf(0.55f, (float)k); p[k] = (k & 1) ? 0.45f : -0.45f; c[k] = powf(0.7f, (float)(k + 1)); rm[k] = 1; dt[k] = 0; } ne = 3; }
+	if (gFx == 2) { static const float T[6] = {0.041f, 0.067f, 0.109f, 0.157f, 0.233f, 0.331f};
+		for (int k = 0; k < 6; k++) { t[k] = T[k]; g[k] = 0.5f * powf(0.8f, (float)k); p[k] = (k & 1) ? 0.4f : -0.4f; c[k] = powf(0.82f, (float)(k + 1)); rm[k] = 1; dt[k] = 0; } ne = 6; }
+	if (gFx == 3) {   // REVERB: 8 diffuse, detuned, darkening taps with long releases
+		static const float M[8] = {1.0f, 1.7f, 2.6f, 3.7f, 5.0f, 6.6f, 8.5f, 11.0f};
+		float base = 0.018f + gRevSize * 0.05f, damp = 0.55f + 0.4f * (1.0f - gRevDamp);
+		for (int k = 0; k < 8; k++) {
+			t[k] = base * M[k]; g[k] = 0.42f * powf(0.84f, (float)k);
+			p[k] = ((k & 1) ? 1.0f : -1.0f) * (0.2f + 0.05f * k); c[k] = powf(damp, (float)(k + 1));
+			rm[k] = 1.0f + gRevSize * 5.0f; dt[k] = ((k & 1) ? 1.0f : -1.0f) * (2.0f + k * 0.8f);
+		}
+		ne = 8;
+	}
+	for (int k = 0; k < ne; k++) {
+		SVoice* e = newVoice(); initVoice(e);
+		e->note = v->note; e->freq = v->freq; e->cur = v->freq; e->vel = v->vel;
+		e->gain = g[k] * mix; e->pan = p[k]; e->cutMul = c[k]; e->startDelay = t[k]; e->isEcho = 1; e->parent = v->id;
+		e->relMul = rm[k]; e->tapDet = dt[k];
+	}
+}
 
 static void voiceOn(int note, float vel) {
 	if (!gAudioOK) return;
@@ -538,21 +611,14 @@ static void voiceOn(int note, float vel) {
 		SVoice* v = newVoice(); initVoice(v);
 		v->note = note; v->freq = mtof((float)note); v->cur = (from > 0 && gGlide > 0) ? from : v->freq; v->vel = vel;
 		lfoTrig(); startVoice(v - gV);
+		if (v->active) addTaps(v);
 		return;
 	}
 	SVoice* v = newVoice(); initVoice(v);
 	v->note = note; v->freq = mtof((float)note); v->cur = v->freq; v->vel = vel;
 	lfoTrig();
 	startVoice(v - gV);
-	int ne = 0; float t[6], g[6], p[6], c[6];
-	if (gFx == 1) { float d = ECHO_T[gEchoT]; for (int k = 0; k < 3; k++) { t[k] = d * (k + 1); g[k] = 0.6f * powf(0.55f, (float)k); p[k] = (k & 1) ? 0.45f : -0.45f; c[k] = powf(0.7f, (float)(k + 1)); } ne = 3; }
-	if (gFx == 2) { static const float T[6] = {0.041f, 0.067f, 0.109f, 0.157f, 0.233f, 0.331f};
-		for (int k = 0; k < 6; k++) { t[k] = T[k]; g[k] = 0.5f * powf(0.8f, (float)k); p[k] = (k & 1) ? 0.4f : -0.4f; c[k] = powf(0.82f, (float)(k + 1)); } ne = 6; }
-	for (int k = 0; k < ne; k++) {
-		SVoice* e = newVoice(); initVoice(e);
-		e->note = note; e->freq = v->freq; e->cur = v->freq; e->vel = vel;
-		e->gain = g[k]; e->pan = p[k]; e->cutMul = c[k]; e->startDelay = t[k]; e->isEcho = 1; e->parent = v->id;
-	}
+	if (v->active) addTaps(v);
 }
 
 static void voiceOff(int note) {
@@ -565,12 +631,12 @@ static void voiceOff(int note) {
 }
 static void allOff(void) { for (int i = 0; i < NVS; i++) if (gV[i].active) { if (gV[i].isEcho && !gV[i].started) gV[i].active = 0; else gV[i].stage = gV[i].stage2 = 4; } }
 
-static void envStep(float* e, int* st, const AHDSR* E, float dt, float* hold) {
+static void envStep(float* e, int* st, const AHDSR* E, float dt, float* hold, float relMul) {
 	switch (*st) {
 	case 1: *e += dt / (E->a + 0.0005f); if (*e >= 1) { *e = 1; *st = E->h > 0 ? 5 : 2; *hold = 0; } break;
 	case 5: *hold += dt; if (*hold >= E->h) *st = 2; break;
 	case 2: *e -= dt * (1 - E->s) / (E->d + 0.0005f); if (*e <= E->s) { *e = E->s; *st = 3; } break;
-	case 4: *e -= dt / (E->r + 0.0005f); if (*e < 0) *e = 0; break;
+	case 4: *e -= dt / (E->r * relMul + 0.0005f); if (*e < 0) *e = 0; break;
 	}
 }
 
@@ -603,6 +669,20 @@ static float modSum(int dst, const SVoice* v) {
 	return s;
 }
 
+static void noiseChannel(int want) {   // shared noise layer on DSP channel NOISE_CH
+	if (want == gNoiseOn) return;
+	if (want) {
+		if (gDspOwner[NOISE_CH] >= 0) freeVoice(&gV[gDspOwner[NOISE_CH]]);
+		gNoiseOn = 1;
+		float mix[12] = {0};
+		ndspChnSetMix(NOISE_CH, mix);
+		ndspChnSetRate(NOISE_CH, DSPRATE);
+		memset(&gWB[NOISE_CH], 0, sizeof(ndspWaveBuf));
+		gWB[NOISE_CH].data_vaddr = gNoise; gWB[NOISE_CH].nsamples = gNoiseLen; gWB[NOISE_CH].looping = true;
+		ndspChnWaveBufAdd(NOISE_CH, &gWB[NOISE_CH]);
+	} else { ndspChnWaveBufClear(NOISE_CH); gNoiseOn = 0; }
+}
+
 static void voicesUpdate(float dt, float bend) {
 	for (int i = 0; i < 2; i++) {
 		LFO* l = &gLfo[i];
@@ -611,9 +691,12 @@ static void voicesUpdate(float dt, float bend) {
 		l->val = lfoValue(l);
 	}
 	gChorusPh += dt * 0.7f * TWO_PI;
-	static float mixL[NCH], mixR[NCH];
-	for (int c = 0; c < NCH; c++) mixL[c] = mixR[c] = -1;
+	noiseChannel(gNoiseLevel > 0.01f);
+	static float dL[NCH], dR[NCH], cL[NCS], cR[NCS];
+	for (int c = 0; c < NCH; c++) dL[c] = dR[c] = -1;
+	for (int c = 0; c < NCS; c++) cL[c] = cR[c] = -1;
 	float gl = gGlide > 0 ? 1.0f - expf(-dt / (gGlide * 0.35f)) : 1.0f;
+	float noiseAmt = 0;
 
 	for (int i = 0; i < NVS; i++) {
 		SVoice* v = &gV[i];
@@ -621,15 +704,15 @@ static void voicesUpdate(float dt, float bend) {
 		if (!v->started) { v->startDelay -= dt; if (v->startDelay <= 0) startVoice(i); if (!v->started) continue; }
 		if (v->stage != 4) v->held += dt;
 		if (v->gate >= 0 && v->stage != 4) { v->gate -= dt; if (v->gate <= 0) v->stage = v->stage2 = 4; }
-		envStep(&v->env, &v->stage, &gEnv1, dt, &v->hold1);
-		envStep(&v->env2, &v->stage2, &gEnv2, dt, &v->hold2);
+		envStep(&v->env, &v->stage, &gEnv1, dt, &v->hold1, v->relMul);
+		envStep(&v->env2, &v->stage2, &gEnv2, dt, &v->hold2, 1);
 		if (v->stage == 4 && v->env <= 0) { freeVoice(v); continue; }
 		if (v->stage == 3 && gEnv1.s <= 0.001f) { freeVoice(v); continue; }
 		v->cur += (v->freq - v->cur) * gl;
 
 		float pitch = bend * gBendRange + modSum(DST_PITCH, v) * 12.0f;
 		float pm = powf(2.0f, pitch / 12.0f);
-		float cutoff = 60.0f * powf(15000.0f / 60.0f, gCutoff) * powf(2.0f, modSum(DST_CUTOFF, v) * 5.0f);
+		float cutoff = baseCutoff() * powf(2.0f, modSum(DST_CUTOFF, v) * 5.0f);
 		cutoff *= powf(v->cur / 261.6f, gKeytrack) * v->cutMul;
 		float res = gRes + modSum(DST_RES, v);
 		if (res < 0) res = 0;
@@ -638,40 +721,63 @@ static void voicesUpdate(float dt, float bend) {
 		float aLev = gOsc[0].level * (1 + modSum(DST_ALEV, v)); if (aLev < 0) aLev = 0;
 		float bLev = gOsc[1].level * (1 + modSum(DST_BLEV, v)); if (bLev < 0) bLev = 0;
 		float vg = v->env * v->env * v->gain * gMaster * (0.35f + 0.65f * v->vel) * 1.5f;
+		if (!v->isEcho) noiseAmt += v->env * v->env * (0.35f + 0.65f * v->vel);
 
 		for (int k = 0; k < v->nch; k++) {
 			int ch = v->ch[k], role = v->role[k]; if (ch < 0) continue;
-			float det = 0, pan = 0.5f, ug = 1, lv = 1, f = v->cur;
+			float det = 0, pan = 0.5f, ug = 1, lv = 1, f = roleFreq(v, role);
 			if (role <= R_B2) {
 				int o = role >= R_B0, u = role - (o ? R_B0 : R_A0);
-				if (!v->isEcho) uniParams(&gOsc[o], u, &det, &pan, &ug);
+				uniParams(&gOsc[o], u, &det, &pan, &ug);
 				lv = o ? bLev : aLev;
-				f *= oscTune(o);
 				ug /= sqrtf((float)gOsc[o].uni);
 				if (gChorus > 0 && gOsc[o].uni > 1 && u > 0) det += gChorus * 12.0f * sinf(gChorusPh + u * 2.1f + o);
-			} else if (role == R_SUB) { lv = gSubLevel; f *= powf(2.0f, (float)gSubOct); }
-			else lv = gNoiseLevel * 0.5f;
+			} else if (role == R_SUB) lv = gSubLevel;
+			else { lv = gOsc[0].on ? aLev : bLev; det = v->tapDet; }
 			pan += v->pan + panMod;
 			if (pan < 0) pan = 0;
 			if (pan > 1) pan = 1;
 			float g = vg * ug * lv;
-			mixL[ch] = g * sqrtf(1 - pan) * 1.41f; mixR[ch] = g * sqrtf(pan) * 1.41f;
-			if (role != R_NOISE) ndspChnSetRate(ch, f * pm * powf(2.0f, det / 1200.0f) * LEVN[v->lev[k]]);
-			filterSet(ch, role == R_SUB ? cutoff * 0.6f + 300 : cutoff, res);
+			float L = g * sqrtf(1 - pan) * 1.41f, R = g * sqrtf(pan) * 1.41f;
+			float rate = f * pm * powf(2.0f, det / 1200.0f) * LEVN[v->lev[k]];
+			if (v->bk[k] == BK_DSP) {
+				dL[ch] = L; dR[ch] = R;
+				ndspChnSetRate(ch, rate);
+				filterSet(ch, role == R_SUB ? cutoff * 0.6f + 300 : cutoff, res);
+			} else {
+				cL[ch] = L; cR[ch] = R;
+				u32 timer = CSND_TIMER(rate); if (timer < 0x42) timer = 0x42; if (timer > 0xFFFF) timer = 0xFFFF;
+				CSND_SetTimer(ch, timer);
+			}
 		}
 	}
-	// limiter across all channels: estimate the summed peak and scale everything down if needed
+	if (gNoiseOn) {
+		float g = gNoiseLevel * 0.5f * gMaster * (noiseAmt > 1.2f ? 1.2f : noiseAmt);
+		dL[NOISE_CH] = dR[NOISE_CH] = g;
+		filterSet(NOISE_CH, baseCutoff() * powf(2.0f, modSum(DST_CUTOFF, NULL) * 5.0f), gRes);
+	}
+	// limiter across every channel (DSP + CSND): estimate the summed peak, scale everything together
 	float sl = 0, sr = 0, al = 0, ar = 0;
-	for (int c = 0; c < NCH; c++) if (mixL[c] >= 0) { sl += mixL[c] * mixL[c]; sr += mixR[c] * mixR[c]; al += mixL[c]; ar += mixR[c]; }
+	for (int c = 0; c < NCH; c++) if (dL[c] >= 0) { sl += dL[c] * dL[c]; sr += dR[c] * dR[c]; al += dL[c]; ar += dR[c]; }
+	for (int c = 0; c < NCS; c++) if (cL[c] >= 0) { sl += cL[c] * cL[c]; sr += cR[c] * cR[c]; al += cL[c]; ar += cR[c]; }
 	float estL = sqrtf(sl) * 0.9f + al * 0.5f, estR = sqrtf(sr) * 0.9f + ar * 0.5f;
 	float est = estL > estR ? estL : estR;
 	float target = est > 0.95f ? 0.95f / est : 1.0f;
 	gAutoGain += (target - gAutoGain) * (target < gAutoGain ? 0.6f : 0.05f);
-	for (int c = 0; c < NCH; c++) if (mixL[c] >= 0) {
+	for (int c = 0; c < NCH; c++) if (dL[c] >= 0) {
 		float mix[12] = {0};
-		mix[0] = mixL[c] * gAutoGain; mix[1] = mixR[c] * gAutoGain;
+		mix[0] = dL[c] * gAutoGain; mix[1] = dR[c] * gAutoGain;
 		ndspChnSetMix(c, mix);
 	}
+	int any = 0;
+	for (int c = 0; c < NCS; c++) if (cL[c] >= 0) {
+		float l = cL[c] * gAutoGain, r = cR[c] * gAutoGain;
+		if (l > 1) l = 1;
+		if (r > 1) r = 1;
+		u32 vol = (u32)(l * 0x8000) | ((u32)(r * 0x8000) << 16);
+		CSND_SetVol(c, vol, vol); any = 1;
+	}
+	if (gCsndOK && any) csndExecCmds(false);
 }
 
 // ---------------------------------------------------------------- parameter pages
@@ -734,7 +840,8 @@ static const char* BEND_NAMES[13] = {"0", "1", "2", "3", "4", "5", "6", "7", "8"
 static Param P_VOICE[] = {
 	PE("MODE", &gVoiceMode, 3, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0),
 	PE("BEND RANGE", &gBendRange, 13, BEND_NAMES, 0), PE("CHORD", &gChord, 5, CHORD_NAMES, 0),
-	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("FX", &gFx, 3, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
+	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("FX", &gFx, 4, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
+	PF("REV SIZE", &gRevSize, 0, 1, 0.02f, "%", 0), PF("REV DAMP", &gRevDamp, 0, 1, 0.02f, "%", 0), PF("FX MIX", &gFxMix, 0, 1, 0.02f, "%", 0),
 	PE("DRIVE", &gDrive, 5, DRIVE_TYPES, D_A | D_B), PF("DRIVE AMT", &gDriveAmt, 0, 1, 0.02f, "%", D_A | D_B),
 	PF("MASTER", &gMaster, 0, 1.5f, 0.02f, "%", 0),
 	PEND};
@@ -854,8 +961,12 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		snprintf(s, sizeof(s), "%s  OCT %+d%s", VOICE_MODES[gVoiceMode], oct, latch ? "  LATCH" : "");
 		text(6, 166, s, 1, TXT);
 		snprintf(s, sizeof(s), "CHORD %s  FX %s", CHORD_NAMES[gChord], FX_NAMES[gFx]); text(6, 180, s, 1, TXT);
-		int voices = 0, chans = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started) { voices++; chans += gV[i].nch; }
-		snprintf(s, sizeof(s), "VOICES %d  DSP CH %d/24", voices, chans); text(6, 194, s, 1, DIM);
+		int voices = 0, dsp = 0, cs = 0, csTot = 0;
+		for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho) voices++;
+		for (int c = 0; c < NCH; c++) if (gDspOwner[c] >= 0 || (gNoiseOn && c == NOISE_CH)) dsp++;
+		for (int c = 0; c < NCS; c++) if (csUsable(c)) { csTot++; if (gCsOwner[c] >= 0) cs++; }
+		snprintf(s, sizeof(s), "NOTES %d", voices); text(6, 194, s, 1, DIM);
+		snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d", dsp, cs, csTot); text(6, 206, s, 1, DIM);
 	}
 	Param* P = PAGES[page]; int n = pageLen(page);
 	int rows = 17, first = sel - rows + 1; if (first < 0) first = 0;
@@ -958,7 +1069,10 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 static u32 usedLevels(int o) {
 	u32 m = (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4);   // display + common note ranges
 	for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started)
-		for (int k = 0; k < gV[i].nch; k++) { int r = gV[i].role[k]; if ((o == 0 && r <= R_A2) || (o == 1 && r >= R_B0 && r <= R_B2)) m |= 1u << gV[i].lev[k]; }
+		for (int k = 0; k < gV[i].nch; k++) {
+			int r = gV[i].role[k], to = gOsc[0].on ? 0 : 1;
+			if ((o == 0 && r <= R_A2) || (o == 1 && r >= R_B0 && r <= R_B2) || (r == R_TAP && o == to)) m |= 1u << gV[i].lev[k];
+		}
 	return m;
 }
 
@@ -971,7 +1085,8 @@ int main(void) {
 	for (int o = 0; o < 2; o++) { gOsc[o].tb.frames = (float*)malloc(sizeof(float) * CYC * MAXFR); mipsInit(&gOsc[o].mips); }
 	mipsInit(&gSubMips);
 	gNoise = (s16*)linearAlloc(gNoiseLen * sizeof(s16));
-	for (int c = 0; c < NCH; c++) gChOwner[c] = -1;
+	for (int c = 0; c < NCH; c++) gDspOwner[c] = -1;
+	for (int c = 0; c < NCS; c++) gCsOwner[c] = -1;
 	scanTables();
 	gTableCount = T_BUILTIN + gNFiles;
 
@@ -987,6 +1102,7 @@ int main(void) {
 		ndspSetOutputMode(NDSP_OUTPUT_STEREO);
 		ndspSetMasterVol(1.0f);
 		for (int ch = 0; ch < NCH; ch++) { ndspChnReset(ch); ndspChnSetInterp(ch, NDSP_INTERP_POLYPHASE); ndspChnSetFormat(ch, NDSP_FORMAT_MONO_PCM16); }
+		gCsndOK = R_SUCCEEDED(csndInit());   // second sound unit: sub + effect taps
 	}
 
 	int page = 0, sel[NPAGES] = {0}, oct = 0, helpOn = 0, latch = 0, prevTouch = 0;
@@ -1118,6 +1234,7 @@ int main(void) {
 		gspWaitForVBlank();
 	}
 
+	if (gCsndOK) { for (int c = 0; c < NCS; c++) if (csUsable(c)) CSND_SetPlayState(c, 0); csndExecCmds(true); csndExit(); }
 	if (gAudioOK) { for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }
 	gfxExit();
 	return 0;
