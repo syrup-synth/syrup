@@ -14,7 +14,8 @@ The 3DS's DSP chip plays the oscillators: each voice is a DSP channel looping a 
 
 | Input | Action |
 |---|---|
-| Bottom screen, top half | XY pad: X = wavetable position, Y = filter cutoff |
+| Bottom screen, tabs | HELP (on-screen help), STEREO (Narrow / Wide / Spread), FX (Off / Echo / Space), echo TIME (250 / 375 / 500 ms) |
+| Bottom screen, middle | XY pad: X = wavetable position, Y = filter cutoff |
 | Bottom screen, bottom half | 2-octave keyboard (slide to glide between notes) |
 | D-pad left / right | Wavetable |
 | D-pad up / down (hold) | Warp amount |
@@ -41,4 +42,4 @@ FBI > Remote Install > Scan QR Code, and scan `install-qr.png`. Sound needs the 
 
 - The waveform is rewritten while the DSP is playing it, so fast position sweeps can add slight grit.
 - Envelopes and LFO run at ~60 Hz, so attacks shorter than one frame are rounded off.
-- No effects rack yet.
+- Effects are made from extra DSP voices (delayed, panned, darker copies of each note), because the DSP's effect buses can't be routed back for processing from homebrew yet. ECHO is a 3-repeat ping-pong, SPACE is 6 dense early reflections.

@@ -7,7 +7,8 @@
 // low-pass is the filter. The ARM is left almost idle.
 //
 // Controls:
-//   Bottom screen top half: XY pad (X = wavetable POSITION, Y = filter CUTOFF)
+//   Bottom screen tabs: HELP, STEREO (narrow/wide/spread), FX (off/echo/space), echo TIME
+//   Bottom screen middle: XY pad (X = wavetable POSITION, Y = filter CUTOFF)
 //   Bottom screen bottom half: 2-octave keyboard (slide to glide between notes)
 //   D-pad L/R ..... wavetable            D-pad U/D .... warp amount
 //   X ............. warp mode            A ............ unison 1 / 2 / 3
@@ -285,93 +286,174 @@ static void rebuild(float pos, int warp, float amt) {
 }
 
 // ---------------------------------------------------------------- voices on DSP channels
+// Voices take 1-3 DSP channels from a shared pool of 24. Effects are built from voices too:
+// ECHO and SPACE add delayed, panned, darker single-channel copies of each note.
 typedef struct { const char* name; float a, d, s, r; } Env;
 static const Env ENVS[] = {{"PLUCK", 0.003f, 0.35f, 0.15f, 0.25f}, {"KEYS", 0.005f, 0.8f, 0.5f, 0.4f},
                            {"PAD", 0.40f, 0.5f, 0.85f, 1.0f}, {"LEAD", 0.01f, 0.2f, 0.9f, 0.15f}};
 #define NENV 4
+#define NVS 32
 
 typedef struct {
-	int active, note, stage, level, nu;   // stage: 1 att 2 dec 3 sus 4 rel
-	float env, freq;
-	unsigned age;
+	int active, started, note, stage, level, nu, ch[3];  // stage: 1 att 2 dec 3 sus 4 rel
+	float env, freq, gain, pan, cutMul, startDelay, gate, held;
+	int isEcho; unsigned parent, id, age;
 } SVoice;
-static SVoice gV[NV];
-static unsigned gAge = 0;
+static SVoice gV[NVS];
+static int gChOwner[NCH];
+static unsigned gAge = 0, gIdc = 0;
 static ndspWaveBuf gWB[NCH];
-static int gUnison = 3, gEnv = 0;
-static float gCutoff = 0.7f, gReso = 0.0f;
+static int gUnison = 3, gEnv = 0, gStereo = 1, gFx = 0, gEchoT = 1;
+static float gCutoff = 0.7f, gReso = 0.0f, gAutoGain = 1.0f;
 static int gAudioOK = 0;
-static const float UNI_DET[3] = {0.0f, -0.14f, 0.14f};   // semitones
-static const float UNI_PAN[3] = {0.5f, 0.15f, 0.85f};
+
+enum { ST_NARROW, ST_WIDE, ST_SPREAD, ST_COUNT };
+static const char* STEREO_NAMES[ST_COUNT] = {"NARROW", "WIDE", "SPREAD"};
+static const float UNI_DET[ST_COUNT][3] = {{0, -0.07f, 0.07f}, {0, -0.14f, 0.14f}, {0, -0.17f, 0.17f}};
+static const float UNI_PAN[ST_COUNT][3] = {{0.5f, 0.38f, 0.62f}, {0.5f, 0.08f, 0.92f}, {0.5f, 0.0f, 1.0f}};
+enum { FX_OFF, FX_ECHO, FX_SPACE, FX_COUNT };
+static const char* FX_NAMES[FX_COUNT] = {"OFF", "ECHO", "SPACE"};
+static const float ECHO_T[3] = {0.25f, 0.375f, 0.5f};
+static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
 
 static float mtof(int n) { return 440.0f * powf(2.0f, (n - 69) / 12.0f); }
-
-static int levelFor(float f) {
-	for (int L = 0; L < NLEV; L++) if (f * LEVN[L] <= 2.0f * DSPRATE) return L;
-	return NLEV - 1;
-}
-
+static int levelFor(float f) { for (int L = 0; L < NLEV; L++) if (f * LEVN[L] <= 2.0f * DSPRATE) return L; return NLEV - 1; }
 static float cutoffHz(void) { return 80.0f * powf(14000.0f / 80.0f, gCutoff); }
 
-static void applyFilter(int ch) {
-	float q = 0.707f + gReso * 5.0f;
-	ndspChnIirBiquadSetParamsLowPassFilter(ch, cutoffHz(), q);
+static void applyFilter(int ch, float cutMul) {
+	float f = cutoffHz() * cutMul; if (f < 60) f = 60;
+	ndspChnIirBiquadSetParamsLowPassFilter(ch, f, 0.707f + gReso * 5.0f);
 	ndspChnIirBiquadSetEnable(ch, true);
 }
 
-static void voiceOn(int note) {
-	if (!gAudioOK) return;
-	int vi = -1; unsigned oldest = 0xffffffff;
-	for (int i = 0; i < NV; i++) if (!gV[i].active) { vi = i; break; }
-	if (vi < 0) for (int i = 0; i < NV; i++) if (gV[i].age < oldest) { oldest = gV[i].age; vi = i; }
+static void freeVoice(SVoice* v) {
+	if (v->started) for (int u = 0; u < v->nu; u++) if (v->ch[u] >= 0) { ndspChnWaveBufClear(v->ch[u]); gChOwner[v->ch[u]] = -1; v->ch[u] = -1; }
+	v->active = 0; v->started = 0;
+}
+
+static int freeChannels(void) { int n = 0; for (int c = 0; c < NCH; c++) if (gChOwner[c] < 0) n++; return n; }
+
+// make room for n channels: steal oldest echo, then oldest releasing voice, then oldest
+static int stealFor(int n, int self) {
+	while (freeChannels() < n) {
+		int vi = -1; unsigned best = 0xffffffff; int pass;
+		for (pass = 0; pass < 3 && vi < 0; pass++)
+			for (int i = 0; i < NVS; i++) {
+				SVoice* v = &gV[i];
+				if (i == self || !v->active || !v->started) continue;
+				if (pass == 0 && !v->isEcho) continue;
+				if (pass == 1 && v->stage != 4) continue;
+				if (v->age < best) { best = v->age; vi = i; }
+			}
+		if (vi < 0) return 0;
+		freeVoice(&gV[vi]);
+	}
+	return 1;
+}
+
+static void startVoice(int vi) {
 	SVoice* v = &gV[vi];
-	for (int u = 0; u < 3; u++) ndspChnWaveBufClear(vi * 3 + u);
-	v->active = 1; v->note = note; v->stage = 1; v->env = 0; v->age = gAge++;
-	v->freq = mtof(note); v->level = levelFor(v->freq * 1.02f); v->nu = gUnison;
+	if (!stealFor(v->nu, vi)) { v->active = 0; return; }
 	int N = LEVN[v->level];
 	for (int u = 0; u < v->nu; u++) {
-		int ch = vi * 3 + u;
+		int ch = -1; for (int c = 0; c < NCH; c++) if (gChOwner[c] < 0) { ch = c; break; }
+		gChOwner[ch] = vi; v->ch[u] = ch;
 		float mix[12] = {0};
 		ndspChnSetMix(ch, mix);
-		ndspChnSetRate(ch, v->freq * N * powf(2.0f, UNI_DET[u] / 12.0f));
-		applyFilter(ch);
+		ndspChnSetRate(ch, v->freq * N * powf(2.0f, UNI_DET[gStereo][u] / 12.0f));
+		applyFilter(ch, v->cutMul);
 		memset(&gWB[ch], 0, sizeof(ndspWaveBuf));
 		gWB[ch].data_vaddr = gLev[v->level];
 		gWB[ch].nsamples = N;
 		gWB[ch].looping = true;
 		ndspChnWaveBufAdd(ch, &gWB[ch]);
 	}
+	v->started = 1;
+}
+
+static SVoice* newVoice(void) {
+	for (int i = 0; i < NVS; i++) if (!gV[i].active) return &gV[i];
+	int vi = 0; unsigned best = 0xffffffff;   // all slots busy: drop the oldest echo (or oldest)
+	for (int i = 0; i < NVS; i++) if (gV[i].isEcho && gV[i].age < best) { best = gV[i].age; vi = i; }
+	if (best == 0xffffffff) for (int i = 0; i < NVS; i++) if (gV[i].age < best) { best = gV[i].age; vi = i; }
+	freeVoice(&gV[vi]);
+	return &gV[vi];
+}
+
+static int gNoteCount = 0;
+static void voiceOn(int note) {
+	if (!gAudioOK) return;
+	SVoice* v = newVoice();
+	memset(v, 0, sizeof(*v)); v->ch[0] = v->ch[1] = v->ch[2] = -1;
+	v->active = 1; v->note = note; v->stage = 1; v->age = gAge++; v->id = ++gIdc;
+	v->freq = mtof(note); v->level = levelFor(v->freq * 1.02f); v->nu = gUnison;
+	v->gain = 1.0f; v->cutMul = 1.0f; v->gate = -1;
+	v->pan = (gStereo == ST_SPREAD) ? ((gNoteCount++ & 1) ? 0.22f : -0.22f) : 0.0f;
+	startVoice(v - gV);
+	// effect voices
+	int ne = 0; float t[6], g[6], p[6], c[6];
+	if (gFx == FX_ECHO) {
+		float d = ECHO_T[gEchoT];
+		for (int k = 0; k < 3; k++) { t[k] = d * (k + 1); g[k] = 0.6f * powf(0.55f, (float)k); p[k] = (k & 1) ? 0.45f : -0.45f; c[k] = powf(0.7f, (float)(k + 1)); }
+		ne = 3;
+	} else if (gFx == FX_SPACE) {
+		static const float T[6] = {0.041f, 0.067f, 0.109f, 0.157f, 0.233f, 0.331f};
+		for (int k = 0; k < 6; k++) { t[k] = T[k]; g[k] = 0.5f * powf(0.8f, (float)k); p[k] = (k & 1) ? 0.4f : -0.4f; c[k] = powf(0.82f, (float)(k + 1)); }
+		ne = 6;
+	}
+	for (int k = 0; k < ne; k++) {
+		SVoice* e = newVoice();
+		memset(e, 0, sizeof(*e)); e->ch[0] = e->ch[1] = e->ch[2] = -1;
+		e->active = 1; e->note = note; e->stage = 1; e->age = gAge++; e->id = ++gIdc;
+		e->freq = v->freq; e->level = v->level; e->nu = 1;
+		e->gain = g[k]; e->pan = p[k]; e->cutMul = c[k]; e->startDelay = t[k]; e->gate = -1;
+		e->isEcho = 1; e->parent = v->id;
+	}
 }
 
 static void voiceOff(int note) {
-	for (int i = 0; i < NV; i++) if (gV[i].active && gV[i].note == note && gV[i].stage != 4) gV[i].stage = 4;
+	for (int i = 0; i < NVS; i++) {
+		SVoice* v = &gV[i];
+		if (!v->active || v->isEcho || v->note != note || v->stage == 4) continue;
+		v->stage = 4;
+		for (int k = 0; k < NVS; k++) if (gV[k].active && gV[k].isEcho && gV[k].parent == v->id && gV[k].gate < 0) gV[k].gate = v->held;
+	}
 }
-static void allOff(void) { for (int i = 0; i < NV; i++) if (gV[i].active) gV[i].stage = 4; }
+static void allOff(void) { for (int i = 0; i < NVS; i++) if (gV[i].active) { if (gV[i].isEcho && !gV[i].started) gV[i].active = 0; else gV[i].stage = 4; } }
 
-// runs once per video frame (~60 Hz): envelopes, mix levels, pitch, filter
+// runs once per video frame (~60 Hz): delays, envelopes, mix levels, pitch, filter
 static void voicesUpdate(float dt, float bend, float vib, int filterDirty) {
 	const Env* E = &ENVS[gEnv];
 	static float vibPh = 0; vibPh += dt * 5.5f * TWO_PI;
 	float pm = powf(2.0f, (bend + vib * 0.5f * sinf(vibPh)) / 12.0f);
-	for (int i = 0; i < NV; i++) {
+	// auto gain: louder for single notes, eased back for chords so the DSP doesn't clip
+	int held = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4) held++;
+	float target = 1.0f / sqrtf((float)(held > 1 ? held : 1));
+	gAutoGain += (target - gAutoGain) * (target < gAutoGain ? 0.5f : 0.08f);
+	for (int i = 0; i < NVS; i++) {
 		SVoice* v = &gV[i];
 		if (!v->active) continue;
+		if (!v->started) { v->startDelay -= dt; if (v->startDelay <= 0) startVoice(i); if (!v->started) continue; }
+		if (v->stage != 4) v->held += dt;
+		if (v->gate >= 0 && v->stage != 4) { v->gate -= dt; if (v->gate <= 0) v->stage = 4; }
 		switch (v->stage) {
 		case 1: v->env += dt / E->a; if (v->env >= 1) { v->env = 1; v->stage = 2; } break;
 		case 2: v->env -= dt * (1 - E->s) / E->d; if (v->env <= E->s) { v->env = E->s; v->stage = 3; } break;
-		case 4: v->env -= dt / E->r; if (v->env <= 0) { v->env = 0; v->active = 0; } break;
+		case 4: v->env -= dt / E->r; if (v->env <= 0) { v->env = 0; freeVoice(v); continue; } break;
 		}
-		if (v->stage == 3 && E->s <= 0.001f) { v->active = 0; v->env = 0; }
-		float g = v->env * v->env * 0.20f / sqrtf((float)v->nu);
+		if (v->stage == 3 && E->s <= 0.001f) { freeVoice(v); continue; }
+		float g = v->env * v->env * 0.55f * v->gain * gAutoGain / sqrtf((float)v->nu);
 		int N = LEVN[v->level];
 		for (int u = 0; u < v->nu; u++) {
-			int ch = i * 3 + u;
-			if (!v->active) { ndspChnWaveBufClear(ch); continue; }
+			int ch = v->ch[u]; if (ch < 0) continue;
+			float pan = (v->nu == 1 ? 0.5f : UNI_PAN[gStereo][u]) + v->pan;
+			if (pan < 0) pan = 0;
+			if (pan > 1) pan = 1;
 			float mix[12] = {0};
-			mix[0] = g * (1.0f - UNI_PAN[u]) * 1.4f; mix[1] = g * UNI_PAN[u] * 1.4f;
+			mix[0] = g * sqrtf(1.0f - pan) * 1.41f; mix[1] = g * sqrtf(pan) * 1.41f;
 			ndspChnSetMix(ch, mix);
-			ndspChnSetRate(ch, v->freq * N * pm * powf(2.0f, UNI_DET[u] / 12.0f));
-			if (filterDirty) applyFilter(ch);
+			ndspChnSetRate(ch, v->freq * N * pm * powf(2.0f, UNI_DET[gStereo][u] / 12.0f));
+			if (filterDirty) applyFilter(ch, v->cutMul);
 		}
 	}
 }
@@ -398,73 +480,122 @@ static void text(int x, int y, const char* s, int sc, u8 r, u8 g, u8 b) { for (;
 
 // syrup palette
 #define BG   14, 9, 4
+#define PANEL 30, 19, 7
 #define AMB  255, 170, 40
 #define AMB2 200, 110, 20
-#define DIM  110, 70, 25
+#define DIM  130, 85, 30
 #define TXT  255, 225, 170
 
 static const char* CHORD_NAMES[5] = {"OFF", "MIN7", "MAJ7", "POWER", "SUS"};
 static const int CHORDS[5][4] = {{0, -1, -1, -1}, {0, 3, 7, 10}, {0, 4, 7, 11}, {0, 7, 12, -1}, {0, 5, 7, 12}};
+
+static void drawHelp(void) {
+	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
+	rect(0, 0, 400, 240, BG);
+	text(8, 6, "SYRUP HELP", 2, AMB); text(200, 10, "tap HELP to close", 1, DIM);
+	static const char* L[] = {
+		"TOUCH",
+		"  XY pad ...... X = wavetable position",
+		"                Y = filter cutoff",
+		"  Keys ........ play, slide to glide",
+		"  STEREO ...... narrow / wide / spread",
+		"  FX .......... off / echo / space",
+		"  TIME ........ echo time",
+		"BUTTONS",
+		"  D-pad L/R ... wavetable",
+		"  D-pad U/D ... warp amount (hold)",
+		"  X ........... warp mode",
+		"  A ........... unison 1 / 2 / 3",
+		"  Y ........... envelope",
+		"  B ........... LFO sweeps position",
+		"  L / R ....... octave down / up",
+		"  SELECT ...... chord mode",
+		"  Circle pad .. L/R bend, up vibrato,",
+		"                down resonance",
+		"  START ....... quit",
+		"Own wavetables: Serum .wav files in /3ds/syrup/",
+	};
+	int y = 30;
+	for (unsigned i = 0; i < sizeof(L) / sizeof(L[0]); i++, y += 10) {
+		int hdr = (L[i][0] != ' ' && i != sizeof(L) / sizeof(L[0]) - 1);
+		text(8, y, L[i], 1, hdr ? 255 : 255, hdr ? 170 : 225, hdr ? 40 : 170);
+	}
+}
 
 static void drawTop(float pos, int warp, float amt, int oct, int chord, int lfo, int tableIdx, int nTables) {
 	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
 	rect(0, 0, 400, 240, BG);
 	text(8, 6, "SYRUP", 2, AMB);
 	text(96, 10, "wavetable synth", 1, DIM);
-	// 3D stacked wavetable view (Serum style)
-	int ox = 14, oy = 200, W = 190, H = 40, steps = 24;
+
+	// big, clean waveform panel: what you hear (band-limited level, morph + warp applied)
+	int wx = 8, wy = 28, ww = 226, wh = 92;
+	rect(wx, wy, ww, wh, PANEL);
+	rect(wx, wy + wh / 2, ww, 1, 70, 44, 16);
+	{
+		const s16* lv = gLev[2]; int N = LEVN[2];
+		int px0 = 0, py0 = 0;
+		for (int i = 0; i <= ww - 8; i++) {
+			int n = i * N / (ww - 8); if (n >= N) n = N - 1;
+			int x = wx + 4 + i, y = wy + wh / 2 - (int)(lv[n] / 32768.0f * (wh / 2 - 6));
+			if (i) { line(px0, py0, x, y, AMB); line(px0, py0 + 1, x, y + 1, AMB); }
+			px0 = x; py0 = y;
+		}
+	}
+	text(wx + 4, wy + 4, "OSC", 1, DIM);
+
+	// 3D wavetable stack (unwarped frames, dim), current frame bright
+	int ox = 8, oy = 214, W = 150, H = 22, steps = 20;
 	float ds = 1.0f / gTablePeak;
-	int curF = (int)(pos * (gNFrames - 1) + 0.5f);
+	int curK = (int)(pos * (steps - 1) + 0.5f);
 	for (int k = steps - 1; k >= 0; k--) {
 		int fi = (int)((float)k / (steps - 1) * (gNFrames - 1));
 		const float* fr = gFrames + fi * CYC;
-		int bx = ox + k * 3, by = oy - k * 5;
-		int near = abs(fi - curF) <= (gNFrames / steps);
-		u8 r = near ? 150 : 70, g = near ? 90 : 42, b = near ? 30 : 14;
+		int bx = ox + k * 3, by = oy - k * 4;
+		int cur = (k == curK);
+		u8 r = cur ? 255 : 80, g = cur ? 170 : 50, b = cur ? 40 : 18;
 		int px0 = bx, py0 = by - (int)(fr[0] * ds * H * 0.5f);
-		for (int n = 1; n <= 64; n++) {
-			int x = bx + n * W / 64;
-			int y = by - (int)(fr[(n * CYC / 64) & (CYC - 1)] * ds * H * 0.5f);
+		for (int n = 1; n <= 48; n++) {
+			int x = bx + n * W / 48;
+			int y = by - (int)(fr[(n * CYC / 48) & (CYC - 1)] * ds * H * 0.5f);
 			line(px0, py0, x, y, r, g, b); px0 = x; py0 = y;
 		}
 	}
-	// current morphed+warped cycle, bright, at its depth
-	{
-		int k = (int)(pos * (steps - 1) + 0.5f);
-		int bx = ox + k * 3, by = oy - k * 5;
-		float pk = 0; for (int n = 0; n < CYC; n += 8) if (fabsf(gCycle[n]) > pk) pk = fabsf(gCycle[n]);
-		float sc = pk > 1e-3f ? 1.0f / pk : 1.0f;
-		int px0 = bx, py0 = by - (int)(gCycle[0] * sc * H * 0.5f);
-		for (int n = 1; n <= 128; n++) {
-			int x = bx + n * W / 128;
-			int y = by - (int)(gCycle[(n * CYC / 128) & (CYC - 1)] * sc * H * 0.5f);
-			line(px0, py0, x, y, AMB); line(px0, py0 + 1, x, y + 1, AMB2); px0 = x; py0 = y;
-		}
-	}
+	text(170, 222, "TABLE", 1, DIM);
+
 	// parameter panel
-	char s[48]; int x = 300, y = 40;
-	text(x, y, "TABLE", 1, DIM); snprintf(s, sizeof(s), "%d/%d", tableIdx + 1, nTables); text(x + 56, y, s, 1, DIM); y += 11;
-	text(x - 40, y, gTableName, 1, TXT); y += 18;
-	text(x, y, "POS", 1, DIM); snprintf(s, sizeof(s), "%3d%%%s", (int)(pos * 100 + 0.5f), lfo ? " LFO" : ""); text(x + 40, y, s, 1, TXT); y += 13;
-	text(x, y, "WARP", 1, DIM); text(x + 40, y, WARP_NAMES[warp], 1, TXT); y += 11;
-	snprintf(s, sizeof(s), "%3d%%", (int)(amt * 100 + 0.5f)); text(x + 40, y, s, 1, TXT); y += 13;
-	text(x, y, "UNI", 1, DIM); snprintf(s, sizeof(s), "%d", gUnison); text(x + 40, y, s, 1, TXT); y += 13;
-	text(x, y, "ENV", 1, DIM); text(x + 40, y, ENVS[gEnv].name, 1, TXT); y += 13;
-	text(x, y, "CUT", 1, DIM); snprintf(s, sizeof(s), "%dHz", (int)cutoffHz()); text(x + 40, y, s, 1, TXT); y += 13;
-	text(x, y, "RES", 1, DIM); snprintf(s, sizeof(s), "%d%%", (int)(gReso * 100)); text(x + 40, y, s, 1, TXT); y += 13;
-	text(x, y, "OCT", 1, DIM); snprintf(s, sizeof(s), "%+d", oct); text(x + 40, y, s, 1, TXT); y += 13;
-	text(x, y, "CHORD", 1, DIM); text(x + 48, y, CHORD_NAMES[chord], 1, TXT); y += 13;
-	if (!gAudioOK) text(8, 226, "NO AUDIO - run DSP1 once (dspfirm.cdc)", 1, 255, 80, 60);
-	else text(8, 226, "DSP: 24 ch wavetable osc + biquad", 1, DIM);
+	char s[48]; int x = 246, y = 30;
+	snprintf(s, sizeof(s), "TABLE %d/%d", tableIdx + 1, nTables); text(x, y, s, 1, DIM); y += 11;
+	text(x, y, gTableName, 1, TXT); y += 16;
+	struct { const char* k; char v[24]; } rows[11];
+	int nr = 0;
+	#define ROW(K, ...) do { rows[nr].k = K; snprintf(rows[nr].v, 24, __VA_ARGS__); nr++; } while (0)
+	ROW("POS", "%d%%%s", (int)(pos * 100 + 0.5f), lfo ? " LFO" : "");
+	ROW("WARP", "%s %d%%", WARP_NAMES[warp], (int)(amt * 100 + 0.5f));
+	ROW("UNI", "%d", gUnison);
+	ROW("ENV", "%s", ENVS[gEnv].name);
+	ROW("CUT", "%dHz", (int)cutoffHz());
+	ROW("RES", "%d%%", (int)(gReso * 100));
+	ROW("STEREO", "%s", STEREO_NAMES[gStereo]);
+	ROW("FX", "%s", gFx == FX_ECHO ? ECHO_T_NAMES[gEchoT] : FX_NAMES[gFx]);
+	if (gFx == FX_ECHO) snprintf(rows[nr - 1].v, 24, "ECHO %s", ECHO_T_NAMES[gEchoT]);
+	ROW("OCT", "%+d", oct);
+	ROW("CHORD", "%s", CHORD_NAMES[chord]);
+	for (int i = 0; i < nr; i++, y += 13) { text(x, y, rows[i].k, 1, DIM); text(x + 56, y, rows[i].v, 1, TXT); }
+	if (!gAudioOK) text(8, 230, "NO AUDIO - run DSP1 once", 1, 255, 80, 60);
 }
 
-#define XY_H 112
-#define KB_Y 118
+#define TAB_H 20
+#define XY_Y  22
+#define XY_H  94
+#define KB_Y  118
+static const char* TAB_LABEL[4] = {"HELP", "STEREO", "FX", "TIME"};
+
 static int keyAt(int x, int y, int base) {   // 2 octaves, 14 white keys
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
+	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
 	float ww = 320.0f / 14;
-	if (y < KB_Y + 70) {   // black key zone
-		static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};   // black key after white i?
+	if (y < KB_Y + 70) {
 		for (int i = 0; i < 14; i++) {
 			if (!BL[i % 7]) continue;
 			int bx = (int)((i + 1) * ww - ww * 0.3f);
@@ -475,17 +606,31 @@ static int keyAt(int x, int y, int base) {   // 2 octaves, 14 white keys
 	return base + (i / 7) * 12 + WN[i % 7];
 }
 
-static void drawBottom(float pos, int base, const u8* on) {
+static void drawBottom(float pos, int base, const u8* on, int helpOn) {
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	rect(0, 0, 320, KB_Y, BG);
+	// tab buttons
+	for (int i = 0; i < 4; i++) {
+		int x = i * 80;
+		int lit = (i == 0 && helpOn) || (i == 2 && gFx) || (i == 1 && gStereo != ST_NARROW);
+		rect(x + 2, 1, 76, TAB_H - 2, lit ? 90 : 40, lit ? 56 : 26, lit ? 16 : 9);
+		char s[16];
+		if (i == 0) snprintf(s, sizeof(s), "HELP");
+		else if (i == 1) snprintf(s, sizeof(s), "%s", STEREO_NAMES[gStereo]);
+		else if (i == 2) snprintf(s, sizeof(s), "FX %s", FX_NAMES[gFx]);
+		else snprintf(s, sizeof(s), "%s", ECHO_T_NAMES[gEchoT]);
+		int w = strlen(s) * 8;
+		text(x + 40 - w / 2, 7, s, 1, lit ? 255 : 200, lit ? 200 : 150, lit ? 120 : 90);
+	}
+	(void)TAB_LABEL;
 	// XY pad
-	rect(4, 4, 312, XY_H - 4, 28, 18, 8);
-	for (int gx = 1; gx < 8; gx++) rect(4 + gx * 39, 4, 1, XY_H - 4, 44, 28, 12);
-	for (int gy = 1; gy < 4; gy++) rect(4, 4 + gy * 27, 312, 1, 44, 28, 12);
-	int cx = 4 + (int)(pos * 311), cy = 4 + (int)((1 - gCutoff) * (XY_H - 5));
-	rect(cx, 4, 1, XY_H - 4, AMB2); rect(4, cy, 312, 1, AMB2);
+	rect(4, XY_Y, 312, XY_H, 28, 18, 8);
+	for (int gx = 1; gx < 8; gx++) rect(4 + gx * 39, XY_Y, 1, XY_H, 44, 28, 12);
+	for (int gy = 1; gy < 4; gy++) rect(4, XY_Y + gy * XY_H / 4, 312, 1, 44, 28, 12);
+	int cx = 4 + (int)(pos * 311), cy = XY_Y + (int)((1 - gCutoff) * (XY_H - 1));
+	rect(cx, XY_Y, 1, XY_H, AMB2); rect(4, cy, 312, 1, AMB2);
 	rect(cx - 4, cy - 4, 9, 9, AMB);
-	text(8, 8, "POSITION >", 1, DIM); text(240, XY_H - 12, "^ CUTOFF", 1, DIM);
+	text(8, XY_Y + 4, "POSITION >", 1, DIM); text(240, XY_Y + XY_H - 12, "^ CUTOFF", 1, DIM);
 	// keyboard
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
@@ -519,11 +664,13 @@ int main(void) {
 	s16* levMem = (s16*)linearAlloc(levTotal * sizeof(s16));
 	for (int L = 0, o = 0; L < NLEV; L++) { gLev[L] = levMem + o; o += LEVN[L]; }
 	memset(levMem, 0, levTotal * sizeof(s16));
+	for (int c = 0; c < NCH; c++) gChOwner[c] = -1;
 	scanTables();
 
 	gAudioOK = R_SUCCEEDED(ndspInit());
 	if (gAudioOK) {
 		ndspSetOutputMode(NDSP_OUTPUT_STEREO);
+		ndspSetMasterVol(1.0f);
 		for (int ch = 0; ch < NCH; ch++) {
 			ndspChnReset(ch);
 			ndspChnSetInterp(ch, NDSP_INTERP_POLYPHASE);
@@ -534,7 +681,7 @@ int main(void) {
 	int tableIdx = T_BASIC, nTables = T_BUILTIN + gNFiles;
 	selectTable(tableIdx);
 	float pos = 0.35f, amt = 0.0f; int warp = W_OFF;
-	int oct = 0, chord = 0, lfo = 0;
+	int oct = 0, chord = 0, lfo = 0, helpOn = 0, prevTouch = 0;
 	float lfoPh = 0;
 	int held[4] = {-1, -1, -1, -1}, heldN = 0, curKey = -1;
 	int topDirty = 1, botDirty = 1, rebuildDirty = 1, filterDirty = 1;
@@ -547,6 +694,7 @@ int main(void) {
 		if (kDown & KEY_START) break;
 		u64 now = osGetTime(); float dt = (now - last) / 1000.0f; last = now; if (dt > 0.1f) dt = 0.1f;
 
+		if (helpOn && (kDown & ~KEY_TOUCH)) { helpOn = 0; topDirty = botDirty = 1; }
 		if (kDown & KEY_DRIGHT) { tableIdx = (tableIdx + 1) % nTables; selectTable(tableIdx); rebuildDirty = topDirty = 1; }
 		if (kDown & KEY_DLEFT)  { tableIdx = (tableIdx + nTables - 1) % nTables; selectTable(tableIdx); rebuildDirty = topDirty = 1; }
 		if (kHeld & KEY_DUP)    { amt += dt * 0.6f; if (amt > 1) amt = 1; rebuildDirty = topDirty = 1; }
@@ -569,11 +717,20 @@ int main(void) {
 
 		// touch
 		int base = 48 + 12 * oct;
-		int key = -1;
-		if (kHeld & KEY_TOUCH) {
+		int key = -1, touching = !!(kHeld & KEY_TOUCH);
+		if (touching) {
 			touchPosition t; hidTouchRead(&t);
-			if (t.py < XY_H) {
-				float np = (t.px - 4) / 311.0f, nc = 1.0f - (t.py - 4) / (float)(XY_H - 5);
+			if (t.py < TAB_H) {
+				if (!prevTouch) {
+					int b = t.px / 80;
+					if (b == 0) helpOn = !helpOn;
+					if (b == 1) gStereo = (gStereo + 1) % ST_COUNT;
+					if (b == 2) { gFx = (gFx + 1) % FX_COUNT; allOff(); }
+					if (b == 3) gEchoT = (gEchoT + 1) % 3;
+					topDirty = botDirty = 1;
+				}
+			} else if (t.py < XY_Y + XY_H) {
+				float np = (t.px - 4) / 311.0f, nc = 1.0f - (t.py - XY_Y) / (float)(XY_H - 1);
 				if (np < 0) np = 0;
 				if (np > 1) np = 1;
 				if (nc < 0) nc = 0;
@@ -583,6 +740,7 @@ int main(void) {
 				topDirty = botDirty = 1;
 			} else if (t.py >= KB_Y) key = keyAt(t.px, t.py, base);
 		}
+		prevTouch = touching;
 		if (key != curKey) {
 			for (int i = 0; i < heldN; i++) voiceOff(held[i]);
 			heldN = 0;
@@ -597,11 +755,11 @@ int main(void) {
 		filterDirty = 0;
 
 		memset(on, 0, sizeof(on));
-		for (int i = 0; i < NV; i++) if (gV[i].active && gV[i].stage != 4 && gV[i].note < 128) on[gV[i].note] = 1;
+		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note < 128) on[gV[i].note] = 1;
 		if (memcmp(on, onPrev, sizeof(on))) { memcpy(onPrev, on, sizeof(on)); botDirty = 1; }
 
-		if (topDirty) { drawTop(p, warp, amt, oct, chord, lfo, tableIdx, nTables); topDirty = 0; }
-		if (botDirty) { drawBottom(pos, base, on); botDirty = 0; }
+		if (topDirty) { if (helpOn) drawHelp(); else drawTop(p, warp, amt, oct, chord, lfo, tableIdx, nTables); topDirty = 0; }
+		if (botDirty) { drawBottom(pos, base, on, helpOn); botDirty = 0; }
 
 		gfxFlushBuffers();
 		gfxSwapBuffers();
