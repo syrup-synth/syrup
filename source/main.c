@@ -1116,9 +1116,147 @@ static void presetLoad(int style, int idx) {
 }
 static const char* presetName(int style, int idx) { return style == NSTYLES - 1 ? gUser[idx].name : PRESETS[style][idx].name; }
 
+// ---------------------------------------------------------------- scales, arpeggiator, step sequencer
+static const char* NOTE_NAMES[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+#define NSCALES 14
+static const char* SCALE_NAMES[NSCALES] = {"CHROMATIC", "MAJOR", "MINOR", "DORIAN", "PHRYGIAN", "LYDIAN", "MIXOLYDIAN",
+	"HARM MINOR", "MAJ PENTA", "MIN PENTA", "BLUES", "WHOLE TONE", "JAPANESE", "ARABIC"};
+static const s8 SCALES[NSCALES][13] = {
+	{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, -1}, {0, 2, 4, 5, 7, 9, 11, -1}, {0, 2, 3, 5, 7, 8, 10, -1}, {0, 2, 3, 5, 7, 9, 10, -1},
+	{0, 1, 3, 5, 7, 8, 10, -1}, {0, 2, 4, 6, 7, 9, 11, -1}, {0, 2, 4, 5, 7, 9, 10, -1}, {0, 2, 3, 5, 7, 8, 11, -1},
+	{0, 2, 4, 7, 9, -1}, {0, 3, 5, 7, 10, -1}, {0, 3, 5, 6, 7, 10, -1}, {0, 2, 4, 6, 8, 10, -1},
+	{0, 1, 5, 7, 8, -1}, {0, 1, 4, 5, 7, 8, 11, -1}};
+static int gRoot = 0, gScale = 0;
+static int scaleLen(void) { int n = 0; while (n < 12 && SCALES[gScale][n] >= 0) n++; return n; }
+static int scaleNote(int rootNote, int deg) {   // degree -> MIDI note (any degree, negative ok)
+	int n = scaleLen(), o = deg >= 0 ? deg / n : -((-deg + n - 1) / n);
+	return rootNote + 12 * o + SCALES[gScale][deg - o * n];
+}
+static int inScale(int note) { int pc = ((note - gRoot) % 12 + 12) % 12; for (int i = 0; SCALES[gScale][i] >= 0; i++) if (SCALES[gScale][i] == pc) return 1; return 0; }
+static int snapScale(int note) { if (!gScale) return note; for (int d = 0; d < 6; d++) { if (inScale(note - d)) return note - d; if (inScale(note + d)) return note + d; } return note; }
+static int gKeyDeg = 0;   // degree of the last pad pressed in scale mode
+
+// chord tones: chromatic chords, or chords stacked inside the scale when a scale is on
+static int chordNotes(int key, int* out) {
+	int n = 0;
+	if (!gScale || gChord == 3) { for (int i = 0; i < 4; i++) if (CHORDS[gChord][i] >= 0) out[n++] = key + CHORDS[gChord][i]; return n; }
+	static const s8 DEG[5][4] = {{0, -1, -1, -1}, {0, 2, 4, 6}, {0, 2, 4, -1}, {0, -1, -1, -1}, {0, 3, 4, -1}};
+	int rootNote = key - scaleNote(0, gKeyDeg);   // = base + root
+	for (int i = 0; i < 4; i++) if (DEG[gChord][i] >= 0) out[n++] = rootNote + scaleNote(0, gKeyDeg + DEG[gChord][i]);
+	return n;
+}
+
+// ---- tempo + arpeggiator
+#define NARPM 7
+static const char* ARP_NAMES[NARPM] = {"OFF", "UP", "DOWN", "UP+DOWN", "RANDOM", "AS PLAYED", "CHORD"};
+static const char* RATE_NAMES[6] = {"1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32"};
+static const float RATE_BEATS[6] = {1.0f, 0.5f, 1.0f / 3, 0.25f, 1.0f / 6, 0.125f};
+static int gArp = 0, gArpRate = 3, gArpOct = 1, gBPM = 120;
+static float gArpGate = 0.5f;
+static int gArpPool[8], gArpN = 0;   // notes the arp is cycling through (held keys or the current sequencer step)
+static float gArpVel = 0.8f, gArpPh = 0;
+static int gArpIdx = 0, gArpDir = 1, gArpFresh = 0;
+static int gArpOn[8], gArpOnN = 0;
+static int gBeatFlash = 0;   // set on each arp/seq step (UI blink)
+
+static void arpRelease(void) { for (int i = 0; i < gArpOnN; i++) voiceOff(gArpOn[i]); gArpOnN = 0; }
+static void arpSetPool(const int* notes, int n, float vel) {
+	if (n > 8) n = 8;
+	int was = gArpN;
+	for (int i = 0; i < n; i++) gArpPool[i] = notes[i];
+	gArpN = n; gArpVel = vel;
+	if (!was && n) { gArpIdx = 0; gArpDir = 1; gArpFresh = 1; }   // start on the first press
+	if (!n) arpRelease();
+}
+static void arpStep(void) {
+	arpRelease();
+	int s[8], n = gArpN;
+	for (int i = 0; i < n; i++) s[i] = gArpPool[i];
+	if (gArp == 6) {   // CHORD: retrigger the whole chord
+		for (int i = 0; i < n; i++) { voiceOn(s[i], gArpVel); gArpOn[gArpOnN++] = s[i]; }
+		return;
+	}
+	if (gArp != 5) for (int i = 1; i < n; i++) for (int j = i; j > 0 && s[j] < s[j - 1]; j--) { int t = s[j]; s[j] = s[j - 1]; s[j - 1] = t; }
+	int tot = n * gArpOct, k;
+	if (tot <= 0) return;
+	if (gArp == 4) k = rand() % tot;
+	else if (gArp == 3 && tot > 1) {
+		if (gArpIdx >= tot) { gArpIdx = tot - 2; gArpDir = -1; }
+		if (gArpIdx < 0) { gArpIdx = 1; gArpDir = 1; }
+		k = gArpIdx; gArpIdx += gArpDir;
+	} else { k = gArpIdx % tot; gArpIdx = (gArpIdx + 1) % tot; }
+	if (gArp == 2) k = tot - 1 - k;
+	int note = s[k % n] + 12 * (k / n);
+	voiceOn(note, gArpVel); gArpOn[gArpOnN++] = note;
+}
+static void arpTick(float dt) {
+	if (!gArp || !gArpN) { if (gArpOnN) arpRelease(); gArpPh = 0; return; }
+	float stepsPerSec = gBPM / 60.0f / RATE_BEATS[gArpRate];
+	if (gArpFresh) { gArpFresh = 0; gArpPh = 0; arpStep(); gBeatFlash = 1; return; }
+	float before = gArpPh;
+	gArpPh += dt * stepsPerSec;
+	if (before < gArpGate && gArpPh >= gArpGate && gArpGate < 0.99f) arpRelease();
+	if (gArpPh >= 1) { gArpPh -= floorf(gArpPh); arpStep(); gBeatFlash = 1; }
+}
+
+// ---- held notes (keys or sequencer) -> voices or arp
+static int gHeld[8], gHeldN = 0;
+static void playSet(const int* notes, int n, float vel) {
+	for (int i = 0; i < gHeldN; i++) voiceOff(gHeld[i]);
+	gHeldN = 0;
+	if (gArp) { arpSetPool(notes, n, vel); return; }
+	if (gArpN) arpSetPool(NULL, 0, vel);
+	for (int i = 0; i < n && i < 8; i++) { gHeld[gHeldN++] = notes[i]; voiceOn(notes[i], vel); }
+}
+
+// ---- 16-step sequencer (step record, keys transpose while playing)
+typedef struct { s8 n; u8 note[4]; u8 vel; } Step;
+#define NSTEP 16
+static const char* SEQ_NAMES[3] = {"OFF", "PLAY", "REC"};
+static Step gSeq[NSTEP];
+static int gSeqMode = 0, gSeqLen = 8, gSeqPos = -1, gRecPos = 0, gSeqBase = -1, gSeqTr = 0;
+static float gSeqGate = 0.6f, gSwing = 0.0f, gSeqPh = 0;
+static int gSeqPlaying = 0;
+
+static void seqDefault(void) {   // a little pattern so PLAY makes sound straight away
+	static const int pat[8] = {0, -1, 7, 12, -1, 10, 7, 3};
+	memset(gSeq, 0, sizeof(gSeq));
+	for (int i = 0; i < 8; i++) if (pat[i] >= 0) { gSeq[i].n = 1; gSeq[i].note[0] = 48 + pat[i]; gSeq[i].vel = 200; }
+	gSeqLen = 8; gSeqBase = 48;
+}
+static void seqRecord(const int* notes, int n, float vel) {
+	Step* s = &gSeq[gRecPos];
+	s->n = n > 4 ? 4 : n;
+	for (int i = 0; i < s->n; i++) s->note[i] = notes[i] < 0 ? 0 : (notes[i] > 127 ? 127 : notes[i]);
+	s->vel = (u8)(vel * 255);
+	if (gRecPos == 0) gSeqBase = notes[0];
+	gRecPos++;
+	gSeqLen = gRecPos;
+	if (gRecPos >= NSTEP) gRecPos = 0;
+}
+static void seqRest(void) { gSeq[gRecPos].n = 0; gRecPos++; gSeqLen = gRecPos; if (gRecPos >= NSTEP) gRecPos = 0; }
+static void seqClear(void) { memset(gSeq, 0, sizeof(gSeq)); gRecPos = 0; gSeqLen = 1; gSeqBase = -1; gSeqTr = 0; }
+static void seqStop(void) { if (gSeqPlaying) playSet(NULL, 0, 0.8f); gSeqPlaying = 0; gSeqPos = -1; gSeqPh = 0; }
+static void seqFire(void) {
+	Step* s = &gSeq[gSeqPos];
+	int notes[4], n = 0;
+	for (int i = 0; i < s->n; i++) notes[n++] = snapScale(s->note[i] + gSeqTr);
+	playSet(notes, n, s->n ? s->vel / 255.0f : 0.8f);
+	gBeatFlash = 1;
+}
+static void seqTick(float dt) {
+	if (gSeqMode != 1) { if (gSeqPlaying) seqStop(); return; }
+	if (!gSeqPlaying) { gSeqPlaying = 1; gSeqPos = 0; gSeqPh = 0; seqFire(); return; }
+	float len = (gSeqPos & 1) ? 1.0f - gSwing : 1.0f + gSwing;   // in 16ths
+	float before = gSeqPh;
+	gSeqPh += dt * gBPM / 60.0f * 4.0f;
+	if (!gArp && before < len * gSeqGate && gSeqPh >= len * gSeqGate) playSet(NULL, 0, 0.8f);
+	if (gSeqPh >= len) { gSeqPh -= len; gSeqPos = (gSeqPos + 1) % (gSeqLen < 1 ? 1 : gSeqLen); seqFire(); }
+}
+
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
-enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512 };
+enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
 
 #define PF(n, ptr, mn, mx, st, unit, d) {n, PT_F, ptr, mn, mx, st, NULL, unit, d}
@@ -1192,9 +1330,18 @@ static Param P_PRESET[] = {
 	{"SAVE NOW", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_SAVE},
 	{"INIT PATCH", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_INIT},
 	PEND};
-#define NPAGES 7
-static Param* PAGES[NPAGES] = {P_PRESET, P_OSCA, P_OSCB, P_SUBN, P_FILT, P_MOD, P_VOICE};
-static const char* PAGE_NAMES[NPAGES] = {"PRESETS", "OSC A", "OSC B", "SUB+NOISE", "FILT+ENV", "LFO+MOD", "VOICE+FX"};
+static Param P_PLAY[] = {
+	PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
+	PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ), PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0),
+	PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PI_("BPM", &gBPM, 40, 240, 0),
+	PE("SEQ", &gSeqMode, 3, SEQ_NAMES, D_SEQ), PI_("SEQ LENGTH", &gSeqLen, 1, NSTEP, 0), PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0),
+	PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
+	{"ADD REST", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_REST},
+	{"CLEAR SEQ", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CLEAR},
+	PEND};
+#define NPAGES 8
+static Param* PAGES[NPAGES] = {P_PRESET, P_OSCA, P_OSCB, P_SUBN, P_FILT, P_MOD, P_VOICE, P_PLAY};
+static const char* PAGE_NAMES[NPAGES] = {"PRESETS", "OSC A", "OSC B", "SUB+NOISE", "FILT+ENV", "LFO+MOD", "VOICE+FX", "ARP+SEQ"};
 static int pageLen(int pg) { int n = 0; while (PAGES[pg][n].name) n++; return n; }
 
 static void paramFmt(const Param* p, char* out, int len) {
@@ -1229,7 +1376,7 @@ static int paramChange(Param* p, int dir, int fast) {
 	if (p->names == TABLE_NAME_DUMMY) mx = gTableCount - 1;
 	if (p->names == PRESET_DUMMY) mx = presetCount(gStyle) - 1;
 	if (p->names == PRESS_RIGHT) return 0;
-	int nv = *v + dir;
+	int nv = *v + dir * ((fast && p->type == PT_I && p->mx > 32) ? 5 : 1);
 	if (p->type == PT_E) { if (nv < 0) nv = mx; if (nv > mx) nv = 0; }
 	else { if (nv < (int)p->mn) nv = (int)p->mn; if (nv > mx) nv = mx; }
 	if (nv == *v) return 0;
@@ -1315,6 +1462,28 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		}
 		char cnt[24]; snprintf(cnt, sizeof(cnt), "%d PATCHES", presetCount(gStyle)); text(10, 160, cnt, 1, DIM);
 		drawWave(gOsc[0].mips.lev[2], LEVN[2], 8, 176, 188, 50, gOsc[0].on);
+	} else if (page == 7) {   // scale / arp / sequencer
+		char s[40];
+		rect(4, 16, 196, 214, PANEL);
+		snprintf(s, sizeof(s), "%s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); text(10, 22, s, 1, AMB);
+		snprintf(s, sizeof(s), "ARP %s %s x%d", ARP_NAMES[gArp], RATE_NAMES[gArpRate], gArpOct); text(10, 36, s, 1, TXT);
+		snprintf(s, sizeof(s), "%d BPM  SEQ %s", gBPM, SEQ_NAMES[gSeqMode]); text(10, 50, s, 1, TXT);
+		for (int i = 0; i < NSTEP; i++) {   // 2 rows of 8 steps
+			int x = 8 + (i % 8) * 24, y = 70 + (i / 8) * 40, act = i < gSeqLen;
+			int playing = gSeqPlaying && i == gSeqPos, rec = gSeqMode == 2 && i == gRecPos;
+			if (playing) rect(x, y, 22, 34, AMB);
+			else if (rec) rect(x, y, 22, 34, 160, 40, 30);
+			else rect(x, y, 22, 34, act ? 70 : 34, act ? 46 : 24, act ? 18 : 10);
+			if (act && gSeq[i].n) {
+				int nt = gSeq[i].note[0];
+				text(x + 11 - (int)strlen(NOTE_NAMES[nt % 12]) * 4, y + 6, NOTE_NAMES[nt % 12], 1, playing ? 30 : 255, playing ? 20 : 220, playing ? 10 : 160);
+				char o[4]; snprintf(o, sizeof(o), "%d", nt / 12 - 1); text(x + 7, y + 18, o, 1, playing ? 30 : 150, playing ? 20 : 110, playing ? 10 : 60);
+				if (gSeq[i].n > 1) rect(x + 17, y + 26, 3, 3, 255, 200, 120);
+			} else if (act) text(x + 7, y + 12, "-", 1, DIM);
+		}
+		text(10, 158, gSeqMode == 2 ? "REC: KEYS WRITE STEPS" : (gSeqMode == 1 ? "PLAY: KEYS TRANSPOSE" : "SEQ OFF"), 1, DIM);
+		if (gSeqMode == 1 && gSeqTr) { snprintf(s, sizeof(s), "TRANSPOSE %+d", gSeqTr); text(10, 170, s, 1, DIM); }
+		drawWave(gOsc[0].mips.lev[2], LEVN[2], 8, 184, 188, 42, gOsc[0].on);
 	} else if (page == 1 || page == 2) {
 		Osc* o = &gOsc[focus];
 		drawWave(o->mips.lev[2], LEVN[2], 4, 16, 196, 100, o->on);
@@ -1352,15 +1521,15 @@ static void drawHelp(void) {
 	rect(0, 0, 400, 240, BG);
 	text(8, 6, "SYRUP HELP", 2, AMB); text(200, 10, "SELECT or HELP to close", 1, DIM);
 	static const char* L[] = {
-		"PAGES  OSC A, OSC B, SUB+NOISE, FILT+ENV,",
-		"       LFO+MOD, VOICE+FX",
+		"PAGES  PRESETS, OSC A, OSC B, SUB+NOISE,",
+		"       FILT+ENV, LFO+MOD, VOICE+FX, SCALE+ARP+SEQ",
 		"  X / Y ........ next / previous page",
 		"  D-pad U/D .... pick a parameter",
 		"  D-pad L/R .... change it (hold = fast)",
 		"TOUCH",
 		"  XY pad ....... X = OSC A WT POS, Y = cutoff",
 		"  Keys ......... play; lower on key = louder",
-		"  Tabs ......... HELP, < PAGE, PAGE >, LATCH",
+		"  Tabs ......... HELP, PAGE, OCT-/OCT+, LATCH",
 		"BUTTONS",
 		"  A ............ chord mode",
 		"  B ............ latch (notes keep ringing)",
@@ -1368,7 +1537,9 @@ static void drawHelp(void) {
 		"  Circle pad ... L/R bend, U/D = STICK source",
 		"  START ........ quit",
 		"NOTES",
-		"  4 mod slots: source > destination x amount",
+		"  SCALE on: keys become scale pads, chords",
+		"    stack inside the scale",
+		"  SEQ REC: each key writes a step; PLAY: keys transpose",
 		"  WT POS / WARP mod is shared by all notes",
 		"  FM/AM/RM <OSC uses whole-octave ratios",
 		"  Own wavetables: Serum .wav in /3ds/syrup/",
@@ -1388,6 +1559,7 @@ static int keyAt(int x, int y, int base) {
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
 	float ww = 320.0f / 14;
+	if (gScale) { int i = (int)(x / ww); if (i > 13) i = 13; if (i < 0) i = 0; gKeyDeg = i; return scaleNote(base + gRoot, i); }
 	if (y < KB_Y + 70)
 		for (int i = 0; i < 14; i++) {
 			if (!BL[i % 7]) continue;
@@ -1401,12 +1573,12 @@ static int keyAt(int x, int y, int base) {
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	rect(0, 0, 320, KB_Y, BG);
-	static const char* TABS[4] = {"HELP", "< PAGE", "PAGE >", "LATCH"};
-	for (int i = 0; i < 4; i++) {
-		int x = i * 80, lit = (i == 0 && helpOn) || (i == 3 && latch);
-		rect(x + 2, 1, 76, TAB_H - 2, lit ? 90 : 40, lit ? 56 : 26, lit ? 16 : 9);
+	static const char* TABS[6] = {"HELP", "<PAGE", "PAGE>", "OCT-", "OCT+", "LATCH"};
+	for (int i = 0; i < 6; i++) {
+		int x = i * 320 / 6, lit = (i == 0 && helpOn) || (i == 5 && latch);
+		rect(x + 2, 1, 320 / 6 - 4, TAB_H - 2, lit ? 90 : 40, lit ? 56 : 26, lit ? 16 : 9);
 		int w = strlen(TABS[i]) * 8;
-		text(x + 40 - w / 2, 7, TABS[i], 1, lit ? 255 : 200, lit ? 200 : 150, lit ? 120 : 90);
+		text(x + 320 / 12 - w / 2, 7, TABS[i], 1, lit ? 255 : 200, lit ? 200 : 150, lit ? 120 : 90);
 	}
 	rect(4, XY_Y, 312, XY_H, 28, 18, 8);
 	for (int gx = 1; gx < 8; gx++) rect(4 + gx * 39, XY_Y, 1, XY_H, 44, 28, 12);
@@ -1418,6 +1590,18 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
 	float ww = 320.0f / 14;
 	rect(0, KB_Y, 320, 240 - KB_Y, 30, 20, 10);
+	if (gScale) {   // scale mode: 14 pads, one per scale degree
+		int n = scaleLen();
+		for (int i = 0; i < 14; i++) {
+			int note = scaleNote(base + gRoot, i), x = (int)(i * ww), root = i % n == 0;
+			if (note < 128 && on[note]) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, AMB);
+			else if (root) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, 200, 150, 70);
+			else rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, 240, 228, 205);
+			text(x + (int)ww / 2 - (int)strlen(NOTE_NAMES[note % 12]) * 4, 226, NOTE_NAMES[note % 12], 1, 60, 40, 20);
+		}
+		char c[24]; snprintf(c, sizeof(c), "%s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); text(3, KB_Y + 4, c, 1, 90, 60, 30);
+		return;
+	}
 	for (int i = 0; i < 14; i++) {
 		int n = base + (i / 7) * 12 + WN[i % 7], x = (int)(i * ww);
 		if (on[n]) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, AMB);
@@ -1481,8 +1665,8 @@ static u32 usedLevels(int o) {
 
 int main(void) {
 	gfxInitDefault();
-	gfxSetDoubleBuffering(GFX_TOP, false);
-	gfxSetDoubleBuffering(GFX_BOTTOM, false);
+	gfxSetDoubleBuffering(GFX_TOP, true);     // draw into the hidden buffer, swap on vblank: no tearing
+	gfxSetDoubleBuffering(GFX_BOTTOM, true);
 	fontGfx = consoleGetDefault()->font.gfx;
 	fftInit();
 	for (int o = 0; o < 2; o++) { gOsc[o].tb.frames = (float*)malloc(sizeof(float) * CYC * MAXFR); mipsInit(&gOsc[o].mips); }
@@ -1500,6 +1684,7 @@ int main(void) {
 	tableSelect(&A->tb, A->table); tableSelect(&B->tb, B->table);
 	LightLock_Init(&gMipsLock);
 	userLoad();
+	seqDefault();
 	presetLoad(gStyle, gPreset);   // start on PAD / SYRUP PAD
 	LightEvent_Init(&gJobEv, RESET_ONESHOT);
 	APT_SetAppCpuTimeLimit(80);
@@ -1518,8 +1703,8 @@ int main(void) {
 	}
 
 	int page = 0, sel[NPAGES] = {0}, oct = 0, helpOn = 0, latch = 0, prevTouch = 0;
-	int held[4] = {-1, -1, -1, -1}, heldN = 0, curKey = -1;
-	int topDirty = 1, botDirty = 1;
+	int curKey = -1;
+	int topDirty = 1, botDirty = 1, topAgain = 0, botAgain = 0;   // *Again: also refresh the other buffer next frame
 	float repeatT = 0, lastPos[2] = {-1, -1}, lastWarp[2] = {-1, -1};
 	u8 on[128], onPrev[128]; memset(onPrev, 0, sizeof(onPrev));
 	u64 last = osGetTime();
@@ -1535,9 +1720,9 @@ int main(void) {
 		if (kDown & KEY_X) { page = (page + 1) % NPAGES; topDirty = 1; }
 		if (kDown & KEY_Y) { page = (page + NPAGES - 1) % NPAGES; topDirty = 1; }
 		if (kDown & KEY_A) { gChord = (gChord + 1) % 5; topDirty = 1; }
-		if (kDown & KEY_B) { latch = !latch; if (!latch) { allOff(); curKey = -1; heldN = 0; } topDirty = botDirty = 1; }
-		if (kDown & KEY_L) { if (oct > -2) oct--; allOff(); curKey = -1; heldN = 0; topDirty = botDirty = 1; }
-		if (kDown & KEY_R) { if (oct < 2) oct++; allOff(); curKey = -1; heldN = 0; topDirty = botDirty = 1; }
+		if (kDown & KEY_B) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
+		if (kDown & KEY_L) { if (oct > -3) oct--; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = botDirty = 1; }
+		if (kDown & KEY_R) { if (oct < 3) oct++; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = botDirty = 1; }
 
 		// parameter editing
 		int n = pageLen(page);
@@ -1548,13 +1733,17 @@ int main(void) {
 		else if (kHeld & (KEY_DLEFT | KEY_DRIGHT)) { repeatT -= dt; if (repeatT <= 0) { dir = (kHeld & KEY_DRIGHT) ? 1 : -1; repeatT = 0.05f; fast = 1; } }
 		if (dir) {
 			Param* p = &PAGES[page][sel[page]];
-			if ((p->dirty & (D_SAVE | D_INIT)) && dir > 0 && !fast) {
+			if ((p->dirty & (D_REST | D_CLEAR)) && dir > 0 && !fast) {
+				if (p->dirty & D_REST) seqRest(); else seqClear();
+				topDirty = 1;
+			} else if ((p->dirty & (D_SAVE | D_INIT)) && dir > 0 && !fast) {
 				if (p->dirty & D_SAVE) { patchCapture(&gUser[gSaveSlot]); userSave(); gStyle = NSTYLES - 1; gPreset = gSaveSlot; }
 				else { SPatch ip; patchInit(&ip); patchApply(&ip); }
-				curKey = -1; heldN = 0; topDirty = 1;
+				curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = 1;
 			} else if (paramChange(p, dir, fast)) {
-				if (p->dirty & D_STYLE) { gPreset = 0; presetLoad(gStyle, 0); curKey = -1; heldN = 0; }
-				if (p->dirty & D_PRESET) { presetLoad(gStyle, gPreset); curKey = -1; heldN = 0; }
+				if (p->dirty & D_STYLE) { gPreset = 0; presetLoad(gStyle, 0); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
+				if (p->dirty & (D_SCALE | D_SEQ)) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; botDirty = 1; if (p->p == &gSeqMode && gSeqMode == 2) gRecPos = 0; if (p->p == &gSeqMode && gSeqMode != 1) gSeqTr = 0; }
+				if (p->dirty & D_PRESET) { presetLoad(gStyle, gPreset); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				if (p->dirty & (D_TBLA | D_TBLB)) LightLock_Lock(&gMipsLock);
 				if (p->dirty & D_TBLA) tableSelect(&A->tb, A->table);
 				if (p->dirty & D_TBLB) tableSelect(&B->tb, B->table);
@@ -1563,16 +1752,27 @@ int main(void) {
 				if (p->dirty & (D_B | D_TBLB)) gForceBuild |= 2;
 				if (p->dirty & D_SUB) { LightLock_Lock(&gMipsLock); buildSub(); LightLock_Unlock(&gMipsLock); }
 				if (p->dirty & D_NOISE) buildNoise();
-				if (p->p == &gVoiceMode || p->p == &gFx || p->p == &A->on || p->p == &B->on || p->p == &A->uni || p->p == &B->uni) { allOff(); curKey = -1; heldN = 0; }
+				if (p->p == &gVoiceMode || p->p == &gFx || p->p == &A->on || p->p == &B->on || p->p == &A->uni || p->p == &B->uni) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				topDirty = 1;
 			}
 		}
 
 		circlePosition cp; hidCircleRead(&cp);
-		float cx = cp.dx / 156.0f, cy = cp.dy / 156.0f;
-		if (fabsf(cx) < 0.1f) cx = 0;
-		if (fabsf(cy) < 0.1f) cy = 0;
-		gStick = cy > 1 ? 1 : (cy < -1 ? -1 : cy);
+		// circle pad: soft dead zone (no jump at its edge), clamp, then smooth (~35 ms) so bends and STICK mod glide
+		static float sx = 0, sy = 0;
+		float rx = cp.dx / 150.0f, ry = cp.dy / 150.0f;
+		#define DZ(v) (fabsf(v) < 0.12f ? 0.0f : ((v) > 0 ? ((v) - 0.12f) : ((v) + 0.12f)) / 0.88f)
+		rx = DZ(rx); ry = DZ(ry);
+		if (rx > 1) rx = 1;
+		if (rx < -1) rx = -1;
+		if (ry > 1) ry = 1;
+		if (ry < -1) ry = -1;
+		float k = 1.0f - expf(-dt / 0.035f);
+		sx += (rx - sx) * k; sy += (ry - sy) * k;
+		if (fabsf(sx) < 0.001f) sx = 0;
+		if (fabsf(sy) < 0.001f) sy = 0;
+		float cx = sx;
+		gStick = sy;
 
 		// touch
 		int base = 48 + 12 * oct, key = -1, touching = !!(kHeld & KEY_TOUCH);
@@ -1581,11 +1781,13 @@ int main(void) {
 			touchPosition t; hidTouchRead(&t);
 			if (t.py < TAB_H) {
 				if (!prevTouch) {
-					int b = t.px / 80;
+					int b = t.px * 6 / 320;
 					if (b == 0) helpOn = !helpOn;
 					if (b == 1) page = (page + NPAGES - 1) % NPAGES;
 					if (b == 2) page = (page + 1) % NPAGES;
-					if (b == 3) { latch = !latch; if (!latch) { allOff(); curKey = -1; heldN = 0; } }
+					if (b == 3 && oct > -3) { oct--; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
+					if (b == 4 && oct < 3) { oct++; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
+					if (b == 5) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } }
 					topDirty = botDirty = 1;
 				}
 			} else if (t.py < XY_Y + XY_H) {
@@ -1603,11 +1805,17 @@ int main(void) {
 		}
 		prevTouch = touching;
 		if (key != curKey && !(latch && key < 0)) {
-			for (int i = 0; i < heldN; i++) voiceOff(held[i]);
-			heldN = 0;
-			if (key >= 0) for (int i = 0; i < 4; i++) if (CHORDS[gChord][i] >= 0) { held[heldN++] = key + CHORDS[gChord][i]; voiceOn(key + CHORDS[gChord][i], vel); }
+			int notes[4], n = key >= 0 ? chordNotes(key, notes) : 0;
+			if (gSeqMode == 1) { if (key >= 0 && gSeqBase >= 0) { gSeqTr = key - gSeqBase; topDirty = 1; } }   // transpose the pattern
+			else {
+				if (gSeqMode == 2 && key >= 0) { seqRecord(notes, n, vel); topDirty = 1; }
+				playSet(notes, n, vel);
+			}
 			curKey = key;
 		}
+		arpTick(dt);
+		seqTick(dt);
+		if (gBeatFlash) { gBeatFlash = 0; if (page == 7) topDirty = 1; }
 
 		// rebuild oscillator cycles when WT POS / WARP (incl. modulation) changed
 		SVoice* newest = NULL;
@@ -1643,8 +1851,8 @@ int main(void) {
 		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note < 128) on[gV[i].note] = 1;
 		if (memcmp(on, onPrev, sizeof(on))) { memcpy(onPrev, on, sizeof(on)); botDirty = 1; topDirty = 1; }
 
-		if (topDirty) { if (helpOn) drawHelp(); else drawTop(page, sel[page], oct, latch); topDirty = 0; }
-		if (botDirty) { drawBottom(base, on, helpOn, latch); botDirty = 0; }
+		if (topDirty || topAgain) { if (helpOn) drawHelp(); else drawTop(page, sel[page], oct, latch); topAgain = topDirty; topDirty = 0; }
+		if (botDirty || botAgain) { drawBottom(base, on, helpOn, latch); botAgain = botDirty; botDirty = 0; }
 
 		gfxFlushBuffers();
 		gfxSwapBuffers();
