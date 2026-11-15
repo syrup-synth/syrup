@@ -11,6 +11,8 @@
 // Paraphonic note: WT POS / WARP modulation is shared by all notes (one cycle per oscillator);
 // filter, pitch, level and pan modulation are per note.
 //
+// The waveform rebuilds run on the second CPU core (worker thread on core 1).
+//
 // Controls:
 //   D-pad U/D select parameter, L/R change it (hold to repeat)   X / Y  next / previous page
 //   Bottom tabs: HELP, < PAGE, PAGE >, LATCH   XY pad: X = OSC A WT POS, Y = filter cutoff
@@ -61,6 +63,9 @@ static void fft(cpx* a, int n, int inv) {
 			}
 	}
 }
+
+static LightLock gMipsLock;   // guards the shared FFT buffers (worker on core 1 vs main core)
+static Thread gWorker = NULL;
 
 // a band-limited single-cycle source: spectrum + 7 mip levels in linear memory
 typedef struct {
@@ -521,7 +526,9 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 	float f = roleFreq(v, role);
 	v->lev[i] = (role == R_TAP || (role == R_SUB && bk == BK_CSND)) ? levelDamped(f, baseCutoff() * v->cutMul + 200) : levelFor(f * 1.03f);
 	Mips* m = roleMips(role);
+	LightLock_Lock(&gMipsLock);
 	if (!(m->built & (1u << v->lev[i]))) mipsBuildLevel(m, v->lev[i]);
+	LightLock_Unlock(&gMipsLock);
 	int N = LEVN[v->lev[i]];
 	if (bk == BK_DSP) {
 		float mix[12] = {0};
@@ -965,7 +972,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho) voices++;
 		for (int c = 0; c < NCH; c++) if (gDspOwner[c] >= 0 || (gNoiseOn && c == NOISE_CH)) dsp++;
 		for (int c = 0; c < NCS; c++) if (csUsable(c)) { csTot++; if (gCsOwner[c] >= 0) cs++; }
-		snprintf(s, sizeof(s), "NOTES %d", voices); text(6, 194, s, 1, DIM);
+		snprintf(s, sizeof(s), "NOTES %d   CORE 2: %s", voices, gWorker ? "ON" : "OFF"); text(6, 194, s, 1, DIM);
 		snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d", dsp, cs, csTot); text(6, 206, s, 1, DIM);
 	}
 	Param* P = PAGES[page]; int n = pageLen(page);
@@ -1065,6 +1072,42 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	char c[8]; snprintf(c, sizeof(c), "C%d", base / 12 - 1); text(3, 228, c, 1, 120, 90, 50);
 }
 
+// ---------------------------------------------------------------- second CPU core: waveform rebuild worker
+// Morph + warp + FFT band-limiting run on core 1 (the system core; the app gets up to 80% of it via
+// APT_SetAppCpuTimeLimit). The main core only posts jobs. gMipsLock guards the shared FFT buffers.
+typedef struct { float pe[2], we[2]; int chg[2]; u32 used[2]; } RebuildJob;
+static LightEvent gJobEv;
+static RebuildJob gJob;
+static int gJobBusy = 0, gWorkerQuit = 0, gJobDone = 0;   // accessed with __atomic ops (cross-core)
+#define AGET(x) __atomic_load_n(&(x), __ATOMIC_ACQUIRE)
+#define ASET(x, v) __atomic_store_n(&(x), (v), __ATOMIC_RELEASE)
+
+static void doRebuild(const RebuildJob* j) {
+	Osc* A = &gOsc[0]; Osc* B = &gOsc[1];
+	oscMorph(A, j->pe[0]); oscMorph(B, j->pe[1]);
+	float rA = powf(2.0f, (float)(B->oct - A->oct)), rB = powf(2.0f, (float)(A->oct - B->oct));
+	if (rA < 1) rA = 1;
+	if (rB < 1) rB = 1;
+	for (int o = 0; o < 2; o++) if (j->chg[o]) {
+		oscWarp(&gOsc[o], j->we[o], &gOsc[1 - o], o ? rB : rA);
+		mipsSet(&gOsc[o].mips, gOsc[o].cyc, j->used[o]);
+	}
+}
+
+static void workerMain(void* arg) {
+	(void)arg;
+	for (;;) {
+		LightEvent_Wait(&gJobEv);
+		if (AGET(gWorkerQuit)) break;
+		RebuildJob j = gJob;
+		LightLock_Lock(&gMipsLock);
+		doRebuild(&j);
+		LightLock_Unlock(&gMipsLock);
+		ASET(gJobDone, 1);
+		ASET(gJobBusy, 0);
+	}
+}
+
 // ---------------------------------------------------------------- main
 static u32 usedLevels(int o) {
 	u32 m = (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4);   // display + common note ranges
@@ -1095,6 +1138,13 @@ int main(void) {
 	A->on = 1; A->table = T_BASIC; A->pos = 0.6f; A->level = 0.8f; A->uni = 3; A->detune = 14; A->blend = 0.6f; A->width = 0.8f;
 	B->on = 0; B->table = T_HARMONIX; B->pos = 0.3f; B->level = 0.5f; B->oct = 1; B->uni = 1; B->detune = 10; B->blend = 0.5f; B->width = 0.6f;
 	tableSelect(&A->tb, A->table); tableSelect(&B->tb, B->table);
+	LightLock_Init(&gMipsLock);
+	LightEvent_Init(&gJobEv, RESET_ONESHOT);
+	APT_SetAppCpuTimeLimit(80);
+	{
+		s32 prio = 0x30; svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+		gWorker = threadCreate(workerMain, NULL, 64 * 1024, prio - 1 < 0x18 ? 0x18 : prio - 1, 1, false);
+	}
 	buildSub(); buildNoise();
 
 	gAudioOK = R_SUCCEEDED(ndspInit());
@@ -1138,11 +1188,13 @@ int main(void) {
 		if (dir) {
 			Param* p = &PAGES[page][sel[page]];
 			if (paramChange(p, dir, fast)) {
+				if (p->dirty & (D_TBLA | D_TBLB)) LightLock_Lock(&gMipsLock);
 				if (p->dirty & D_TBLA) tableSelect(&A->tb, A->table);
 				if (p->dirty & D_TBLB) tableSelect(&B->tb, B->table);
+				if (p->dirty & (D_TBLA | D_TBLB)) LightLock_Unlock(&gMipsLock);
 				if (p->dirty & (D_A | D_TBLA)) forceBuild |= 1;
 				if (p->dirty & (D_B | D_TBLB)) forceBuild |= 2;
-				if (p->dirty & D_SUB) buildSub();
+				if (p->dirty & D_SUB) { LightLock_Lock(&gMipsLock); buildSub(); LightLock_Unlock(&gMipsLock); }
 				if (p->dirty & D_NOISE) buildNoise();
 				if (p->p == &gVoiceMode || p->p == &gFx || p->p == &A->on || p->p == &B->on || p->p == &A->uni || p->p == &B->uni) { allOff(); curKey = -1; heldN = 0; }
 				topDirty = 1;
@@ -1206,19 +1258,17 @@ int main(void) {
 		for (int o = 0; o < 2; o++) chg[o] = (forceBuild & (1 << o)) || fabsf(pe[o] - lastPos[o]) > 0.002f || fabsf(we[o] - lastWarp[o]) > 0.002f;
 		if (chg[1] && A->warp >= W_FM) chg[0] = 1;
 		if (chg[0] && B->warp >= W_FM) chg[1] = 1;
-		if (chg[0] || chg[1]) {
-			oscMorph(A, pe[0]); oscMorph(B, pe[1]);
-			float rA = powf(2.0f, (float)(B->oct - A->oct)), rB = powf(2.0f, (float)(A->oct - B->oct));
-			if (rA < 1) rA = 1;
-			if (rB < 1) rB = 1;
-			for (int o = 0; o < 2; o++) if (chg[o]) {
-				oscWarp(&gOsc[o], we[o], &gOsc[1 - o], o ? rB : rA);
-				mipsSet(&gOsc[o].mips, gOsc[o].cyc, usedLevels(o));
-				lastPos[o] = pe[o]; lastWarp[o] = we[o]; gPosEff[o] = pe[o];
+		if ((chg[0] || chg[1]) && !AGET(gJobBusy)) {
+			RebuildJob j;
+			for (int o = 0; o < 2; o++) {
+				j.pe[o] = pe[o]; j.we[o] = we[o]; j.chg[o] = chg[o]; j.used[o] = usedLevels(o);
+				if (chg[o]) { lastPos[o] = pe[o]; lastWarp[o] = we[o]; gPosEff[o] = pe[o]; }
 			}
+			if (gWorker) { gJob = j; ASET(gJobBusy, 1); LightEvent_Signal(&gJobEv); }   // core 1
+			else { LightLock_Lock(&gMipsLock); doRebuild(&j); LightLock_Unlock(&gMipsLock); ASET(gJobDone, 1); }
 			forceBuild = 0;
-			topDirty = 1;
 		}
+		if (AGET(gJobDone)) { ASET(gJobDone, 0); topDirty = 1; }
 
 		if (gAudioOK) voicesUpdate(dt, cx);
 
@@ -1234,6 +1284,7 @@ int main(void) {
 		gspWaitForVBlank();
 	}
 
+	if (gWorker) { ASET(gWorkerQuit, 1); LightEvent_Signal(&gJobEv); threadJoin(gWorker, U64_MAX); threadFree(gWorker); }
 	if (gCsndOK) { for (int c = 0; c < NCS; c++) if (csUsable(c)) CSND_SetPlayState(c, 0); csndExecCmds(true); csndExit(); }
 	if (gAudioOK) { for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }
 	gfxExit();

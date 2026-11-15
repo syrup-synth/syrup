@@ -9,6 +9,8 @@ The 3DS's DSP chip plays the oscillators: each voice layer is a DSP channel loop
 3. Apply **drive**.
 4. FFT it into 7 band-limited copies (2048 down to 32 samples), so high notes don't alias.
 
+Waveform rebuilds run on the 3DS's second CPU core (a worker thread on core 1, with the app given up to 80% of that core), so wavetable sweeps and modulation don't load the main core.
+
 ## Engine (laid out like Serum)
 
 | Section | What's there |
