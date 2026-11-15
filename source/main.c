@@ -1353,7 +1353,7 @@ static void paramFmt(const Param* p, char* out, int len) {
 		else snprintf(out, len, "%s", p->names[v]);
 		return;
 	}
-	if (p->type == PT_I) { if (!strcmp(p->name, "UNISON")) snprintf(out, len, "%d", *(int*)p->p); else snprintf(out, len, "%+d", *(int*)p->p); return; }
+	if (p->type == PT_I) { if (!strcmp(p->name, "UNISON")) snprintf(out, len, "%d", *(int*)p->p); else snprintf(out, len, p->mn < 0 ? "%+d" : "%d", *(int*)p->p); return; }
 	float v = *(float*)p->p;
 	if (!strcmp(p->unit, "%")) snprintf(out, len, "%d%%", (int)lrintf(v * 100));
 	else if (!strcmp(p->unit, "HZ") && p->p == &gCutoff) snprintf(out, len, "%dHZ", (int)(60.0f * powf(15000.0f / 60.0f, v)));
@@ -1761,8 +1761,10 @@ int main(void) {
 		// circle pad: soft dead zone (no jump at its edge), clamp, then smooth (~35 ms) so bends and STICK mod glide
 		static float sx = 0, sy = 0;
 		float rx = cp.dx / 150.0f, ry = cp.dy / 150.0f;
-		#define DZ(v) (fabsf(v) < 0.12f ? 0.0f : ((v) > 0 ? ((v) - 0.12f) : ((v) + 0.12f)) / 0.88f)
-		rx = DZ(rx); ry = DZ(ry);
+		// wide centre dead zone on L/R (bend) and a curved response so small moves bend gently
+		#define DZ(v, z) (fabsf(v) < (z) ? 0.0f : ((v) > 0 ? ((v) - (z)) : ((v) + (z))) / (1.0f - (z)))
+		rx = DZ(rx, 0.30f); ry = DZ(ry, 0.15f);
+		rx = rx * fabsf(rx);
 		if (rx > 1) rx = 1;
 		if (rx < -1) rx = -1;
 		if (ry > 1) ry = 1;
