@@ -2226,7 +2226,7 @@ static Param P_VIS[] = {
 	PEND};
 static const char* LOOP_NAMES_P[3] = {"OFF", "REC", "PLAY"};
 static const char* BARS_NAMES_P[5] = {"1 BAR", "2 BARS", "4 BARS", "8 BARS", "16 BARS"};
-static const char* LINK_NAMES_P[5] = {"OFF", "WIFI HOST", "WIFI JOIN", "IR SEND", "IR RECEIVE"};
+static const char* LINK_NAMES_P[6] = {"OFF", "WIFI HOST", "WIFI JOIN", "IR SEND", "IR RECEIVE", "IR MIDI IN"};
 static int gLoopMode, gLoopBars, gCamOn, gLink, gBeatLight;
 static float gLoopLevel;
 static Param P_HW[] = {
@@ -2241,7 +2241,7 @@ static Param P_HW[] = {
 	PE("WI-FI MIDI", &gMidiNet, 2, ONOFF, D_NETMIDI),
 	{"UPDATE SYRUP", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_UPDATE},
 	{"GET WAVETABLES", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
-	PE("LINK", &gLink, 5, LINK_NAMES_P, D_LINK), PE("BEAT LIGHT", &gBeatLight, 2, ONOFF, 0),
+	PE("LINK", &gLink, 6, LINK_NAMES_P, D_LINK), PE("BEAT LIGHT", &gBeatLight, 2, ONOFF, 0),
 	PEND};
 static const char* ONOFF2[2] = {"OFF", "ON"};
 static Param P_MASTER[] = {
@@ -3491,7 +3491,7 @@ static void camToTable(void) {
 }
 
 // ---- link: tempo + sequencer step over local wireless (UDS) or infrared, to another 2DS/3DS running Syrup
-static const char* LINK_NAMES[5] = {"OFF", "WIFI HOST", "WIFI JOIN", "IR SEND", "IR RECEIVE"};
+static const char* LINK_NAMES[6] = {"OFF", "WIFI HOST", "WIFI JOIN", "IR SEND", "IR RECEIVE", "IR MIDI IN"};
 static int gLink = 0, gLinkUp = 0, gLinkPeers = 0;
 static float gLinkRx = 0;   // seconds since the last packet
 static udsBindContext gUdsBind;
@@ -3506,6 +3506,17 @@ static void irRecvMain(void* a) {
 		u8 b[2]; u32 n = 0;
 		if (R_SUCCEEDED(iruRecvData(b, 2, 0, &n, true)) && n == 2 && (b[0] & 0xF0) == 0xA0) { gIrBpm = 40 + b[1]; gIrStep = b[0] & 15; }
 		else svcSleepThread(2000000);
+	}
+}
+// IR MIDI IN: raw MIDI bytes from the Syrup IR-MIDI adapter (an RP2040 on USB, sending IrDA at 115200)
+static void midiParse(const u8* p, int n, u8* run);
+static volatile int gIrMidiBytes = 0;
+static void irMidiMain(void* a) {
+	(void)a; u8 run = 0;
+	while (!gIrQuit) {
+		u8 b[1]; u32 n = 0;
+		if (R_SUCCEEDED(iruRecvData(b, 1, 0, &n, true)) && n == 1) { midiParse(b, 1, &run); gIrMidiBytes++; }
+		else svcSleepThread(1000000);
 	}
 }
 static void linkStop(void) {
@@ -3533,11 +3544,12 @@ static void linkChanged(void) {
 			else say("NO HOST FOUND - SELECT JOIN AGAIN");
 			free(nets);
 		}
-	} else if (want == 3 || want == 4) {
+	} else if (want == 3 || want == 4 || want == 5) {
 		gIrMem = (u32*)memalign(0x1000, 0x1000);
 		if (!gIrMem || R_FAILED(iruInit(gIrMem, 0x1000))) { say("INFRARED NOT AVAILABLE"); free(gIrMem); gIrMem = NULL; gLink = gLinkPrev = 0; return; }
 		gLinkUp = 1;
 		if (want == 4) { gIrQuit = 0; gIrThread = threadCreate(irRecvMain, NULL, 0x2000, 0x30, -2, false); say("IR: POINT THE CONSOLES AT EACH OTHER"); }
+		else if (want == 5) { IRU_SetBitRate(3); gIrQuit = 0; gIrThread = threadCreate(irMidiMain, NULL, 0x2000, 0x2C, -2, false); say("IR MIDI: POINT THE ADAPTER AT THE 2DS"); }
 		else say("IR SENDING TEMPO");
 	}
 }

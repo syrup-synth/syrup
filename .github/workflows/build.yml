@@ -59,3 +59,26 @@ jobs:
             syrup.cia
             syrup.elf
             version.txt
+
+  irmidi:
+    # RP2040 IR MIDI adapter firmware (USB MIDI -> IrDA to the 2DS)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain + Pico SDK
+        run: |
+          sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib cmake
+          git clone --depth 1 https://github.com/raspberrypi/pico-sdk.git $HOME/pico-sdk
+          git -C $HOME/pico-sdk submodule update --init --depth 1 lib/tinyusb
+      - name: Build syrup_irmidi.uf2
+        run: |
+          export PICO_SDK_PATH=$HOME/pico-sdk
+          cmake -S irmidi -B irmidi/build -DPICO_BOARD=pico
+          make -C irmidi/build -j4
+          cp irmidi/build/syrup_irmidi.uf2 .
+      - name: Publish to "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          files: syrup_irmidi.uf2

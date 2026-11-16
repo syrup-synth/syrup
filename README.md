@@ -180,3 +180,13 @@ When it starts, Syrup shows an address such as `http://192.168.1.23:8080`. Your 
 - **CAM WAVE LIVE:** OSC A's wavetable becomes the live camera picture, updated about 8 times a second, with each image row as one frame.
 - **CAM WAVE RECORD:** records about 8 seconds of camera, giving 64 moments with one waveform each. It's saved as `VID n.wav` and loaded into OSC A.
 - **WT SCAN:** sweeps OSC A's WT position automatically (1X = the whole table in 8 seconds). It works on any table, and plays a recorded video table back.
+
+## IR MIDI adapter (RP2040)
+
+Any RP2040 board (Raspberry Pi Pico, RP2040-Zero and so on) becomes a USB MIDI device called "Syrup IR MIDI". It flashes whatever it receives to the 2DS's infrared port. Plug it into a computer, a DAW, or a phone running a MIDI app; the USB-C boards work directly.
+
+- **Firmware:** `syrup_irmidi.uf2` from the latest release. Hold BOOTSEL while plugging the board in, then copy the file onto the RPI-RP2 drive.
+- **Wiring the IR LED:** GP15 → 1 kΩ → base of an NPN transistor (2N2222 / 2N3904), with the emitter to GND. Run VBUS (5 V) → 47 Ω → IR LED → collector. Use an 850 nm LED (IrDA wavelength); a 940 nm LED also works at short range.
+- **Optional 5-pin DIN MIDI in:** the standard 6N138 opto circuit into GP5.
+- **In Syrup:** go to HARDWARE → LINK → IR MIDI IN and point the LED at the IR window on the 2DS's back edge, from a few centimetres to about 20 cm.
+- **How it works:** the signal is IrDA SIR at 115200 baud (a 3/16-bit pulse for each 0 bit), the same format the 2DS's IR chip reads.
