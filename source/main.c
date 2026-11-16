@@ -1803,7 +1803,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		for (int c = 0; c < NCH; c++) if (gDspOwner[c] >= 0 || (gNoiseOn && c == NOISE_CH)) dsp++;
 		for (int c = 0; c < NCS; c++) if (csUsable(c)) { csTot++; if (gCsOwner[c] >= 0) cs++; }
 		snprintf(s, sizeof(s), "NOTES %d  CORE2 %s  FX BUS %s", voices, gWorker ? "ON" : "OFF", busActive() ? (gBusSeen ? "OK" : "ON") : (gBusFail ? "FALLBK" : "OFF")); text(6, 194, s, 1, DIM);
-		if (gGpuHung) text(6, 218, "GPU HUNG - VISUALS OFF", 1, 255, 90, 60);
+		if (gGpuHung) { snprintf(s, sizeof(s), "GPU HUNG AFTER %d FRAMES", gGpuFrames); text(6, 218, s, 1, 255, 90, 60); }
 		else if (gGpuFx && gGpuOK) { snprintf(s, sizeof(s), "GPU FRAMES %d", gGpuFrames); text(6, 218, s, 1, DIM); }
 		snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d", dsp, cs, csTot); text(6, 206, s, 1, DIM);
 	}
@@ -2116,7 +2116,8 @@ static void visFrame(int page, float dt) {
 	else visScopes();
 	C2D_Flush();
 	if (gGpuFrames < 3) { snprintf(mk, sizeof(mk), "GPU F%d DRAWN", gGpuFrames + 1); crashMark(mk); }
-	C3D_SyncDisplayTransfer((u32*)gVisTgt->frameBuf.colorBuf, GX_BUFFER_DIM(240 * VIS_SS, VIS_W * VIS_SS), (u32*)gVisLin, GX_BUFFER_DIM(240, VIS_W),
+	// with SCALE_XY the transfer engine takes the same (input) dimensions for both sides and halves them itself
+	C3D_SyncDisplayTransfer((u32*)gVisTgt->frameBuf.colorBuf, GX_BUFFER_DIM(240 * VIS_SS, VIS_W * VIS_SS), (u32*)gVisLin, GX_BUFFER_DIM(240 * VIS_SS, VIS_W * VIS_SS),
 		GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
 		GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_XY));
 	C3D_FrameEnd(0);
