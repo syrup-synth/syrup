@@ -1943,7 +1943,7 @@ static const char* presetName(int style, int idx) { return style == NSTYLES - 1 
 
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
-enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536, D_LOOP = 1 << 17, D_LOOPTAB = 1 << 18, D_MICTAB = 1 << 19, D_CAMTAB = 1 << 20, D_CAM = 1 << 21, D_LINK = 1 << 22, D_DLWT = 1 << 23, D_DRUMS = 1 << 24 };
+enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536, D_LOOP = 1 << 17, D_LOOPTAB = 1 << 18, D_MICTAB = 1 << 19, D_CAMTAB = 1 << 20, D_CAM = 1 << 21, D_LINK = 1 << 22, D_DLWT = 1 << 23, D_DRUMS = 1 << 24, D_UPDATE = 1 << 25 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
 
 #define PF(n, ptr, mn, mx, st, unit, d) {n, PT_F, ptr, mn, mx, st, NULL, unit, d}
@@ -2053,6 +2053,7 @@ static Param P_HW[] = {
 	{"MIC > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_MICTAB},
 	PE("CAMERA", &gCamOn, 2, ONOFF, D_CAM),
 	{"CAM > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CAMTAB},
+	{"UPDATE SYRUP", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_UPDATE},
 	{"GET WAVETABLES", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	PE("LINK", &gLink, 5, LINK_NAMES_P, D_LINK), PE("BEAT LIGHT", &gBeatLight, 2, ONOFF, 0),
 	PEND};
@@ -2384,7 +2385,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM MACHINE ON / OFF"}, {"KIT", "DRUM SOUNDS"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -3021,7 +3022,8 @@ static void linkTick(float dt) {
 
 // ---- wavetable downloads over Wi-Fi: the Syrup Pack lives in the GitHub repo (wavetables/ + index.txt)
 #define PACK_URL "https://raw.githubusercontent.com/syrup-synth/syrup/main/wavetables/"
-static volatile int gDlState = 0, gDlDone = 0, gDlTotal = 0, gDlNew = 0;   // state: 0 idle, 1 running, 2 finished, 3 failed
+static volatile int gDlState = 0, gDlDone = 0, gDlTotal = 0, gDlNew = 0;
+static volatile int gUpState = 0;   // updater: 0 idle, 1 checking, 2 downloading, 3 installed, 4 up to date, 5 failed   // state: 0 idle, 1 running, 2 finished, 3 failed
 static char gDlErr[40];
 static Thread gDlThread = NULL;
 #ifndef SYRUP_NO_NET
@@ -3095,7 +3097,7 @@ static void dlStart(void) {
 #ifdef SYRUP_NO_NET
 	say("NO NETWORK IN THIS BUILD");
 #else
-	if (gDlState == 1) return;
+	if (gDlState == 1 || gUpState == 1 || gUpState == 2) return;
 	if (gDlThread) { threadJoin(gDlThread, U64_MAX); threadFree(gDlThread); gDlThread = NULL; }
 	gDlState = 1; gDlDone = gDlTotal = gDlNew = 0; gDlErr[0] = 0;
 	gDlThread = threadCreate(dlMain, NULL, 0x10000, 0x38, -2, false);
@@ -3113,6 +3115,86 @@ static void dlTick(void) {   // progress in the footer; when done, rescan so the
 		if (gDlState == 2) snprintf(m, sizeof(m), "GOT %d NEW WAVETABLES - SEE OSC TABLE", gDlNew);
 		else snprintf(m, sizeof(m), "DOWNLOAD FAILED: %.26s", gDlErr[0] ? gDlErr : "?");
 		say(m); gDlState = 0;
+	}
+}
+
+
+// ---- in-app updater: compare the release's version.txt with this build, then download and install the new CIA
+#define REL_URL "https://github.com/syrup-synth/syrup/releases/latest/download/"
+static volatile u32 gUpGot = 0, gUpTotal = 0;
+static char gUpVer[12];
+#ifndef SYRUP_NO_NET
+typedef struct { Handle cia; FILE* f; u64 off; } UpSink;
+static size_t upWrite(void* d, size_t sz, size_t nm, void* u) {
+	UpSink* k = (UpSink*)u; u32 n = sz * nm, w = 0;
+	if (k->f) { w = fwrite(d, 1, n, k->f); }
+	else if (R_FAILED(FSFILE_Write(k->cia, &w, k->off, d, n, 0))) return 0;
+	k->off += w; gUpGot = (u32)k->off; return w;
+}
+static int upProgress(void* c, curl_off_t dlt, curl_off_t dl, curl_off_t ult, curl_off_t ul) { (void)c; (void)dl; (void)ult; (void)ul; if (dlt > 0) gUpTotal = (u32)dlt; return 0; }
+static void upMain(void* arg) {
+	(void)arg;
+	u32* soc = (u32*)memalign(0x1000, 0x100000);
+	if (!soc || R_FAILED(socInit(soc, 0x100000))) { snprintf(gDlErr, sizeof(gDlErr), "WI-FI NOT AVAILABLE"); free(soc); gUpState = 5; return; }
+	curl_global_init(CURL_GLOBAL_DEFAULT);
+	MemBuf v = {0};
+	int ok = httpGet(REL_URL "version.txt", &v, 0);
+	if (ok && v.p) {
+		snprintf(gUpVer, sizeof(gUpVer), "%.7s", v.p);
+		if (!strncmp(gUpVer, SYRUP_VER, 7)) gUpState = 4;
+		else {
+			gUpState = 2; gUpGot = gUpTotal = 0;
+			int hb = envIsHomebrew();   // .3dsx from the Homebrew Launcher: replace the file; installed CIA: reinstall through AM
+			UpSink k = {0};
+			if (hb) k.f = fopen("sdmc:/3ds/syrup.3dsx.part", "wb");
+			else if (R_FAILED(amInit()) || R_FAILED(AM_StartCiaInstall(MEDIATYPE_SD, &k.cia))) { snprintf(gDlErr, sizeof(gDlErr), "CAN'T START INSTALL"); ok = 0; }
+			if (ok && (hb ? k.f != NULL : 1)) {
+				CURL* c = curl_easy_init();
+				curl_easy_setopt(c, CURLOPT_URL, hb ? REL_URL "syrup.3dsx" : REL_URL "syrup.cia");
+				curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L);
+				curl_easy_setopt(c, CURLOPT_USERAGENT, "Syrup-3DS"); curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 20L); curl_easy_setopt(c, CURLOPT_TIMEOUT, 600L);
+				curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 65536L);
+				curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, upWrite); curl_easy_setopt(c, CURLOPT_WRITEDATA, &k);
+				curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, upProgress); curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+				CURLcode r = curl_easy_perform(c); long code = 0; curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
+				curl_easy_cleanup(c);
+				ok = r == CURLE_OK && code == 200 && k.off > 1024;
+				if (!ok) snprintf(gDlErr, sizeof(gDlErr), r != CURLE_OK ? "NETWORK ERROR %d" : "SERVER SAID %d", r != CURLE_OK ? (int)r : (int)code);
+			}
+			if (hb) {
+				if (k.f) fclose(k.f);
+				if (ok) { remove("sdmc:/3ds/syrup.3dsx"); rename("sdmc:/3ds/syrup.3dsx.part", "sdmc:/3ds/syrup.3dsx"); } else remove("sdmc:/3ds/syrup.3dsx.part");
+			} else if (k.cia) {
+				if (ok && R_FAILED(AM_FinishCiaInstall(k.cia))) { snprintf(gDlErr, sizeof(gDlErr), "INSTALL FAILED"); ok = 0; }
+				else if (!ok) AM_CancelCIAInstall(k.cia);
+			}
+			if (!hb) amExit();
+			gUpState = ok ? 3 : 5;
+		}
+	} else gUpState = 5;
+	free(v.p);
+	curl_global_cleanup(); socExit(); free(soc);
+}
+#endif
+static void upStart(void) {
+#ifdef SYRUP_NO_NET
+	say("NO NETWORK IN THIS BUILD");
+#else
+	if (gDlState == 1 || gUpState == 1 || gUpState == 2) return;   // one network job at a time
+	if (gDlThread) { threadJoin(gDlThread, U64_MAX); threadFree(gDlThread); gDlThread = NULL; }
+	gUpState = 1; gDlErr[0] = 0;
+	gDlThread = threadCreate(upMain, NULL, 0x10000, 0x38, -2, false);
+	if (!gDlThread) { gUpState = 5; snprintf(gDlErr, sizeof(gDlErr), "COULD NOT START"); }
+#endif
+}
+static void upTick(void) {
+	char m[48];
+	switch (gUpState) {
+	case 1: say("CHECKING FOR AN UPDATE..."); break;
+	case 2: if (gUpTotal) snprintf(m, sizeof(m), "DOWNLOADING %s  %d%%", gUpVer, (int)(gUpGot * 100.0f / gUpTotal)); else snprintf(m, sizeof(m), "DOWNLOADING %s  %dK", gUpVer, (int)(gUpGot / 1024)); say(m); break;
+	case 3: snprintf(m, sizeof(m), "UPDATED TO %s - CLOSE AND REOPEN SYRUP", gUpVer); say(m); gMsgT = 30; gUpState = 0; break;
+	case 4: snprintf(m, sizeof(m), "UP TO DATE (BUILD %.7s)", SYRUP_VER); say(m); gUpState = 0; break;
+	case 5: snprintf(m, sizeof(m), "UPDATE FAILED: %.28s", gDlErr[0] ? gDlErr : "?"); say(m); gUpState = 0; break;
 	}
 }
 
@@ -3832,7 +3914,7 @@ int main(void) {
 		if (kDown & KEY_START) break;
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
-		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick();
+		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick(); upTick();
 		if (gMsgT > 0) { gMsgT -= 1.0f / 60; topDirty = 1; }
 		u64 now = osGetTime(); float dt = (now - last) / 1000.0f; last = now; if (dt > 0.1f) dt = 0.1f;
 		sensorsUpdate(dt);
@@ -3855,8 +3937,9 @@ int main(void) {
 		else if (kHeld & (KEY_DLEFT | KEY_DRIGHT)) { repeatT -= dt; if (repeatT <= 0) { dir = (kHeld & KEY_DRIGHT) ? 1 : -1; repeatT = 0.05f; fast = 1; } }
 		if (dir) {
 			Param* p = &PAGES[page][sel[page]];
-			if ((p->dirty & (D_LOOPTAB | D_MICTAB | D_CAMTAB | D_DLWT)) && dir > 0 && !fast) {
-				if (p->dirty & D_DLWT) dlStart();
+			if ((p->dirty & (D_LOOPTAB | D_MICTAB | D_CAMTAB | D_DLWT | D_UPDATE)) && dir > 0 && !fast) {
+				if (p->dirty & D_UPDATE) upStart();
+				else if (p->dirty & D_DLWT) dlStart();
 				else if (p->dirty & D_LOOPTAB) loopToTable();
 				else if (p->dirty & D_MICTAB) micRecStart();
 				else { gCamWant = 1; say("CAMERA: HOLD STILL..."); }

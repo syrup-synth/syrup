@@ -36,6 +36,9 @@ jobs:
           bannertool makesmdh -s "Syrup" -l "Wavetable synth" -p "Soul Provider Records" -i app/icon.png -o build/icon.bin
           makerom -f cia -target t -o syrup.cia -elf syrup.elf -rsf app/syrup.rsf -banner build/banner.bin -icon build/icon.bin
 
+      - name: Version stamp (read by the in-app updater)
+        run: echo "$GITHUB_SHA" | cut -c1-7 > version.txt
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -55,3 +58,4 @@ jobs:
             syrup.3dsx
             syrup.cia
             syrup.elf
+            version.txt
