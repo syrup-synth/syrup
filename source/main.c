@@ -72,7 +72,7 @@ static void fft(cpx* a, int n, int inv) {
 	}
 }
 
-static int gGpuOK = 0, gGpuFx = 1;   // graphics-chip visuals (see visFrame)
+static int gGpuOK = 0, gGpuFx = 0;   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
 static int gInAudioTick = 0;
 // crash guard: a marker file holds the last milestone reached; it is removed on a clean exit.
 // If it is still there at launch, the last run crashed -> SAFE MODE (new hardware features off).
@@ -1986,7 +1986,7 @@ static void sampleCycle(const float* cyc, float* out, float* peakOut) {
 	float pk = 0;
 	for (int i = 0; i < CYC; i += 8) { float v = fabsf(cyc[i]); if (v > pk) pk = v; }
 	if (pk < 1e-4f) pk = 1;
-	for (int i = 0; i < TPTS; i++) out[i] = cyc[i * (CYC - 1) / (TPTS - 1)] / pk;
+	for (int i = 0; i < TPTS; i++) { float v = cyc[i * (CYC - 1) / (TPTS - 1)] / pk; out[i] = (v == v && v < 4 && v > -4) ? v : 0; }
 	if (peakOut) *peakOut = pk;
 }
 static void trailPush(int o, float pos) {
@@ -2092,18 +2092,22 @@ static void visFrame(int page, float dt) {
 	if (e > 1) e = 1;
 	gVisEnv += (e - gVisEnv) * (e > gVisEnv ? 0.5f : 0.08f);
 	for (int o = 0; o < 2; o++) trailPush(o, gPosEff[o]);
+	// pipelined: C3D_FrameBegin waits for the previous frame (its render + transfer), so that
+	// result is copied in now and this frame's transfer is queued inside the frame (no PPF wait)
 	C3D_FrameBegin(0);
+	static int lastPage = -1, have = 0;
+	if (have && lastPage == page) { if (page == 1 || page == 2) visBlit(16, 216); else visBlit(16, 152); }
+	lastPage = page; have = 1;
 	C2D_TargetClear(gVisTgt, C2D_Color32(0x14, 0x0d, 0x06, 0xff));
 	C2D_SceneBegin(gVisTgt);
 	C2D_SceneSize(240 * VIS_SS, VIS_W * VIS_SS, true);   // tilted like a real screen target
 	if (page == 1 || page == 2) visWavetable(page - 1);
 	else visScopes();
-	C3D_FrameEnd(0);
+	C2D_Flush();
 	C3D_SyncDisplayTransfer((u32*)gVisTgt->frameBuf.colorBuf, GX_BUFFER_DIM(240 * VIS_SS, VIS_W * VIS_SS), (u32*)gVisLin, GX_BUFFER_DIM(240, VIS_W),
 		GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
 		GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_XY));
-	if (page == 1 || page == 2) visBlit(16, 216);
-	else visBlit(16, 152);
+	C3D_FrameEnd(0);
 }
 
 // ---------------------------------------------------------------- second CPU core: waveform rebuild worker
@@ -2358,6 +2362,8 @@ int main(void) {
 			if (!m2 && gBusSeen) { m2 = 1; crashMark("FX BUS RUNNING"); }
 			if (!m3 && (gArpOnN || gSeqPlaying)) { m3 = 1; crashMark("ARP/SEQ RUNNING"); }
 			if (!m4 && visActive(page)) { m4 = 1; crashMark("GPU VISUALS"); }
+			static int lastMarkPage = -1;
+			if (page != lastMarkPage) { lastMarkPage = page; char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
 		}
 		if (gAudioOK) voicesUpdate(dt, cx);
 		// effect-bus self check: if notes are sending but the DSP never delivers aux audio, fall back to taps
