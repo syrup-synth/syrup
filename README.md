@@ -34,6 +34,17 @@ The original amber look with a tab bar across the top (PATCH, OSC, SHAPE, FX, PL
 
 Two LFOs with 13 shapes: sine, triangle, saw, square, S&H, steps, bounce, exp rise/fall, 25% pulse, and wavetable shapes: WT OSC A / WT OSC B (the oscillator's live, warped cycle) or WAVETABLE (any frame of a built-in table, picked with LFO TABLE and LFO WT POS). LFO SYNC locks the rate to the tempo (4 bars to 1/16T). The LFO+MOD page draws both LFOs with a moving playhead. Patches: VOWEL TALK (FX), TABLE DRIFT (PAD).
 
+## HARDWARE page (HW tab)
+
+- **LOOPER:** REC records 1, 2 or 4 bars of Syrup's output (the DSP's own output tap), then loops it on two channels of the second sound chip while you play on top. LOOP LEVEL sets its volume.
+- **LOOP > TABLE / MIC > TABLE / CAM > TABLE:** turn the loop, one second of mic (sing or play into it), or a camera photo (each image row becomes a frame) into a 64-frame wavetable. It's saved as a Serum-style .wav in /3ds/syrup/ and loaded into OSC A. Pitched audio is cut into clean single cycles; anything else becomes even slices.
+- **CAMERA:** CAM LIGHT and CAM COLOR mod sources (thumbnail on the page).
+- **Motion:** TWIST (gyroscope) and SHAKE mod sources join TILT and BREATH.
+- **LINK:** sync tempo and sequencer steps with another console running Syrup, over local wireless (one HOSTs, the other JOINs) or infrared (IR SEND / IR RECEIVE, consoles pointed at each other).
+- **BEAT LIGHT:** both screens' backlights flash on each arp / sequencer step.
+- OUTPUT AUTO (VOICE+FX) switches to surround when headphones are plugged in; New 3DS / New 2DS run at 804 MHz automatically.
+- Visualizer: TRAILS (the GPU keeps and fades the last frame) and PARTICLES (sparks on notes and beats).
+
 ## Visualizer page
 
 The last page (VISUALIZER) fills the top screen with GPU visuals while you play on the bottom screen: WAVETABLE (big 3D table), SCOPES, ORBIT (OSC A against OSC B, spirograph trails) and SPECTRUM (harmonic bars), or AUTO to cycle every 10 s. Arp/sequencer steps pulse the background. D-pad picks VIS MODE / VIS OSC / OVERLAY.

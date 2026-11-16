@@ -211,7 +211,7 @@ AccessControlInfo:
    - ac:u
    - am:net
    #- boss:U
-   #- cam:u
+   - cam:u
    #- cecd:u
    #- cfg:nor
    - cfg:u
@@ -224,7 +224,7 @@ AccessControlInfo:
    - hid:USER
    - http:C
    #- ir:rst
-   #- ir:u
+   - ir:u
    #- ir:USER
    - mic:u
    #- ndm:u
