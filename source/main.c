@@ -1614,7 +1614,7 @@ static const char* presetName(int style, int idx) { return style == NSTYLES - 1 
 
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
-enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536, D_LOOP = 1 << 17, D_LOOPTAB = 1 << 18, D_MICTAB = 1 << 19, D_CAMTAB = 1 << 20, D_CAM = 1 << 21, D_LINK = 1 << 22 };
+enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536, D_LOOP = 1 << 17, D_LOOPTAB = 1 << 18, D_MICTAB = 1 << 19, D_CAMTAB = 1 << 20, D_CAM = 1 << 21, D_LINK = 1 << 22, D_DLWT = 1 << 23 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
 
 #define PF(n, ptr, mn, mx, st, unit, d) {n, PT_F, ptr, mn, mx, st, NULL, unit, d}
@@ -1716,6 +1716,7 @@ static Param P_HW[] = {
 	{"MIC > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_MICTAB},
 	PE("CAMERA", &gCamOn, 2, ONOFF, D_CAM),
 	{"CAM > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CAMTAB},
+	{"GET WAVETABLES", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	PE("LINK", &gLink, 5, LINK_NAMES_P, D_LINK), PE("BEAT LIGHT", &gBeatLight, 2, ONOFF, 0),
 	PEND};
 #define NPAGES 10
@@ -2015,7 +2016,7 @@ static const char* paramHelp(const char* n) {
 		{"LOOPER", "REC RECORDS THE SOUND, THEN LOOPS IT"}, {"LOOP BARS", "LOOP LENGTH AT THE CURRENT BPM"}, {"LOOP LEVEL", "LOOP VOLUME"},
 		{"LOOP > TABLE", "PRESS > TO TURN THE LOOP INTO A WAVETABLE"}, {"MIC > TABLE", "PRESS >, THEN SING 1 SECOND INTO THE MIC"},
 		{"CAMERA", "CAMERA AS MOD SOURCES (CAM LIGHT / COLOR)"}, {"CAM > TABLE", "PRESS > TO TURN A PHOTO INTO A WAVETABLE"},
-		{"LINK", "SYNC TEMPO WITH ANOTHER SYRUP"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"},
+		{"LINK", "SYNC TEMPO WITH ANOTHER SYRUP"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -2642,8 +2643,107 @@ static void linkTick(float dt) {
 	if (gLink == 1) { udsConnectionStatus cs; if (R_SUCCEEDED(udsGetConnectionStatus(&cs))) gLinkPeers = cs.total_nodes > 0 ? cs.total_nodes - 1 : 0; }
 }
 
+
+// ---- wavetable downloads over Wi-Fi: the Syrup Pack lives in the GitHub repo (wavetables/ + index.txt)
+#define PACK_URL "https://raw.githubusercontent.com/syrup-synth/syrup/main/wavetables/"
+static volatile int gDlState = 0, gDlDone = 0, gDlTotal = 0, gDlNew = 0;   // state: 0 idle, 1 running, 2 finished, 3 failed
+static char gDlErr[40];
+static Thread gDlThread = NULL;
+#ifndef SYRUP_NO_NET
+#include <curl/curl.h>
+typedef struct { char* p; size_t n, cap; } MemBuf;
+static size_t dlToMem(void* d, size_t sz, size_t nm, void* u) {
+	MemBuf* m = (MemBuf*)u; size_t k = sz * nm;
+	if (m->n + k + 1 > m->cap) { size_t c = (m->n + k + 1) * 2; char* q = (char*)realloc(m->p, c); if (!q) return 0; m->p = q; m->cap = c; }
+	memcpy(m->p + m->n, d, k); m->n += k; m->p[m->n] = 0; return k;
+}
+static size_t dlToFile(void* d, size_t sz, size_t nm, void* u) { return fwrite(d, sz, nm, (FILE*)u); }
+static int httpGet(const char* url, void* sink, int toFile) {
+	CURL* c = curl_easy_init(); if (!c) return 0;
+	curl_easy_setopt(c, CURLOPT_URL, url);
+	curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+	curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
+	curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L);
+	curl_easy_setopt(c, CURLOPT_USERAGENT, "Syrup-3DS");
+	curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 20L);
+	curl_easy_setopt(c, CURLOPT_TIMEOUT, 180L);
+	curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 65536L);
+	curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, toFile ? dlToFile : dlToMem);
+	curl_easy_setopt(c, CURLOPT_WRITEDATA, sink);
+	CURLcode r = curl_easy_perform(c); long code = 0;
+	curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
+	curl_easy_cleanup(c);
+	if (r != CURLE_OK) snprintf(gDlErr, sizeof(gDlErr), "NETWORK ERROR %d", (int)r);
+	else if (code != 200) snprintf(gDlErr, sizeof(gDlErr), "SERVER SAID %ld", code);
+	return r == CURLE_OK && code == 200;
+}
+static void urlName(char* out, int len, const char* nm) {   // spaces -> %20
+	int o = 0; for (; *nm && o < len - 4; nm++) { if (*nm == ' ') { memcpy(out + o, "%20", 3); o += 3; } else out[o++] = *nm; }
+	out[o] = 0;
+}
+static void dlMain(void* arg) {
+	(void)arg;
+	u32* soc = (u32*)memalign(0x1000, 0x100000);
+	if (!soc || R_FAILED(socInit(soc, 0x100000))) { snprintf(gDlErr, sizeof(gDlErr), "WI-FI NOT AVAILABLE"); free(soc); gDlState = 3; return; }
+	curl_global_init(CURL_GLOBAL_DEFAULT);
+	MemBuf idx = {0};
+	int ok = httpGet(PACK_URL "index.txt", &idx, 0);
+	if (ok && idx.p) {
+		mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777);
+		int total = 0; for (char* q = idx.p; *q; q++) if (*q == '\n') total++;
+		gDlTotal = total;
+		char* line = strtok(idx.p, "\r\n");
+		while (line) {
+			char path[128], part[136], url[256], enc[160];
+			snprintf(path, sizeof(path), "sdmc:/3ds/syrup/%s", line);
+			FILE* t = fopen(path, "rb");
+			if (t) fclose(t);   // already have it
+			else {
+				snprintf(part, sizeof(part), "%s.part", path);
+				urlName(enc, sizeof(enc), line); snprintf(url, sizeof(url), PACK_URL "%s", enc);
+				FILE* f = fopen(part, "wb");
+				int good = f && httpGet(url, f, 1);
+				if (f) fclose(f);
+				if (good) { rename(part, path); gDlNew++; } else { remove(part); ok = 0; }
+			}
+			gDlDone++;
+			line = strtok(NULL, "\r\n");
+		}
+	}
+	free(idx.p);
+	curl_global_cleanup();
+	socExit(); free(soc);
+	gDlState = ok ? 2 : 3;
+}
+#endif
+static void dlStart(void) {
+#ifdef SYRUP_NO_NET
+	say("NO NETWORK IN THIS BUILD");
+#else
+	if (gDlState == 1) return;
+	if (gDlThread) { threadJoin(gDlThread, U64_MAX); threadFree(gDlThread); gDlThread = NULL; }
+	gDlState = 1; gDlDone = gDlTotal = gDlNew = 0; gDlErr[0] = 0;
+	gDlThread = threadCreate(dlMain, NULL, 0x10000, 0x38, -2, false);
+	if (!gDlThread) { gDlState = 3; snprintf(gDlErr, sizeof(gDlErr), "COULD NOT START"); }
+#endif
+}
+static void dlTick(void) {   // progress in the footer; when done, rescan so the new tables show up
+	if (gDlState == 1) { char m[48]; snprintf(m, sizeof(m), "DOWNLOADING WAVETABLES %d/%d", gDlDone, gDlTotal); say(m); }
+	else if (gDlState == 2 || gDlState == 3) {
+		LightLock_Lock(&gMipsLock);
+		scanTables(); gTableCount = T_BUILTIN + gNFiles;
+		for (int i = 0; i < WCACHE; i++) gWCache[i].idx = -1;
+		LightLock_Unlock(&gMipsLock);
+		char m[48];
+		if (gDlState == 2) snprintf(m, sizeof(m), "GOT %d NEW WAVETABLES - SEE OSC TABLE", gDlNew);
+		else snprintf(m, sizeof(m), "DOWNLOAD FAILED: %.26s", gDlErr[0] ? gDlErr : "?");
+		say(m); gDlState = 0;
+	}
+}
+
 static void extrasExit(void) {
 	linkStop(); camStop();
+	if (gDlThread) { threadJoin(gDlThread, 3000000000ULL); gDlThread = NULL; }
 	if (gCapBuf) ndspSetCapture(NULL);
 	if (gLcdOK) { GSPLCD_SetBrightness(GSPLCD_SCREEN_TOP, gBrightTop); GSPLCD_SetBrightness(GSPLCD_SCREEN_BOTTOM, gBrightBot); gspLcdExit(); }
 	HIDUSER_DisableGyroscope();
@@ -3161,7 +3261,7 @@ int main(void) {
 		if (kDown & KEY_START) break;
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
-		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60);
+		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick();
 		if (gMsgT > 0) { gMsgT -= 1.0f / 60; topDirty = 1; }
 		u64 now = osGetTime(); float dt = (now - last) / 1000.0f; last = now; if (dt > 0.1f) dt = 0.1f;
 		sensorsUpdate(dt);
@@ -3184,8 +3284,9 @@ int main(void) {
 		else if (kHeld & (KEY_DLEFT | KEY_DRIGHT)) { repeatT -= dt; if (repeatT <= 0) { dir = (kHeld & KEY_DRIGHT) ? 1 : -1; repeatT = 0.05f; fast = 1; } }
 		if (dir) {
 			Param* p = &PAGES[page][sel[page]];
-			if ((p->dirty & (D_LOOPTAB | D_MICTAB | D_CAMTAB)) && dir > 0 && !fast) {
-				if (p->dirty & D_LOOPTAB) loopToTable();
+			if ((p->dirty & (D_LOOPTAB | D_MICTAB | D_CAMTAB | D_DLWT)) && dir > 0 && !fast) {
+				if (p->dirty & D_DLWT) dlStart();
+				else if (p->dirty & D_LOOPTAB) loopToTable();
 				else if (p->dirty & D_MICTAB) micRecStart();
 				else { gCamWant = 1; say("CAMERA: HOLD STILL..."); }
 				topDirty = 1;

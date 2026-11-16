@@ -24,6 +24,9 @@ jobs:
           7z e -y makerom.zip
           chmod +x makerom && mv makerom /usr/local/bin/
 
+      - name: Install portlibs (curl + mbedtls for Wi-Fi downloads)
+        run: dkp-pacman -Sy --noconfirm --needed 3ds-curl 3ds-mbedtls 3ds-zlib
+
       - name: Build .3dsx
         run: make
 
