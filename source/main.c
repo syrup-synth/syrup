@@ -974,7 +974,7 @@ static int busActive(void) { return gBusOK && !gBusFail; }
 
 #define NCOMB 8
 #define NAP 4
-typedef struct { float* b; int n, i; float st; } Comb;
+typedef struct { float* b; int n, ln, i; float st; } Comb;   // ln: active length (room / plate / spring use shorter loops)
 typedef struct { float* b; int n, i; } APass;
 static Comb gCbL[NCOMB], gCbR[NCOMB];
 static APass gApL[NAP], gApR[NAP];
@@ -988,7 +988,7 @@ static int busFxInit(void) {
 	static const int CL[NCOMB] = {1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617}, AL[NAP] = {556, 441, 341, 225};
 	const float sc = DSPRATE / 44100.0f;
 	for (int i = 0; i < NCOMB; i++) {
-		gCbL[i].n = (int)(CL[i] * sc); gCbR[i].n = (int)((CL[i] + 23) * sc);
+		gCbL[i].n = gCbL[i].ln = (int)(CL[i] * sc); gCbR[i].n = gCbR[i].ln = (int)((CL[i] + 23) * sc);
 		if (!fxAllocLine(&gCbL[i].b, gCbL[i].n) || !fxAllocLine(&gCbR[i].b, gCbR[i].n)) return 0;
 	}
 	for (int i = 0; i < NAP; i++) {
@@ -1001,7 +1001,7 @@ static inline float comb(Comb* c, float in, float fb, float damp) {
 	float y = c->b[c->i];
 	c->st = y * (1 - damp) + c->st * damp;
 	c->b[c->i] = in + c->st * fb;
-	if (++c->i >= c->n) c->i = 0;
+	if (++c->i >= c->ln) c->i = 0;
 	return y;
 }
 static inline float apass(APass* a, float in) {
@@ -1010,10 +1010,72 @@ static inline float apass(APass* a, float in) {
 	if (++a->i >= a->n) a->i = 0;
 	return y;
 }
+// ---- reverb types (all from the same comb/allpass bank; the type sets loop lengths, feedback, tone and dynamics)
+static int gRevType = 0;
+#define NREVT 6
+static const char* REVT_NAMES[NREVT] = {"HALL", "ROOM", "PLATE", "SPRING", "GATED", "SWELL"};
+static const float REVT_LEN[NREVT] = {1.0f, 0.42f, 0.72f, 0.38f, 0.9f, 1.0f};
+#define NSPR 6
+static float gSprBuf[2][NSPR][104]; static int gSprI[2][NSPR];
+static const int SPR_N[NSPR] = {37, 53, 61, 71, 83, 94};
+static float gRevEnv = 0, gRevGate = 0, gRevHold = 0, gRevHp[2], gRevLp[2];
+static void revTypeApply(void) {   // audio side picks this up; clear the loops so a change never bursts
+	static int last = -1;
+	if (last == gRevType) return;
+	last = gRevType;
+	for (int i = 0; i < NCOMB; i++) {
+		Comb* c[2] = {&gCbL[i], &gCbR[i]};
+		for (int k = 0; k < 2; k++) { if (!c[k]->b) continue; c[k]->ln = (int)(c[k]->n * REVT_LEN[gRevType]); if (c[k]->ln < 8) c[k]->ln = 8; c[k]->i = 0; c[k]->st = 0; memset(c[k]->b, 0, c[k]->n * sizeof(float)); }
+	}
+	memset(gSprBuf, 0, sizeof(gSprBuf));
+}
+// per-type feedback / damping from REV SIZE and REV DAMP
+static void revParams(float* fb, float* damp) {
+	float sz = gRevSize, dm = gRevDamp;
+	switch (gRevType) {
+	case 1: *fb = 0.62f + 0.24f * sz; *damp = 0.3f + 0.55f * dm; break;    // ROOM: short, woody
+	case 2: *fb = 0.80f + 0.18f * sz; *damp = 0.03f + 0.25f * dm; break;   // PLATE: dense, bright
+	case 3: *fb = 0.86f + 0.1f * sz; *damp = 0.2f + 0.4f * dm; break;      // SPRING: rings on
+	case 4: *fb = 0.86f + 0.1f * sz; *damp = 0.1f + 0.4f * dm; break;      // GATED: big tail, cut short
+	case 5: *fb = 0.84f + 0.14f * sz; *damp = 0.15f + 0.6f * dm; break;    // SWELL
+	default: *fb = 0.70f + 0.28f * sz; *damp = 0.15f + 0.6f * dm; break;   // HALL
+	}
+}
+// per-sample: input shaping before the combs, output shaping after the allpasses
+static inline float revIn(float in) {
+	float a = fabsf(in) * 40;
+	gRevEnv += (a - gRevEnv) * (a > gRevEnv ? 0.02f : 0.0004f);
+	return in;
+}
+static inline void revOut(float* l, float* r) {
+	if (gRevType == 3) {   // SPRING: dispersive allpass chain (the "boing"), band-limited like a real tank
+		float* v[2] = {l, r};
+		for (int k = 0; k < 2; k++) {
+			float x = *v[k];
+			for (int j = 0; j < NSPR; j++) {
+				float* b = gSprBuf[k][j]; int i = gSprI[k][j], nn = SPR_N[j] + k * 3;
+				float d = b[i], y = d - 0.62f * x; b[i] = x + 0.62f * y; x = y;
+				if (++i >= nn) i = 0;
+				gSprI[k][j] = i;
+			}
+			gRevLp[k] += (x - gRevLp[k]) * 0.35f; gRevHp[k] += (gRevLp[k] - gRevHp[k]) * 0.03f;
+			*v[k] = (gRevLp[k] - gRevHp[k]) * 1.3f;
+		}
+	} else if (gRevType == 4) {   // GATED: open while the input is loud (plus a short hold), then slam shut
+		if (gRevEnv > 0.25f) { gRevHold = 0.22f * 32728; }
+		float tgt = gRevHold > 0 ? 1 : 0; if (gRevHold > 0) gRevHold -= 1;
+		gRevGate += (tgt - gRevGate) * (tgt > gRevGate ? 0.05f : 0.004f);
+		*l *= gRevGate * 0.85f; *r *= gRevGate * 0.85f;
+	} else if (gRevType == 5) {   // SWELL: the tail is ducked while you play and blooms up after, like a reversed reverb
+		float d = 1 - (gRevEnv > 1 ? 1 : gRevEnv) * 0.95f;
+		gRevGate += (d - gRevGate) * 0.0006f;
+		*l *= gRevGate * 1.1f; *r *= gRevGate * 1.1f;
+	} else if (gRevType == 1) { *l *= 1.25f; *r *= 1.25f; }
+}
 static void auxReverb(void* data, int n, void* samples[4]) {
 	(void)data;
 	s32* L = (s32*)samples[0]; s32* R = (s32*)samples[1];
-	float fb = 0.70f + 0.28f * gRevSize, damp = 0.15f + 0.6f * gRevDamp;
+	float fb, damp; revParams(&fb, &damp);
 	int seen = 0;
 	for (int s = 0; s < n; s++) {
 		if (L[s] | R[s]) seen = 1;
@@ -1080,6 +1142,14 @@ static float busSend(int bus) {
 static int gMasterFX = 1, gModFx = 0, gDlySync = 0, gShimmer = 0, gFreeze = 0, gPumpRate = 1, gLofiBits = 0;
 static float gModRate = 0.4f, gModDepth = 0.5f, gModMix = 0.5f, gFxColor = 0.5f;
 static float gEqLow = 0, gEqMid = 0, gEqHigh = 0;
+static int gDlyType = 0; static float gRevK = 0, gDlHp[2];
+#define NDLYT 6
+static const char* DLYT_NAMES[NDLYT] = {"TAPE", "DIGITAL", "PING-PONG", "DUB", "LO-FI", "REVERSE"};
+static void dlyTypeChanged(void) {   // clear the line so switching type never replays old repeats through the new path
+	if (gDlL) memset(gDlL, 0, DLMAX * sizeof(float));
+	if (gDlR) memset(gDlR, 0, DLMAX * sizeof(float));
+	gDlLp[0] = gDlLp[1] = gDlHp[0] = gDlHp[1] = 0; gRevK = 0;
+}
 static float gDlyMix = 0, gDlyWow = 0.25f, gDlySat = 0.3f, gRevMix = 0, gOtt = 0, gPump = 0, gLofiRate = 0;
 static volatile float gFxModVal = 0;   // FX COLOR modulation from the mod matrix (set by the main loop)
 static float gBeatPh = 0;              // quarter notes, advanced by the audio clock (sidechain pump)
@@ -1141,7 +1211,7 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 	float dSec = gDlySync ? DSYNC_BEATS[gDlySync] * 60.0f / gBPM : ECHO_T[gEchoT];
 	if (dSec > 0.78f) dSec = 0.78f;
 	float dSmp = dSec * DSPRATE, dMix = (gDlyMix + (gFx == 1 ? gFxMix : 0)) * 1.2f, rMix = (gRevMix + (gFx == 3 ? gFxMix : 0)) * 1.4f;
-	float fb = gFreeze ? 1.0f : 0.70f + 0.28f * gRevSize, damp = gFreeze ? 0 : 0.15f + 0.6f * gRevDamp;
+	float fb, damp; revParams(&fb, &damp); if (gFreeze) { fb = 1.0f; damp = 0; }
 	int bits = gLofiBits ? 14 - gLofiBits * 2 : 0, hold = 1 + (int)(gLofiRate * 15);
 	float pumpRate = gPumpRate == 0 ? 0.5f : (gPumpRate == 1 ? 1.0f : 2.0f), beatInc = gBPM / 60.0f / DSPRATE;
 	float combHz = 60 * powf(2, color * 6), combD = DSPRATE / combHz;
@@ -1181,16 +1251,52 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 		if (dlyTail > 0) {
 			gWowPh += 0.6f / DSPRATE; gFlutPh += 7.0f / DSPRATE; if (gWowPh > 1) gWowPh -= 1; if (gFlutPh > 1) gFlutPh -= 1;
 			float mod = gDlyWow * (0.004f * sinf(TWO_PI * gWowPh) + 0.0006f * sinf(TWO_PI * gFlutPh)) * DSPRATE;
-			float yl = rdFrac(gDlL, DLMAX, gDlW - dSmp - mod), yr = rdFrac(gDlR, DLMAX, gDlW - dSmp - mod);
-			gDlLp[0] += (yr - gDlLp[0]) * 0.45f; gDlLp[1] += (yl - gDlLp[1]) * 0.45f;
-			float sat = 1 + gDlySat * 3;
-			gDlL[gDlW] = tanhf((mono * dMix + gDlLp[0] * gEchoFb) * sat) / sat; gDlR[gDlW] = tanhf(gDlLp[1] * gEchoFb * sat) / sat;
+			int dt = gDlyType;
+			if (dt != 0 && dt != 3) mod = 0;   // only TAPE and DUB wobble
+			float yl, yr;
+			if (dt == 5) {   // REVERSE: each slice of DELAY TIME comes back played backwards, windowed so it doesn't click
+				float D = dSmp < 64 ? 64 : dSmp; if (D * 2 > DLMAX - 4) D = (DLMAX - 4) / 2;
+				gRevK += 1; if (gRevK >= D) gRevK -= D;
+				float w = sinf(3.14159f * gRevK / D), w2 = sinf(3.14159f * fmodf(gRevK + D / 2, D) / D);
+				float r1 = gDlW - 2 * gRevK, r2 = gDlW - 2 * fmodf(gRevK + D / 2, D);
+				yl = rdFrac(gDlL, DLMAX, r1) * w + rdFrac(gDlL, DLMAX, r2) * w2;
+				yr = rdFrac(gDlR, DLMAX, r1 - 37) * w + rdFrac(gDlR, DLMAX, r2 - 37) * w2;
+			} else { yl = rdFrac(gDlL, DLMAX, gDlW - dSmp - mod); yr = rdFrac(gDlR, DLMAX, gDlW - dSmp - (dt == 1 ? dSmp * 0.012f : 0) - mod); }
+			float sat = 1 + gDlySat * 3, inL, inR;
+			switch (dt) {
+			case 1:   // DIGITAL: clean stereo repeats, no crossing, full bandwidth
+				inL = mono * dMix + yl * gEchoFb; inR = mono * dMix + yr * gEchoFb; break;
+			case 2:   // PING-PONG: clean, bounces left / right
+				inL = mono * dMix + yr * gEchoFb; inR = yl * gEchoFb; break;
+			case 3: {   // DUB: band-passed, saturated, long and swampy (feedback can push past 100% gently)
+				gDlLp[0] += (yr - gDlLp[0]) * 0.22f; gDlLp[1] += (yl - gDlLp[1]) * 0.22f;
+				gDlHp[0] += (gDlLp[0] - gDlHp[0]) * 0.02f; gDlHp[1] += (gDlLp[1] - gDlHp[1]) * 0.02f;
+				float fb = gEchoFb * 1.15f, s2 = 1 + gDlySat * 4 + 1;
+				inL = tanhf((mono * dMix + (gDlLp[0] - gDlHp[0]) * fb) * s2) / s2 * 1.3f; inR = tanhf((gDlLp[1] - gDlHp[1]) * fb * s2) / s2 * 1.3f; break; }
+			case 4: {   // LO-FI: each repeat goes through a sample-rate and bit crusher, getting grittier
+				static float hold[2]; static int ctr = 0;
+				if (++ctr >= 4) { ctr = 0; hold[0] = yr; hold[1] = yl; }
+				float q = 1.0f / 48;
+				float cl = floorf(hold[0] / q + 0.5f) * q, cr = floorf(hold[1] / q + 0.5f) * q;
+				gDlLp[0] += (cl - gDlLp[0]) * 0.3f; gDlLp[1] += (cr - gDlLp[1]) * 0.3f;
+				inL = mono * dMix + gDlLp[0] * gEchoFb; inR = gDlLp[1] * gEchoFb; break; }
+			case 5:   // REVERSE: the dry signal is recorded, the reversed read is the output; light feedback of the reversed sound
+				inL = mono * dMix + yl * gEchoFb * 0.6f; inR = mono * dMix + yr * gEchoFb * 0.6f; break;
+			default:   // TAPE: ping-pong, darker and more saturated each pass
+				gDlLp[0] += (yr - gDlLp[0]) * 0.45f; gDlLp[1] += (yl - gDlLp[1]) * 0.45f;
+				inL = tanhf((mono * dMix + gDlLp[0] * gEchoFb) * sat) / sat; inR = tanhf(gDlLp[1] * gEchoFb * sat) / sat; break;
+			}
+			if (inL > 4) inL = 4;
+			if (inL < -4) inL = -4;
+			if (inR > 4) inR = 4;
+			if (inR < -4) inR = -4;
+			gDlL[gDlW] = inL; gDlR[gDlW] = inR;
 			if (++gDlW >= DLMAX) gDlW = 0;
 			wet[0] += yl * 0.8f; wet[1] += yr * 0.8f;
 		}
 		// reverb (+ shimmer: an octave-up copy of the tail fed back in; freeze: endless tail, no new input)
 		if (revTail > 0) {
-			float in = gFreeze ? 0 : mono * rMix * 0.025f, ol = 0, orr = 0;
+			float in = gFreeze ? 0 : revIn(mono * rMix * 0.025f), ol = 0, orr = 0;
 			if (gShimmer) {
 				float a = rdFrac(gPs, PSN, gPsR), b = rdFrac(gPs, PSN, gPsR + PSN / 2), ph = fmodf(gPsW - gPsR + PSN, PSN) / PSN;
 				float w = 1 - fabsf(ph * 2 - 1);
@@ -1199,6 +1305,7 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 			}
 			for (int i = 0; i < NCOMB; i++) { ol += comb(&gCbL[i], in, fb, damp); orr += comb(&gCbR[i], in, fb, damp); }
 			for (int i = 0; i < NAP; i++) { ol = apass(&gApL[i], ol); orr = apass(&gApR[i], orr); }
+			if (!gFreeze) revOut(&ol, &orr);
 			if (gShimmer) { gPs[gPsW] = (ol + orr) * 0.5f; if (++gPsW >= PSN) gPsW = 0; }
 			wet[0] += ol * 1.6f; wet[1] += orr * 1.6f;
 		}
@@ -1500,8 +1607,11 @@ typedef struct {
 	int modFx, dlySync, shimmer, freeze, pumpRate, lofiBits;
 	float modRate, modDepth, modMix, fxColor, eqLow, eqMid, eqHigh, dlyMix, dlyWow, dlySat, revMix, ott, pump, lofiRate;
 	float chipLevel, csEcho, csEchoFb, orbit, orbitRate; int chipDuty, chipOct, csEchoT;   // v5
+	int revType, dlyType;   // v6
 } SPatch;
-#define PATCH_MAGIC 0x53595235   // "SYR5"
+#define PATCH_MAGIC 0x53595236   // "SYR6"
+#define PATCH_MAGIC5 0x53595235  // v5 (no reverb type)
+#define PATCH_V5_SIZE offsetof(SPatch, revType)
 #define PATCH_MAGIC4 0x53595234  // v4 (no chip layer / chip echo / orbit)
 #define PATCH_V4_SIZE offsetof(SPatch, chipLevel)
 #define PATCH_MAGIC3 0x53595233  // v3 (no macros / master FX)
@@ -1538,7 +1648,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->modFx = 0; p->dlySync = 0; p->shimmer = 0; p->freeze = 0; p->pumpRate = 1; p->lofiBits = 0;
 	p->modRate = 0.4f; p->modDepth = 0.5f; p->modMix = 0.5f; p->fxColor = 0.5f; p->eqLow = p->eqMid = p->eqHigh = 0;
 	p->dlyMix = 0; p->dlyWow = 0.25f; p->dlySat = 0.3f; p->revMix = 0; p->ott = 0; p->pump = 0; p->lofiRate = 0;
-	p->chipLevel = 0; p->chipDuty = 3; p->chipOct = 0; p->csEcho = 0; p->csEchoFb = 0.45f; p->csEchoT = 2; p->orbit = 0; p->orbitRate = 0.2f;
+	p->chipLevel = 0; p->chipDuty = 3; p->chipOct = 0; p->csEcho = 0; p->csEchoFb = 0.45f; p->csEchoT = 2; p->orbit = 0; p->orbitRate = 0.2f; p->revType = 0; p->dlyType = 0;
 }
 
 #define OA p->osc[0]
@@ -1794,12 +1904,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -1833,7 +1943,7 @@ static void patchCapture(SPatch* p) {
 	p->modFx = gModFx; p->dlySync = gDlySync; p->shimmer = gShimmer; p->freeze = gFreeze; p->pumpRate = gPumpRate; p->lofiBits = gLofiBits;
 	p->modRate = gModRate; p->modDepth = gModDepth; p->modMix = gModMix; p->fxColor = gFxColor; p->eqLow = gEqLow; p->eqMid = gEqMid; p->eqHigh = gEqHigh;
 	p->dlyMix = gDlyMix; p->dlyWow = gDlyWow; p->dlySat = gDlySat; p->revMix = gRevMix; p->ott = gOtt; p->pump = gPump; p->lofiRate = gLofiRate;
-	p->chipLevel = gChipLevel; p->chipDuty = gChipDuty; p->chipOct = gChipOct; p->csEcho = gCsEcho; p->csEchoFb = gCsEchoFb; p->csEchoT = gCsEchoT; p->orbit = gOrbit; p->orbitRate = gOrbitRate;
+	p->chipLevel = gChipLevel; p->chipDuty = gChipDuty; p->chipOct = gChipOct; p->csEcho = gCsEcho; p->csEchoFb = gCsEchoFb; p->csEchoT = gCsEchoT; p->orbit = gOrbit; p->orbitRate = gOrbitRate; p->revType = gRevType; p->dlyType = gDlyType;
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
 	p->glide = gGlide; p->chorus = gChorus; p->revSize = gRevSize; p->revDamp = gRevDamp; p->fxMix = gFxMix; p->driveAmt = gDriveAmt; p->master = gMaster;
 	p->arp = gArp; p->arpRate = gArpRate; p->arpOct = gArpOct; p->arpGate = gArpGate; p->bpm = gBPM;
@@ -1860,7 +1970,7 @@ static void patchApply(const SPatch* p) {
 	gModFx = p->modFx % 6; gDlySync = p->dlySync % 7; gShimmer = p->shimmer & 1; gFreeze = p->freeze & 1; gPumpRate = p->pumpRate % 3; gLofiBits = p->lofiBits % 6;
 	gModRate = p->modRate; gModDepth = p->modDepth; gModMix = p->modMix; gFxColor = p->fxColor; gEqLow = p->eqLow; gEqMid = p->eqMid; gEqHigh = p->eqHigh;
 	gDlyMix = p->dlyMix; gDlyWow = p->dlyWow; gDlySat = p->dlySat; gRevMix = p->revMix; gOtt = p->ott; gPump = p->pump; gLofiRate = p->lofiRate;
-	chipSet(p->chipLevel); gChipDuty = p->chipDuty; gChipOct = p->chipOct; gCsEcho = p->csEcho; gCsEchoFb = p->csEchoFb; gCsEchoT = p->csEchoT; gOrbit = p->orbit; gOrbitRate = p->orbitRate;
+	chipSet(p->chipLevel); gChipDuty = p->chipDuty; gChipOct = p->chipOct; gCsEcho = p->csEcho; gCsEchoFb = p->csEchoFb; gCsEchoT = p->csEchoT; gOrbit = p->orbit; gOrbitRate = p->orbitRate; gRevType = p->revType % NREVT; gDlyType = p->dlyType % NDLYT; dlyTypeChanged();
 	gVoiceMode = p->voiceMode; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
 	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate; if (p->bpm >= 40) gBPM = p->bpm;
@@ -1881,6 +1991,19 @@ static void patchApply(const SPatch* p) {
 enum { MF_CHORUS = 1, MF_FLANGER, MF_PHASER, MF_COMB, MF_FORMANT };
 enum { DS_FREE, DS_16, DS_8, DS_8D, DS_4, DS_4D, DS_2 };
 static void polishPatch(SPatch* p, int style, const char* n) {
+	{   // reverb character per style, with a few signature patches
+		static const int ST[11] = {1, 0, 0, 2, 1, 2, 0, 1, 0, 0, 0};   // BASS room, PLUCK plate, KEYS room, CHORDS plate, RETRO room
+		if (style >= 0 && style < 11) p->revType = ST[style];
+		if (!strcmp(n, "80S POLY") || !strcmp(n, "SYNTHWAVE") || !strcmp(n, "POWER CHORD") || !strcmp(n, "POWER STAB")) p->revType = 4;
+		if (strstr(n, "ORGAN") || strstr(n, "DUB") || !strcmp(n, "CLAV")) p->revType = 3;
+		if (!strcmp(n, "DREAM KEYS") || !strcmp(n, "VAPOR PAD") || !strcmp(n, "LULLABY") || !strcmp(n, "REVERSE PAD")) p->revType = 5;
+		if (!strcmp(n, "BELL") || !strcmp(n, "E PIANO") || !strcmp(n, "GLASS")) p->revType = 2;
+		if (strstr(n, "DUB")) p->dlyType = 3;
+		if (!strcmp(n, "CHIP ARP") || !strcmp(n, "CHIP SQUARE") || !strcmp(n, "LOFI PIANO") || !strcmp(n, "VINYL KEYS")) p->dlyType = 4;
+		if (style == 6 || !strcmp(n, "SYRUP PLUCK")) p->dlyType = 2;   // ARP style: ping-pong
+		if (!strcmp(n, "SUPERSAW") || !strcmp(n, "TRANCE GATE")) p->dlyType = 1;
+		if (!strcmp(n, "REVERSE PAD") || !strcmp(n, "DREAM KEYS")) p->dlyType = 5;
+	}
 	if (p->modFx || p->dlyMix > 0 || p->revMix > 0 || p->ott > 0 || p->pump > 0 || p->lofiBits || p->shimmer) return;
 #define IS(x) (!strcmp(n, x))
 	switch (style) {
@@ -1991,7 +2114,7 @@ static const char* presetName(int style, int idx) { return style == NSTYLES - 1 
 
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
-enum { D_CHIP = 1 << 26, D_GRAIN = 1 << 27 };
+enum { D_CHIP = 1 << 26, D_GRAIN = 1 << 27, D_DLYT = 1 << 28 };
 enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536, D_LOOP = 1 << 17, D_LOOPTAB = 1 << 18, D_MICTAB = 1 << 19, D_CAMTAB = 1 << 20, D_CAM = 1 << 21, D_LINK = 1 << 22, D_DLWT = 1 << 23, D_DRUMS = 1 << 24, D_UPDATE = 1 << 25 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
 
@@ -2115,8 +2238,8 @@ static Param P_MASTER[] = {
 	PE("MOD FX", &gModFx, 6, MODFX_NAMES, 0), PF("MOD RATE", &gModRate, 0.02f, 4, 0.02f, "HZ", 0), PF("MOD DEPTH", &gModDepth, 0, 1, 0.02f, "%", 0),
 	PF("MOD MIX", &gModMix, 0, 1, 0.02f, "%", 0), PF("FX COLOR", &gFxColor, 0, 1, 0.02f, "%", 0),
 	PF("EQ LOW", &gEqLow, -12, 12, 0.5f, "DB", 0), PF("EQ MID", &gEqMid, -12, 12, 0.5f, "DB", 0), PF("EQ HIGH", &gEqHigh, -12, 12, 0.5f, "DB", 0),
-	PF("DELAY MIX", &gDlyMix, 0, 1, 0.02f, "%", 0), PE("DELAY SYNC", &gDlySync, 7, DSYNC_NAMES, 0), PF("TAPE WOW", &gDlyWow, 0, 1, 0.02f, "%", 0), PF("TAPE SAT", &gDlySat, 0, 1, 0.02f, "%", 0),
-	PF("REVERB MIX", &gRevMix, 0, 1, 0.02f, "%", 0), PE("SHIMMER", &gShimmer, 2, ONOFF2, 0), PE("FREEZE", &gFreeze, 2, ONOFF2, 0),
+	PE("DELAY TYPE", &gDlyType, NDLYT, DLYT_NAMES, D_DLYT), PF("DELAY MIX", &gDlyMix, 0, 1, 0.02f, "%", 0), PE("DELAY SYNC", &gDlySync, 7, DSYNC_NAMES, 0), PF("TAPE WOW", &gDlyWow, 0, 1, 0.02f, "%", 0), PF("TAPE SAT", &gDlySat, 0, 1, 0.02f, "%", 0),
+	PF("REVERB MIX", &gRevMix, 0, 1, 0.02f, "%", 0), PE("REVERB TYPE", &gRevType, NREVT, REVT_NAMES, 0), PE("SHIMMER", &gShimmer, 2, ONOFF2, 0), PE("FREEZE", &gFreeze, 2, ONOFF2, 0),
 	PF("OTT", &gOtt, 0, 1, 0.02f, "%", 0), PF("PUMP", &gPump, 0, 1, 0.02f, "%", 0), PE("PUMP RATE", &gPumpRate, 3, PUMP_NAMES, 0),
 	PE("LOFI BITS", &gLofiBits, 6, BITS_NAMES, 0), PF("LOFI RATE", &gLofiRate, 0, 1, 0.02f, "%", 0),
 	PF("3D ORBIT", &gOrbit, 0, 1, 0.02f, "%", 0), PF("ORBIT RATE", &gOrbitRate, 0, 2, 0.02f, "HZ", 0),
@@ -4425,7 +4548,7 @@ int main(void) {
 		if (kDown & KEY_START) break;
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
-		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick();
+		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply();
 		if (gMsgT > 0) { gMsgT -= 1.0f / 60; topDirty = 1; }
 		u64 now = osGetTime(); float dt = (now - last) / 1000.0f; last = now; if (dt > 0.1f) dt = 0.1f;
 		sensorsUpdate(dt);
@@ -4471,6 +4594,7 @@ int main(void) {
 				if (p->dirty & D_DRUMS) drumsChanged();
 				if (p->dirty & D_CHIP) { float lv = gChipLevel; gChipLevel = 1; chipSet(lv); }
 				if (p->dirty & D_GRAIN) grainsChanged();
+				if (p->dirty & D_DLYT) dlyTypeChanged();
 				if (p->dirty & D_LINK) linkChanged();
 				if (p->dirty & D_THEME) botDirty = 1;
 				if (p->dirty & (D_SCALE | D_SEQ)) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; botDirty = 1; if (p->p == &gSeqMode && gSeqMode == 2) gRecPos = 0; if (p->p == &gSeqMode && gSeqMode != 1) gSeqTr = 0; }

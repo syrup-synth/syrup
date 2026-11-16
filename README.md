@@ -157,3 +157,10 @@ On the PLAY page the bottom screen's XY pad becomes a 16-step grid. Each of the 
 - **Buttons:** PLAY/STOP, CLEAR, <LEN / LEN> (pattern length), ROW- / ROW+ (move the grid an octave), and ACID.
 - **ACID:** writes a random 303-style bassline. It favours the root, adds octave jumps, rests, accents and slides, and sits in the bass octave. Tap it again for a new line. Try it with the BASS > ACID patch.
 - **While it plays:** the keys transpose the pattern.
+
+## Reverb and delay types (MASTER FX page)
+
+- **REVERB TYPE:** HALL, ROOM, PLATE, SPRING (a dispersive "boing" and the narrow tone of a spring tank), GATED (the 80s snare reverb: a big tail that cuts off) and SWELL (ducked while you play, then blooms up afterwards, like a reversed reverb).
+- **DELAY TYPE:** TAPE (ping-pong with wow and saturation), DIGITAL (clean stereo), PING-PONG (clean), DUB (dark, saturated, long), LO-FI (each repeat crushed further) and REVERSE (repeats play backwards).
+
+Both are saved with patches, and factory patches pick types to suit them.
