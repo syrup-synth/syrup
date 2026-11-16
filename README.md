@@ -197,3 +197,18 @@ Any RP2040 board (Raspberry Pi Pico, RP2040-Zero and so on) becomes a USB MIDI d
 - **3D** (10 patches): sounds that orbit around you. Loading one sets OUTPUT to SURROUND; headphones work best.
 - **BREATH** (9 patches): blow into the mic while holding a key, or LATCH a note and play with breath alone. Breath sets the volume and opens the filter. The new mod destination VOLUME makes any source control loudness.
 - **IMPULSE theme:** Impulse Tracker look, with black fields, grey panels and tabs, and a blue selection bar.
+
+## Sequencer button, grain oscillator, GRAIN patches, NET > TABLE, mic-tap drums
+
+- **SEQ button** (bottom bar, far right): jumps to the step grid, and tapping it again goes back. The top tab is now called SEQ.
+- **GRAINS** (HARDWARE page):
+  - **LOOP** plays the grain source by itself; **KEYS** makes it an oscillator, with pitch from the keys and loudness from the voice envelope.
+  - **GRAIN SOURCE** is LOOP (your loop recording), TABLE (OSC A's wavetable, where WT POS and its LFOs move through it) or MIC (the last second the mic heard).
+  - Grain settings are saved with patches.
+- **GRAIN style** (12 patches): grain oscillator layered with OSC B, sub, noise and CHIP SQUARE.
+- **NET > TABLE** (HARDWARE page): fetches a random web page and turns its raw bytes into a 64-frame wavetable (data-bending).
+- **MIC TAP** (DRUMS page):
+  - Pick TAP KICK, TAP SNARE or TAP HAT, then tap the 2DS near the mic. Each hit plays the drum and is written into the MINE pattern at the nearest 16th note, as loud as you hit it.
+  - The row's current pattern is copied into MINE first, so you can overdub. CLEAR MINE empties it.
+  - MINE is saved to the SD card.
+- **Key velocity:** press lower on a key to play louder, near the top to play softer.

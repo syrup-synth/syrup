@@ -82,11 +82,12 @@ static void fft(cpx* a, int n, int inv) {
 
 static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0, gGpuCopy = 1;
 static int gDrums, gKit, gKickPat, gSnarePat, gHatPat; static float gDrumLevel;
-static float gChipLevel, gCsEcho, gCsEchoFb, gOrbit, gOrbitRate, gGrainSize, gGrainScan, gGrainSpray, gGrainPitch, gGrainLevel; static int gChipDuty, gChipOct, gCsEchoT, gGrains;
+static float gChipLevel, gCsEcho, gCsEchoFb, gOrbit, gOrbitRate, gGrainSize, gGrainScan, gGrainSpray, gGrainPitch, gGrainLevel; static int gChipDuty, gChipOct, gCsEchoT, gGrains, gGrainSrc; static const char* GRAIN_MODES[3]; static const char* GRAIN_SRCS[3];
 static const char* DUTY_NAMES[8]; static const char* CSECHO_T_NAMES[4];
 static int gCamVid, gMidiNet; static float gWtScan; static const char* VID_NAMES[3];
 static void chipSet(float lv);
-static const char* KIT_NAMES[4]; static const char* KICKP_NAMES[7]; static const char* SNAREP_NAMES[6]; static const char* HATP_NAMES[6];
+static void grainsChanged(void);
+static const char* KIT_NAMES[4]; static const char* KICKP_NAMES[8]; static const char* SNAREP_NAMES[7]; static const char* HATP_NAMES[7]; static int gDrumRec; static const char* DREC_NAMES[5];
 #define NVISM 11
 static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM", "VOXELS", "VOXEL TABLE", "TUNNEL", "KALEIDO", "SYNTHWAVE", "RIPPLES"};
 static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
@@ -1619,8 +1620,11 @@ typedef struct {
 	float modRate, modDepth, modMix, fxColor, eqLow, eqMid, eqHigh, dlyMix, dlyWow, dlySat, revMix, ott, pump, lofiRate;
 	float chipLevel, csEcho, csEchoFb, orbit, orbitRate; int chipDuty, chipOct, csEchoT;   // v5
 	int revType, dlyType;   // v6
+	int grainMode, grainSrc; float grainSize, grainScan, grainSpray, grainPitch, grainLevel;   // v7
 } SPatch;
-#define PATCH_MAGIC 0x53595236   // "SYR6"
+#define PATCH_MAGIC 0x53595237   // "SYR7"
+#define PATCH_MAGIC6 0x53595236  // v6 (no grain settings)
+#define PATCH_V6_SIZE offsetof(SPatch, grainMode)
 #define PATCH_MAGIC5 0x53595235  // v5 (no reverb type)
 #define PATCH_V5_SIZE offsetof(SPatch, revType)
 #define PATCH_MAGIC4 0x53595234  // v4 (no chip layer / chip echo / orbit)
@@ -1659,7 +1663,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->modFx = 0; p->dlySync = 0; p->shimmer = 0; p->freeze = 0; p->pumpRate = 1; p->lofiBits = 0;
 	p->modRate = 0.4f; p->modDepth = 0.5f; p->modMix = 0.5f; p->fxColor = 0.5f; p->eqLow = p->eqMid = p->eqHigh = 0;
 	p->dlyMix = 0; p->dlyWow = 0.25f; p->dlySat = 0.3f; p->revMix = 0; p->ott = 0; p->pump = 0; p->lofiRate = 0;
-	p->chipLevel = 0; p->chipDuty = 3; p->chipOct = 0; p->csEcho = 0; p->csEchoFb = 0.45f; p->csEchoT = 2; p->orbit = 0; p->orbitRate = 0.2f; p->revType = 0; p->dlyType = 0;
+	p->chipLevel = 0; p->chipDuty = 3; p->chipOct = 0; p->csEcho = 0; p->csEchoFb = 0.45f; p->csEchoT = 2; p->orbit = 0; p->orbitRate = 0.2f; p->revType = 0; p->dlyType = 0; p->grainMode = 0; p->grainSrc = 1; p->grainSize = 0.35f; p->grainScan = 0.5f; p->grainSpray = 0.2f; p->grainPitch = 0; p->grainLevel = 0.8f;
 }
 
 #define OA p->osc[0]
@@ -1809,6 +1813,35 @@ static void pb_brass(SPatch* p) { p->master = 0.9f; OA.uni = 3; OA.detune = 10; 
 	p->voiceMode = 0; ENV1(0.02f, 0, 0.3f, 1.0f, 0.2f); p->revMix = 0.25f; p->revType = 0; p->dlyMix = 0.12f; p->dlySync = 3; }
 static void pb_wind(SPatch* p) { p->master = 1.6f; OA.level = 0.2f; p->noiseLevel = 0.6f; BREATH(0.6f); MOD(2, SRC_MIC, DST_RES, 0.5f); MOD(3, SRC_TILTX, DST_CUTOFF, 0.3f);
 	p->cutoff = 0.25f; p->res = 0.55f; ENV1(0.1f, 0, 0.5f, 1.0f, 1.0f); p->revMix = 0.45f; p->revType = 0; p->orbit = 0.6f; p->orbitRate = 0.15f; }
+
+
+// ---- GRAIN: the granular oscillator (GRAINS KEYS) layered with the other sound sources - OSC B, sub, noise and
+// the second chip's CHIP SQUARE. TABLE-source grains follow OSC A's WT POS, so the LFOs below morph the cloud.
+#define GR(m, src, sz, sc, sp, pi, lv) do { p->grainMode = m; p->grainSrc = src; p->grainSize = sz; p->grainScan = sc; p->grainSpray = sp; p->grainPitch = pi; p->grainLevel = lv; } while (0)
+static void pg_choir(SPatch* p) { p->master = 1.0f; OA.table = T_VOWELS; OA.level = 0.35f; LFO(0, LS_TRI, 0, 0.08f); MOD(2, SRC_LFO1, DST_APOS, 0.7f);
+	GR(2, 1, 0.55f, 0.5f, 0.15f, 0, 0.9f); ENV1(0.6f, 0, 1.0f, 0.9f, 1.8f); p->cutoff = 0.7f; p->revMix = 0.4f; p->modFx = 1; p->modRate = 0.2f; p->modDepth = 0.5f; p->modMix = 0.3f; }
+static void pg_shimmer(SPatch* p) { p->master = 1.0f; OA.table = T_HARMONIX; OA.level = 0.3f; LFO(0, LS_SINE, 0, 0.05f); MOD(2, SRC_LFO1, DST_APOS, 0.8f);
+	GR(2, 1, 0.4f, 0.55f, 0.45f, 12, 0.8f); ENV1(0.8f, 0, 1.0f, 1.0f, 2.5f); p->revMix = 0.45f; p->shimmer = 1; p->revType = 5; }
+static void pg_bells(SPatch* p) { OA.table = T_DIGITAL; OA.pos = 0.6f; OA.level = 0.5f; GR(2, 1, 0.12f, 0.7f, 0.3f, 12, 0.7f); ENV1(0.002f, 0, 1.8f, 0.0f, 1.4f);
+	MOD(2, SRC_VEL, DST_APOS, 0.4f); p->revMix = 0.3f; p->revType = 2; p->dlyMix = 0.2f; p->dlySync = 4; p->dlyType = 2; }
+static void pg_cloud(SPatch* p) { p->master = 1.4f; OA.table = T_HARMONIX; OA.level = 0.0f; LFO(0, LS_SH, 0, 0.4f); MOD(2, SRC_LFO1, DST_APOS, 0.6f);
+	GR(2, 1, 0.8f, 0.5f, 0.8f, 0, 1.0f); ENV1(1.0f, 0, 1.0f, 1.0f, 3.0f); p->noiseLevel = 0.04f; p->revMix = 0.5f; p->orbit = 0.5f; p->orbitRate = 0.08f; }
+static void pg_chip(SPatch* p) { OA.table = T_PWM; OA.level = 0.4f; p->chipLevel = 0.5f; p->chipDuty = 1; GR(2, 1, 0.08f, 0.8f, 0.1f, 0, 0.6f);
+	LFO(0, LS_SQR, 1, 4.0f); MOD(2, SRC_LFO1, DST_APOS, 0.5f); ENV1(0.002f, 0, 0.3f, 0.6f, 0.2f); p->lofiBits = 1; p->dlyMix = 0.25f; p->dlySync = 2; p->dlyType = 4; }
+static void pg_subbass(SPatch* p) { p->master = 0.65f; OA.table = T_GROWL; OA.oct = -1; OA.level = 0.4f; p->subLevel = 0.7f; GR(2, 1, 0.1f, 0.5f, 0.05f, -12, 0.7f);
+	ENV2(0.0f, 0, 0.3f, 0.2f, 0.2f); MOD(2, SRC_ENV2, DST_APOS, 0.7f); p->voiceMode = 1; p->glide = 0.04f; ENV1(0.003f, 0, 0.3f, 0.9f, 0.12f); p->cutoff = 0.6f; p->ott = 0.4f; }
+static void pg_noise(SPatch* p) { p->master = 1.3f; OA.table = T_DIGITAL; OA.level = 0.1f; p->noiseLevel = 0.3f; GR(2, 1, 0.25f, 0.5f, 1.0f, 0, 0.9f);
+	LFO(0, LS_SINE, 0, 0.12f); MOD(2, SRC_LFO1, DST_APOS, 1.0f); MOD(3, SRC_LFO1, DST_CUTOFF, 0.3f); ENV1(0.5f, 0, 1.0f, 1.0f, 2.0f); p->cutoff = 0.5f; p->res = 0.4f; p->revMix = 0.4f; p->revType = 0; }
+static void pg_fifths(SPatch* p) { OA.table = T_SYNC; OA.level = 0.4f; OB.on = 1; OB.semi = 7; OB.table = T_HARMONIX; OB.level = 0.3f; GR(2, 1, 0.3f, 0.6f, 0.2f, 12, 0.6f);
+	LFO(0, LS_TRI, 0, 0.3f); MOD(2, SRC_LFO1, DST_APOS, 0.5f); MOD(3, SRC_LFO1, DST_BPOS, -0.5f); ENV1(0.05f, 0, 0.5f, 0.85f, 0.6f); p->revMix = 0.3f; p->dlyMix = 0.2f; p->dlySync = 3; }
+static void pg_frozen(SPatch* p) { p->master = 1.0f; OA.table = T_VOWELS; OA.pos = 0.4f; OA.level = 0.0f; GR(2, 1, 1.0f, 0.5f, 0.05f, 0, 1.0f); MOD(2, SRC_STICK, DST_APOS, 0.5f); MOD(3, SRC_TILTX, DST_APOS, 0.3f);
+	ENV1(0.4f, 0, 1.0f, 1.0f, 2.0f); p->revMix = 0.45f; p->revType = 0; p->freeze = 0; }
+static void pg_reverse(SPatch* p) { p->master = 1.0f; OA.table = T_HARMONIX; OA.level = 0.2f; GR(2, 1, 0.6f, 0.15f, 0.25f, 0, 0.9f); ENV1(0.7f, 0, 1.0f, 1.0f, 2.0f);
+	p->revMix = 0.4f; p->revType = 5; p->dlyMix = 0.25f; p->dlySync = 4; p->dlyType = 5; }
+static void pg_glitch(SPatch* p) { OA.table = T_DIGITAL; OA.level = 0.3f; p->chipLevel = 0.25f; p->chipDuty = 0; GR(2, 1, 0.02f, 0.9f, 0.9f, 0, 1.0f);
+	LFO(0, LS_SH, 1, 8.0f); MOD(2, SRC_LFO1, DST_APOS, 1.0f); ENV1(0.002f, 0, 0.25f, 0.7f, 0.2f); p->lofiBits = 3; p->dlyMix = 0.25f; p->dlySync = 1; p->dlyType = 4; }
+static void pg_tape(SPatch* p) { p->master = 0.95f; OA.table = T_BASIC; OA.pos = 0.3f; OA.level = 0.5f; OB.on = 1; OB.oct = -1; OB.level = 0.3f; GR(2, 1, 0.45f, 0.48f, 0.1f, -12, 0.6f);
+	ENV1(0.3f, 0, 1.0f, 0.9f, 1.2f); p->cutoff = 0.55f; p->dlyMix = 0.3f; p->dlySync = 4; p->dlyType = 0; p->dlyWow = 0.8f; p->lofiRate = 0.2f; p->revMix = 0.3f; }
 
 // ---- 3D: patches that move around you (3D ORBIT); loading one turns OUTPUT to SURROUND
 #define ORB(a, r) do { p->orbit = a; p->orbitRate = r; } while (0)
@@ -1961,8 +1994,8 @@ static void pa_ripple(SPatch* p) { pr_syruppad(p); ENV1(0.05f, 0, 0.8f, 0.6f, 1.
 static void pa_bassoct(SPatch* p) { pr_pluckbass(p); p->chord = 0; ARPSET(1, 3, 2, 0.5f, 124); }
 static void pa_marimba(SPatch* p) { pr_marimba(p); p->chord = 2; ARPSET(3, 3, 2, 0.6f, 112); }
 #define MAXPRE 14
-#define NSTYLES 14   // last style = USER
-static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "PLUCK", "KEYS", "CHORDS", "ARP", "RETRO", "AMBIENT", "FX", "WAVES", "3D", "BREATH", "USER"};
+#define NSTYLES 15   // last style = USER
+static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "PLUCK", "KEYS", "CHORDS", "ARP", "RETRO", "AMBIENT", "FX", "WAVES", "3D", "BREATH", "GRAIN", "USER"};
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB WOBBLE", pr_subwob}, {"REESE", pr_reese}, {"FM GROWL", pr_fmgrowl}, {"808 SUB", pr_808}, {"ACID", pr_acid},
 	 {"WOBBLE 1/8", pr_wob8}, {"DIGI BASS", pr_digibass}, {"SINE BASS", pr_sinebass}, {"PLUCK BASS", pr_pluckbass}, {"HOOVER", pr_hoover}, {"TILT WOBBLE", pr_tiltwob}, {"OTT GROWL", pm_ottgrowl}},
@@ -1990,7 +2023,9 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"ORBIT PAD", p3_orbitpad}, {"SPACE CHOIR", p3_spacechoir}, {"CIRCLE ARP", p3_circlearp}, {"3D BELLS", p3_bells}, {"HELICOPTER", p3_heli}, {"WIDE SAW", p3_widesaw},
 	 {"AROUND YOU", p3_aroundyou}, {"SPIRAL PLUCK", p3_spiralpluck}, {"3D STRINGS", p3_strings}, {"TILT ORBIT", p3_tiltorbit}},
 	{{"BREATH FLUTE", pb_flute}, {"BREATH SAX", pb_sax}, {"HARMONICA", pb_harmonica}, {"BREATH PAD", pb_pad}, {"DIDGERIDOO", pb_didge},
-	 {"BLOWN BOTTLE", pb_bottle}, {"TALK BREATH", pb_talk}, {"BREATH BRASS", pb_brass}, {"BLOW WIND", pb_wind}}
+	 {"BLOWN BOTTLE", pb_bottle}, {"TALK BREATH", pb_talk}, {"BREATH BRASS", pb_brass}, {"BLOW WIND", pb_wind}},
+	{{"GRAIN CHOIR", pg_choir}, {"GRAIN SHIMMER", pg_shimmer}, {"GRAIN BELLS", pg_bells}, {"CLOUD", pg_cloud}, {"CHIP GRAINS", pg_chip}, {"SUB GRAIN BASS", pg_subbass},
+	 {"NOISE GRAINS", pg_noise}, {"GRAIN FIFTHS", pg_fifths}, {"FROZEN TABLE", pg_frozen}, {"REVERSE CLOUD", pg_reverse}, {"GLITCH GRAINS", pg_glitch}, {"TAPE GRAINS", pg_tape}}
 };
 #define NUSER 8
 static SPatch gUser[NUSER];
@@ -2007,12 +2042,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -2046,7 +2081,7 @@ static void patchCapture(SPatch* p) {
 	p->modFx = gModFx; p->dlySync = gDlySync; p->shimmer = gShimmer; p->freeze = gFreeze; p->pumpRate = gPumpRate; p->lofiBits = gLofiBits;
 	p->modRate = gModRate; p->modDepth = gModDepth; p->modMix = gModMix; p->fxColor = gFxColor; p->eqLow = gEqLow; p->eqMid = gEqMid; p->eqHigh = gEqHigh;
 	p->dlyMix = gDlyMix; p->dlyWow = gDlyWow; p->dlySat = gDlySat; p->revMix = gRevMix; p->ott = gOtt; p->pump = gPump; p->lofiRate = gLofiRate;
-	p->chipLevel = gChipLevel; p->chipDuty = gChipDuty; p->chipOct = gChipOct; p->csEcho = gCsEcho; p->csEchoFb = gCsEchoFb; p->csEchoT = gCsEchoT; p->orbit = gOrbit; p->orbitRate = gOrbitRate; p->revType = gRevType; p->dlyType = gDlyType;
+	p->chipLevel = gChipLevel; p->chipDuty = gChipDuty; p->chipOct = gChipOct; p->csEcho = gCsEcho; p->csEchoFb = gCsEchoFb; p->csEchoT = gCsEchoT; p->orbit = gOrbit; p->orbitRate = gOrbitRate; p->revType = gRevType; p->dlyType = gDlyType; p->grainMode = gGrains; p->grainSrc = gGrainSrc; p->grainSize = gGrainSize; p->grainScan = gGrainScan; p->grainSpray = gGrainSpray; p->grainPitch = gGrainPitch; p->grainLevel = gGrainLevel;
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
 	p->glide = gGlide; p->chorus = gChorus; p->revSize = gRevSize; p->revDamp = gRevDamp; p->fxMix = gFxMix; p->driveAmt = gDriveAmt; p->master = gMaster;
 	p->arp = gArp; p->arpRate = gArpRate; p->arpOct = gArpOct; p->arpGate = gArpGate; p->bpm = gBPM;
@@ -2080,6 +2115,9 @@ static void patchApply(const SPatch* p) {
 	gArpN = 0; gArpOnN = 0; gHeldN = 0;
 	if (subChg) buildSub();
 	LightLock_Unlock(&gMipsLock);
+	// grains after the table lock is released (building the TABLE source takes that lock)
+	{ int gm = p->grainMode % 3, gs = p->grainSrc % 3; gGrainSize = p->grainSize; gGrainScan = p->grainScan; gGrainSpray = p->grainSpray; gGrainPitch = p->grainPitch; gGrainLevel = p->grainLevel;
+	  if (!(gm == 0 && gGrains == 1) && (gm != gGrains || gs != gGrainSrc || gm)) { gGrains = gm; gGrainSrc = gs; grainsChanged(); } }
 	if (noiseChg) buildNoise();
 	snprintf(gPatchName, sizeof(gPatchName), "%s", p->name);
 	gForceBuild = 3;
@@ -2222,6 +2260,7 @@ static const char* presetName(int style, int idx) { return style == NSTYLES - 1 
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
 enum { D_CHIP = 1 << 26, D_GRAIN = 1 << 27, D_DLYT = 1 << 28, D_CAMV = 1 << 29, D_NETMIDI = 1 << 30 };
+#define D_DREC D_DRUMS   // shares the drums flag; told apart by the param
 enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536, D_LOOP = 1 << 17, D_LOOPTAB = 1 << 18, D_MICTAB = 1 << 19, D_CAMTAB = 1 << 20, D_CAM = 1 << 21, D_LINK = 1 << 22, D_DLWT = 1 << 23, D_DRUMS = 1 << 24, D_UPDATE = 1 << 25 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
 
@@ -2329,7 +2368,7 @@ static int gLoopMode, gLoopBars, gCamOn, gLink, gBeatLight;
 static float gLoopLevel;
 static Param P_HW[] = {
 	PE("LOOPER", &gLoopMode, 3, LOOP_NAMES_P, D_LOOP), PE("LOOP BARS", &gLoopBars, 5, BARS_NAMES_P, 0), PF("LOOP LEVEL", &gLoopLevel, 0, 1, 0.05f, "%", 0),
-	PE("GRAINS", &gGrains, 2, ONOFF, D_GRAIN), PF("GRAIN SIZE", &gGrainSize, 0, 1, 0.02f, "%", 0), PF("GRAIN SCAN", &gGrainScan, 0, 1, 0.02f, "%", 0),
+	PE("GRAINS", &gGrains, 3, GRAIN_MODES, D_GRAIN), PE("GRAIN SOURCE", &gGrainSrc, 3, GRAIN_SRCS, D_GRAIN), PF("GRAIN SIZE", &gGrainSize, 0, 1, 0.02f, "%", 0), PF("GRAIN SCAN", &gGrainScan, 0, 1, 0.02f, "%", 0),
 	PF("GRAIN SPRAY", &gGrainSpray, 0, 1, 0.02f, "%", 0), PF("GRAIN PITCH", &gGrainPitch, -24, 24, 1, "ST", 0), PF("GRAIN LEVEL", &gGrainLevel, 0, 1, 0.05f, "%", 0),
 	{"LOOP > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_LOOPTAB},
 	{"MIC > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_MICTAB},
@@ -2339,6 +2378,7 @@ static Param P_HW[] = {
 	PE("WI-FI MIDI", &gMidiNet, 2, ONOFF, D_NETMIDI),
 	{"UPDATE SYRUP", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_UPDATE},
 	{"GET WAVETABLES", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
+	{"NET > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	PE("LINK", &gLink, 6, LINK_NAMES_P, D_LINK), PE("BEAT LIGHT", &gBeatLight, 2, ONOFF, 0),
 	PEND};
 static const char* ONOFF2[2] = {"OFF", "ON"};
@@ -2354,8 +2394,8 @@ static Param P_MASTER[] = {
 	PF("3D ORBIT", &gOrbit, 0, 1, 0.02f, "%", 0), PF("ORBIT RATE", &gOrbitRate, 0, 2, 0.02f, "HZ", 0),
 	PEND};
 static Param P_DRUMS[] = {
-	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 4, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 7, KICKP_NAMES, 0),
-	PE("SNARE", &gSnarePat, 6, SNAREP_NAMES, 0), PE("HAT", &gHatPat, 6, HATP_NAMES, 0), PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0),
+	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 4, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 8, KICKP_NAMES, 0),
+	PE("SNARE", &gSnarePat, 7, SNAREP_NAMES, 0), PE("HAT", &gHatPat, 7, HATP_NAMES, 0), PE("MIC TAP", &gDrumRec, 5, DREC_NAMES, D_DREC), PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0),
 	PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
 	PF("CHIP ECHO", &gCsEcho, 0, 1, 0.02f, "%", 0), PE("ECHO TIME", &gCsEchoT, 4, CSECHO_T_NAMES, 0), PF("ECHO REPEATS", &gCsEchoFb, 0, 0.85f, 0.03f, "%", 0),
 	PEND};
@@ -2680,7 +2720,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM MACHINE ON / OFF"}, {"KIT", "DRUM SOUNDS"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE + NETWORK MIDI ON PORT 8080 / 5004"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -2688,7 +2728,7 @@ static const char* paramHelp(const char* n) {
 }
 
 // ---- Pip-Boy tabs: main sections with sub-pages
-static const char* SECT_NAMES[7] = {"PATCH", "OSC", "SHAPE", "FX", "PLAY", "VIS", "HW"};
+static const char* SECT_NAMES[7] = {"PATCH", "OSC", "SHAPE", "FX", "SEQ", "VIS", "HW"};
 static const int PAGE_SECT[NPAGES] = {0, 1, 1, 1, 2, 2, 3, 4, 5, 6, 3, 4};
 static const char* SUB_NAMES[NPAGES] = {"PRESETS", "OSC A", "OSC B", "SUB+NOISE", "FILTER+ENV", "LFO+MOD", "VOICE+FX", "ARP+SEQ", "VISUALIZER", "HARDWARE", "MASTER FX", "DRUMS"};
 
@@ -2993,16 +3033,16 @@ static void outline(int x, int y, int w, int h, u8 r, u8 g, u8 b) { rect(x, y, w
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	rect(0, 0, 320, KB_Y, BG);
-	static const char* TABS[6] = {"HELP", "<PAGE", "PAGE>", "OCT-", "OCT+", "LATCH"};
-	for (int i = 0; i < 6; i++) {
-		int x = i * 320 / 6, lit = (i == 0 && helpOn) || (i == 5 && latch);
-		int w = strlen(TABS[i]) * 8, bw = 320 / 6 - 4;
+	static const char* TABS[7] = {"HELP", "<PAGE", "PAGE>", "OCT-", "OCT+", "LATCH", "SEQ"};
+	for (int i = 0; i < 7; i++) {
+		int x = i * 320 / 7, lit = (i == 0 && helpOn) || (i == 5 && latch) || (i == 6 && gGridOn);
+		int w = strlen(TABS[i]) * 8, bw = 320 / 7 - 4;
 		if (TH->ega) {
-			if (lit) { rect(x + 2, 1, bw, TAB_H - 3, HI); text(x + 320 / 12 - w / 2, 6, TABS[i], 1, HITXT); }
-			else { outline(x + 2, 1, bw, TAB_H - 3, LINE); text(x + 320 / 12 - w / 2, 6, TABS[i], 1, TXT); }
+			if (lit) { rect(x + 2, 1, bw, TAB_H - 3, HI); text(x + 160 / 7 - w / 2, 6, TABS[i], 1, HITXT); }
+			else { outline(x + 2, 1, bw, TAB_H - 3, LINE); text(x + 160 / 7 - w / 2, 6, TABS[i], 1, TXT); }
 		} else {
-			if (lit) { rect(x + 2, 1, bw, TAB_H - 2, HI); text(x + 320 / 12 - w / 2, 7, TABS[i], 1, HITXT); }
-			else { rect(x + 2, 1, bw, TAB_H - 2, RGB3(TH->tab)); text(x + 320 / 12 - w / 2, 7, TABS[i], 1, RGB3(TH->tabTxt)); }
+			if (lit) { rect(x + 2, 1, bw, TAB_H - 2, HI); text(x + 160 / 7 - w / 2, 7, TABS[i], 1, HITXT); }
+			else { rect(x + 2, 1, bw, TAB_H - 2, RGB3(TH->tab)); text(x + 160 / 7 - w / 2, 7, TABS[i], 1, RGB3(TH->tabTxt)); }
 		}
 	}
 	if (gGridOn) drawGrid(); else {
@@ -3440,40 +3480,92 @@ static void loopToTable(void) {
 	free(in); free(fr);
 }
 
-// ---- grains: the DSP plays short windowed slices of the loop, two channels overlapping by half; the CPU only
-// refills a slice once the DSP has finished with it (so the DSP sets the pace)
-static int gGrains = 0; static float gGrainSize = 0.35f, gGrainScan = 0.75f, gGrainSpray = 0.2f, gGrainPitch = 0, gGrainLevel = 0.8f;
+// ---- grain engine: the DSP plays short windowed slices from a source, two channels offset by half a grain;
+// the CPU only refills a slice once the DSP has finished with it (so the DSP sets the pace).
+// GRAINS LOOP plays the source by itself; GRAINS KEYS makes it an oscillator: pitch from the keys, loudness
+// from the voice envelope, and with the TABLE source the position follows OSC A's WT POS (and its mods).
+static int gGrains = 0, gGrainSrc = 1; static float gGrainSize = 0.35f, gGrainScan = 0.5f, gGrainSpray = 0.2f, gGrainPitch = 0, gGrainLevel = 0.8f;
+static const char* GRAIN_MODES[3] = {"OFF", "LOOP", "KEYS"};
+static const char* GRAIN_SRCS[3] = {"LOOP", "TABLE", "MIC"};
 #define GR_CH0 21
 #define GR_N 4
 #define GR_MAX 8192
-static s16* gGrBuf[GR_N]; static ndspWaveBuf gGrWB[GR_N];
+static s16* gGrBuf[GR_N]; static ndspWaveBuf gGrWB[GR_N]; static s16* gGrPad = NULL; static ndspWaveBuf gGrPadWB;
 static float gGrPos = 0;
+static s16* gGrSrcBuf = NULL; static int gGrSrcLen = 0, gGrSrcRate = 32728, gGrSrcKind = -1; static char gGrSrcTab[40] = "";
+#define GR_SRCMAX (32728 * 16)
 static int grainReserved(int c) { return gGrains && (c == GR_CH0 || c == GR_CH0 + 1); }
-static void grainsTick(void) {   // main thread
-	if (!gGrains || !gLoopHave || !gAudioOK) return;
+static int grainBuild(void) {   // (re)make the source buffer for the chosen source; 0 = nothing to play yet
+	if (!gGrSrcBuf && !(gGrSrcBuf = (s16*)linearAlloc(GR_SRCMAX * 2))) return 0;
+	if (gGrainSrc == 0) {
+		if (!gLoopHave) return 0;
+		int n = gLoopLen > GR_SRCMAX ? GR_SRCMAX : gLoopLen;
+		for (int i = 0; i < n; i++) { float v = (adSample(0, i) + adSample(1, i)) * 0.5f * 32000; gGrSrcBuf[i] = (s16)(v > 32767 ? 32767 : v < -32768 ? -32768 : v); }
+		gGrSrcLen = n; gGrSrcRate = 32728;
+	} else if (gGrainSrc == 1) {   // OSC A's table: each frame as six cycles of middle C, frame after frame
+		Table* tb = &gOsc[0].tb; int nf = tb->nFrames < 1 ? 1 : tb->nFrames; const float P = 32728.0f / 261.63f; int per = (int)(P * 6);
+		float pk = tb->peak > 1e-6f ? tb->peak : 1;
+		LightLock_Lock(&gMipsLock);
+		int n = 0;
+		for (int f = 0; f < nf && n + per < GR_SRCMAX; f++) {
+			const float* c = tb->frames + f * CYC;
+			for (int i = 0; i < per; i++) { float x = fmodf(i / P, 1.0f) * CYC; int k = (int)x; float u = x - k; float v = (c[k] * (1 - u) + c[(k + 1) % CYC] * u) / pk; gGrSrcBuf[n++] = (s16)(v * 26000); }
+		}
+		snprintf(gGrSrcTab, sizeof(gGrSrcTab), "%s", tb->name);
+		LightLock_Unlock(&gMipsLock);
+		gGrSrcLen = n; gGrSrcRate = 32728;
+	} else {   // MIC: whatever the mic heard over the last second or so, oldest first
+		if (!gMicOK || !gMicBuf) return 0;
+		u32 N = gMicSize / 2, end = micGetLastSampleOffset() / 2; const s16* m = (const s16*)gMicBuf;
+		if (N > GR_SRCMAX) N = GR_SRCMAX;
+		for (u32 i = 0; i < N; i++) gGrSrcBuf[i] = m[(end + i) % N];
+		gGrSrcLen = N; gGrSrcRate = 16364;
+	}
+	DSP_FlushDataCache(gGrSrcBuf, gGrSrcLen * 2);
+	gGrSrcKind = gGrainSrc;
+	return gGrSrcLen > 64;
+}
+static void grainMix(float g) {   // both grain channels: level, and into the master chain when it's on
+	for (int k = 0; k < 2; k++) {
+		float mix[12] = {0}, pan = k ? 0.65f : 0.35f;
+		if (masterActive()) { mix[4] = sqrtf(1 - pan) * g; mix[5] = sqrtf(pan) * g; } else { mix[0] = sqrtf(1 - pan) * g; mix[1] = sqrtf(pan) * g; }
+		ndspChnSetMix(GR_CH0 + k, mix);
+	}
+}
+static void grainsTick(void) {   // main thread, every frame
+	if (!gGrains || !gAudioOK) return;
+	if (gGrSrcKind != gGrainSrc || gGrSrcLen <= 64 || (gGrainSrc == 1 && strcmp(gGrSrcTab, gOsc[0].tb.name))) { if (!grainBuild()) return; }
+	static int live = 0; if (gGrainSrc == 1 && !strcmp(gOsc[0].tb.name, "CAM LIVE") && ++live >= 15) { live = 0; grainBuild(); }   // follow the live camera table
+	float ratio = 1, g = gGrainLevel;
+	if (gGrains == 2) {   // KEYS: newest sounding voice sets pitch and loudness
+		SVoice* nv = NULL; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && (!nv || gV[i].age > nv->age)) nv = &gV[i];
+		if (!nv) { grainMix(0); return; }
+		ratio = nv->cur / 261.63f; g *= nv->env * nv->env * (0.35f + 0.65f * nv->vel) * 1.4f;
+	}
+	grainMix(g * gMaster);
 	int len = (int)(512 + gGrainSize * 7000); if (len > GR_MAX) len = GR_MAX;
-	float rate = 32728.0f * powf(2.0f, gGrainPitch / 12.0f);
+	float rate = gGrSrcRate * ratio * powf(2.0f, gGrainPitch / 12.0f);
+	if (rate > 190000) rate = 190000;
 	for (int b = 0; b < GR_N; b++) {
 		if (gGrWB[b].status == NDSP_WBUF_QUEUED || gGrWB[b].status == NDSP_WBUF_PLAYING) continue;
 		if (!gGrBuf[b] && !(gGrBuf[b] = (s16*)linearAlloc(GR_MAX * 2))) return;
-		gGrPos += len * 0.5f * (gGrainScan * 2 - 1);   // SCAN: 50% = frozen, above = forwards, below = backwards
-		while (gGrPos < 0) gGrPos += gLoopLen;
-		while (gGrPos >= gLoopLen) gGrPos -= gLoopLen;
-		int st = (int)gGrPos + (int)((rand() % 1000 / 1000.0f - 0.5f) * gGrainSpray * 32728);
-		st %= gLoopLen; if (st < 0) st += gLoopLen;
-		for (int i = 0; i < len; i++) gGrBuf[b][i] = 0;
-		for (int k = 0; k < 2; k++) for (int i = 0; i < len; i++) {   // Hann window, channels decoded one after the other
+		int L = gGrSrcLen;
+		if (gGrains == 2 && gGrainSrc == 1) {   // TABLE in KEYS: position = OSC A's WT POS (with mods) plus SCAN drift
+			static float drift = 0; drift += len * 0.5f * (gGrainScan * 2 - 1); while (drift < 0) drift += L; while (drift >= L) drift -= L;
+			gGrPos = gPosEff[0] * (L - len) + (gGrainScan != 0.5f ? drift : 0);
+		} else gGrPos += len * 0.5f * (gGrainScan * 2 - 1);   // SCAN: 50% = frozen, above = forwards, below = backwards
+		while (gGrPos < 0) gGrPos += L;
+		while (gGrPos >= L) gGrPos -= L;
+		int st = (int)gGrPos + (int)((rand() % 1000 / 1000.0f - 0.5f) * gGrainSpray * gGrSrcRate);
+		st %= L; if (st < 0) st += L;
+		for (int i = 0; i < len; i++) {   // Hann window
 			float w = 0.5f - 0.5f * cosf(TWO_PI * i / len);
-			int q = gGrBuf[b][i] + (int)(adSample(k, (st + i) % gLoopLen) * w * gGrainLevel * 16000);
-			gGrBuf[b][i] = (s16)(q > 32767 ? 32767 : q < -32768 ? -32768 : q);
+			gGrBuf[b][i] = (s16)(gGrSrcBuf[(st + i) % L] * w);
 		}
 		DSP_FlushDataCache(gGrBuf[b], len * 2);
 		int ch = GR_CH0 + (b & 1);
 		memset(&gGrWB[b], 0, sizeof(ndspWaveBuf)); gGrWB[b].data_vaddr = gGrBuf[b]; gGrWB[b].nsamples = len;
 		ndspChnSetRate(ch, rate);
-		float mix[12] = {0}; float pan = (b & 1) ? 0.65f : 0.35f;
-		if (masterActive()) { mix[4] = sqrtf(1 - pan); mix[5] = sqrtf(pan); } else { mix[0] = sqrtf(1 - pan); mix[1] = sqrtf(pan); }
-		ndspChnSetMix(ch, mix);
 		ndspChnWaveBufAdd(ch, &gGrWB[b]);
 	}
 }
@@ -3485,8 +3577,15 @@ static void grainsChanged(void) {
 		if (gGrains) { ndspChnReset(c); ndspChnSetInterp(c, NDSP_INTERP_LINEAR); ndspChnSetFormat(c, NDSP_FORMAT_MONO_PCM16); }
 	}
 	for (int b = 0; b < GR_N; b++) gGrWB[b].status = NDSP_WBUF_DONE;
-	gGrPos = 0;
-	if (gGrains && !gLoopHave) say("RECORD A LOOP FIRST, THEN GRAINS PLAY IT");
+	gGrPos = 0; gGrSrcKind = -1;
+	if (!gGrains) return;
+	if (!grainBuild()) { say(gGrainSrc == 0 ? "GRAIN SOURCE LOOP: RECORD A LOOP FIRST" : "GRAIN SOURCE MIC: MIC NOT AVAILABLE"); return; }
+	if (!gGrPad && (gGrPad = (s16*)linearAlloc(GR_MAX))) { memset(gGrPad, 0, GR_MAX); DSP_FlushDataCache(gGrPad, GR_MAX); }
+	if (gGrPad) {   // start the second stream half a grain late so the two overlap evenly
+		memset(&gGrPadWB, 0, sizeof(gGrPadWB)); gGrPadWB.data_vaddr = gGrPad; gGrPadWB.nsamples = (int)(512 + gGrainSize * 7000) / 2;
+		ndspChnSetRate(GR_CH0 + 1, gGrSrcRate); ndspChnWaveBufAdd(GR_CH0 + 1, &gGrPadWB);
+	}
+	if (gGrainSrc == 2) say("GRAINS: GRABBED THE LAST SECOND OF MIC (PICK MIC AGAIN TO REGRAB)");
 }
 
 // ---- camera: brightness / colour mod sources, and photo -> wavetable (each image row is a frame)
@@ -4125,6 +4224,49 @@ static void upMain(void* arg) {
 	curl_global_cleanup(); netDown();
 }
 #endif
+// ---- NET > TABLE: data-bending. Fetch a random web page and play its raw bytes as 64 wavetable frames.
+// (The Wi-Fi chip never hands apps raw radio noise, so live network data is the closest thing.)
+static float* gNetFr = NULL; static volatile int gNetTab = 0;   // 1 fetching, 2 ready, 3 failed
+#ifndef SYRUP_NO_NET
+static void netTabMain(void* arg) {
+	(void)arg;
+	if (!netUp()) { snprintf(gDlErr, sizeof(gDlErr), "WI-FI NOT AVAILABLE"); gNetTab = 3; return; }
+	curl_global_init(CURL_GLOBAL_DEFAULT);
+	MemBuf b = {0};
+	int ok = httpGet("https://en.wikipedia.org/wiki/Special:Random", &b, 0);
+	if (ok && b.p && b.n > 8192) {
+		if (!gNetFr) gNetFr = (float*)malloc(sizeof(float) * CYC * WT_FR);
+		if (gNetFr) {
+			size_t start = b.n / 8, span = b.n - start, seg = span / WT_FR; if (seg > 4096) seg = 4096; if (seg < 64) seg = 64;
+			static float tmp[4096];
+			for (int f = 0; f < WT_FR; f++) {
+				size_t o = start + (span - seg) * f / (WT_FR - 1);
+				for (size_t i = 0; i < seg; i++) tmp[i] = ((u8)b.p[o + i] - 128) / 128.0f;
+				for (size_t i = 1; i + 1 < seg; i++) tmp[i] = (tmp[i - 1] + 2 * tmp[i] + tmp[i + 1]) * 0.25f;   // take the worst fizz off
+				wtResample(tmp, (int)seg, gNetFr + f * CYC);
+			}
+			wtFinish(gNetFr, WT_FR); gNetTab = 2;
+		} else { snprintf(gDlErr, sizeof(gDlErr), "OUT OF MEMORY"); gNetTab = 3; }
+	} else { if (ok) snprintf(gDlErr, sizeof(gDlErr), "PAGE TOO SMALL"); gNetTab = 3; }
+	free(b.p);
+	curl_global_cleanup(); netDown();
+}
+#endif
+static void netTabStart(void) {
+#ifdef SYRUP_NO_NET
+	say("NO NETWORK IN THIS BUILD");
+#else
+	if (gDlState == 1 || gUpState == 1 || gUpState == 2 || gNetTab == 1) return;
+	if (gDlThread) { threadJoin(gDlThread, U64_MAX); threadFree(gDlThread); gDlThread = NULL; }
+	gNetTab = 1; gDlErr[0] = 0; say("GRABBING BYTES OFF THE INTERNET...");
+	gDlThread = threadCreate(netTabMain, NULL, 0x10000, 0x38, -2, false);
+	if (!gDlThread) { gNetTab = 0; say("COULD NOT START"); }
+#endif
+}
+static void netTabTick(void) {
+	if (gNetTab == 2) { gNetTab = 0; wtInstall("NET", gNetFr); }
+	else if (gNetTab == 3) { gNetTab = 0; char m[48]; snprintf(m, sizeof(m), "NET > TABLE FAILED: %.24s", gDlErr); say(m); }
+}
 static void upStart(void) {
 #ifdef SYRUP_NO_NET
 	say("NO NETWORK IN THIS BUILD");
@@ -4191,12 +4333,19 @@ static int gDrumCh[3] = {-1, -1, -1}, gDrumStep = -1;
 static float gDrumPh = 0;
 static s16* gDrumSmp[3]; static int gDrumLen[3];
 static const char* KIT_NAMES[4] = {"808", "909", "LOFI", "CHIP"};
-static const char* KICKP_NAMES[7] = {"OFF", "FOUR FLOOR", "BREAK", "TRAP", "DNB", "HALFTIME", "BOOM BAP"};
-static const char* SNAREP_NAMES[6] = {"OFF", "BACKBEAT", "BREAK", "TRAP", "DNB", "CLAP 2+4"};
-static const char* HATP_NAMES[6] = {"OFF", "8THS", "16THS", "OFFBEAT", "TRAP ROLL", "SHUFFLE"};
-static const u16 KICKP[7] = {0, 0x8888, 0x8224, 0x8022, 0x8020, 0x8000, 0x8124};
-static const u16 SNAREP[6] = {0, 0x0808, 0x0849, 0x0080, 0x0808, 0x0808};
-static const u16 HATP[6] = {0, 0xAAAA, 0xFFFF, 0x2222, 0xFDEF, 0x9249};
+static const char* KICKP_NAMES[8] = {"OFF", "FOUR FLOOR", "BREAK", "TRAP", "DNB", "HALFTIME", "BOOM BAP", "MINE"};
+static const char* SNAREP_NAMES[7] = {"OFF", "BACKBEAT", "BREAK", "TRAP", "DNB", "CLAP 2+4", "MINE"};
+static const char* HATP_NAMES[7] = {"OFF", "8THS", "16THS", "OFFBEAT", "TRAP ROLL", "SHUFFLE", "MINE"};
+static const u16 KICKP[8] = {0, 0x8888, 0x8224, 0x8022, 0x8020, 0x8000, 0x8124, 0};
+static const u16 SNAREP[7] = {0, 0x0808, 0x0849, 0x0080, 0x0808, 0x0808, 0};
+static const u16 HATP[7] = {0, 0xAAAA, 0xFFFF, 0x2222, 0xFDEF, 0x9249, 0};
+// MINE: your own pattern, a velocity (0 = rest) per step per drum, recorded by tapping on the mic
+static u8 gMyDrum[3][16];
+static const int MINE_IDX[3] = {7, 6, 6};
+static int* const DPAT[3] = {&gKickPat, &gSnarePat, &gHatPat};
+static int gDrumRec = 0;   // 0 off, 1 kick, 2 snare, 3 hat, 4 clear
+static const char* DREC_NAMES[5] = {"OFF", "TAP KICK", "TAP SNARE", "TAP HAT", "CLEAR MINE"};
+static float gTapLevel = 0, gTapHold = 0;
 static const u8 HATVEL[16] = {255, 120, 200, 110, 255, 120, 200, 140, 255, 120, 200, 110, 255, 130, 220, 160};
 static int gNzCh[2] = {-1, -1}; static float gNzVol[2];
 static int drumReserved(int c) { return gDrums && (c == gDrumCh[0] || c == gDrumCh[1] || c == gDrumCh[2] || (gKit == 3 && (c == 14 || c == 15))); }
@@ -4283,17 +4432,56 @@ static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the
 	gDrumStep = step;
 	if ((step & 3) == 0) gBeatPh = step / 4;   // keep the sidechain pump on the kick grid
 	u16 bit = 0x8000 >> step; int any = 0;
-	if (KICKP[gKickPat] & bit) { drumHit(0, 1.0f); any = 1; }
-	if (SNAREP[gSnarePat] & bit) { drumHit(1, (gSnarePat == 5 && (step & 4)) ? 0.85f : 1.0f); any = 1; }
-	if (HATP[gHatPat] & bit) { drumHit(2, HATVEL[step] / 255.0f); any = 1; }
+	if (gKickPat == 7) { if (gMyDrum[0][step]) { drumHit(0, gMyDrum[0][step] / 255.0f); any = 1; } }
+	else if (KICKP[gKickPat] & bit) { drumHit(0, 1.0f); any = 1; }
+	if (gSnarePat == 6) { if (gMyDrum[1][step]) { drumHit(1, gMyDrum[1][step] / 255.0f); any = 1; } }
+	else if (SNAREP[gSnarePat] & bit) { drumHit(1, (gSnarePat == 5 && (step & 4)) ? 0.85f : 1.0f); any = 1; }
+	if (gHatPat == 6) { if (gMyDrum[2][step]) { drumHit(2, gMyDrum[2][step] / 255.0f); any = 1; } }
+	else if (HATP[gHatPat] & bit) { drumHit(2, HATVEL[step] / 255.0f); any = 1; }
 	if (any) csndExecCmds(false);
 }
+static void myDrumLoad(void);
 static void drumsChanged(void) {   // main thread
+	myDrumLoad();
 	if (gDrums) {
 		if (!gCsndOK) { say("DRUMS NEED THE SECOND SOUND CHIP"); gDrums = 0; return; }
 		if (gDrumBuilt != gKit) drumBuild(gKit);
 		drumPickChannels(); gDrumStep = -1;
 	} else if (gCsndOK) { for (int d = 0; d < 3; d++) if (gDrumCh[d] >= 0) CSND_SetPlayState(gDrumCh[d], 0); for (int k = 0; k < 2; k++) if (gNzCh[k] >= 0) CSND_SetPlayState(gNzCh[k], 0); csndExecCmds(false); }
+}
+// MIC TAP: knock or tap near the mic; each hit plays the drum now and is written into MINE at the nearest 16th,
+// as loud as you hit it. Switching to a row copies its current pattern into MINE first, so you overdub.
+static int gMyDrumLoaded = 0;
+static void myDrumSave(void) { if (!gMyDrumLoaded) return; FILE* f = fopen("sdmc:/3ds/syrup/mydrums.bin", "wb"); if (f) { fwrite(gMyDrum, 1, sizeof(gMyDrum), f); fclose(f); } }
+static void myDrumLoad(void) { if (gMyDrumLoaded) return; gMyDrumLoaded = 1; FILE* f = fopen("sdmc:/3ds/syrup/mydrums.bin", "rb"); if (f) { if (fread(gMyDrum, 1, sizeof(gMyDrum), f) != sizeof(gMyDrum)) memset(gMyDrum, 0, sizeof(gMyDrum)); fclose(f); } }
+static void drumRecChanged(void) {
+	myDrumLoad();
+	if (gDrumRec == 4) { memset(gMyDrum, 0, sizeof(gMyDrum)); gDrumRec = 0; myDrumSave(); say("MINE CLEARED"); return; }
+	if (!gDrumRec) { myDrumSave(); return; }
+	int r = gDrumRec - 1;
+	if (*DPAT[r] != MINE_IDX[r]) {   // start from what's playing on that row
+		const u16* pt = r == 0 ? KICKP : r == 1 ? SNAREP : HATP;
+		for (int i = 0; i < 16; i++) gMyDrum[r][i] = (pt[*DPAT[r]] & (0x8000 >> i)) ? (r == 2 ? HATVEL[i] : 230) : 0;
+		*DPAT[r] = MINE_IDX[r];
+	}
+	if (!gDrums) { gDrums = 1; drumsChanged(); }
+	say("TAP THE 2DS NEAR THE MIC - HARDER = LOUDER");
+}
+static void drumTapTick(float dt) {   // main thread (inside the voice lock), 60 times a second
+	if (!gDrumRec || !gDrums || !gMicOK || !gMicBuf || gDrumBuilt < 0) return;
+	u32 N = gMicSize / 2, end = micGetLastSampleOffset() / 2; const s16* m = (const s16*)gMicBuf;
+	float pk = 0; for (int i = 0; i < 300; i++) { float v = fabsf(m[(end + N - 1 - i) % N] / 32768.0f); if (v > pk) pk = v; }   // last ~18 ms
+	if (gTapHold > 0) { gTapHold -= dt; gTapLevel += (pk - gTapLevel) * 0.2f; return; }
+	if (pk > 0.2f && pk > gTapLevel * 2.5f + 0.05f) {
+		float vel = (pk - 0.2f) / 0.6f; if (vel > 1) vel = 1; vel = 0.3f + 0.7f * vel;
+		int r = gDrumRec - 1;
+		int st = gDrumStep < 0 ? 0 : gDrumStep;
+		if (!gSeqPlaying) { float len = (st & 1) ? 1.0f - gSwing : 1.0f + gSwing; if (gDrumPh > len * 0.5f) st = (st + 1) & 15; }   // nearest 16th
+		gMyDrum[r][st] = (u8)(vel * 255);
+		if (gCsndOK) { drumHit(r, vel); csndExecCmds(false); }
+		gTapHold = 0.09f; gVisBeat = vel;
+	}
+	gTapLevel += (pk - gTapLevel) * 0.2f;
 }
 static void drawMasterPanel(void) {
 	frame(4, 30, 196, 194);
@@ -4325,14 +4513,16 @@ static void drawDrumsPanel(void) {
 		int y = 56 + r * 34;
 		text(10, y, RN[r], 1, DIM);
 		for (int i = 0; i < 16; i++) {
-			int x = 10 + i * 11, on = (pats[r] >> (15 - i)) & 1, cur = gDrums && i == gDrumStep;
-			if (on) rect(x, y + 11, 9, 14, cur ? TH->txt[0] : TH->line[0], cur ? TH->txt[1] : TH->line[1], cur ? TH->txt[2] : TH->line[2]);
+			int x = 10 + i * 11, mine = *DPAT[r] == MINE_IDX[r], on = mine ? gMyDrum[r][i] > 0 : (pats[r] >> (15 - i)) & 1, cur = gDrums && i == gDrumStep;
+			int hgt = mine && on ? 3 + gMyDrum[r][i] * 11 / 255 : 14;   // MINE: bar height = how hard you hit
+			if (on) rect(x, y + 25 - hgt, 9, hgt, cur ? TH->txt[0] : TH->line[0], cur ? TH->txt[1] : TH->line[1], cur ? TH->txt[2] : TH->line[2]);
 			else { rect(x, y + 23, 9, 2, DIM); if (cur) rect(x, y + 11, 9, 14, RGB3(TH->grid)); }
 			if ((i & 3) == 0) rect(x, y + 27, 1, 3, DIM);
 		}
 	}
 	text(10, 160, gSeqPlaying ? "FOLLOWING THE SEQUENCER" : "OWN CLOCK (BPM, SWING)", 1, DIM);
 	text(10, 172, "PUMP ON MASTER FX LOCKS TO KICK", 1, DIM);
+	if (gDrumRec && gDrumRec < 4) { char t[40]; snprintf(t, sizeof(t), "MIC TAP: %s  LEVEL", DREC_NAMES[gDrumRec] + 4); text(10, 186, t, 1, VAL); rect(10, 198, 184, 6, RGB3(TH->pad)); rect(10, 198, (int)(184 * (gTapLevel > 1 ? 1 : gTapLevel)), 6, TXT); }
 }
 
 // ---------------------------------------------------------------- graphics chip (PICA200) visuals
@@ -5011,7 +5201,7 @@ int main(void) {
 		if (kDown & KEY_START) break;
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
-		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply();
+		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
 		if (midiTick()) topDirty = botDirty = 1;
 		gVidT += 1.0f / 60;
 		if (gWtScan > 0) { A->pos += gWtScan / 60.0f / 8.0f; if (A->pos >= 1) A->pos -= 1; if (page == 1) topDirty = 1; }
@@ -5040,6 +5230,7 @@ int main(void) {
 			Param* p = &PAGES[page][sel[page]];
 			if ((p->dirty & (D_LOOPTAB | D_MICTAB | D_CAMTAB | D_DLWT | D_UPDATE)) && dir > 0 && !fast) {
 				if (p->dirty & D_UPDATE) upStart();
+				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "NET > TABLE")) netTabStart();
 				else if (p->dirty & D_DLWT) dlStart();
 				else if (p->dirty & D_LOOPTAB) loopToTable();
 				else if (p->dirty & D_MICTAB) micRecStart();
@@ -5058,7 +5249,8 @@ int main(void) {
 				if (p->dirty & D_STYLE) { gPreset = 0; presetLoad(gStyle, 0); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				if (p->dirty & D_OUT) outputApply();
 				if (p->dirty & D_LOOP) loopModeChanged();
-				if (p->dirty & D_DRUMS) drumsChanged();
+				if ((p->dirty & D_DRUMS) && p->p == &gDrumRec) drumRecChanged();
+				else if (p->dirty & D_DRUMS) drumsChanged();
 				if (p->dirty & D_CHIP) { float lv = gChipLevel; gChipLevel = 1; chipSet(lv); }
 				if (p->dirty & D_GRAIN) grainsChanged();
 				if (p->dirty & D_DLYT) dlyTypeChanged();
@@ -5107,7 +5299,9 @@ int main(void) {
 			touchPosition t; hidTouchRead(&t);
 			if (t.py < TAB_H) {
 				if (!prevTouch) {
-					int b = t.px * 6 / 320;
+					int b = t.px * 7 / 320;
+					static int seqBack = 0;
+					if (b == 6) { if (page != 7) { seqBack = page; page = 7; } else page = seqBack; if (page == 7) say("SEQUENCER: TAP THE GRID, PLAY / ACID ABOVE IT"); }
 					if (b == 0) helpOn = !helpOn;
 					if (b == 1) page = navStep(page, -1);
 					if (b == 2) page = navStep(page, 1);
@@ -5260,6 +5454,7 @@ int main(void) {
 	LightLock_Unlock(&gVoiceLock);
 	if (gAudioOK) { ndspSetCapture(NULL); for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }
 	if (!gSafeMode) { extrasExit(); sensorsExit(); }
+	myDrumSave();
 	gpuExit();
 	remove(CRASH_PATH);   // clean exit
 	gfxExit();
