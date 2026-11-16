@@ -1074,7 +1074,7 @@ static void bqSet(BQ* f, int type, float hz, float q, float db) {   // RBJ: 0 lo
 	if (type == 1) { b0 = 1 + al * A; b1 = -2 * cw; b2 = 1 - al * A; a0 = 1 + al / A; a1 = -2 * cw; a2 = 1 - al / A; }
 	else if (type == 3) { b0 = al; b1 = 0; b2 = -al; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; }
 	else {
-		float sa = 2 * sqrtf(A) * al, s = type == 0 ? -1 : 1;
+		float sa = 2 * sqrtf(A) * al, s = type == 0 ? 1 : -1;   // RBJ shelf sign: +1 low, -1 high
 		b0 = A * ((A + 1) - s * (A - 1) * cw + sa); b1 = 2 * s * A * ((A - 1) - s * (A + 1) * cw); b2 = A * ((A + 1) - s * (A - 1) * cw - sa);
 		a0 = (A + 1) + s * (A - 1) * cw + sa; a1 = -2 * s * ((A - 1) + s * (A + 1) * cw); a2 = (A + 1) + s * (A - 1) * cw - sa;
 	}
@@ -1166,7 +1166,7 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 		}
 		// reverb (+ shimmer: an octave-up copy of the tail fed back in; freeze: endless tail, no new input)
 		if (revTail > 0) {
-			float in = gFreeze ? 0 : mono * rMix * 0.018f, ol = 0, orr = 0;
+			float in = gFreeze ? 0 : mono * rMix * 0.025f, ol = 0, orr = 0;
 			if (gShimmer) {
 				float a = rdFrac(gPs, PSN, gPsR), b = rdFrac(gPs, PSN, gPsR + PSN / 2), ph = fmodf(gPsW - gPsR + PSN, PSN) / PSN;
 				float w = 1 - fabsf(ph * 2 - 1);
@@ -1824,6 +1824,108 @@ static void patchApply(const SPatch* p) {
 	gForceBuild = 3;
 }
 
+
+// ---- every factory patch tuned for the master chain (patches that already set master FX keep theirs)
+// dly(mix, sync, wow, sat)  rev(mix)  mod(type, rate, depth, mix)
+#define DLY(m, sy, w, st) do { p->dlyMix = m; p->dlySync = sy; p->dlyWow = w; p->dlySat = st; } while (0)
+#define REV(m) (p->revMix = m)
+#define MODFX(t, r, d, m) do { p->modFx = t; p->modRate = r; p->modDepth = d; p->modMix = m; } while (0)
+enum { MF_CHORUS = 1, MF_FLANGER, MF_PHASER, MF_COMB, MF_FORMANT };
+enum { DS_FREE, DS_16, DS_8, DS_8D, DS_4, DS_4D, DS_2 };
+static void polishPatch(SPatch* p, int style, const char* n) {
+	if (p->modFx || p->dlyMix > 0 || p->revMix > 0 || p->ott > 0 || p->pump > 0 || p->lofiBits || p->shimmer) return;
+#define IS(x) (!strcmp(n, x))
+	switch (style) {
+	case 0:   // BASS: tight, forward, a little glue
+		p->ott = 0.3f; p->eqLow = 2;
+		if (IS("REESE")) MODFX(MF_PHASER, 0.12f, 0.6f, 0.35f);
+		else if (IS("ACID")) { DLY(0.18f, DS_8D, 0.2f, 0.55f); p->ott = 0.2f; }
+		else if (IS("HOOVER")) { MODFX(MF_CHORUS, 0.3f, 0.6f, 0.4f); REV(0.12f); }
+		else if (IS("808 SUB")) { p->ott = 0.15f; p->eqLow = 3; }
+		else if (IS("SINE BASS")) { p->ott = 0; p->eqLow = 2.5f; }
+		else if (IS("FM GROWL") || IS("SUB WOBBLE") || IS("WOBBLE 1/8") || IS("TILT WOBBLE")) { p->ott = 0.5f; p->eqHigh = 1.5f; }
+		else if (IS("DIGI BASS")) { p->lofiBits = 1; p->ott = 0.35f; }
+		break;
+	case 1:   // LEAD: dotted-eighth tape delay, a touch of room
+		DLY(0.2f, DS_8D, 0.15f, 0.35f); REV(0.1f);
+		if (IS("SUPERSAW") || IS("FIFTHS")) { MODFX(MF_CHORUS, 0.25f, 0.5f, 0.3f); REV(0.15f); }
+		else if (IS("CHIP SQUARE")) { p->lofiBits = 3; DLY(0.22f, DS_16, 0, 0.2f); REV(0); }
+		else if (IS("WHISTLE")) { DLY(0.15f, DS_4, 0.3f, 0.2f); REV(0.25f); }
+		else if (IS("FUZZ LEAD")) { p->ott = 0.3f; DLY(0.18f, DS_8, 0.2f, 0.6f); }
+		else if (IS("SYNC SCREAM")) { MODFX(MF_FLANGER, 0.1f, 0.5f, 0.3f); }
+		else if (IS("VOWEL LEAD") || IS("BREATH LEAD")) { DLY(0.22f, DS_4D, 0.25f, 0.3f); REV(0.15f); }
+		else if (IS("DIGI PIPE")) { REV(0.2f); MODFX(MF_CHORUS, 0.3f, 0.4f, 0.25f); }
+		else if (IS("GLIDE SQUARE")) { DLY(0.25f, DS_4, 0.3f, 0.4f); }
+		break;
+	case 2:   // PAD: wide chorus, big space, air on top
+		MODFX(MF_CHORUS, 0.18f, 0.6f, 0.35f); REV(0.25f); p->eqHigh = 1.5f;
+		if (IS("GLASS") || IS("CHOIR") || IS("SHIMMER PAD")) { p->shimmer = 1; REV(0.3f); }
+		else if (IS("DARK DRONE")) { MODFX(MF_PHASER, 0.06f, 0.7f, 0.4f); p->eqHigh = -2; REV(0.3f); }
+		else if (IS("VAPOR PAD")) { p->lofiRate = 0.2f; DLY(0.15f, DS_4, 0.6f, 0.3f); }
+		else if (IS("FORMANT PAD")) { MODFX(MF_FORMANT, 0.1f, 0.5f, 0.3f); }
+		else if (IS("SWEEP PAD")) { MODFX(MF_PHASER, 0.1f, 0.6f, 0.35f); }
+		break;
+	case 3:   // PLUCK: delay does the work
+		DLY(0.25f, DS_8D, 0.15f, 0.3f); REV(0.15f);
+		if (IS("DUB STAB")) { DLY(0.4f, DS_4D, 0.3f, 0.5f); REV(0.1f); }
+		else if (IS("BELL")) { p->shimmer = 1; REV(0.2f); DLY(0.2f, DS_4, 0.1f, 0.2f); }
+		else if (IS("KALIMBA") || IS("MARIMBA")) { DLY(0.2f, DS_8, 0.1f, 0.2f); REV(0.12f); }
+		else if (IS("STEEL DRUM")) { MODFX(MF_CHORUS, 0.3f, 0.4f, 0.2f); }
+		else if (IS("MUTED")) { DLY(0.3f, DS_16, 0.1f, 0.4f); REV(0.05f); }
+		break;
+	case 4:   // KEYS: chorus and tape
+		MODFX(MF_CHORUS, 0.3f, 0.45f, 0.3f); DLY(0.1f, DS_4D, 0.3f, 0.3f); REV(0.12f);
+		if (IS("ORGAN") || IS("CHURCH ORGAN")) { MODFX(MF_CHORUS, 0.9f, 0.6f, 0.45f); DLY(0, 0, 0, 0); REV(IS("CHURCH ORGAN") ? 0.35f : 0.12f); }
+		else if (IS("CLAV")) { MODFX(MF_PHASER, 0.25f, 0.6f, 0.4f); DLY(0.12f, DS_8, 0.2f, 0.3f); }
+		else if (IS("LOFI PIANO") || IS("VINYL KEYS")) { p->lofiBits = 2; p->lofiRate = 0.25f; p->dlyWow = 0.6f; }
+		else if (IS("DARK RHODES")) { MODFX(MF_PHASER, 0.15f, 0.5f, 0.3f); p->eqHigh = -2; }
+		else if (IS("HARPSICHORD")) { MODFX(0, 0, 0, 0); REV(0.15f); }
+		break;
+	case 5:   // CHORDS
+		if (IS("HOUSE ORGAN") || IS("TECHNO STAB")) { p->pump = 0.55f; p->pumpRate = 1; DLY(0.25f, DS_8D, 0.1f, 0.3f); REV(0.15f); }
+		else if (IS("NEO SOUL") || IS("MAJ7 KEYS")) { MODFX(MF_CHORUS, 0.3f, 0.5f, 0.35f); DLY(0.12f, DS_4D, 0.4f, 0.3f); REV(0.15f); }
+		else if (IS("POWER") || IS("POWER PLUCK")) { p->ott = 0.35f; DLY(0.15f, DS_8, 0.1f, 0.4f); }
+		else if (IS("SUS SHIMMER")) { p->shimmer = 1; REV(0.3f); }
+		else if (IS("DUB CHORDS")) { DLY(0.4f, DS_4D, 0.3f, 0.5f); REV(0.12f); }
+		else { MODFX(MF_CHORUS, 0.2f, 0.5f, 0.3f); REV(0.2f); }
+		break;
+	case 6:   // ARP: everything locked to the tempo
+		DLY(0.22f, DS_8D, 0.1f, 0.3f); REV(0.15f);
+		if (IS("TRANCE GATE")) { p->pump = 0.5f; DLY(0.2f, DS_8D, 0, 0.2f); REV(0.2f); }
+		else if (IS("CRYSTAL ARP") || IS("PAD RIPPLE")) { p->shimmer = 1; DLY(0.2f, DS_4, 0.1f, 0.2f); REV(0.2f); }
+		else if (IS("CHIP ARP")) { p->lofiBits = 3; DLY(0.2f, DS_16, 0, 0.2f); REV(0); }
+		else if (IS("SYNTHWAVE ARP")) { MODFX(MF_CHORUS, 0.25f, 0.6f, 0.35f); DLY(0.25f, DS_4D, 0.2f, 0.3f); REV(0.2f); }
+		else if (IS("DUB ECHO ARP")) { DLY(0.4f, DS_4D, 0.35f, 0.5f); }
+		else if (IS("BASS OCTAVES")) { p->ott = 0.35f; DLY(0, 0, 0, 0); REV(0); }
+		else if (IS("BERLIN SEQ")) { DLY(0.3f, DS_8D, 0.2f, 0.55f); }
+		break;
+	case 7:   // RETRO
+		if (IS("8-BIT LEAD") || IS("8-BIT BASS") || IS("ARCADE") || IS("CHIP BELL")) { p->lofiBits = 3; p->lofiRate = 0.15f; DLY(IS("8-BIT BASS") ? 0 : 0.18f, DS_16, 0, 0.2f); }
+		else if (IS("GB WAVE")) { p->lofiBits = 5; p->lofiRate = 0.3f; }
+		else if (IS("80S POLY") || IS("SYNTHWAVE")) { MODFX(MF_CHORUS, 0.25f, 0.65f, 0.4f); DLY(0.2f, DS_4D, 0.2f, 0.3f); REV(0.2f); }
+		else if (IS("VGM BRASS")) { MODFX(MF_CHORUS, 0.3f, 0.4f, 0.25f); REV(0.12f); }
+		break;
+	case 8:   // AMBIENT: long, wide, shimmering
+		REV(0.35f); MODFX(MF_CHORUS, 0.12f, 0.6f, 0.3f);
+		if (IS("AURORA") || IS("DEEP SPACE") || IS("SLOW BLOOM") || IS("DUST")) p->shimmer = 1;
+		else if (IS("DREAM KEYS") || IS("LULLABY")) { p->dlyWow = 0.6f; DLY(0.2f, DS_4D, 0.6f, 0.3f); p->lofiRate = 0.1f; }
+		else if (IS("RAIN")) { DLY(0.25f, DS_8D, 0.3f, 0.3f); }
+		else if (IS("OCEAN")) { MODFX(MF_PHASER, 0.05f, 0.6f, 0.35f); }
+		break;
+	case 9:   // FX
+		if (IS("RISER") || IS("SIREN")) { MODFX(MF_FLANGER, 0.2f, 0.7f, 0.45f); REV(0.25f); }
+		else if (IS("LASER")) { DLY(0.3f, DS_16, 0.1f, 0.4f); }
+		else if (IS("WIND") || IS("NOISE SWEEP")) { MODFX(MF_PHASER, 0.08f, 0.7f, 0.5f); REV(0.2f); }
+		else if (IS("RADIO")) { p->lofiBits = 4; p->lofiRate = 0.4f; p->eqLow = -8; p->eqHigh = -5; p->eqMid = 4; }
+		else if (IS("ROBOT")) { MODFX(MF_COMB, 0.2f, 0.6f, 0.5f); p->fxColor = 0.55f; }
+		else if (IS("BUBBLES")) { MODFX(MF_CHORUS, 0.6f, 0.7f, 0.4f); DLY(0.2f, DS_8, 0.2f, 0.2f); }
+		else if (IS("ALARM")) { p->lofiBits = 3; }
+		else if (IS("SPACE DRONE")) { p->shimmer = 1; REV(0.35f); MODFX(MF_PHASER, 0.04f, 0.6f, 0.3f); }
+		else if (IS("VOWEL TALK")) { DLY(0.2f, DS_8D, 0.2f, 0.3f); }
+		break;
+	}
+#undef IS
+}
 static int presetCount(int style) {
 	if (style == NSTYLES - 1) return NUSER;
 	int n = 0; while (n < MAXPRE && PRESETS[style][n].name) n++;
@@ -1833,6 +1935,7 @@ static void presetLoad(int style, int idx) {
 	if (style == NSTYLES - 1) { if (gUser[idx].magic == PATCH_MAGIC) patchApply(&gUser[idx]); return; }
 	SPatch p; patchInit(&p);
 	PRESETS[style][idx].fn(&p);
+	polishPatch(&p, style, PRESETS[style][idx].name);
 	snprintf(p.name, sizeof(p.name), "%s", PRESETS[style][idx].name);
 	patchApply(&p);
 }
