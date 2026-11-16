@@ -70,7 +70,24 @@ static void fft(cpx* a, int n, int inv) {
 }
 
 static int gGpuOK = 0, gGpuFx = 1;   // graphics-chip visuals (see visFrame)
-static int gInAudioTick = 0;        // set while the audio thread runs the arp/seq clock (it holds gMipsLock)
+static int gInAudioTick = 0;
+// crash guard: a marker file holds the last milestone reached; it is removed on a clean exit.
+// If it is still there at launch, the last run crashed -> SAFE MODE (new hardware features off).
+static const char* CRASH_PATH = "sdmc:/3ds/syrup/running.txt";
+static int gSafeMode = 0, gAudioClock = 1;
+static char gCrashStage[40] = "";
+static void crashMark(const char* stage) {
+	mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777);
+	FILE* f = fopen(CRASH_PATH, "w");
+	if (f) { fputs(stage, f); fclose(f); }
+}
+static void crashCheck(void) {
+	FILE* f = fopen(CRASH_PATH, "r");
+	if (!f) return;
+	if (!fgets(gCrashStage, sizeof(gCrashStage), f)) snprintf(gCrashStage, sizeof(gCrashStage), "START");
+	fclose(f);
+	gSafeMode = 1;
+}        // set while the audio thread runs the arp/seq clock (it holds gMipsLock)
 static LightLock gMipsLock;   // guards the shared FFT buffers (worker on core 1 vs main core)
 static Thread gWorker = NULL;
 
@@ -1095,6 +1112,7 @@ static void arpTick(float dt);
 static void seqTick(float dt);
 static void audioTick(void* data) {
 	(void)data;
+	if (!gAudioClock) return;
 	float dt = 160.0f / DSPRATE + gClockDebt;
 	if (LightLock_TryLock(&gVoiceLock)) { gClockDebt = dt; return; }   // main loop busy: catch up next frame
 	if (LightLock_TryLock(&gMipsLock)) { LightLock_Unlock(&gVoiceLock); gClockDebt = dt; return; }
@@ -1793,6 +1811,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		int w = strlen(v) * 8; text(396 - w, y, v, 1, TXT);
 	}
 	if (!gAudioOK) text(208, 230, "NO AUDIO: RUN DSP1", 1, 255, 80, 60);
+	else if (gSafeMode) { char m[60]; snprintf(m, sizeof(m), "SAFE MODE - LAST RUN CRASHED AT: %.20s", gCrashStage); rect(0, 229, 400, 11, 90, 20, 10); text(4, 231, m, 1, 255, 160, 120); }
 }
 
 static void drawHelp(void) {
@@ -2134,8 +2153,12 @@ int main(void) {
 	gfxInitDefault();
 	gfxSetDoubleBuffering(GFX_TOP, true);     // draw into the hidden buffer, swap on vblank: no tearing
 	gfxSetDoubleBuffering(GFX_BOTTOM, true);
-	gpuInit();
-	sensorsInit();
+	crashCheck();
+	crashMark("GPU INIT");
+	if (!gSafeMode) gpuInit();
+	crashMark("SENSORS INIT");
+	if (!gSafeMode) sensorsInit();
+	if (gSafeMode) { gGpuFx = 0; gAudioClock = 0; }
 	fontGfx = consoleGetDefault()->font.gfx;
 	fftInit();
 	for (int o = 0; o < 2; o++) { gOsc[o].tb.frames = (float*)malloc(sizeof(float) * CYC * MAXFR); mipsInit(&gOsc[o].mips); }
@@ -2170,7 +2193,9 @@ int main(void) {
 		ndspSetMasterVol(1.0f);
 		for (int ch = 0; ch < NCH; ch++) { ndspChnReset(ch); ndspChnSetInterp(ch, NDSP_INTERP_POLYPHASE); ndspChnSetFormat(ch, NDSP_FORMAT_MONO_PCM16); }
 		gCsndOK = R_SUCCEEDED(csndInit());   // second sound unit: sub + effect taps
-		busInit();
+		crashMark("FX BUS INIT");
+		if (!gSafeMode) busInit();
+		crashMark("OUTPUT INIT");
 		outputApply();
 		ndspSetCallback(audioTick, NULL);   // arp + sequencer clock, every 160 samples
 	}
@@ -2322,6 +2347,14 @@ int main(void) {
 		}
 		if (AGET(gJobDone)) { ASET(gJobDone, 0); topDirty = 1; }
 
+		if (!gAudioClock) { arpTick(dt); seqTick(dt); }
+		{	// runtime milestones for the crash guard (written once each)
+			static int m1 = 0, m2 = 0, m3 = 0, m4 = 0;
+			if (!m1) { m1 = 1; crashMark("RUNNING"); }
+			if (!m2 && gBusSeen) { m2 = 1; crashMark("FX BUS RUNNING"); }
+			if (!m3 && (gArpOnN || gSeqPlaying)) { m3 = 1; crashMark("ARP/SEQ RUNNING"); }
+			if (!m4 && visActive(page)) { m4 = 1; crashMark("GPU VISUALS"); }
+		}
 		if (gAudioOK) voicesUpdate(dt, cx);
 		// effect-bus self check: if notes are sending but the DSP never delivers aux audio, fall back to taps
 		if (gBusOK && !gBusFail && !gBusSeen && (busSend(0) > 0 || busSend(1) > 0)) {
@@ -2358,8 +2391,9 @@ int main(void) {
 	if (gWorker) { ASET(gWorkerQuit, 1); LightEvent_Signal(&gJobEv); threadJoin(gWorker, U64_MAX); threadFree(gWorker); }
 	if (gCsndOK) { for (int c = 0; c < NCS; c++) if (csUsable(c)) CSND_SetPlayState(c, 0); csndExecCmds(true); csndExit(); }
 	if (gAudioOK) { for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }
-	sensorsExit();
+	if (!gSafeMode) sensorsExit();
 	gpuExit();
+	remove(CRASH_PATH);   // clean exit
 	gfxExit();
 	return 0;
 }

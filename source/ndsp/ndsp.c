@@ -5,7 +5,7 @@
 #include <3ds/env.h>
 #include <3ds/thread.h>
 
-#define NDSP_THREAD_STACK_SIZE 0x1000
+#define NDSP_THREAD_STACK_SIZE 0x8000   // Syrup: notes are started from the audio callback (was 0x1000)
 
 u16 ndspFrameId, ndspBufferCurId, ndspBufferId;
 void* ndspVars[16][2];
