@@ -543,7 +543,7 @@ static void uniParams(const Osc* o, int u, float* det, float* pan, float* gain) 
 
 static void stopCh(int bk, int ch) {
 	if (bk == BK_DSP) { ndspChnWaveBufClear(ch); gDspOwner[ch] = -1; }
-	else { CSND_SetPlayState(ch, 0); gCsOwner[ch] = -1; }
+	else { if (gCsndOK) CSND_SetPlayState(ch, 0); gCsOwner[ch] = -1; }
 }
 
 static void freeVoice(SVoice* v) {
@@ -4134,7 +4134,18 @@ int main(void) {
 	}
 
 	if (gWorker) { ASET(gWorkerQuit, 1); LightEvent_Signal(&gJobEv); threadJoin(gWorker, U64_MAX); threadFree(gWorker); }
-	if (gCsndOK) { for (int c = 0; c < NCS; c++) if (csUsable(c)) CSND_SetPlayState(c, 0); csndExecCmds(true); csndExit(); }
+	// shut the audio clock down first: the sound thread starts drum / arp / sequencer notes on the second
+	// sound chip, so it must be stopped (and out of its tick) before that chip's command memory goes away
+	if (gAudioOK) ndspSetCallback(NULL, NULL);
+	LightLock_Lock(&gVoiceLock);   // waits for a tick that's still running
+	gAudioClock = 0; gDrums = 0; gLoopMode = 0;
+	if (gCsndOK) {
+		for (int c = 0; c < NCS; c++) if (gCsndOK && (csndChannels & BIT(c))) CSND_SetPlayState(c, 0);
+		csndExecCmds(true);
+		gCsndOK = 0;
+		csndExit();
+	}
+	LightLock_Unlock(&gVoiceLock);
 	if (gAudioOK) { for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }
 	if (!gSafeMode) { extrasExit(); sensorsExit(); }
 	gpuExit();
