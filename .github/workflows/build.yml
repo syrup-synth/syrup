@@ -40,6 +40,7 @@ jobs:
           path: |
             syrup.3dsx
             syrup.cia
+            syrup.elf
 
       - name: Publish to "latest" release (QR / phone download)
         uses: softprops/action-gh-release@v2
@@ -50,3 +51,4 @@ jobs:
           files: |
             syrup.3dsx
             syrup.cia
+            syrup.elf
