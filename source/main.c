@@ -75,8 +75,8 @@ static void fft(cpx* a, int n, int inv) {
 static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0;
 static int gDrums, gKit, gKickPat, gSnarePat, gHatPat; static float gDrumLevel;
 static const char* KIT_NAMES[4]; static const char* KICKP_NAMES[7]; static const char* SNAREP_NAMES[6]; static const char* HATP_NAMES[6];
-#define NVISM 5
-static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM"};
+#define NVISM 7
+static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM", "VOXELS", "VOXEL TABLE"};
 static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
 static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
 static float gVisBeat = 0;
@@ -3420,13 +3420,77 @@ static void partDraw(float dt) {
 	}
 	blendAdd(0);
 }
+// ---- voxels: isometric block columns, drawn back to front
+static void voxColumn(float cx, float cy, float cw, float chh, float hu, int i, int j, int h, float r, float g, float b, int lit) {
+	float x = cx + (i - j) * cw, y = cy + (i + j) * chh, top = y - h * hu;
+	u32 cTop = rgba(r, g, b, 1), cL = rgba(r * 0.62f, g * 0.62f, b * 0.62f, 1), cR = rgba(r * 0.38f, g * 0.38f, b * 0.38f, 1);
+	// left face, right face, top face (a rhombus)
+	vTri(x - cw, top, x, top + chh, x, y + chh, cL); vTri(x - cw, top, x, y + chh, x - cw, y, cL);
+	vTri(x, top + chh, x + cw, top, x + cw, y, cR); vTri(x, top + chh, x + cw, y, x, y + chh, cR);
+	vTri(x - cw, top, x, top - chh, x + cw, top, cTop); vTri(x - cw, top, x + cw, top, x, top + chh, cTop);
+	u32 edge = rgba(0, 0, 0, 0.55f);
+	for (int k = 1; k < h; k++) {   // block seams so each column reads as stacked voxels
+		float yy = y - k * hu;
+		vLine(x - cw, yy, x, yy + chh, edge, 0.6f); vLine(x, yy + chh, x + cw, yy, edge, 0.6f);
+	}
+	if (lit) { blendAdd(1); vTri(x - cw, top, x, top - chh, x + cw, top, rgba(1, 1, 1, 0.35f)); vTri(x - cw, top, x + cw, top, x, top + chh, rgba(1, 1, 1, 0.35f)); blendAdd(0); }
+}
+#define VXR 14
+#define VXC 16
+static u8 gVox[VXR][VXC];   // scrolling note landscape: row 0 is the newest (front)
+static void visVoxels(float dt) {
+	static float acc = 0; acc += dt;
+	if (acc > 0.09f) {   // push a new front row ~11 times a second
+		acc = 0;
+		memmove(gVox[1], gVox[0], sizeof(gVox) - sizeof(gVox[0]));
+		float row[VXC] = {0};
+		for (int k = 0; k < NVS; k++) {
+			const SVoice* v = &gV[k]; if (!v->active || !v->started || v->isEcho) continue;
+			int c = (v->note - 36) / 3; if (c < 0) c = 0; if (c >= VXC) c = VXC - 1;
+			row[c] += v->env * (0.5f + v->vel) * 6;
+			if (c > 0) row[c - 1] += v->env * 2;
+			if (c < VXC - 1) row[c + 1] += v->env * 2;
+		}
+		for (int c = 0; c < VXC; c++) { int h = (int)(row[c] + 0.5f) + (gVisBeat > 0.5f ? 1 : 0); gVox[0][c] = h > 9 ? 9 : h; }
+	}
+	float cw = 11, chh = 5.5f, hu = 7, cx = 200, cy = 70;
+	for (int sum = 0; sum <= VXR - 1 + VXC - 1; sum++)   // back (far) to front
+		for (int i = 0; i < VXC; i++) {
+			int j = (VXR - 1) - (sum - i); if (j < 0 || j >= VXR) continue;
+			int rIdx = VXR - 1 - j, h = gVox[rIdx][i];   // front rows sit lower on screen
+			float r, g, b; hue((float)i / VXC * 0.8f + gCutoff * 0.2f, &r, &g, &b);
+			float fade = 0.35f + 0.65f * (1 - rIdx / (float)VXR);
+			voxColumn(cx, cy, cw, chh, hu, i, j, h < 1 ? 1 : h + 1, r * fade, g * fade, b * fade, rIdx == 0 && h > 0);
+		}
+}
+// the wavetable as blocks: rows are frames, columns are points along the cycle; the playing frame glows
+static void visVoxTable(int o) {
+	Osc* os = &gOsc[o]; Table* tb = &os->tb;
+	int nf = tb->nFrames < 1 ? 1 : tb->nFrames; float pk = tb->peak > 1e-4f ? tb->peak : 1;
+	enum { R = 14, C = 18 };
+	float cw = 10, chh = 5, hu = 5, cx = 200, cy = 62;
+	int cur = (int)(gPosEff[o] * (R - 1) + 0.5f);
+	for (int sum = 0; sum <= R - 1 + C - 1; sum++)
+		for (int i = 0; i < C; i++) {
+			int j = (R - 1) - (sum - i); if (j < 0 || j >= R) continue;
+			int fr = (int)((R - 1 - j) / (float)(R - 1) * (nf - 1));
+			float v = os->on ? tb->frames[fr * CYC + i * (CYC - 1) / (C - 1)] / pk : 0;
+			if (R - 1 - j == cur) { float s[TPTS]; sampleCycle(os->cyc, s, NULL); v = s[i * (TPTS - 1) / (C - 1)]; }   // live warped cycle
+			int h = (int)((v + 1) * 4 + 0.5f) + 1;
+			float r, g, b; hue(gCutoff * 0.6f + (R - 1 - j) / (float)R * 0.4f, &r, &g, &b);
+			int isCur = R - 1 - j == cur; float k = isCur ? 1 : 0.55f;
+			voxColumn(cx, cy, cw, chh, hu, i, j, h, r * k, g * k, b * k, isCur);
+		}
+}
 static void visFull(void) {
-	int mode = gVisMode ? gVisMode : 1 + ((int)(gVisT / 10.0f)) % 4;   // AUTO: change every 10 s
+	int mode = gVisMode ? gVisMode : 1 + ((int)(gVisT / 10.0f)) % 6;   // AUTO: change every 10 s
 	if (gVisBeat > 0.01f) { float r, g, b; hue(0.35f, &r, &g, &b); blendAdd(1); vRect(0, 0, 400, 240, rgba(r, g, b, gVisBeat * 0.12f)); blendAdd(0); }
 	if (mode == 1) visWavetable(gVisOsc, 200, 128, 1.6f);
 	else if (mode == 2) visScopes(10, 20, 380, 210);
 	else if (mode == 3) visOrbit(200, 125, 100);
-	else visSpectrum(12, 20, 376, 210, gVisOsc);
+	else if (mode == 4) visSpectrum(12, 20, 376, 210, gVisOsc);
+	else if (mode == 5) visVoxels(1.0f / 60);
+	else visVoxTable(gVisOsc);
 	if (gVisParts) {
 		static unsigned lastId = 0; if (gIdc != lastId) { gVisBurst += 14; lastId = gIdc; }
 		if (gVisBurst > 0) { partSpawn(gVisBurst); gVisBurst = 0; }
