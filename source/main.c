@@ -78,9 +78,9 @@ static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", 
 static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
 static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
 static float gVisBeat = 0;
-#define NTHEMES 4
-static const char* THEME_NAMES[NTHEMES] = {"PIP GREEN", "DOS BLUE", "AMBER", "MAGENTA"};
-static int gTheme = 0, gScan = 1;   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
+#define NTHEMES 5
+static const char* THEME_NAMES[NTHEMES] = {"ORIGINAL", "PIP GREEN", "DOS BLUE", "AMBER EGA", "MAGENTA"};
+static int gTheme = 0, gScan = 0;   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
 static int gInAudioTick = 0;
 // crash guard: a marker file holds the last milestone reached; it is removed on a clean exit.
 // If it is still there at launch, the last run crashed -> SAFE MODE (new hardware features off).
@@ -1713,29 +1713,37 @@ static const u8 EGA[16][3] = {
 	{85, 85, 85}, {85, 85, 255}, {85, 255, 85}, {85, 255, 255}, {255, 85, 85}, {255, 85, 255}, {255, 255, 85}, {255, 255, 255}};
 typedef struct {
 	const char* name;
-	u8 bg, line, dim, txt, hi, hiTxt, val, warn;   // EGA indices
-	u8 keyW, keyB, keyOn, keyLine;
-	u8 acc[4];                                     // visual ramp (filter / envelope picks one)
+	u8 bg[3], line[3], dim[3], txt[3], hi[3], hiTxt[3], val[3], warn[3];
+	u8 keyW[3], keyB[3], keyOn[3], keyOnB[3], keyLine[3], kbBg[3], tab[3], tabTxt[3], pad[3], grid[3];
+	u8 acc[4];        // EGA visual ramp (unused when smooth)
+	int ega;          // 1: EGA-style (meters, dotted grids, outlined tabs, quantised visual colours)
 } Theme;
 static const Theme THEMES[NTHEMES] = {
-	{"PIP GREEN", 0, 2, 2, 10, 10, 0, 10, 12, 0, 2, 10, 10, {2, 10, 11, 15}},
-	{"DOS BLUE", 1, 3, 7, 15, 3, 0, 14, 12, 15, 0, 14, 8, {11, 14, 13, 15}},
-	{"AMBER", 0, 6, 6, 14, 14, 0, 15, 12, 0, 6, 14, 14, {6, 14, 12, 15}},
-	{"MAGENTA", 0, 5, 5, 13, 13, 0, 11, 12, 0, 5, 11, 13, {5, 13, 11, 15}},
+	{"ORIGINAL", {14, 9, 4}, {200, 110, 20}, {150, 100, 40}, {255, 225, 170}, {70, 44, 14}, {255, 220, 160}, {255, 225, 170}, {255, 80, 60},
+	 {240, 228, 205}, {26, 16, 8}, {255, 170, 40}, {200, 110, 20}, {30, 20, 10}, {30, 20, 10}, {40, 26, 9}, {200, 150, 90}, {28, 18, 8}, {44, 28, 12}, {0, 0, 0, 0}, 0},
+	{"PIP GREEN", {0, 0, 0}, {0, 170, 0}, {0, 170, 0}, {85, 255, 85}, {85, 255, 85}, {0, 0, 0}, {85, 255, 85}, {255, 85, 85},
+	 {0, 0, 0}, {0, 170, 0}, {85, 255, 85}, {85, 255, 85}, {85, 255, 85}, {0, 0, 0}, {0, 0, 0}, {85, 255, 85}, {0, 0, 0}, {0, 170, 0}, {2, 10, 11, 15}, 1},
+	{"DOS BLUE", {0, 0, 170}, {0, 170, 170}, {170, 170, 170}, {255, 255, 255}, {0, 170, 170}, {0, 0, 0}, {255, 255, 85}, {255, 85, 85},
+	 {255, 255, 255}, {0, 0, 0}, {255, 255, 85}, {255, 255, 85}, {85, 85, 85}, {0, 0, 170}, {0, 0, 170}, {255, 255, 255}, {0, 0, 170}, {170, 170, 170}, {11, 14, 13, 15}, 1},
+	{"AMBER EGA", {0, 0, 0}, {170, 85, 0}, {170, 85, 0}, {255, 255, 85}, {255, 255, 85}, {0, 0, 0}, {255, 255, 255}, {255, 85, 85},
+	 {0, 0, 0}, {170, 85, 0}, {255, 255, 85}, {255, 255, 85}, {255, 255, 85}, {0, 0, 0}, {0, 0, 0}, {255, 255, 85}, {0, 0, 0}, {170, 85, 0}, {6, 14, 12, 15}, 1},
+	{"MAGENTA", {0, 0, 0}, {170, 0, 170}, {170, 0, 170}, {255, 85, 255}, {255, 85, 255}, {0, 0, 0}, {85, 255, 255}, {255, 85, 85},
+	 {0, 0, 0}, {170, 0, 170}, {85, 255, 255}, {85, 255, 255}, {255, 85, 255}, {0, 0, 0}, {0, 0, 0}, {255, 85, 255}, {0, 0, 0}, {170, 0, 170}, {5, 13, 11, 15}, 1},
 };
 #define TH (&THEMES[gTheme])
+#define RGB3(a) (a)[0], (a)[1], (a)[2]
 #define EC(i) EGA[i][0], EGA[i][1], EGA[i][2]
-#define BG    EC(TH->bg)
-#define PANEL EC(TH->bg)
-#define AMB   EC(TH->txt)
-#define AMB2  EC(TH->dim)
-#define DIM   EC(TH->dim)
-#define TXT   EC(TH->txt)
-#define LINE  EC(TH->line)
-#define VAL   EC(TH->val)
-#define HI    EC(TH->hi)
-#define HITXT EC(TH->hiTxt)
-#define WARN  EC(TH->warn)
+#define BG    RGB3(TH->bg)
+#define PANEL RGB3(TH->bg)
+#define AMB   RGB3(TH->txt)
+#define AMB2  RGB3(TH->line)
+#define DIM   RGB3(TH->dim)
+#define TXT   RGB3(TH->txt)
+#define LINE  RGB3(TH->line)
+#define VAL   RGB3(TH->val)
+#define HI    RGB3(TH->hi)
+#define HITXT RGB3(TH->hiTxt)
+#define WARN  RGB3(TH->warn)
 
 // Pip-Boy style corner brackets around a panel
 static void frame(int x, int y, int w, int h) {
@@ -1755,8 +1763,8 @@ static void scanlines(void) {
 }
 
 static void drawWave(const s16* lv, int N, int x0, int y0, int w, int h, int bright) {
-	rect(x0, y0, w, h, BG);
-	for (int x = x0; x < x0 + w; x += 2) px(x, y0 + h / 2, LINE);   // dotted centre line
+	if (TH->ega) { rect(x0, y0, w, h, BG); for (int x = x0; x < x0 + w; x += 2) px(x, y0 + h / 2, LINE); }
+	else { rect(x0, y0, w, h, RGB3(TH->pad)); rect(x0, y0 + h / 2, w, 1, RGB3(TH->grid)); }
 	int px0 = 0, py0 = 0;
 	for (int i = 0; i <= w - 6; i++) {
 		int n = i * N / (w - 6); if (n >= N) n = N - 1;
@@ -1782,6 +1790,85 @@ static void drawStack(const Osc* o, float pos, int ox, int oy, int W, int H) {
 			px0 = x; py0 = y;
 		}
 	}
+}
+
+// ---- envelope shapes (FILTER+ENV page): A, H, D, S, R drawn to scale (square-root time so short stages stay visible)
+static const char* gSelName = NULL;   // selected control, so its stage can be highlighted
+typedef struct { float x[6], y[6]; } EnvPts;   // start, peak, hold end, decay end, sustain end, release end
+static float envW(float t) { return sqrtf(t + 0.002f); }
+static void envShape(const AHDSR* E, float X0, float Y0, float W, float H, EnvPts* P) {
+	float wa = envW(E->a), wh = E->h > 0 ? envW(E->h) : 0, wd = envW(E->d), wr = envW(E->r);
+	float ws = (wa + wh + wd + wr) * 0.3f + 0.12f;   // sustain: a plateau of fixed share
+	float k = W / (wa + wh + wd + ws + wr), x = X0, yb = Y0 + H, ys = Y0 + H * (1 - E->s);
+	P->x[0] = x; P->y[0] = yb;
+	x += wa * k; P->x[1] = x; P->y[1] = Y0;
+	x += wh * k; P->x[2] = x; P->y[2] = Y0;
+	x += wd * k; P->x[3] = x; P->y[3] = ys;
+	x += ws * k; P->x[4] = x; P->y[4] = ys;
+	x += wr * k; P->x[5] = x; P->y[5] = yb;
+}
+static int envSelSeg(int which) {   // 0 A, 1 H, 2 D, 3 S, 4 R for the selected control, else -1
+	if (!gSelName || strncmp(gSelName, which ? "ENV2 " : "ENV1 ", 5)) return -1;
+	const char* t = gSelName + 5;
+	return !strcmp(t, "ATK") ? 0 : !strcmp(t, "HOLD") ? 1 : !strcmp(t, "DEC") ? 2 : !strcmp(t, "SUS") ? 3 : !strcmp(t, "REL") ? 4 : -1;
+}
+static const SVoice* newestVoice(void) {
+	const SVoice* nv = NULL;
+	for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho && (!nv || gV[i].age > nv->age)) nv = &gV[i];
+	return nv;
+}
+static int envDot(int which, const EnvPts* P, float* dx, float* dy) {   // where the newest note is on the shape
+	const SVoice* v = newestVoice(); if (!v) return 0;
+	const AHDSR* E = which ? &gEnv2 : &gEnv1;
+	int st = which ? v->stage2 : v->stage; float e = which ? v->env2 : v->env, hd = which ? v->hold2 : v->hold1;
+	switch (st) {
+	case 1: *dx = P->x[0] + (P->x[1] - P->x[0]) * e; break;
+	case 5: *dx = P->x[1] + (P->x[2] - P->x[1]) * (E->h > 0 ? hd / E->h : 0); break;
+	case 2: *dx = P->x[2] + (P->x[3] - P->x[2]) * ((1 - e) / (1 - E->s + 1e-4f)); break;
+	case 3: *dx = (P->x[3] + P->x[4]) * 0.5f; break;
+	case 4: { float s0 = E->s > 0.02f ? E->s : 1, u = 1 - e / s0; if (u < 0) u = 0; if (u > 1) u = 1; *dx = P->x[4] + (P->x[5] - P->x[4]) * u; } break;
+	default: return 0;
+	}
+	*dy = P->y[0] - (P->y[0] - P->y[1]) * e;
+	return 1;
+}
+// labels drawn by the CPU (also over the GPU panel)
+static void envLabels(void) {
+	static const char* SEG = "AHDSR";
+	for (int w = 0; w < 2; w++) {
+		float Y0 = 30 + w * 64; EnvPts P; envShape(w ? &gEnv2 : &gEnv1, 14, Y0 + 13, 176, 33, &P);
+		text(8, Y0 + 3, w ? "MOD ENV" : "AMP ENV", 1, DIM);
+		int sel = envSelSeg(w);
+		for (int k = 0; k < 5; k++) {
+			if (k == 1 && (w ? gEnv2.h : gEnv1.h) <= 0) continue;
+			int x = (int)((P.x[k] + P.x[k + 1]) * 0.5f) - 4;
+			char c[2] = {SEG[k], 0};
+			if (k == sel) text(x, (int)Y0 + 50, c, 1, TXT); else text(x, (int)Y0 + 50, c, 1, DIM);
+		}
+	}
+}
+// CPU version
+static void drawEnvelopesCPU(void) {
+	for (int w = 0; w < 2; w++) {
+		int Y0 = 30 + w * 64, H = 60;
+		rect(4, Y0, 196, H, RGB3(TH->pad));
+		EnvPts P; envShape(w ? &gEnv2 : &gEnv1, 14, Y0 + 13, 176, 33, &P);
+		for (int x = (int)P.x[0]; x < (int)P.x[5]; x++) {   // fill under the curve
+			int k = 0; while (k < 4 && x > P.x[k + 1]) k++;
+			float u = (x - P.x[k]) / (P.x[k + 1] - P.x[k] + 1e-4f), y = P.y[k] + (P.y[k + 1] - P.y[k]) * u;
+			rect(x, (int)y, 1, (int)(P.y[0] - y), RGB3(TH->grid));
+		}
+		for (int x = 8; x < 196; x += 4) px(x, (int)P.y[3], DIM);   // sustain level
+		int sel = envSelSeg(w);
+		for (int k = 0; k < 5; k++) {
+			line((int)P.x[k], (int)P.y[k], (int)P.x[k + 1], (int)P.y[k + 1], k == sel ? TH->txt[0] : TH->line[0], k == sel ? TH->txt[1] : TH->line[1], k == sel ? TH->txt[2] : TH->line[2]);
+			if (k == sel) line((int)P.x[k], (int)P.y[k] - 1, (int)P.x[k + 1], (int)P.y[k + 1] - 1, TXT);
+		}
+		for (int k = 1; k < 5; k++) rect((int)P.x[k] - 1, (int)P.y[k] - 1, 3, 3, TXT);
+		float dx, dy; if (envDot(w, &P, &dx, &dy)) rect((int)dx - 2, (int)dy - 2, 5, 5, VAL);
+		frame(4, Y0, 196, H);
+	}
+	envLabels();
 }
 
 // ---- what each control does (shown in the footer for the selected row)
@@ -1924,11 +2011,14 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		text(8, 34, o->on ? (focus ? "OSC B" : "OSC A") : (focus ? "OSC B OFF" : "OSC A OFF"), 1, DIM);
 		char tn[26]; snprintf(tn, sizeof(tn), "%.24s", o->tb.name); text(6, 214, tn, 1, VAL);
 	} else {
-		if (!visActive(page)) {
-			drawWave(gOsc[0].mips.lev[2], LEVN[2], 4, 30, 196, 60, gOsc[0].on);
-			drawWave(gOsc[1].mips.lev[2], LEVN[2], 4, 94, 196, 60, gOsc[1].on);
+		if (page == 4) { if (!visActive(page)) drawEnvelopesCPU(); }
+		else {
+			if (!visActive(page)) {
+				drawWave(gOsc[0].mips.lev[2], LEVN[2], 4, 30, 196, 60, gOsc[0].on);
+				drawWave(gOsc[1].mips.lev[2], LEVN[2], 4, 94, 196, 60, gOsc[1].on);
+			}
+			text(8, 34, "A", 1, DIM); text(8, 98, "B", 1, DIM);
 		}
-		text(8, 34, "A", 1, DIM); text(8, 98, "B", 1, DIM);
 		char s[40];
 		snprintf(s, sizeof(s), "%s  OCT %+d%s", VOICE_MODES[gVoiceMode], oct, latch ? "  LATCH" : ""); text(6, 160, s, 1, TXT);
 		snprintf(s, sizeof(s), "CHORD %s  FX %s", CHORD_NAMES[gChord], FX_NAMES[gFx]); text(6, 172, s, 1, TXT);
@@ -1951,7 +2041,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		int cur = i == sel, w = strlen(v) * 8;
 		if (cur) rect(206, y - 2, 190, 11, HI);
 		if (cur) text(208, y, P[i].name, 1, HITXT); else text(208, y, P[i].name, 1, DIM);
-		if (P[i].type == PT_F) {   // 8-block meter
+		if (P[i].type == PT_F && TH->ega) {   // 8-block meter
 			float t = (*(float*)P[i].p - P[i].mn) / (P[i].mx - P[i].mn + 1e-9f);
 			int blocks = (int)(t * 8 + 0.5f);
 			for (int b = 0; b < 8; b++) {
@@ -1961,8 +2051,8 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			}
 			if (w > 54) w = 54;
 		}
-		if (cur && P[i].type == PT_E && P[i].names != PRESS_RIGHT) { char b2[28]; snprintf(b2, sizeof(b2), "<%s>", v); text(394 - (int)strlen(b2) * 8, y, b2, 1, HITXT); }
-		else if (cur) text(394 - w, y, v, 1, HITXT);
+		if (cur && TH->ega && P[i].type == PT_E && P[i].names != PRESS_RIGHT) { char b2[28]; snprintf(b2, sizeof(b2), "<%s>", v); text(394 - (int)strlen(b2) * 8, y, b2, 1, HITXT); }
+		else if (cur && TH->ega) text(394 - w, y, v, 1, HITXT);
 		else text(394 - w, y, v, 1, VAL);
 	}
 	if (first > 0) text(388, 30, "^", 1, TXT);
@@ -2031,48 +2121,61 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	for (int i = 0; i < 6; i++) {
 		int x = i * 320 / 6, lit = (i == 0 && helpOn) || (i == 5 && latch);
 		int w = strlen(TABS[i]) * 8, bw = 320 / 6 - 4;
-		if (lit) { rect(x + 2, 1, bw, TAB_H - 3, HI); text(x + 320 / 12 - w / 2, 6, TABS[i], 1, HITXT); }
-		else { outline(x + 2, 1, bw, TAB_H - 3, LINE); text(x + 320 / 12 - w / 2, 6, TABS[i], 1, TXT); }
+		if (TH->ega) {
+			if (lit) { rect(x + 2, 1, bw, TAB_H - 3, HI); text(x + 320 / 12 - w / 2, 6, TABS[i], 1, HITXT); }
+			else { outline(x + 2, 1, bw, TAB_H - 3, LINE); text(x + 320 / 12 - w / 2, 6, TABS[i], 1, TXT); }
+		} else {
+			if (lit) { rect(x + 2, 1, bw, TAB_H - 2, 90, 56, 16); text(x + 320 / 12 - w / 2, 7, TABS[i], 1, 255, 200, 120); }
+			else { rect(x + 2, 1, bw, TAB_H - 2, RGB3(TH->tab)); text(x + 320 / 12 - w / 2, 7, TABS[i], 1, RGB3(TH->tabTxt)); }
+		}
 	}
 	// XY pad: dotted EGA grid, crosshair
-	for (int gx = 0; gx <= 8; gx++) for (int y = XY_Y; y < XY_Y + XY_H; y += 2) px(4 + gx * 39, y, DIM);
-	for (int gy = 0; gy <= 4; gy++) for (int x = 4; x < 316; x += 2) px(x, XY_Y + gy * (XY_H - 1) / 4, DIM);
 	int cx = 4 + (int)(gOsc[0].pos * 311), cy = XY_Y + (int)((1 - gCutoff) * (XY_H - 1));
-	rect(cx, XY_Y, 1, XY_H, LINE); rect(4, cy, 312, 1, LINE);
-	rect(cx - 4, cy - 4, 9, 9, TXT); rect(cx - 2, cy - 2, 5, 5, BG);
+	if (TH->ega) {
+		for (int gx = 0; gx <= 8; gx++) for (int y = XY_Y; y < XY_Y + XY_H; y += 2) px(4 + gx * 39, y, DIM);
+		for (int gy = 0; gy <= 4; gy++) for (int x = 4; x < 316; x += 2) px(x, XY_Y + gy * (XY_H - 1) / 4, DIM);
+		rect(cx, XY_Y, 1, XY_H, LINE); rect(4, cy, 312, 1, LINE);
+		rect(cx - 4, cy - 4, 9, 9, TXT); rect(cx - 2, cy - 2, 5, 5, BG);
+	} else {
+		rect(4, XY_Y, 312, XY_H, RGB3(TH->pad));
+		for (int gx = 1; gx < 8; gx++) rect(4 + gx * 39, XY_Y, 1, XY_H, RGB3(TH->grid));
+		for (int gy = 1; gy < 4; gy++) rect(4, XY_Y + gy * XY_H / 4, 312, 1, RGB3(TH->grid));
+		rect(cx, XY_Y, 1, XY_H, LINE); rect(4, cy, 312, 1, LINE); rect(cx - 4, cy - 4, 9, 9, TXT);
+		frame(4, XY_Y, 312, XY_H);
+	}
 	text(8, XY_Y + 4, "WT POS >", 1, DIM); text(248, XY_Y + XY_H - 12, "^ CUTOFF", 1, DIM);
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
 	float ww = 320.0f / 14;
-	rect(0, KB_Y, 320, 240 - KB_Y, BG);
-	rect(0, KB_Y, 320, 1, LINE);
+	rect(0, KB_Y, 320, 240 - KB_Y, RGB3(TH->kbBg));
+	if (TH->ega) rect(0, KB_Y, 320, 1, LINE);
 	if (gScale) {   // scale mode: 14 pads, one per scale degree
 		int n = scaleLen();
 		for (int i = 0; i < 14; i++) {
 			int note = scaleNote(base + gRoot, i), x = (int)(i * ww), root = i % n == 0;
 			int lit = note < 128 && on[note];
-			if (lit) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->keyOn));
-			else if (root) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->dim));
-			else { rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->keyW)); outline(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->keyLine)); }
+			if (lit) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyOn));
+			else if (root) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->dim));
+			else { rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyW)); if (TH->ega) outline(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyLine)); }
 			if (lit || root) text(x + (int)ww / 2 - (int)strlen(NOTE_NAMES[note % 12]) * 4, 226, NOTE_NAMES[note % 12], 1, EC(0));
-			else text(x + (int)ww / 2 - (int)strlen(NOTE_NAMES[note % 12]) * 4, 226, NOTE_NAMES[note % 12], 1, EC(TH->keyLine));
+			else text(x + (int)ww / 2 - (int)strlen(NOTE_NAMES[note % 12]) * 4, 226, NOTE_NAMES[note % 12], 1, TH->ega ? TH->keyLine[0] : 60, TH->ega ? TH->keyLine[1] : 40, TH->ega ? TH->keyLine[2] : 20);
 		}
 		char c[24]; snprintf(c, sizeof(c), "%s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); text(4, KB_Y + 5, c, 1, VAL);
 		return;
 	}
 	for (int i = 0; i < 14; i++) {
 		int n = base + (i / 7) * 12 + WN[i % 7], x = (int)(i * ww);
-		if (on[n]) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->keyOn));
-		else { rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->keyW)); outline(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->keyLine)); }
+		if (on[n]) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyOn));
+		else { rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyW)); if (TH->ega) outline(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyLine)); }
 	}
 	for (int i = 0; i < 14; i++) {
 		if (!BL[i % 7]) continue;
 		int n = base + (i / 7) * 12 + WN[i % 7] + 1, bx = (int)((i + 1) * ww - ww * 0.3f);
-		if (on[n]) rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, EC(TH->keyOn));
-		else { rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, EC(TH->keyB)); outline(bx, KB_Y + 2, (int)(ww * 0.6f), 68, EC(TH->keyLine)); }
+		if (on[n]) rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, RGB3(TH->keyOnB));
+		else { rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, RGB3(TH->keyB)); if (TH->ega) outline(bx, KB_Y + 2, (int)(ww * 0.6f), 68, RGB3(TH->keyLine)); }
 	}
 	char c[8]; snprintf(c, sizeof(c), "C%d", base / 12 - 1);
-	if (on[base]) text(4, 228, c, 1, EC(0)); else text(4, 228, c, 1, EC(TH->keyLine));
+	if (on[base] || !TH->ega) text(4, 228, c, 1, TH->ega ? 0 : 120, TH->ega ? 0 : 90, TH->ega ? 0 : 50); else text(4, 228, c, 1, RGB3(TH->keyLine));
 }
 
 // ---------------------------------------------------------------- graphics chip (PICA200) visuals
@@ -2133,7 +2236,7 @@ static void blendAdd(int on) {
 static void hue(float t, float* r, float* g, float* b) {   // EGA: snap to the theme's 4-colour ramp
 	if (t < 0) t = 0;
 	if (t > 1) t = 1;
-	{ int i = (int)(t * 3.999f); const u8* c = EGA[TH->acc[i]]; *r = c[0] / 255.0f; *g = c[1] / 255.0f; *b = c[2] / 255.0f; return; }
+	if (TH->ega) { int i = (int)(t * 3.999f); const u8* c = EGA[TH->acc[i]]; *r = c[0] / 255.0f; *g = c[1] / 255.0f; *b = c[2] / 255.0f; return; }
 	if (t < 0.5f) { float u = t * 2; *r = 1.0f; *g = 0.62f * (1 - u) + 0.3f * u; *b = 0.15f * (1 - u) + 0.8f * u; }
 	else { float u = (t - 0.5f) * 2; *r = 1.0f * (1 - u) + 0.3f * u; *g = 0.3f * (1 - u) + 0.95f * u; *b = 0.8f * (1 - u) + 1.0f * u; }
 }
@@ -2191,7 +2294,7 @@ static void visWavetable(int o, float cx, float cy, float k) {
 		}
 		float near = 1.0f - fabsf(z - gPosEff[o]) * 6; if (near < 0) near = 0;
 		float depth = 0.35f + 0.65f * (1 - z);
-		u32 fill = rgba(EGA[TH->bg][0] / 255.0f, EGA[TH->bg][1] / 255.0f, EGA[TH->bg][2] / 255.0f, 0.97f);
+		u32 fill = TH->ega ? rgba(TH->bg[0] / 255.0f, TH->bg[1] / 255.0f, TH->bg[2] / 255.0f, 0.97f) : rgba(0.07f + 0.05f * near, 0.045f + 0.03f * near, 0.02f, 0.96f);
 		for (int i = 0; i + 1 < 48; i++) { vTri(xs[i], ys[i], xs[i + 1], ys[i + 1], bx[i], by[i], fill); vTri(xs[i + 1], ys[i + 1], bx[i + 1], by[i + 1], bx[i], by[i], fill); }
 		u32 lc = rgba(cr * depth * (0.45f + 0.55f * near), cg * depth * (0.45f + 0.55f * near), cb * depth * (0.45f + 0.55f * near), 1);
 		for (int i = 0; i + 1 < 48; i++) vLine(xs[i], ys[i], xs[i + 1], ys[i + 1], lc, (0.9f + near) * (k > 1 ? 1.4f : 1));
@@ -2221,8 +2324,8 @@ static void visScopes(float X0, float Y0, float W, float H) {
 	float cr, cg, cb; hue(gCutoff * 0.7f + gVisEnv * 0.3f, &cr, &cg, &cb);
 	for (int o = 0; o < 2; o++) {
 		float h = (H - 4) / 2, y0 = Y0 + o * (h + 4), mid = y0 + h / 2;
-		vRect(X0, y0, W, h, rgba(EGA[TH->bg][0] / 255.0f, EGA[TH->bg][1] / 255.0f, EGA[TH->bg][2] / 255.0f, 1));
-		u32 grid = rgba(EGA[TH->line][0] / 510.0f, EGA[TH->line][1] / 510.0f, EGA[TH->line][2] / 510.0f, 1);
+		vRect(X0, y0, W, h, rgba(TH->pad[0] / 255.0f, TH->pad[1] / 255.0f, TH->pad[2] / 255.0f, 1));
+		u32 grid = rgba(TH->grid[0] / 255.0f, TH->grid[1] / 255.0f, TH->grid[2] / 255.0f, 1);
 		for (int g = 1; g < 6; g++) vLine(X0 + g * W / 6.0f, y0, X0 + g * W / 6.0f, y0 + h, grid, 0.6f);
 		vLine(X0, mid, X0 + W, mid, grid, 0.8f);
 		if (!gOsc[o].on) continue;
@@ -2292,11 +2395,43 @@ static void visSpectrum(float X0, float Y0, float W, float H, int o) {
 }
 static void visFull(void) {
 	int mode = gVisMode ? gVisMode : 1 + ((int)(gVisT / 10.0f)) % 4;   // AUTO: change every 10 s
-	if (gVisBeat > 0.01f) { const u8* c = EGA[TH->acc[1]]; blendAdd(1); vRect(0, 0, 400, 240, rgba(c[0] / 255.0f, c[1] / 255.0f, c[2] / 255.0f, gVisBeat * 0.12f)); blendAdd(0); }
+	if (gVisBeat > 0.01f) { float r, g, b; hue(0.35f, &r, &g, &b); blendAdd(1); vRect(0, 0, 400, 240, rgba(r, g, b, gVisBeat * 0.12f)); blendAdd(0); }
 	if (mode == 1) visWavetable(gVisOsc, 200, 128, 1.6f);
 	else if (mode == 2) visScopes(10, 20, 380, 210);
 	else if (mode == 3) visOrbit(200, 125, 100);
 	else visSpectrum(12, 20, 376, 210, gVisOsc);
+}
+
+// envelopes on the GPU: filled shapes, glowing outline, highlighted stage, live note dot
+static void visEnvelopes(void) {
+	float cr, cg, cb; hue(gCutoff * 0.7f + gVisEnv * 0.3f, &cr, &cg, &cb);
+	for (int w = 0; w < 2; w++) {
+		float Y0 = 30 + w * 64, H = 60;
+		vRect(0, Y0, 196, H, rgba(TH->pad[0] / 255.0f, TH->pad[1] / 255.0f, TH->pad[2] / 255.0f, 1));
+		EnvPts P; envShape(w ? &gEnv2 : &gEnv1, 10, Y0 + 13, 176, 33, &P);   // panel-local x (screen x - 4)
+		u32 grid = rgba(TH->grid[0] / 255.0f, TH->grid[1] / 255.0f, TH->grid[2] / 255.0f, 1);
+		for (int g = 1; g < 6; g++) vLine(g * 196 / 6.0f, Y0, g * 196 / 6.0f, Y0 + H, grid, 0.6f);
+		blendAdd(1);
+		int sel = envSelSeg(w);
+		for (int k = 0; k < 5; k++) {   // translucent fill, brighter on the selected stage
+			u32 f = rgba(cr, cg, cb, k == sel ? 0.30f : 0.13f);
+			vTri(P.x[k], P.y[k], P.x[k + 1], P.y[k + 1], P.x[k + 1], P.y[0], f);
+			vTri(P.x[k], P.y[k], P.x[k + 1], P.y[0], P.x[k], P.y[0], f);
+		}
+		for (float x = 4; x < 192; x += 6) vLine(x, P.y[3], x + 3, P.y[3], rgba(cr, cg, cb, 0.35f), 0.8f);   // sustain level
+		blendAdd(0);
+		glowLine(P.x, P.y, 6, cr, cg, cb, 0.8f);
+		if (sel >= 0) { float xs[2] = {P.x[sel], P.x[sel + 1]}, ys[2] = {P.y[sel], P.y[sel + 1]}; glowLine(xs, ys, 2, 1, 1, 1, 0.9f); }
+		for (int k = 1; k < 5; k++) vRect(P.x[k] - 1.5f, P.y[k] - 1.5f, 3, 3, rgba(1, 1, 1, 1));
+		float dx, dy;
+		if (envDot(w, &P, &dx, &dy)) {
+			blendAdd(1);
+			vRect(dx - 5, dy - 5, 10, 10, rgba(cr, cg, cb, 0.25f)); vRect(dx - 3, dy - 3, 6, 6, rgba(cr, cg, cb, 0.5f));
+			blendAdd(0);
+			vRect(dx - 1.5f, dy - 1.5f, 3, 3, rgba(1, 1, 1, 1));
+			vLine(dx, P.y[0], dx, dy, rgba(cr, cg, cb, 0.6f), 0.8f);
+		}
+	}
 }
 
 // copy rows y0..y1 (screen) of the rendered panel into the top framebuffer
@@ -2336,11 +2471,12 @@ static void visFrame(int page, float dt) {
 	lastPage = page; have = 1;
 	C3D_RenderTarget* tg = full ? gFullTgt : gVisTgt;
 	int cols = full ? 400 : VIS_W;
-	C2D_TargetClear(tg, C2D_Color32(EGA[TH->bg][0], EGA[TH->bg][1], EGA[TH->bg][2], 0xff));
+	C2D_TargetClear(tg, C2D_Color32(TH->bg[0], TH->bg[1], TH->bg[2], 0xff));
 	C2D_SceneBegin(tg);
 	C2D_SceneSize(240 * VIS_SS, cols * VIS_SS, true);   // tilted like a real screen target
 	if (full) visFull();
 	else if (page == 1 || page == 2) visWavetable(page - 1, 98, 122, 0.95f);
+	else if (page == 4) visEnvelopes();
 	else visScopes(0, 30, 196, 124);
 	C2D_Flush();
 	if (gGpuFrames < 3) { snprintf(mk, sizeof(mk), "GPU F%d DRAWN", gGpuFrames + 1); crashMark(mk); }
@@ -2622,7 +2758,9 @@ int main(void) {
 		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note < 128) on[gV[i].note] = 1;
 		if (memcmp(on, onPrev, sizeof(on))) { memcpy(onPrev, on, sizeof(on)); botDirty = 1; topDirty = 1; }
 
+		gSelName = PAGES[page][sel[page]].name;
 		if (!helpOn && visActive(page)) topDirty = 1;   // animated panel: redraw every frame
+		if (!helpOn && page == 4 && newestVoice()) topDirty = 1;   // moving envelope dot
 		if (topDirty || topAgain) {
 			if (helpOn) drawHelp();
 			else {
@@ -2641,6 +2779,7 @@ int main(void) {
 							text(394 - (int)strlen(gPatchName) * 8, 4, gPatchName, 1, 200, 150, 90);
 						}
 					} else if (page <= 2) { Osc* o = &gOsc[page - 1]; frame(4, 30, 196, 177); text(8, 34, o->on ? (page == 2 ? "OSC B" : "OSC A") : (page == 2 ? "OSC B OFF" : "OSC A OFF"), 1, DIM); }
+					else if (page == 4) { frame(4, 30, 196, 60); frame(4, 94, 196, 60); envLabels(); }
 					else { frame(4, 30, 196, 125); text(8, 34, "A", 1, DIM); text(8, 96, "B", 1, DIM); }
 					scanlines();
 				}
