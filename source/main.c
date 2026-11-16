@@ -72,7 +72,12 @@ static void fft(cpx* a, int n, int inv) {
 	}
 }
 
-static int gGpuOK = 0, gGpuFx = 0, gGpuHung = 0, gGpuFrames = 0;   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
+static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0;
+#define NVISM 5
+static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM"};
+static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
+static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
+static float gVisBeat = 0;   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
 static int gInAudioTick = 0;
 // crash guard: a marker file holds the last milestone reached; it is removed on a clean exit.
 // If it is still there at launch, the last run crashed -> SAFE MODE (new hardware features off).
@@ -1634,9 +1639,12 @@ static Param P_PLAY[] = {
 	{"ADD REST", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_REST},
 	{"CLEAR SEQ", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CLEAR},
 	PEND};
-#define NPAGES 8
-static Param* PAGES[NPAGES] = {P_PRESET, P_OSCA, P_OSCB, P_SUBN, P_FILT, P_MOD, P_VOICE, P_PLAY};
-static const char* PAGE_NAMES[NPAGES] = {"PRESETS", "OSC A", "OSC B", "SUB+NOISE", "FILT+ENV", "LFO+MOD", "VOICE+FX", "ARP+SEQ"};
+static Param P_VIS[] = {
+	PE("VIS MODE", &gVisMode, NVISM, VISM_NAMES, 0), PE("VIS OSC", &gVisOsc, 2, AB_NAMES, 0), PE("OVERLAY", &gVisOverlay, 2, ONOFF, 0),
+	PEND};
+#define NPAGES 9
+static Param* PAGES[NPAGES] = {P_PRESET, P_OSCA, P_OSCB, P_SUBN, P_FILT, P_MOD, P_VOICE, P_PLAY, P_VIS};
+static const char* PAGE_NAMES[NPAGES] = {"PRESETS", "OSC A", "OSC B", "SUB+NOISE", "FILT+ENV", "LFO+MOD", "VOICE+FX", "ARP+SEQ", "VISUALIZER"};
 static int pageLen(int pg) { int n = 0; while (PAGES[pg][n].name) n++; return n; }
 
 static void paramFmt(const Param* p, char* out, int len) {
@@ -1742,6 +1750,13 @@ static void drawTop(int page, int sel, int oct, int latch) {
 	char pn[8]; snprintf(pn, sizeof(pn), "%d/%d", page + 1, NPAGES); text(170, 3, pn, 1, DIM);
 	text(396 - (int)strlen(gPatchName) * 8, 3, gPatchName, 1, TXT);
 	int focus = (page == 2) ? 1 : 0;
+	if (page == 8) {
+		if (visActive(8)) return;   // the GPU frame covers the whole screen; overlay is drawn after the copy
+		rect(0, 14, 400, 226, BG);
+		text(100, 100, gGpuHung ? "GPU HUNG - NO VISUALIZER" : "VISUALIZER NEEDS THE GPU", 1, 255, 120, 80);
+		drawWave(gOsc[0].mips.lev[2], LEVN[2], 4, 120, 392, 110, gOsc[0].on);
+		return;
+	}
 	if (page == 0) {   // preset browser: styles | patches
 		rect(4, 16, 196, 214, PANEL);
 		for (int i = 0; i < NSTYLES; i++) {
@@ -1930,6 +1945,8 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 #define VIS_X 4
 #define VIS_SS 2
 static C3D_RenderTarget* gVisTgt = NULL;
+static C3D_RenderTarget* gFullTgt = NULL;
+static u8* gFullLin = NULL;
 static u8* gVisLin = NULL;
 static float gVisT = 0, gVisEnv = 0;
 #define TRAILS 10
@@ -1944,11 +1961,15 @@ static void gpuInit(void) {
 	C2D_Prepare();
 	gVisTgt = C3D_RenderTargetCreate(240 * VIS_SS, VIS_W * VIS_SS, GPU_RB_RGBA8, GPU_RB_DEPTH16);
 	gVisLin = (u8*)linearAlloc(240 * VIS_W * 3);
-	gGpuOK = gVisTgt && gVisLin;
+	gFullTgt = C3D_RenderTargetCreate(240 * VIS_SS, 400 * VIS_SS, GPU_RB_RGBA8, GPU_RB_DEPTH16);
+	gFullLin = (u8*)linearAlloc(240 * 400 * 3);
+	gGpuOK = gVisTgt && gVisLin && gFullTgt && gFullLin;
 }
 static void gpuExit(void) {
 	if (gVisTgt) C3D_RenderTargetDelete(gVisTgt);
 	if (gVisLin) linearFree(gVisLin);
+	if (gFullTgt) C3D_RenderTargetDelete(gFullTgt);
+	if (gFullLin) linearFree(gFullLin);
 	if (gGpuHung) return;   // a stuck GPU queue would block C3D_Fini forever
 	if (gGpuOK || gVisTgt) { C2D_Fini(); C3D_Fini(); }
 }
@@ -2003,18 +2024,18 @@ static void trailPush(int o, float pos) {
 }
 
 // 3D wavetable: slices stacked in depth, drawn back to front as solid ribbons, slowly swaying
-typedef struct { float yaw, cx, cy, cs, sn; } Proj;
+typedef struct { float yaw, cx, cy, k, cs, sn; } Proj;
 static void proj(const Proj* P, float xn, float v, float z, float* sx, float* sy) {
-	float X = xn * 74, Z = (z - 0.5f) * 120, Y = v * 26;
+	float X = xn * 74 * P->k, Z = (z - 0.5f) * 120 * P->k, Y = v * 26 * P->k;
 	float cs = P->cs, sn = P->sn;
 	float xr = X * cs - Z * sn, zr = X * sn + Z * cs;
-	float p = 1.0f / (1.0f + zr / 420.0f);
+	float p = 1.0f / (1.0f + zr / (420.0f * P->k));
 	*sx = P->cx + xr * p; *sy = P->cy - Y * p - zr * 0.52f * p;
 }
-static void visWavetable(int o) {
+static void visWavetable(int o, float cx, float cy, float k) {
 	Osc* os = &gOsc[o]; Table* tb = &os->tb;
 	float cr, cg, cb; hue(gCutoff * 0.7f + gVisEnv * 0.3f, &cr, &cg, &cb);
-	Proj P = {0.55f + 0.22f * sinf(gVisT * 0.45f), 98, 128};
+	Proj P = {0.55f + 0.22f * sinf(gVisT * 0.45f), cx, cy, k};
 	P.cs = cosf(P.yaw); P.sn = sinf(P.yaw);
 	int nf = tb->nFrames < 1 ? 1 : tb->nFrames, S = nf < 20 ? nf : 20;
 	float pk = tb->peak > 1e-4f ? tb->peak : 1;
@@ -2033,7 +2054,7 @@ static void visWavetable(int o) {
 		u32 fill = rgba(0.07f + 0.05f * near, 0.045f + 0.03f * near, 0.02f, 0.96f);
 		for (int i = 0; i + 1 < 48; i++) { vTri(xs[i], ys[i], xs[i + 1], ys[i + 1], bx[i], by[i], fill); vTri(xs[i + 1], ys[i + 1], bx[i + 1], by[i + 1], bx[i], by[i], fill); }
 		u32 lc = rgba(cr * depth * (0.45f + 0.55f * near), cg * depth * (0.45f + 0.55f * near), cb * depth * (0.45f + 0.55f * near), 1);
-		for (int i = 0; i + 1 < 48; i++) vLine(xs[i], ys[i], xs[i + 1], ys[i + 1], lc, 0.9f + near);
+		for (int i = 0; i + 1 < 48; i++) vLine(xs[i], ys[i], xs[i + 1], ys[i + 1], lc, (0.9f + near) * (k > 1 ? 1.4f : 1));
 	}
 	// trails of where the (warped) cycle has been, then the live cycle with glow
 	blendAdd(1);
@@ -2056,14 +2077,14 @@ static void visWavetable(int o) {
 }
 
 // scope boxes for OSC A and B with phosphor-style trails
-static void visScopes(void) {
+static void visScopes(float X0, float Y0, float W, float H) {
 	float cr, cg, cb; hue(gCutoff * 0.7f + gVisEnv * 0.3f, &cr, &cg, &cb);
 	for (int o = 0; o < 2; o++) {
-		float y0 = 16 + o * 70, h = 66, mid = y0 + h / 2;
-		vRect(0, y0, 196, h, rgba(0.07f, 0.045f, 0.02f, 1));
+		float h = (H - 4) / 2, y0 = Y0 + o * (h + 4), mid = y0 + h / 2;
+		vRect(X0, y0, W, h, rgba(0.07f, 0.045f, 0.02f, 1));
 		u32 grid = rgba(0.16f, 0.1f, 0.04f, 1);
-		for (int g = 1; g < 6; g++) vLine(g * 196 / 6.0f, y0, g * 196 / 6.0f, y0 + h, grid, 0.6f);
-		vLine(0, mid, 196, mid, grid, 0.8f);
+		for (int g = 1; g < 6; g++) vLine(X0 + g * W / 6.0f, y0, X0 + g * W / 6.0f, y0 + h, grid, 0.6f);
+		vLine(X0, mid, X0 + W, mid, grid, 0.8f);
 		if (!gOsc[o].on) continue;
 		float amp = (h / 2 - 6) * (0.75f + 0.25f * gVisEnv);
 		blendAdd(1);
@@ -2071,13 +2092,71 @@ static void visScopes(void) {
 			int idx = (gTrailHead[o] - k + TRAILS) % TRAILS;
 			u32 c = rgba(cr, cg, cb, 0.35f * (1 - k / (float)TRAILS));
 			for (int i = 0; i + 1 < TPTS; i++)
-				vLine(i * 196.0f / (TPTS - 1), mid - gTrail[o][idx][i] * amp, (i + 1) * 196.0f / (TPTS - 1), mid - gTrail[o][idx][i + 1] * amp, c, 1.0f);
+				vLine(X0 + i * W / (TPTS - 1), mid - gTrail[o][idx][i] * amp, X0 + (i + 1) * W / (TPTS - 1), mid - gTrail[o][idx][i + 1] * amp, c, 1.0f);
 		}
 		blendAdd(0);
 		float s[TPTS], xs[TPTS], ys[TPTS]; sampleCycle(gOsc[o].cyc, s, NULL);
-		for (int i = 0; i < TPTS; i++) { xs[i] = i * 196.0f / (TPTS - 1); ys[i] = mid - s[i] * amp; }
+		for (int i = 0; i < TPTS; i++) { xs[i] = X0 + i * W / (TPTS - 1); ys[i] = mid - s[i] * amp; }
 		glowLine(xs, ys, TPTS, cr, cg, cb, 0.75f + gVisEnv * 0.6f);
 	}
+}
+
+// ---- full-screen visualizer (its own 800x480 target, scaled to 400x240)
+#define ORB_T 14
+static float gOrbX[ORB_T][TPTS], gOrbY[ORB_T][TPTS];
+static int gOrbHead = 0, gOrbN = 0;
+
+static void visOrbit(float cx, float cy, float R) {
+	float cr, cg, cb; hue(gCutoff * 0.6f + gVisEnv * 0.4f, &cr, &cg, &cb);
+	float a[TPTS], b[TPTS]; sampleCycle(gOsc[0].cyc, a, NULL);
+	if (gOsc[1].on) sampleCycle(gOsc[1].cyc, b, NULL);
+	else for (int i = 0; i < TPTS; i++) b[i] = a[(i + TPTS / 4) % TPTS];   // phase portrait when OSC B is off
+	float ang = gVisT * 0.35f, cs = cosf(ang), sn = sinf(ang), r = R * (0.75f + 0.25f * gVisEnv);
+	gOrbHead = (gOrbHead + 1) % ORB_T; if (gOrbN < ORB_T) gOrbN++;
+	for (int i = 0; i < TPTS; i++) {
+		float x = a[i] * r, y = b[i] * r;
+		gOrbX[gOrbHead][i] = cx + x * cs - y * sn; gOrbY[gOrbHead][i] = cy + (x * sn + y * cs) * 0.85f;
+	}
+	blendAdd(1);
+	for (int k = gOrbN - 1; k >= 1; k--) {   // older shapes fade out: spirograph trails
+		int idx = (gOrbHead - k + ORB_T) % ORB_T;
+		float t = 1 - k / (float)ORB_T, h2 = fmodf(gCutoff * 0.6f + k * 0.04f, 1.0f);
+		float r2, g2, b2; hue(h2, &r2, &g2, &b2);
+		u32 c = rgba(r2, g2, b2, 0.32f * t);
+		for (int i = 0; i < TPTS; i++) { int j = (i + 1) % TPTS; vLine(gOrbX[idx][i], gOrbY[idx][i], gOrbX[idx][j], gOrbY[idx][j], c, 1.2f); }
+	}
+	blendAdd(0);
+	float xs[TPTS + 1], ys[TPTS + 1];
+	for (int i = 0; i <= TPTS; i++) { xs[i] = gOrbX[gOrbHead][i % TPTS]; ys[i] = gOrbY[gOrbHead][i % TPTS]; }
+	glowLine(xs, ys, TPTS + 1, cr, cg, cb, 0.85f + gVisEnv * 0.6f);
+}
+static void visSpectrum(float X0, float Y0, float W, float H, int o) {
+	Mips* m = &gOsc[o].mips;
+	enum { NB = 48 };
+	float mag[NB + 1], mx = 1e-6f;
+	for (int k = 1; k <= NB; k++) { float re = m->spec[k].re, im = m->spec[k].im; mag[k] = sqrtf(re * re + im * im); if (mag[k] > mx) mx = mag[k]; }
+	float base = Y0 + H * 0.72f, bw = W / NB;
+	for (int k = 1; k <= NB; k++) {
+		float db = 20 * log10f(mag[k] / mx + 1e-5f);   // 0 .. -100
+		float h = (db + 60) / 60; if (h < 0) h = 0;
+		h *= H * 0.68f * (0.8f + 0.2f * gVisEnv) * (gOsc[o].on ? 1 : 0);
+		float r, g, b; hue((k - 1) / (float)NB * 0.9f + gCutoff * 0.2f, &r, &g, &b);
+		float x = X0 + (k - 1) * bw;
+		vRect(x + 1, base - h, bw - 2, h, rgba(r * 0.55f, g * 0.55f, b * 0.55f, 1));
+		vRect(x + 1, base + 2, bw - 2, h * 0.3f, rgba(r * 0.18f, g * 0.18f, b * 0.18f, 1));   // reflection
+		blendAdd(1);
+		vRect(x, base - h - 2, bw, 3, rgba(r, g, b, 0.9f));
+		vRect(x - 1, base - h - 4, bw + 2, 7, rgba(r, g, b, 0.18f));
+		blendAdd(0);
+	}
+}
+static void visFull(void) {
+	int mode = gVisMode ? gVisMode : 1 + ((int)(gVisT / 10.0f)) % 4;   // AUTO: change every 10 s
+	if (gVisBeat > 0.01f) { blendAdd(1); vRect(0, 0, 400, 240, rgba(1.0f, 0.55f, 0.15f, gVisBeat * 0.12f)); blendAdd(0); }
+	if (mode == 1) visWavetable(gVisOsc, 200, 128, 1.6f);
+	else if (mode == 2) visScopes(10, 20, 380, 210);
+	else if (mode == 3) visOrbit(200, 125, 100);
+	else visSpectrum(12, 20, 376, 210, gVisOsc);
 }
 
 // copy rows y0..y1 (screen) of the rendered panel into the top framebuffer
@@ -2088,12 +2167,13 @@ static void visBlit(int y0, int y1) {
 	for (int x = 0; x < VIS_W; x++) memcpy(fbp + ((VIS_X + x) * 240 + m0) * 3, gVisLin + (x * 240 + m0) * 3, (m1 - m0 + 1) * 3);
 }
 
-static int visActive(int page) { return gGpuOK && gGpuFx && !gGpuHung && page >= 1 && page <= 6; }
+static int visActive(int page) { return gGpuOK && !gGpuHung && ((gGpuFx && page >= 1 && page <= 6) || page == 8); }
 static void visFrame(int page, float dt) {
 	gVisT += dt;
 	float e = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho) e += gV[i].env;
 	if (e > 1) e = 1;
 	gVisEnv += (e - gVisEnv) * (e > gVisEnv ? 0.5f : 0.08f);
+	gVisBeat *= 0.82f;
 	for (int o = 0; o < 2; o++) trailPush(o, gPosEff[o]);
 	// pipelined: C3D_FrameBegin waits for the previous frame (its render + transfer), so that
 	// result is copied in now and this frame's transfer is queued inside the frame (no PPF wait)
@@ -2107,17 +2187,25 @@ static void visFrame(int page, float dt) {
 	}
 	stuck = 0;
 	static int lastPage = -1, have = 0;
-	if (have && lastPage == page) { if (page == 1 || page == 2) visBlit(16, 216); else visBlit(16, 152); }
+	int full = page == 8;
+	if (have && lastPage == page) {
+		if (full) { u8* fbp = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); GSPGPU_InvalidateDataCache(gFullLin, 240 * 400 * 3); memcpy(fbp, gFullLin, 240 * 400 * 3); }
+		else if (page == 1 || page == 2) visBlit(16, 216);
+		else visBlit(16, 152);
+	}
 	lastPage = page; have = 1;
-	C2D_TargetClear(gVisTgt, C2D_Color32(0x14, 0x0d, 0x06, 0xff));
-	C2D_SceneBegin(gVisTgt);
-	C2D_SceneSize(240 * VIS_SS, VIS_W * VIS_SS, true);   // tilted like a real screen target
-	if (page == 1 || page == 2) visWavetable(page - 1);
-	else visScopes();
+	C3D_RenderTarget* tg = full ? gFullTgt : gVisTgt;
+	int cols = full ? 400 : VIS_W;
+	C2D_TargetClear(tg, full ? C2D_Color32(0x0a, 0x06, 0x03, 0xff) : C2D_Color32(0x14, 0x0d, 0x06, 0xff));
+	C2D_SceneBegin(tg);
+	C2D_SceneSize(240 * VIS_SS, cols * VIS_SS, true);   // tilted like a real screen target
+	if (full) visFull();
+	else if (page == 1 || page == 2) visWavetable(page - 1, 98, 128, 1.0f);
+	else visScopes(0, 16, 196, 136);
 	C2D_Flush();
 	if (gGpuFrames < 3) { snprintf(mk, sizeof(mk), "GPU F%d DRAWN", gGpuFrames + 1); crashMark(mk); }
 	// with SCALE_XY the transfer engine takes the same (input) dimensions for both sides and halves them itself
-	C3D_SyncDisplayTransfer((u32*)gVisTgt->frameBuf.colorBuf, GX_BUFFER_DIM(240 * VIS_SS, VIS_W * VIS_SS), (u32*)gVisLin, GX_BUFFER_DIM(240 * VIS_SS, VIS_W * VIS_SS),
+	C3D_SyncDisplayTransfer((u32*)tg->frameBuf.colorBuf, GX_BUFFER_DIM(240 * VIS_SS, cols * VIS_SS), (u32*)(full ? gFullLin : gVisLin), GX_BUFFER_DIM(240 * VIS_SS, cols * VIS_SS),
 		GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
 		GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_XY));
 	C3D_FrameEnd(0);
@@ -2341,7 +2429,7 @@ int main(void) {
 			}
 			curKey = key;
 		}
-		if (gBeatFlash) { gBeatFlash = 0; if (page == 7) topDirty = 1; }
+		if (gBeatFlash) { gBeatFlash = 0; gVisBeat = 1; if (page == 7) topDirty = 1; }
 
 		// rebuild oscillator cycles when WT POS / WARP (incl. modulation) changed
 		SVoice* newest = NULL;
@@ -2401,7 +2489,17 @@ int main(void) {
 				if (visActive(page)) {
 					visFrame(page, dt);
 					fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
-					if (page <= 2) { Osc* o = &gOsc[page - 1]; text(8, 19, o->on ? (page == 2 ? "OSC B" : "OSC A") : (page == 2 ? "OSC B OFF" : "OSC A OFF"), 1, DIM); }
+					if (page == 8) {
+						static float showT = 0; static int lastSel = -1, lastVal = -999;
+						Param* P = &PAGES[8][sel[8]]; int v = *(int*)P->p;
+						if (sel[8] != lastSel || v != lastVal) { showT = 2.5f; lastSel = sel[8]; lastVal = v; }
+						if (showT > 0) showT -= dt;
+						if (gVisOverlay || showT > 0) {
+							char ov[48], vv[24]; paramFmt(P, vv, sizeof(vv)); snprintf(ov, sizeof(ov), "%s: %s", P->name, vv);
+							text(6, 4, ov, 1, 255, 200, 130);
+							text(394 - (int)strlen(gPatchName) * 8, 4, gPatchName, 1, 200, 150, 90);
+						}
+					} else if (page <= 2) { Osc* o = &gOsc[page - 1]; text(8, 19, o->on ? (page == 2 ? "OSC B" : "OSC A") : (page == 2 ? "OSC B OFF" : "OSC A OFF"), 1, DIM); }
 					else { text(8, 19, "A", 1, DIM); text(8, 89, "B", 1, DIM); }
 				}
 			}
