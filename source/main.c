@@ -93,8 +93,8 @@ static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
 static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
 static float gVisBeat = 0;
 static int gVisTrails = 0, gVisParts = 1, gVisBurst = 0;
-#define NTHEMES 6
-static const char* THEME_NAMES[NTHEMES] = {"ORIGINAL", "PIP GREEN", "DOS BLUE", "AMBER EGA", "MAGENTA", "STICKER"};
+#define NTHEMES 7
+static const char* THEME_NAMES[NTHEMES] = {"ORIGINAL", "PIP GREEN", "DOS BLUE", "AMBER EGA", "MAGENTA", "STICKER", "IMPULSE"};
 static int gTheme = 0, gScan = 0;   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
 static int gInAudioTick = 0;
 // crash guard: a marker file holds the last milestone reached; it is removed on a clean exit.
@@ -390,8 +390,8 @@ static int gModCurve[NMOD];
 static const char* CURVE_NAMES[4] = {"LINEAR", "EXP", "LOG", "S-CURVE"};
 static float gTiltX, gTiltY, gMicEnv, gTwist, gShake, gCamLight, gCamColor;
 static int gHeadphones = 0;
-enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_COUNT };
-static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR"};
+enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_COUNT };
+static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME"};   // VOLUME: when routed, the source IS the loudness (breath control)
 static const char* VOICE_MODES[3] = {"POLY", "MONO", "LEGATO"};
 static const char* FX_NAMES[4] = {"OFF", "ECHO", "SPACE", "REVERB"};
 static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
@@ -896,6 +896,8 @@ static void voicesUpdate(float dt, float bend) {
 		float aLev = gOsc[0].level * (1 + modSum(DST_ALEV, v)); if (aLev < 0) aLev = 0;
 		float bLev = gOsc[1].level * (1 + modSum(DST_BLEV, v)); if (bLev < 0) bLev = 0;
 		float vg = v->env * v->env * v->gain * gMaster * (0.35f + 0.65f * v->vel) * 1.5f;
+		{ int ar = 0; for (int m = 0; m < NMOD; m++) if (gMod[m].src != SRC_OFF && gMod[m].dst == DST_AMP) ar = 1;
+		  if (ar) { float am = modSum(DST_AMP, v); if (am < 0) am = 0; if (am > 1.5f) am = 1.5f; vg *= am; } }
 		if (!v->isEcho) noiseAmt += v->env * v->env * (0.35f + 0.65f * v->vel);
 
 		for (int k = 0; k < v->nch; k++) {
@@ -1746,6 +1748,91 @@ static void pr_shimmer(SPatch* p) { p->chord = 4; OA.table = T_DIGITAL; OA.pos =
 static void pr_dubchord(SPatch* p) { p->master = 0.72f; p->chord = 1; OA.table = T_HARMONIX; OA.pos = 0.3f; OA.uni = 2; ENV1(0.002f, 0, 0.18f, 0, 0.15f); p->cutoff = 0.4f;
 	ENV2(0, 0, 0.15f, 0, 0.1f); MOD(0, SRC_ENV2, DST_CUTOFF, 0.4f); p->fx = 1; p->echoT = 2; p->fxMix = 0.6f; }
 
+
+// ---- WAVES: built on the Syrup wavetable pack (HARDWARE > GET WAVETABLES); a built-in table stands in until it's downloaded
+static int gPackMissing = 0;
+static int wtFile(const char* nm, int fallback) {
+	char f[48]; snprintf(f, sizeof(f), "%s.wav", nm);
+	for (int i = 0; i < gNFiles; i++) if (!strcasecmp(gFiles[i], f)) return T_BUILTIN + i;
+	gPackMissing = 1; return fallback;
+}
+#define PACKFX(rv, rt, dl, ds) do { p->revMix = rv; p->revType = rt; p->dlyMix = dl; p->dlySync = ds; } while (0)
+static void pw_choir(SPatch* p) { p->master = 1.5f; OA.table = wtFile("SP VOWELS LOW", T_VOWELS); OA.uni = 3; OA.detune = 14; LFO(0, LS_TRI, 0, 0.07f); MOD(2, SRC_LFO1, DST_APOS, 0.6f);
+	OB.on = 1; OB.table = wtFile("SP VOWELS HIGH", T_VOWELS); OB.oct = 1; OB.level = 0.35f; LFO(1, LS_SINE, 0, 0.11f); MOD(3, SRC_LFO2, DST_BPOS, 0.6f);
+	ENV1(0.45f, 0, 1.0f, 0.9f, 1.8f); p->cutoff = 0.75f; PACKFX(0.4f, 0, 0, 0); p->modFx = 1; p->modRate = 0.3f; p->modDepth = 0.5f; p->modMix = 0.35f; }
+static void pw_fmkeys(SPatch* p) { p->master = 0.75f; OA.table = wtFile("SP FM 1-3", T_HARMONIX); OA.pos = 0.15f; ENV2(0.0f, 0, 0.6f, 0.1f, 0.4f); MOD(2, SRC_ENV2, DST_APOS, 0.55f); MOD(3, SRC_VEL, DST_APOS, 0.25f);
+	OB.on = 1; OB.table = wtFile("SP BELL", T_DIGITAL); OB.oct = 1; OB.level = 0.25f; ENV1(0.003f, 0, 1.4f, 0.25f, 0.6f); p->cutoff = 0.9f; PACKFX(0.22f, 2, 0, 0); }
+static void pw_organ(SPatch* p) { OA.table = wtFile("SP ORGAN", T_HARMONIX); OA.pos = 0.4f; LFO(0, LS_SINE, 0, 6.0f); MOD(2, SRC_LFO1, DST_PITCH, 0.006f); MOD(3, SRC_M1, DST_APOS, 0.6f);
+	ENV1(0.005f, 0, 0.1f, 1.0f, 0.08f); p->cutoff = 0.85f; p->drive = 1; p->driveAmt = 0.2f; PACKFX(0.18f, 3, 0, 0); p->modFx = 1; p->modRate = 5.5f; p->modDepth = 0.4f; p->modMix = 0.5f; }
+static void pw_resolead(SPatch* p) { OA.table = wtFile("SP RESO SAW", T_SYNC); OA.uni = 2; OA.detune = 9; ENV2(0.0f, 0, 0.5f, 0.3f, 0.3f); MOD(2, SRC_ENV2, DST_APOS, 0.7f);
+	p->voiceMode = 2; p->glide = 0.05f; p->cutoff = 0.8f; ENV1(0.004f, 0, 0.3f, 0.85f, 0.25f); PACKFX(0.15f, 0, 0.25f, 3); }
+static void pw_pwmstrings(SPatch* p) { p->master = 1.0f; OA.table = wtFile("SP PWM SOFT", T_PWM); OA.uni = 4; OA.detune = 18; OA.width = 1.0f; LFO(0, LS_TRI, 0, 0.35f); MOD(2, SRC_LFO1, DST_APOS, 0.5f);
+	ENV1(0.45f, 0, 1.0f, 0.85f, 0.9f); p->cutoff = 0.62f; PACKFX(0.32f, 0, 0, 0); p->modFx = 1; p->modRate = 0.25f; p->modDepth = 0.6f; p->modMix = 0.4f; }
+static void pw_foldbass(SPatch* p) { p->master = 0.85f; OA.table = wtFile("SP FOLD SINE", T_BASIC); OA.oct = -1; ENV2(0.0f, 0, 0.35f, 0.15f, 0.2f); MOD(2, SRC_ENV2, DST_APOS, 0.8f); MOD(3, SRC_VEL, DST_APOS, 0.3f);
+	p->voiceMode = 1; p->cutoff = 0.7f; ENV1(0.002f, 0, 0.4f, 0.8f, 0.1f); p->subLevel = 0.4f; p->ott = 0.35f; }
+static void pw_syncpluck(SPatch* p) { OA.table = wtFile("SP SYNC SAW", T_SYNC); ENV2(0.0f, 0, 0.25f, 0.0f, 0.2f); MOD(2, SRC_ENV2, DST_APOS, 0.9f);
+	ENV1(0.002f, 0, 0.45f, 0.0f, 0.3f); p->cutoff = 0.85f; PACKFX(0.2f, 2, 0.28f, 2); p->dlyType = 2; }
+static void pw_crushlead(SPatch* p) { p->master = 0.75f; OA.table = wtFile("SP CRUSH", T_DIGITAL); OA.pos = 0.3f; LFO(0, LS_SH, 0, 8.0f); MOD(2, SRC_LFO1, DST_APOS, 0.25f); MOD(3, SRC_STICK, DST_APOS, 0.6f);
+	p->voiceMode = 2; p->glide = 0.03f; ENV1(0.002f, 0, 0.2f, 0.9f, 0.15f); p->lofiBits = 2; PACKFX(0.1f, 1, 0.22f, 2); p->dlyType = 4; }
+static void pw_combpad(SPatch* p) { p->master = 1.7f; OA.table = wtFile("SP COMB SWEEP", T_HARMONIX); OA.uni = 3; OA.detune = 10; LFO(0, LS_SINE, 0, 0.05f); MOD(2, SRC_LFO1, DST_APOS, 0.9f);
+	ENV1(0.6f, 0, 1.0f, 1.0f, 2.5f); p->cutoff = 0.75f; PACKFX(0.45f, 5, 0, 0); p->modFx = 3; p->modRate = 0.15f; p->modDepth = 0.6f; p->modMix = 0.4f; }
+static void pw_additive(SPatch* p) { p->master = 1.05f; OA.table = wtFile("SP ADDITIVE BUILD", T_HARMONIX); OA.pos = 0; OA.uni = 2; OA.detune = 7; ENV2(2.5f, 0, 1.0f, 1.0f, 1.5f); MOD(2, SRC_ENV2, DST_APOS, 1.0f);
+	ENV1(0.6f, 0, 1.0f, 0.9f, 1.5f); PACKFX(0.4f, 0, 0, 0); p->shimmer = 1; }
+static void pw_growl(SPatch* p) { p->master = 0.85f; OA.table = wtFile("SP GROWL", T_GROWL); OA.oct = -1; LFO(0, LS_SINE, 1, 4.0f); MOD(2, SRC_LFO1, DST_APOS, 0.7f); MOD(3, SRC_STICK, DST_CUTOFF, 0.4f);
+	p->voiceMode = 1; p->glide = 0.04f; ENV1(0.003f, 0, 0.3f, 0.9f, 0.1f); p->cutoff = 0.7f; p->ott = 0.55f; p->eqLow = 2; }
+static void pw_hollow(SPatch* p) { p->master = 0.7f; OA.table = wtFile("SP HOLLOW", T_BASIC); OA.pos = 0.5f; LFO(0, LS_SINE, 0, 5.0f); MOD(2, SRC_LFO1, DST_PITCH, 0.004f); p->noiseLevel = 0.06f;
+	p->voiceMode = 2; p->glide = 0.06f; ENV1(0.06f, 0, 0.3f, 0.85f, 0.35f); p->cutoff = 0.7f; PACKFX(0.3f, 2, 0.15f, 3); }
+static void pw_dust(SPatch* p) { p->master = 2.0f; OA.table = wtFile("SP DUST", T_DIGITAL); OA.uni = 3; OA.detune = 20; LFO(0, LS_SH, 0, 0.6f); MOD(2, SRC_LFO1, DST_APOS, 0.8f);
+	ENV1(0.6f, 0, 1.0f, 1.0f, 3.0f); p->cutoff = 0.7f; p->noiseLevel = 0.1f; PACKFX(0.5f, 5, 0.2f, 5); p->dlyType = 5; p->lofiBits = 1; }
+static void pw_ringtines(SPatch* p) { OA.table = wtFile("SP RING", T_HARMONIX); OA.pos = 0.35f; OB.on = 1; OB.table = wtFile("SP PLUCK DECAY", T_BASIC); OB.level = 0.5f;
+	ENV2(0.0f, 0, 0.9f, 0.0f, 0.5f); MOD(2, SRC_ENV2, DST_BPOS, 0.8f); ENV1(0.002f, 0, 1.6f, 0.0f, 1.0f); PACKFX(0.3f, 2, 0.2f, 4); p->modFx = 1; p->modRate = 0.4f; p->modDepth = 0.4f; p->modMix = 0.3f; }
+
+
+// ---- BREATH: blow into the mic (bottom of the 2DS, by the speaker grille) while holding a key - or LATCH a note
+// and play with breath alone. Breath sets the volume (DST_AMP) and opens the filter like a wind instrument.
+#define BREATH(cut) do { MOD(0, SRC_MIC, DST_AMP, 1.0f); MOD(1, SRC_MIC, DST_CUTOFF, cut); p->modCurve[0] = 2; } while (0)   // soft curve: gentle breath already speaks
+static void pb_flute(SPatch* p) { p->master = 1.2f; OA.table = T_BASIC; OA.pos = 0.15f; BREATH(0.45f); p->noiseLevel = 0.08f; p->cutoff = 0.45f;
+	LFO(0, LS_SINE, 0, 5.0f); MOD(2, SRC_LFO1, DST_PITCH, 0.004f); p->voiceMode = 2; p->glide = 0.05f; ENV1(0.01f, 0, 0.2f, 1.0f, 0.15f); p->revMix = 0.25f; p->revType = 2; }
+static void pb_sax(SPatch* p) { p->master = 1.0f; OA.table = T_SYNC; OA.pos = 0.25f; BREATH(0.6f); MOD(2, SRC_MIC, DST_APOS, 0.5f); MOD(3, SRC_TILTX, DST_PITCH, 0.03f);
+	p->cutoff = 0.3f; p->res = 0.25f; p->drive = 1; p->driveAmt = 0.3f; p->voiceMode = 2; p->glide = 0.06f; ENV1(0.01f, 0, 0.2f, 1.0f, 0.12f); p->revMix = 0.2f; p->revType = 1; }
+static void pb_harmonica(SPatch* p) { p->master = 1.1f; OA.table = T_PWM; OA.pos = 0.4f; OA.uni = 2; OA.detune = 6; BREATH(0.4f); MOD(2, SRC_MIC, DST_APOS, 0.35f);
+	p->cutoff = 0.45f; p->voiceMode = 0; ENV1(0.01f, 0, 0.2f, 1.0f, 0.1f); p->revMix = 0.15f; p->revType = 1; }
+static void pb_pad(SPatch* p) { p->master = 1.5f; OA.table = T_HARMONIX; OA.uni = 4; OA.detune = 14; OA.width = 1; BREATH(0.35f); MOD(2, SRC_MIC, DST_APOS, 0.6f);
+	p->cutoff = 0.45f; ENV1(0.05f, 0, 1.0f, 1.0f, 1.5f); p->revMix = 0.4f; p->shimmer = 1; p->modFx = 1; p->modRate = 0.2f; p->modDepth = 0.5f; p->modMix = 0.3f; }
+static void pb_didge(SPatch* p) { p->master = 1.3f; OA.table = T_VOWELS; OA.oct = -2; BREATH(0.35f); MOD(2, SRC_MIC, DST_APOS, 0.8f); MOD(3, SRC_TILTY, DST_APOS, 0.4f);
+	p->subLevel = 0.3f; p->cutoff = 0.35f; p->res = 0.3f; p->voiceMode = 1; ENV1(0.02f, 0, 0.2f, 1.0f, 0.3f); p->revMix = 0.3f; p->revType = 1; }
+static void pb_bottle(SPatch* p) { p->master = 1.3f; OA.table = T_BASIC; OA.pos = 0.0f; BREATH(0.3f); p->noiseLevel = 0.18f; MOD(2, SRC_MIC, DST_RES, 0.4f);
+	p->cutoff = 0.35f; p->res = 0.5f; p->voiceMode = 2; ENV1(0.02f, 0, 0.2f, 1.0f, 0.2f); p->revMix = 0.35f; p->revType = 2; }
+static void pb_talk(SPatch* p) { p->master = 1.1f; OA.table = T_VOWELS; OA.uni = 2; OA.detune = 8; BREATH(0.3f); MOD(2, SRC_MIC, DST_APOS, 0.9f); MOD(3, SRC_TILTX, DST_PITCH, 0.02f);
+	p->cutoff = 0.55f; p->voiceMode = 2; p->glide = 0.05f; ENV1(0.01f, 0, 0.2f, 1.0f, 0.2f); p->modFx = 5; p->modMix = 0.4f; p->fxColor = 0.4f; p->revMix = 0.2f; }
+static void pb_brass(SPatch* p) { p->master = 0.9f; OA.uni = 3; OA.detune = 10; OB.on = 1; OB.semi = 7; OB.level = 0.3f; BREATH(0.7f); p->cutoff = 0.2f; p->res = 0.15f;
+	p->voiceMode = 0; ENV1(0.02f, 0, 0.3f, 1.0f, 0.2f); p->revMix = 0.25f; p->revType = 0; p->dlyMix = 0.12f; p->dlySync = 3; }
+static void pb_wind(SPatch* p) { p->master = 1.6f; OA.level = 0.2f; p->noiseLevel = 0.6f; BREATH(0.6f); MOD(2, SRC_MIC, DST_RES, 0.5f); MOD(3, SRC_TILTX, DST_CUTOFF, 0.3f);
+	p->cutoff = 0.25f; p->res = 0.55f; ENV1(0.1f, 0, 0.5f, 1.0f, 1.0f); p->revMix = 0.45f; p->revType = 0; p->orbit = 0.6f; p->orbitRate = 0.15f; }
+
+// ---- 3D: patches that move around you (3D ORBIT); loading one turns OUTPUT to SURROUND
+#define ORB(a, r) do { p->orbit = a; p->orbitRate = r; } while (0)
+static void p3_orbitpad(SPatch* p) { p->master = 1.5f; OA.table = T_HARMONIX; OA.uni = 4; OA.detune = 16; OA.width = 1; LFO(0, LS_SINE, 0, 0.09f); MOD(2, SRC_LFO1, DST_APOS, 0.5f);
+	ENV1(0.5f, 0, 1.0f, 0.9f, 2.0f); p->cutoff = 0.72f; ORB(0.9f, 0.12f); p->revMix = 0.35f; }
+static void p3_spacechoir(SPatch* p) { p->master = 1.6f; OA.table = T_VOWELS; OA.uni = 3; OA.detune = 12; LFO(0, LS_TRI, 0, 0.07f); MOD(2, SRC_LFO1, DST_APOS, 0.6f);
+	ENV1(0.5f, 0, 1.0f, 0.9f, 2.0f); ORB(0.8f, 0.07f); p->revMix = 0.4f; p->shimmer = 1; }
+static void p3_circlearp(SPatch* p) { p->master = 0.85f; OA.table = T_BASIC; OA.pos = 0.7f; ENV1(0.002f, 0, 0.25f, 0.0f, 0.2f); p->cutoff = 0.7f; ENV2(0, 0, 0.2f, 0, 0.1f); MOD(2, SRC_ENV2, DST_CUTOFF, 0.4f);
+	p->arp = 1; p->arpRate = 3; p->arpOct = 2; ORB(1.0f, 0.5f); p->dlyMix = 0.25f; p->dlySync = 3; p->dlyType = 2; }
+static void p3_bells(SPatch* p) { OA.table = T_DIGITAL; OA.pos = 0.6f; OB.on = 1; OB.table = T_HARMONIX; OB.oct = 2; OB.level = 0.2f; ENV1(0.002f, 0, 2.0f, 0.0f, 1.5f);
+	ORB(0.85f, 0.25f); p->revMix = 0.35f; p->revType = 2; }
+static void p3_heli(SPatch* p) { p->master = 0.8f; OA.table = T_GROWL; OA.oct = -1; LFO(0, LS_SQR, 0, 9.0f); MOD(2, SRC_LFO1, DST_CUTOFF, 0.5f); p->noiseLevel = 0.15f;
+	ENV1(0.3f, 0, 1.0f, 1.0f, 1.0f); p->cutoff = 0.5f; ORB(1.0f, 1.6f); p->revMix = 0.15f; }
+static void p3_widesaw(SPatch* p) { p->master = 0.8f; OA.uni = 5; OA.detune = 28; OA.width = 1; OB.on = 1; OB.oct = 1; OB.uni = 3; OB.detune = 20; OB.level = 0.35f;
+	ENV1(0.02f, 0, 0.4f, 0.85f, 0.4f); p->cutoff = 0.8f; ORB(0.6f, 0.2f); p->revMix = 0.25f; p->dlyMix = 0.2f; p->dlySync = 3; }
+static void p3_aroundyou(SPatch* p) { p->master = 1.9f; OA.table = T_HARMONIX; OA.oct = -1; OA.uni = 3; OA.detune = 6; LFO(0, LS_SINE, 0, 0.03f); MOD(2, SRC_LFO1, DST_APOS, 1.0f);
+	OB.on = 1; OB.table = T_VOWELS; OB.oct = 0; OB.level = 0.4f; LFO(1, LS_TRI, 0, 0.05f); MOD(3, SRC_LFO2, DST_BPOS, 1.0f);
+	ENV1(1.0f, 0, 1.0f, 1.0f, 4.0f); p->cutoff = 0.7f; ORB(1.0f, 0.05f); p->revMix = 0.5f; p->revType = 5; }
+static void p3_spiralpluck(SPatch* p) { OA.table = T_SYNC; ENV2(0, 0, 0.2f, 0, 0.1f); MOD(2, SRC_ENV2, DST_APOS, 0.7f); ENV1(0.002f, 0, 0.5f, 0.0f, 0.4f);
+	ORB(0.9f, 0.35f); p->dlyMix = 0.3f; p->dlySync = 2; p->dlyType = 2; p->revMix = 0.2f; }
+static void p3_strings(SPatch* p) { p->master = 1.4f; OA.table = T_PWM; OA.uni = 4; OA.detune = 16; OA.width = 1; LFO(0, LS_TRI, 0, 0.3f); MOD(2, SRC_LFO1, DST_APOS, 0.4f);
+	ENV1(0.3f, 0, 1.0f, 0.9f, 1.0f); p->cutoff = 0.68f; ORB(0.5f, 0.1f); p->revMix = 0.35f; p->modFx = 1; p->modRate = 0.25f; p->modDepth = 0.5f; p->modMix = 0.3f; }
+static void p3_tiltorbit(SPatch* p) { OA.table = T_DIGITAL; OA.uni = 2; OA.detune = 10; MOD(2, SRC_TILTX, DST_APOS, 0.6f); MOD(3, SRC_TILTY, DST_CUTOFF, 0.5f);
+	ENV1(0.2f, 0, 1.0f, 0.9f, 1.2f); ORB(0.8f, 0.3f); p->revMix = 0.3f; }
 typedef struct { const char* name; void (*fn)(SPatch*); } PresetDef;
 // ---- more BASS
 static void pr_wob8(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.oct = -1; OA.uni = 2; OA.detune = 10; p->subLevel = 0.5f;
@@ -1874,8 +1961,8 @@ static void pa_ripple(SPatch* p) { pr_syruppad(p); ENV1(0.05f, 0, 0.8f, 0.6f, 1.
 static void pa_bassoct(SPatch* p) { pr_pluckbass(p); p->chord = 0; ARPSET(1, 3, 2, 0.5f, 124); }
 static void pa_marimba(SPatch* p) { pr_marimba(p); p->chord = 2; ARPSET(3, 3, 2, 0.6f, 112); }
 #define MAXPRE 14
-#define NSTYLES 11   // last style = USER
-static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "PLUCK", "KEYS", "CHORDS", "ARP", "RETRO", "AMBIENT", "FX", "USER"};
+#define NSTYLES 14   // last style = USER
+static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "PLUCK", "KEYS", "CHORDS", "ARP", "RETRO", "AMBIENT", "FX", "WAVES", "3D", "BREATH", "USER"};
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB WOBBLE", pr_subwob}, {"REESE", pr_reese}, {"FM GROWL", pr_fmgrowl}, {"808 SUB", pr_808}, {"ACID", pr_acid},
 	 {"WOBBLE 1/8", pr_wob8}, {"DIGI BASS", pr_digibass}, {"SINE BASS", pr_sinebass}, {"PLUCK BASS", pr_pluckbass}, {"HOOVER", pr_hoover}, {"TILT WOBBLE", pr_tiltwob}, {"OTT GROWL", pm_ottgrowl}},
@@ -1897,6 +1984,13 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"DREAM KEYS", pr_dreamkeys}, {"DEEP SPACE", pr_deepspace}, {"RAIN", pr_rain}, {"LULLABY", pr_lullaby}},
 	{{"RISER", pr_riser}, {"LASER", pr_laser}, {"WIND", pr_wind}, {"RADIO", pr_radio}, {"ROBOT", pr_robot},
 	 {"SIREN", pr_siren}, {"BUBBLES", pr_bubbles}, {"NOISE SWEEP", pr_noisesweep}, {"ALARM", pr_alarm}, {"SPACE DRONE", pr_spacedrone}, {"VOWEL TALK", pr_vowtalk}, {"TALK BOX", pm_talkbox}, {"COMB DRONE", pm_combdrone}},
+	{{"VOWEL CHOIR", pw_choir}, {"FM KEYS", pw_fmkeys}, {"DRAWBAR ORGAN", pw_organ}, {"RESO LEAD", pw_resolead}, {"PWM STRINGS", pw_pwmstrings}, {"FOLD BASS", pw_foldbass},
+	 {"SYNC PLUCK", pw_syncpluck}, {"CRUSH LEAD", pw_crushlead}, {"COMB DRIFT", pw_combpad}, {"ADDITIVE RISE", pw_additive}, {"GROWL BASS", pw_growl}, {"HOLLOW FLUTE", pw_hollow},
+	 {"DUST CLOUD", pw_dust}, {"RING TINES", pw_ringtines}},
+	{{"ORBIT PAD", p3_orbitpad}, {"SPACE CHOIR", p3_spacechoir}, {"CIRCLE ARP", p3_circlearp}, {"3D BELLS", p3_bells}, {"HELICOPTER", p3_heli}, {"WIDE SAW", p3_widesaw},
+	 {"AROUND YOU", p3_aroundyou}, {"SPIRAL PLUCK", p3_spiralpluck}, {"3D STRINGS", p3_strings}, {"TILT ORBIT", p3_tiltorbit}},
+	{{"BREATH FLUTE", pb_flute}, {"BREATH SAX", pb_sax}, {"HARMONICA", pb_harmonica}, {"BREATH PAD", pb_pad}, {"DIDGERIDOO", pb_didge},
+	 {"BLOWN BOTTLE", pb_bottle}, {"TALK BREATH", pb_talk}, {"BREATH BRASS", pb_brass}, {"BLOW WIND", pb_wind}}
 };
 #define NUSER 8
 static SPatch gUser[NUSER];
@@ -2111,13 +2205,17 @@ static int presetCount(int style) {
 	int n = 0; while (n < MAXPRE && PRESETS[style][n].name) n++;
 	return n;
 }
+static void say(const char* m);
 static void presetLoad(int style, int idx) {
 	if (style == NSTYLES - 1) { if (gUser[idx].magic == PATCH_MAGIC) patchApply(&gUser[idx]); return; }
 	SPatch p; patchInit(&p);
+	gPackMissing = 0;
 	PRESETS[style][idx].fn(&p);
-	polishPatch(&p, style, PRESETS[style][idx].name);
+	if (style < 10) polishPatch(&p, style, PRESETS[style][idx].name);
 	snprintf(p.name, sizeof(p.name), "%s", PRESETS[style][idx].name);
 	patchApply(&p);
+	if (style == 11 && gOutMode == 0) { gOutMode = 1; outputApply(); say("3D PATCH: OUTPUT SET TO SURROUND (HEADPHONES BEST)"); }
+	else if (gPackMissing) say("GET WAVETABLES (HW PAGE) FOR THE FULL SOUND");
 }
 static const char* presetName(int style, int idx) { return style == NSTYLES - 1 ? gUser[idx].name : PRESETS[style][idx].name; }
 
@@ -2351,6 +2449,10 @@ static const Theme THEMES[NTHEMES] = {
 	{"STICKER", {26, 24, 50}, {232, 100, 52}, {110, 165, 200}, {200, 232, 245}, {226, 66, 136}, {255, 246, 238}, {255, 150, 90}, {255, 90, 90},
 	 {246, 238, 226}, {34, 38, 68}, {226, 66, 136}, {232, 100, 52}, {34, 38, 68}, {34, 38, 68}, {58, 48, 92}, {200, 232, 245}, {36, 34, 66}, {62, 60, 104}, {0, 0, 0, 0}, 0,
 	 1, {{232, 100, 52}, {226, 66, 136}, {110, 185, 225}}},
+	// IMPULSE: Impulse Tracker style - black fields, tracker-grey panels and tabs, deep blue selection bar
+	{"IMPULSE", {0, 0, 0}, {168, 164, 152}, {112, 108, 100}, {196, 192, 180}, {44, 44, 132}, {255, 255, 255}, {236, 232, 220}, {220, 76, 64},
+	 {216, 212, 200}, {28, 28, 28}, {72, 72, 196}, {100, 100, 216}, {100, 96, 88}, {132, 128, 120}, {168, 164, 152}, {0, 0, 0}, {14, 14, 22}, {44, 44, 56}, {0, 0, 0, 0}, 0,
+	 1, {{168, 164, 152}, {72, 72, 210}, {236, 232, 220}}},
 };
 #define TH (&THEMES[gTheme])
 #define RGB3(a) (a)[0], (a)[1], (a)[2]
@@ -2651,13 +2753,13 @@ static void drawTop(int page, int sel, int oct, int latch) {
 	else if (page == 0) {   // preset browser: styles | patches
 		frame(4, 30, 196, 194);
 		for (int i = 0; i < NSTYLES; i++) {
-			int y = 35 + i * 13;
+			int y = 35 + i * 12;
 			if (i == gStyle) { rect(7, y - 2, 74, 11, HI); text(10, y, STYLE_NAMES[i], 1, HITXT); }
 			else text(10, y, STYLE_NAMES[i], 1, DIM);
 		}
 		rect(84, 33, 1, 186, LINE);
 		for (int i = 0; i < presetCount(gStyle); i++) {
-			int y = 35 + i * 13, cur = i == gPreset;
+			int y = 35 + i * 12, cur = i == gPreset;
 			char nm[16]; snprintf(nm, sizeof(nm), "%.13s", presetName(gStyle, i));
 			if (cur) { rect(87, y - 2, 110, 11, HI); text(90, y, nm, 1, HITXT); }
 			else text(90, y, nm, 1, TXT);

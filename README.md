@@ -190,3 +190,10 @@ Any RP2040 board (Raspberry Pi Pico, RP2040-Zero and so on) becomes a USB MIDI d
 - **Optional 5-pin DIN MIDI in:** the standard 6N138 opto circuit into GP5.
 - **In Syrup:** go to HARDWARE → LINK → IR MIDI IN and point the LED at the IR window on the 2DS's back edge, from a few centimetres to about 20 cm.
 - **How it works:** the signal is IrDA SIR at 115200 baud (a 3/16-bit pulse for each 0 bit), the same format the 2DS's IR chip reads.
+
+## New styles and theme
+
+- **WAVES** (14 patches): built on the Syrup wavetable pack. Get the pack from HARDWARE → GET WAVETABLES first; until then a built-in table stands in, and Syrup tells you so.
+- **3D** (10 patches): sounds that orbit around you. Loading one sets OUTPUT to SURROUND; headphones work best.
+- **BREATH** (9 patches): blow into the mic while holding a key, or LATCH a note and play with breath alone. Breath sets the volume and opens the filter. The new mod destination VOLUME makes any source control loudness.
+- **IMPULSE theme:** Impulse Tracker look, with black fields, grey panels and tabs, and a blue selection bar.
