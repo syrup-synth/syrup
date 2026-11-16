@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Syrup Remote</title>
+<style>
+*{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+html,body{margin:0;height:100%;background:#1a1410;color:#f0c890;font:13px/1.2 ui-monospace,Menlo,Consolas,monospace;touch-action:none;overflow:hidden}
+#app{display:flex;flex-direction:column;height:100%;padding:8px;gap:8px}
+.bar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.st{flex:1;min-width:120px;color:#a08060}.st b{color:#f0c890}
+button{background:#3a2a1c;color:#f0c890;border:1px solid #6a4a2c;border-radius:4px;padding:9px 10px;font:inherit;min-width:44px}
+button.on{background:#f0a040;color:#1a1410;border-color:#f0a040}
+#mid{display:flex;gap:8px;flex:1;min-height:0}
+#xy{flex:1;position:relative;background:#2a1e14;border:1px solid #6a4a2c;border-radius:4px;min-height:120px}
+#xy .dot{position:absolute;width:18px;height:18px;margin:-9px;border:2px solid #f0c890;border-radius:50%;pointer-events:none}
+#xy .lab{position:absolute;color:#80603c;font-size:11px;padding:4px}
+#sl{display:flex;gap:6px}
+.s{width:42px;display:flex;flex-direction:column;align-items:center;gap:4px}
+.s .t{position:relative;width:34px;flex:1;background:#2a1e14;border:1px solid #6a4a2c;border-radius:4px;min-height:110px}
+.s .f{position:absolute;left:0;right:0;bottom:0;background:#c07830;border-radius:3px}
+.s span{font-size:10px;color:#a08060}
+#kb{position:relative;height:34%;min-height:130px}
+.k{position:absolute;top:0;border:1px solid #6a4a2c;border-radius:0 0 4px 4px}
+.w{background:#f4e6d0;height:100%;z-index:1}.b{background:#2a1e14;height:60%;z-index:2}
+.k.down{background:#f0a040}
+#midi{color:#a08060;font-size:11px}
+</style></head><body><div id="app">
+<div class="bar"><div class="st" id="st">SYRUP REMOTE <b>connecting…</b></div>
+<button id="pp">&lt; PATCH</button><button id="pn">PATCH &gt;</button>
+<button id="seq">PLAY</button><button id="acid">ACID</button></div>
+<div id="mid"><div id="xy"><div class="lab">WT POS → / ↑ CUTOFF</div><div class="dot" id="dot"></div></div>
+<div id="sl"></div></div>
+<div class="bar"><button id="od">OCT-</button><button id="ou">OCT+</button><span class="st" id="oct">C3</span>
+<button id="hold">HOLD</button><button id="panic">ALL OFF</button></div>
+<div id="kb"></div>
+<div id="midi"></div>
+</div>
+<script>
+let ws=null,ok=false,base=48,hold=false,seqOn=false;const held=new Set();
+function conn(){ws=new WebSocket('ws://'+location.host+'/ws');ws.binaryType='arraybuffer';
+ ws.onopen=()=>{ok=true;st('connected')};ws.onclose=()=>{ok=false;st('reconnecting…');setTimeout(conn,1000)};ws.onerror=()=>{}}
+function st(t){document.getElementById('st').innerHTML='SYRUP REMOTE <b>'+t+'</b>'}
+function send(a){if(ok&&ws.readyState==1)ws.send(new Uint8Array(a))}
+function cc(n,v){send([0xB0,n,Math.max(0,Math.min(127,Math.round(v)))])}
+conn();
+// keyboard: two octaves, multitouch, slide between keys
+const kb=document.getElementById('kb');const keys=[];
+function build(){kb.innerHTML='';keys.length=0;const W=[0,2,4,5,7,9,11],B={0:1,1:3,3:6,4:8,5:10};const nw=14,ww=100/nw;
+ for(let i=0;i<nw;i++){const n=base+Math.floor(i/7)*12+W[i%7];const d=mk('k w',i*ww,ww,n)}
+ for(let i=0;i<nw;i++){if(B[i%7]===undefined)continue;const n=base+Math.floor(i/7)*12+B[i%7];mk('k b',(i+1)*ww-ww*0.3,ww*0.6,n)}
+ document.getElementById('oct').textContent='C'+(base/12-1)}
+function mk(c,l,w,n){const d=document.createElement('div');d.className=c;d.style.left=l+'%';d.style.width=w+'%';d.dataset.n=n;kb.appendChild(d);keys.push(d);return d}
+build();
+const touches={};
+function noteAt(x,y){const el=document.elementFromPoint(x,y);return el&&el.dataset&&el.dataset.n?+el.dataset.n:-1}
+function on(n,v){if(n<0)return;if(hold&&held.has(n)){off(n,true);return}held.add(n);send([0x90,n,v]);mark(n,true)}
+function off(n,force){if(n<0)return;if(hold&&!force)return;held.delete(n);send([0x80,n,0]);mark(n,false)}
+function mark(n,d){keys.forEach(k=>{if(+k.dataset.n==n)k.classList.toggle('down',d)})}
+function vel(y){const r=kb.getBoundingClientRect();return Math.max(30,Math.min(127,Math.round(40+87*(y-r.top)/r.height)))}
+kb.addEventListener('touchstart',e=>{e.preventDefault();for(const t of e.changedTouches){const n=noteAt(t.clientX,t.clientY);touches[t.identifier]=n;on(n,vel(t.clientY))}},{passive:false});
+kb.addEventListener('touchmove',e=>{e.preventDefault();for(const t of e.changedTouches){const n=noteAt(t.clientX,t.clientY),o=touches[t.identifier];if(n!==o){if(!hold)off(o);touches[t.identifier]=n;if(!hold)on(n,vel(t.clientY))}}},{passive:false});
+function tend(e){e.preventDefault();for(const t of e.changedTouches){off(touches[t.identifier]);delete touches[t.identifier]}}
+kb.addEventListener('touchend',tend,{passive:false});kb.addEventListener('touchcancel',tend,{passive:false});
+let md=-1;kb.addEventListener('mousedown',e=>{md=noteAt(e.clientX,e.clientY);on(md,vel(e.clientY))});window.addEventListener('mouseup',()=>{off(md);md=-1});
+// sliders (CC)
+const SL=[['RES',71,10],['M1',16,0],['M2',17,0],['M3',18,0],['M4',19,0]];
+const sl=document.getElementById('sl');
+SL.forEach(([n,c,v])=>{const s=document.createElement('div');s.className='s';s.innerHTML='<div class="t"><div class="f"></div></div><span>'+n+'</span>';sl.appendChild(s);
+ const t=s.querySelector('.t'),f=s.querySelector('.f');const set=y=>{const r=t.getBoundingClientRect();const val=Math.max(0,Math.min(1,1-(y-r.top)/r.height));f.style.height=(val*100)+'%';cc(c,val*127)};
+ f.style.height=(v/127*100)+'%';drag(t,(x,y)=>set(y))});
+function drag(el,fn){el.addEventListener('touchstart',e=>{e.preventDefault();fn(e.touches[0].clientX,e.touches[0].clientY)},{passive:false});
+ el.addEventListener('touchmove',e=>{e.preventDefault();fn(e.touches[0].clientX,e.touches[0].clientY)},{passive:false});
+ let d=false;el.addEventListener('mousedown',e=>{d=true;fn(e.clientX,e.clientY)});window.addEventListener('mousemove',e=>{if(d)fn(e.clientX,e.clientY)});window.addEventListener('mouseup',()=>d=false)}
+// XY pad: X = WT position (CC70), Y = cutoff (CC74)
+const xy=document.getElementById('xy'),dot=document.getElementById('dot');
+drag(xy,(x,y)=>{const r=xy.getBoundingClientRect();const a=Math.max(0,Math.min(1,(x-r.left)/r.width)),b=Math.max(0,Math.min(1,1-(y-r.top)/r.height));
+ dot.style.left=(a*100)+'%';dot.style.top=((1-b)*100)+'%';cc(70,a*127);cc(74,b*127)});
+dot.style.left='0%';dot.style.top='25%';
+const $=id=>document.getElementById(id);
+$('od').onclick=()=>{if(base>24){panic();base-=12;build()}};$('ou').onclick=()=>{if(base<84){panic();base+=12;build()}};
+$('pp').onclick=()=>cc(102,127);$('pn').onclick=()=>cc(103,127);$('acid').onclick=()=>cc(104,127);
+$('seq').onclick=()=>{seqOn=!seqOn;send([seqOn?0xFA:0xFC]);$('seq').classList.toggle('on',seqOn);$('seq').textContent=seqOn?'STOP':'PLAY'};
+$('hold').onclick=()=>{hold=!hold;$('hold').classList.toggle('on',hold);if(!hold)panic()};
+function panic(){held.forEach(n=>{send([0x80,n,0]);mark(n,false)});held.clear();cc(123,0)}
+$('panic').onclick=panic;
+// Web MIDI: forward any connected MIDI keyboard / controller (needs Chrome on a secure page, see Syrup README)
+const mi=$('midi');
+if(navigator.requestMIDIAccess){navigator.requestMIDIAccess().then(a=>{const hook=()=>{const names=[];a.inputs.forEach(i=>{names.push(i.name);i.onmidimessage=m=>{const d=m.data;if(d[0]!=0xFE)send(Array.from(d))}});mi.textContent=names.length?'MIDI IN: '+names.join(', '):'WEB MIDI ON: plug in a MIDI keyboard'};hook();a.onstatechange=hook},()=>{mi.textContent='WEB MIDI blocked by the browser'})}
+else mi.textContent='No Web MIDI in this browser (on-screen controls still work)';
+</script></body></html>

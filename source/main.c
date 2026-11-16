@@ -35,6 +35,14 @@
 #include <dirent.h>
 #include <strings.h>
 #include <sys/stat.h>
+#ifndef SYRUP_NO_NET
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
+#endif
 
 #define TWO_PI   6.28318530718f
 #define CYC      2048
@@ -76,6 +84,7 @@ static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0, gGpuCopy = 1;
 static int gDrums, gKit, gKickPat, gSnarePat, gHatPat; static float gDrumLevel;
 static float gChipLevel, gCsEcho, gCsEchoFb, gOrbit, gOrbitRate, gGrainSize, gGrainScan, gGrainSpray, gGrainPitch, gGrainLevel; static int gChipDuty, gChipOct, gCsEchoT, gGrains;
 static const char* DUTY_NAMES[8]; static const char* CSECHO_T_NAMES[4];
+static int gCamVid, gMidiNet; static float gWtScan; static const char* VID_NAMES[3];
 static void chipSet(float lv);
 static const char* KIT_NAMES[4]; static const char* KICKP_NAMES[7]; static const char* SNAREP_NAMES[6]; static const char* HATP_NAMES[6];
 #define NVISM 11
@@ -2114,7 +2123,7 @@ static const char* presetName(int style, int idx) { return style == NSTYLES - 1 
 
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
-enum { D_CHIP = 1 << 26, D_GRAIN = 1 << 27, D_DLYT = 1 << 28 };
+enum { D_CHIP = 1 << 26, D_GRAIN = 1 << 27, D_DLYT = 1 << 28, D_CAMV = 1 << 29, D_NETMIDI = 1 << 30 };
 enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536, D_LOOP = 1 << 17, D_LOOPTAB = 1 << 18, D_MICTAB = 1 << 19, D_CAMTAB = 1 << 20, D_CAM = 1 << 21, D_LINK = 1 << 22, D_DLWT = 1 << 23, D_DRUMS = 1 << 24, D_UPDATE = 1 << 25 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
 
@@ -2228,6 +2237,8 @@ static Param P_HW[] = {
 	{"MIC > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_MICTAB},
 	PE("CAMERA", &gCamOn, 2, ONOFF, D_CAM),
 	{"CAM > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CAMTAB},
+	PE("CAM WAVE", &gCamVid, 3, VID_NAMES, D_CAMV), PF("WT SCAN", &gWtScan, 0, 4, 0.05f, "X", 0),
+	PE("WI-FI MIDI", &gMidiNet, 2, ONOFF, D_NETMIDI),
 	{"UPDATE SYRUP", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_UPDATE},
 	{"GET WAVETABLES", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	PE("LINK", &gLink, 5, LINK_NAMES_P, D_LINK), PE("BEAT LIGHT", &gBeatLight, 2, ONOFF, 0),
@@ -3390,7 +3401,7 @@ static void camStop(void) {
 static void camStart(void) {
 	if (gCamOK) return;
 	if (!gCamBuf) { gCamBuf = (u16*)malloc(160 * 120 * 2); gCamImg = (u16*)malloc(160 * 120 * 2); }
-	if (!gCamBuf || !gCamImg || R_FAILED(camInit())) { say("CAMERA NOT AVAILABLE"); gCamOn = 0; return; }
+	if (!gCamBuf || !gCamImg || R_FAILED(camInit())) { say("CAMERA NOT AVAILABLE"); gCamOn = 0; gCamWant = 0; gCamVid = 0; return; }
 	CAMU_SetSize(SELECT_OUT1, SIZE_QQVGA, CONTEXT_A);
 	CAMU_SetOutputFormat(SELECT_OUT1, OUTPUT_RGB_565, CONTEXT_A);
 	CAMU_SetNoiseFilter(SELECT_OUT1, true); CAMU_SetAutoExposure(SELECT_OUT1, true); CAMU_SetAutoWhiteBalance(SELECT_OUT1, true);
@@ -3401,9 +3412,58 @@ static void camStart(void) {
 	CAMU_SetReceiving(&gCamEv, gCamBuf, PORT_CAM1, 160 * 120 * 2, (s16)gCamXfer);
 	gCamOK = 1; gCamFrames = 0;
 }
+
+// ---- video wavetables: LIVE turns every camera picture into OSC A's table as it changes (rows -> frames);
+// RECORD CLIP grabs 64 moments over ~8 s, one waveform each, so WT POS (or WT SCAN) plays through time
+static int gCamVid = 0, gVidN = 0; static float gWtScan = 0;
+static const char* VID_NAMES[3] = {"OFF", "LIVE", "RECORD"};
+static float* gVidFr = NULL; static float gVidT = 0;
+static float camLum(u16 p) { return 0.3f * (p >> 11) / 31.0f + 0.59f * ((p >> 5) & 63) / 63.0f + 0.11f * (p & 31) / 31.0f; }
+static void vidInstallLive(const float* fr) {   // into OSC A's working table, no file
+	LightLock_Lock(&gMipsLock);
+	Table* tb = &gOsc[0].tb; memcpy(tb->frames, fr, sizeof(float) * CYC * WT_FR); tb->nFrames = WT_FR;
+	float pk = 1e-6f; for (int i = 0; i < WT_FR * CYC; i += 4) { float v = fabsf(fr[i]); if (v > pk) pk = v; }
+	tb->peak = pk; snprintf(tb->name, sizeof(tb->name), "CAM LIVE");
+	LightLock_Unlock(&gMipsLock);
+	gForceBuild |= 1;
+}
+static void vidFrame(void) {   // camTick: a new picture is in gCamImg
+	static float row[160];
+	if (!gVidFr && !(gVidFr = (float*)malloc(sizeof(float) * CYC * WT_FR))) { gCamVid = 0; say("NOT ENOUGH MEMORY FOR VIDEO"); return; }
+	if (gCamVid == 1) {
+		if (gVidT < 0.12f) return;   // ~8 table updates a second
+		gVidT = 0;
+		for (int f = 0; f < WT_FR; f++) {
+			int y = f * 119 / (WT_FR - 1);
+			for (int x = 0; x < 160; x++) row[x] = camLum(gCamImg[y * 160 + x]);
+			for (int pass = 0; pass < 2; pass++) for (int x = 1; x < 159; x++) row[x] = (row[x - 1] + 2 * row[x] + row[x + 1]) * 0.25f;
+			wtResample(row, 160, gVidFr + f * CYC);
+		}
+		wtFinish(gVidFr, WT_FR); vidInstallLive(gVidFr);
+	} else if (gCamVid == 2) {
+		if (gVidT < 0.125f) return;   // 64 frames over 8 s
+		gVidT = 0;
+		for (int x = 0; x < 160; x++) { float a = 0; for (int y = 30; y < 90; y += 2) a += camLum(gCamImg[y * 160 + x]); row[x] = a / 30; }
+		for (int pass = 0; pass < 3; pass++) for (int x = 1; x < 159; x++) row[x] = (row[x - 1] + 2 * row[x] + row[x + 1]) * 0.25f;
+		wtResample(row, 160, gVidFr + gVidN * CYC);
+		gVidN++;
+		char m[40]; snprintf(m, sizeof(m), "RECORDING VIDEO %d / %d", gVidN, WT_FR); say(m);
+		if (gVidN >= WT_FR) {
+			wtFinish(gVidFr, WT_FR); wtInstall("VID", gVidFr);
+			gCamVid = 0; gVidN = 0; if (gWtScan <= 0) gWtScan = 1;
+			say("VIDEO TABLE SAVED: WT SCAN PLAYS IT BACK");
+		}
+	}
+}
+static void vidChanged(void) {
+	gVidN = 0; gVidT = 1;
+	if (gCamVid == 0) {   // back to OSC A's chosen table
+		LightLock_Lock(&gMipsLock); tableSelect(&gOsc[0].tb, gOsc[0].table); LightLock_Unlock(&gMipsLock); gForceBuild |= 1;
+	} else if (gCamVid == 2) say("POINT THE CAMERA: RECORDING STARTS NOW");
+}
 static void camToTable(void);
 static void camTick(void) {
-	int need = gCamOn || gCamWant;
+	int need = gCamOn || gCamWant || gCamVid;
 	if (need && !gCamOK) camStart();
 	if (!need && gCamOK) camStop();
 	if (!gCamOK || !gCamEv) return;
@@ -3416,6 +3476,7 @@ static void camTick(void) {
 	int cnt = 160 * 120 / 7 + 1;
 	gCamLight += (L / cnt - gCamLight) * 0.4f; gCamColor += (C / cnt - gCamColor) * 0.4f;
 	if (gCamWant && gCamFrames > 6) { camToTable(); gCamWant = 0; }   // a few frames in, so exposure has settled
+	if (gCamVid && gCamFrames > 6) vidFrame();
 }
 static void camToTable(void) {
 	float* fr = (float*)malloc(sizeof(float) * CYC * WT_FR); static float row[160];
@@ -3504,6 +3565,276 @@ static void linkTick(float dt) {
 }
 
 
+// ================================================================ Wi-Fi MIDI
+// One network bring-up shared by the downloader, the updater and the MIDI server.
+static LightLock gNetLock; static int gNetRef = 0; static u32* gSocMem = NULL;
+static int netUp(void) {
+	LightLock_Lock(&gNetLock);
+	if (gNetRef == 0) {
+		gSocMem = (u32*)memalign(0x1000, 0x100000);
+		if (!gSocMem || R_FAILED(socInit(gSocMem, 0x100000))) { free(gSocMem); gSocMem = NULL; LightLock_Unlock(&gNetLock); return 0; }
+	}
+	gNetRef++;
+	LightLock_Unlock(&gNetLock);
+	return 1;
+}
+static void netDown(void) {
+	LightLock_Lock(&gNetLock);
+	if (gNetRef > 0 && --gNetRef == 0) { socExit(); free(gSocMem); gSocMem = NULL; }
+	LightLock_Unlock(&gNetLock);
+}
+
+// MIDI from the network lands in a ring (network thread writes, main loop reads)
+#define MQ 256
+static u8 gMq[MQ][3]; static volatile int gMqW = 0, gMqR = 0;
+static void midiPush(u8 a, u8 b, u8 c) { int n = (gMqW + 1) % MQ; if (n == gMqR) return; gMq[gMqW][0] = a; gMq[gMqW][1] = b; gMq[gMqW][2] = c; __sync_synchronize(); gMqW = n; }
+static int midiLen(u8 st) {   // data bytes after a status byte
+	if (st >= 0xF8) return 0;
+	switch (st & 0xF0) { case 0xC0: case 0xD0: return 1; case 0xF0: return st == 0xF2 ? 2 : (st == 0xF1 || st == 0xF3) ? 1 : 0; default: return 2; }
+}
+// raw MIDI byte stream (WebSocket frames); running status allowed, sysex skipped
+static void midiParse(const u8* p, int n, u8* run) {
+	int i = 0;
+	while (i < n) {
+		u8 st = p[i];
+		if (st == 0xF0) { while (i < n && p[i] != 0xF7) i++; i++; continue; }
+		if (st & 0x80) { i++; if (st < 0xF0) *run = st; } else st = *run;
+		if (!st) { i++; continue; }
+		int k = midiLen(st); if (i + k > n) return;
+		midiPush(st, k > 0 ? p[i] : 0, k > 1 ? p[i + 1] : 0); i += k;
+	}
+}
+
+static int gMidiNet = 0; static volatile int gNetRun = 0, gNetClients = 0;
+static char gNetAddr[32] = "", gNetPeer[32] = "";
+static Thread gNetThread = NULL;
+
+#ifndef SYRUP_NO_NET
+// ---- SHA-1 + base64, only for the WebSocket handshake
+static void sha1(const u8* m, u32 len, u8 out[20]) {   // short messages only (the handshake key)
+	u8 buf[192]; if (len > 119) len = 119;
+	memcpy(buf, m, len); buf[len] = 0x80;
+	u32 tot = ((len + 8) / 64 + 1) * 64; memset(buf + len + 1, 0, tot - len - 1);
+	u64 bits = (u64)len * 8; for (int j = 0; j < 8; j++) buf[tot - 8 + j] = (u8)(bits >> (56 - 8 * j));
+	u32 h[5] = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0};
+	for (u32 o = 0; o < tot; o += 64) {
+		const u8* blk = buf + o; u32 w[80];
+		for (int t = 0; t < 16; t++) w[t] = (u32)blk[t * 4] << 24 | (u32)blk[t * 4 + 1] << 16 | (u32)blk[t * 4 + 2] << 8 | blk[t * 4 + 3];
+		for (int t = 16; t < 80; t++) { u32 x = w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]; w[t] = x << 1 | x >> 31; }
+		u32 a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
+		for (int t = 0; t < 80; t++) {
+			u32 f, kk;
+			if (t < 20) { f = (b & c) | (~b & d); kk = 0x5A827999; } else if (t < 40) { f = b ^ c ^ d; kk = 0x6ED9EBA1; }
+			else if (t < 60) { f = (b & c) | (b & d) | (c & d); kk = 0x8F1BBCDC; } else { f = b ^ c ^ d; kk = 0xCA62C1D6; }
+			u32 tmp = (a << 5 | a >> 27) + f + e + kk + w[t]; e = d; d = c; c = b << 30 | b >> 2; b = a; a = tmp;
+		}
+		h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+	}
+	for (int j = 0; j < 5; j++) { out[j * 4] = h[j] >> 24; out[j * 4 + 1] = h[j] >> 16; out[j * 4 + 2] = h[j] >> 8; out[j * 4 + 3] = h[j]; }
+}
+static void b64(const u8* in, int n, char* out) {
+	static const char T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	int o = 0;
+	for (int i = 0; i < n; i += 3) {
+		u32 v = in[i] << 16 | (i + 1 < n ? in[i + 1] << 8 : 0) | (i + 2 < n ? in[i + 2] : 0);
+		out[o++] = T[v >> 18 & 63]; out[o++] = T[v >> 12 & 63]; out[o++] = i + 1 < n ? T[v >> 6 & 63] : '='; out[o++] = i + 2 < n ? T[v & 63] : '=';
+	}
+	out[o] = 0;
+}
+#include "remote_html.h"
+static int sendAll(int s, const void* d, int n) { const char* p = (const char*)d; while (n > 0) { int k = send(s, p, n, 0); if (k <= 0) { if (k < 0 && errno == EAGAIN) { svcSleepThread(1000000); continue; } return 0; } p += k; n -= k; } return 1; }
+#define NCLI 4
+typedef struct { int s, ws; char buf[2048]; int n; u8 run; } Cli;
+static void cliClose(Cli* c) { if (c->s >= 0) close(c->s); c->s = -1; c->ws = 0; c->n = 0; }
+static void cliHttp(Cli* c) {   // request complete in c->buf
+	c->buf[c->n] = 0;
+	char* key = strstr(c->buf, "Sec-WebSocket-Key:");
+	if (key) {
+		key += 18; while (*key == ' ') key++;
+		char k[80]; int i = 0; while (key[i] && key[i] != '\r' && key[i] != '\n' && i < 60) { k[i] = key[i]; i++; } k[i] = 0;
+		strcat(k, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+		u8 h[20]; char acc[40]; sha1((const u8*)k, strlen(k), h); b64(h, 20, acc);
+		char r[256]; int n = snprintf(r, sizeof(r), "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", acc);
+		if (!sendAll(c->s, r, n)) { cliClose(c); return; }
+		c->ws = 1; c->n = 0; gNetClients++;
+		return;
+	}
+	char hdr[160]; int len = (int)strlen(REMOTE_HTML);
+	int n = snprintf(hdr, sizeof(hdr), "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", len);
+	if (sendAll(c->s, hdr, n)) sendAll(c->s, REMOTE_HTML, len);
+	cliClose(c);
+}
+static void cliWs(Cli* c) {   // parse as many frames as are complete
+	for (;;) {
+		u8* p = (u8*)c->buf; if (c->n < 2) return;
+		int op = p[0] & 15, masked = p[1] & 0x80; u32 len = p[1] & 127, hl = 2;
+		if (len == 126) { if (c->n < 4) return; len = p[2] << 8 | p[3]; hl = 4; }
+		else if (len == 127) { cliClose(c); gNetClients--; return; }
+		if (masked) hl += 4;
+		if (len > sizeof(c->buf) - 16) { cliClose(c); gNetClients--; return; }
+		if ((u32)c->n < hl + len) return;
+		u8* d = p + hl;
+		if (masked) for (u32 i = 0; i < len; i++) d[i] ^= p[hl - 4 + (i & 3)];
+		if (op == 8) { u8 cl[2] = {0x88, 0}; sendAll(c->s, cl, 2); cliClose(c); gNetClients--; return; }
+		if (op == 9) { u8 hd[2] = {0x8A, (u8)len}; if (len < 126) { sendAll(c->s, hd, 2); sendAll(c->s, d, len); } }
+		if (op == 1 || op == 2) midiParse(d, len, &c->run);
+		int used = hl + len; memmove(c->buf, c->buf + used, c->n - used); c->n -= used;
+	}
+}
+// ---- AppleMIDI / RTP-MIDI (Network MIDI on Mac, iOS apps, rtpMIDI on Windows, many DAWs)
+static u32 gSsrc = 0x53595255;
+static u64 netNow(void) { return osGetTime() * 10; }   // 100 us units
+static void amReply(int s, struct sockaddr_in* a, const u8* pk, int n) {
+	if (n < 4) return;
+	if (pk[2] == 'I' && pk[3] == 'N' && n >= 16) {   // invitation -> accept
+		u8 r[32] = {0xFF, 0xFF, 'O', 'K'}; memcpy(r + 4, pk + 4, 8); r[12] = gSsrc >> 24; r[13] = gSsrc >> 16; r[14] = gSsrc >> 8; r[15] = gSsrc; memcpy(r + 16, "Syrup 2DS", 10);
+		sendto(s, r, 26, 0, (struct sockaddr*)a, sizeof(*a));
+		if (n > 16) snprintf(gNetPeer, sizeof(gNetPeer), "%.20s", (const char*)pk + 16);
+	} else if (pk[2] == 'C' && pk[3] == 'K' && n >= 36) {   // clock sync: answer counts 0 and 1
+		u8 r[36]; memcpy(r, pk, 36); r[4] = gSsrc >> 24; r[5] = gSsrc >> 16; r[6] = gSsrc >> 8; r[7] = gSsrc;
+		u64 t = netNow(); int cnt = pk[8];
+		if (cnt > 1) return;
+		int off = cnt == 0 ? 20 : 28; r[8] = cnt + 1;
+		for (int j = 0; j < 8; j++) r[off + j] = (u8)(t >> (56 - 8 * j));
+		sendto(s, r, 36, 0, (struct sockaddr*)a, sizeof(*a));
+	} else if (pk[2] == 'B' && pk[3] == 'Y') gNetPeer[0] = 0;
+}
+static void rtpMidi(const u8* p, int n) {
+	if (n < 13 || (p[0] & 0xC0) != 0x80) return;
+	int i = 12; u8 f = p[i]; int len = f & 15; i++;
+	if (f & 0x80) { if (i >= n) return; len = len << 8 | p[i]; i++; }
+	int end = i + len; if (end > n) end = n;
+	u8 run = 0; int first = 1;
+	while (i < end) {
+		if (!first || (f & 0x20)) { while (i < end && (p[i] & 0x80)) i++; i++; }   // delta time
+		first = 0; if (i >= end) break;
+		u8 st = p[i];
+		if (st == 0xF0 || st == 0xF7) { i++; while (i < end && !(p[i] & 0x80)) i++; if (i < end && (p[i] == 0xF7 || p[i] == 0xF0)) i++; continue; }
+		if (st & 0x80) { i++; if (st < 0xF0) run = st; } else st = run;
+		if (!st) break;
+		int k = midiLen(st); if (i + k > end) break;
+		midiPush(st, k > 0 ? p[i] : 0, k > 1 ? p[i + 1] : 0); i += k;
+	}
+}
+static int udpOpen(int port) {
+	int s = socket(AF_INET, SOCK_DGRAM, 0); if (s < 0) return -1;
+	struct sockaddr_in a; memset(&a, 0, sizeof(a)); a.sin_family = AF_INET; a.sin_port = htons(port); a.sin_addr.s_addr = INADDR_ANY;
+	if (bind(s, (struct sockaddr*)&a, sizeof(a)) < 0) { close(s); return -1; }
+	fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
+	return s;
+}
+static void netMain(void* arg) {
+	(void)arg;
+	if (!netUp()) { snprintf(gNetAddr, sizeof(gNetAddr), "NO WI-FI"); gNetRun = 0; return; }
+	struct in_addr ip; ip.s_addr = gethostid();
+	snprintf(gNetAddr, sizeof(gNetAddr), "%s:8080", inet_ntoa(ip));
+	int ls = socket(AF_INET, SOCK_STREAM, 0);
+	struct sockaddr_in a; memset(&a, 0, sizeof(a)); a.sin_family = AF_INET; a.sin_port = htons(8080); a.sin_addr.s_addr = INADDR_ANY;
+	int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+	if (ls < 0 || bind(ls, (struct sockaddr*)&a, sizeof(a)) < 0 || listen(ls, 4) < 0) { snprintf(gNetAddr, sizeof(gNetAddr), "PORT 8080 BUSY"); if (ls >= 0) close(ls); netDown(); gNetRun = 0; return; }
+	fcntl(ls, F_SETFL, fcntl(ls, F_GETFL, 0) | O_NONBLOCK);
+	int uc = udpOpen(5004), ud = udpOpen(5005);
+	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; cl[i].run = 0; }
+	gNetClients = 0;
+	while (gNetRun) {
+		int idle = 1;
+		int s = accept(ls, NULL, NULL);
+		if (s >= 0) {
+			fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
+			int slot = -1; for (int i = 0; i < NCLI; i++) if (cl[i].s < 0) { slot = i; break; }
+			if (slot < 0) close(s); else { cl[slot].s = s; cl[slot].ws = 0; cl[slot].n = 0; cl[slot].run = 0; }
+			idle = 0;
+		}
+		for (int i = 0; i < NCLI; i++) {
+			Cli* c = &cl[i]; if (c->s < 0) continue;
+			int k = recv(c->s, c->buf + c->n, sizeof(c->buf) - 1 - c->n, 0);
+			if (k == 0 || (k < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) { if (c->ws) gNetClients--; cliClose(c); continue; }
+			if (k < 0) continue;
+			c->n += k; idle = 0;
+			if (c->ws) cliWs(c);
+			else { c->buf[c->n] = 0; if (strstr(c->buf, "\r\n\r\n")) cliHttp(c); else if (c->n >= (int)sizeof(c->buf) - 1) cliClose(c); }
+		}
+		u8 pk[512]; struct sockaddr_in from; socklen_t fl;
+		for (int u = 0; u < 2; u++) {
+			int us = u ? ud : uc; if (us < 0) continue;
+			for (int t = 0; t < 8; t++) {
+				fl = sizeof(from); int k = recvfrom(us, pk, sizeof(pk), 0, (struct sockaddr*)&from, &fl);
+				if (k <= 0) break;
+				idle = 0;
+				if (k >= 4 && pk[0] == 0xFF && pk[1] == 0xFF) amReply(us, &from, pk, k);
+				else if (u) rtpMidi(pk, k);
+			}
+		}
+		if (idle) svcSleepThread(1000000);   // 1 ms: low latency, still mostly asleep
+	}
+	for (int i = 0; i < NCLI; i++) cliClose(&cl[i]);
+	close(ls); if (uc >= 0) close(uc); if (ud >= 0) close(ud);
+	gNetClients = 0; gNetPeer[0] = 0;
+	netDown();
+}
+#endif
+static void netMidiChanged(void) {
+#ifdef SYRUP_NO_NET
+	if (gMidiNet) { say("NO NETWORK IN THIS BUILD"); gMidiNet = 0; }
+#else
+	if (gMidiNet && !gNetThread) {
+		gNetRun = 1; gNetAddr[0] = 0;
+		gNetThread = threadCreate(netMain, NULL, 0x8000, 0x30, -2, false);
+		if (!gNetThread) { gNetRun = 0; gMidiNet = 0; say("COULD NOT START WI-FI MIDI"); }
+	} else if (!gMidiNet && gNetThread) {
+		gNetRun = 0; threadJoin(gNetThread, U64_MAX); threadFree(gNetThread); gNetThread = NULL; say("WI-FI MIDI OFF");
+	}
+#endif
+}
+
+// ---- what incoming MIDI does (main loop, inside the voice lock)
+static int gMidiHeld[16], gMidiHeldN = 0, gMidiClk = 0; static float gMidiBend = 0, gMidiVel = 0.8f;
+static u64 gMidiClkT = 0;
+static void midiNoteOn(int n, float v) {
+	if (gMidiHeldN < 16) gMidiHeld[gMidiHeldN++] = n;
+	gMidiVel = v;
+	if (gArp) arpSetPool(gMidiHeld, gMidiHeldN, v); else voiceOn(n, v);
+}
+static void midiNoteOff(int n) {
+	for (int i = 0; i < gMidiHeldN; i++) if (gMidiHeld[i] == n) { gMidiHeld[i] = gMidiHeld[--gMidiHeldN]; break; }
+	if (gArp) arpSetPool(gMidiHeld, gMidiHeldN, gMidiVel); else voiceOff(n);
+}
+static void acidGen(void);
+static int midiTick(void) {   // returns 1 when something on screen changed
+	int ch = 0;
+	while (gMqR != gMqW) {
+		u8 st = gMq[gMqR][0], a = gMq[gMqR][1], b = gMq[gMqR][2]; gMqR = (gMqR + 1) % MQ;
+		switch (st & 0xF0) {
+		case 0x90: if (b) { midiNoteOn(a, 0.25f + 0.75f * b / 127.0f); break; } /* fall through: velocity 0 = off */
+		case 0x80: midiNoteOff(a); break;
+		case 0xE0: gMidiBend = (((b << 7) | a) - 8192) / 8192.0f; break;
+		case 0xC0: { int c = presetCount(gStyle); if (c > 0) { gPreset = a % c; presetLoad(gStyle, gPreset); ch = 1; } break; }
+		case 0xB0: {
+			float v = b / 127.0f; ch = 1;
+			if (a == 74) gCutoff = v; else if (a == 71) gRes = v; else if (a == 70) { gOsc[0].pos = v; }
+			else if (a == 1) gMacro[0] = v; else if (a >= 16 && a <= 19) gMacro[a - 16] = v;
+			else if (a == 102 && b) { int c = presetCount(gStyle); if (c > 0) { gPreset = (gPreset + c - 1) % c; presetLoad(gStyle, gPreset); } }
+			else if (a == 103 && b) { int c = presetCount(gStyle); if (c > 0) { gPreset = (gPreset + 1) % c; presetLoad(gStyle, gPreset); } }
+			else if (a == 104 && b) { acidGen(); if (gSeqMode != 1) gSeqMode = 1; }
+			else if (a == 123 || a == 120) { allOff(); gMidiHeldN = 0; if (gArp) arpSetPool(NULL, 0, 0.8f); }
+			else ch = 0;
+			break; }
+		case 0xF0:
+			if (st == 0xFA || st == 0xFB) { gSeqMode = 1; ch = 1; gMidiClk = 0; }
+			else if (st == 0xFC) { gSeqMode = 0; ch = 1; }
+			else if (st == 0xF8) {   // follow an external clock: 24 per beat
+				if (++gMidiClk % 24 == 0) {
+					u64 t = osGetTime();
+					if (gMidiClkT) { float bpm = 60000.0f / (float)(t - gMidiClkT); if (bpm > 40 && bpm < 240) { gBPM = (int)(gBPM * 0.7f + bpm * 0.3f + 0.5f); } }
+					gMidiClkT = t;
+				}
+			}
+			break;
+		}
+	}
+	return ch;
+}
+
 // ---- wavetable downloads over Wi-Fi: the Syrup Pack lives in the GitHub repo (wavetables/ + index.txt)
 #define PACK_URL "https://raw.githubusercontent.com/syrup-synth/syrup/main/wavetables/"
 static volatile int gDlState = 0, gDlDone = 0, gDlTotal = 0, gDlNew = 0;
@@ -3544,8 +3875,7 @@ static void urlName(char* out, int len, const char* nm) {   // spaces -> %20
 }
 static void dlMain(void* arg) {
 	(void)arg;
-	u32* soc = (u32*)memalign(0x1000, 0x100000);
-	if (!soc || R_FAILED(socInit(soc, 0x100000))) { snprintf(gDlErr, sizeof(gDlErr), "WI-FI NOT AVAILABLE"); free(soc); gDlState = 3; return; }
+	if (!netUp()) { snprintf(gDlErr, sizeof(gDlErr), "WI-FI NOT AVAILABLE"); gDlState = 3; return; }
 	curl_global_init(CURL_GLOBAL_DEFAULT);
 	MemBuf idx = {0};
 	int ok = httpGet(PACK_URL "index.txt", &idx, 0);
@@ -3573,7 +3903,7 @@ static void dlMain(void* arg) {
 	}
 	free(idx.p);
 	curl_global_cleanup();
-	socExit(); free(soc);
+	netDown();
 	gDlState = ok ? 2 : 3;
 }
 #endif
@@ -3618,8 +3948,7 @@ static size_t upWrite(void* d, size_t sz, size_t nm, void* u) {
 static int upProgress(void* c, curl_off_t dlt, curl_off_t dl, curl_off_t ult, curl_off_t ul) { (void)c; (void)dl; (void)ult; (void)ul; if (dlt > 0) gUpTotal = (u32)dlt; return 0; }
 static void upMain(void* arg) {
 	(void)arg;
-	u32* soc = (u32*)memalign(0x1000, 0x100000);
-	if (!soc || R_FAILED(socInit(soc, 0x100000))) { snprintf(gDlErr, sizeof(gDlErr), "WI-FI NOT AVAILABLE"); free(soc); gUpState = 5; return; }
+	if (!netUp()) { snprintf(gDlErr, sizeof(gDlErr), "WI-FI NOT AVAILABLE"); gUpState = 5; return; }
 	curl_global_init(CURL_GLOBAL_DEFAULT);
 	MemBuf v = {0};
 	int ok = httpGet(REL_URL "version.txt", &v, 0);
@@ -3657,7 +3986,7 @@ static void upMain(void* arg) {
 		}
 	} else gUpState = 5;
 	free(v.p);
-	curl_global_cleanup(); socExit(); free(soc);
+	curl_global_cleanup(); netDown();
 }
 #endif
 static void upStart(void) {
@@ -4510,7 +4839,7 @@ int main(void) {
 	B->on = 0; B->table = T_HARMONIX; B->pos = 0.3f; B->level = 0.5f; B->oct = 1; B->uni = 1; B->detune = 10; B->blend = 0.5f; B->width = 0.6f;
 	tableSelect(&A->tb, A->table); tableSelect(&B->tb, B->table);
 	LightLock_Init(&gMipsLock);
-	LightLock_Init(&gVoiceLock);
+	LightLock_Init(&gVoiceLock); LightLock_Init(&gNetLock);
 	userLoad();
 	seqDefault();
 	presetLoad(gStyle, gPreset);   // start on PAD / SYRUP PAD
@@ -4549,6 +4878,10 @@ int main(void) {
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
 		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply();
+		if (midiTick()) topDirty = botDirty = 1;
+		gVidT += 1.0f / 60;
+		if (gWtScan > 0) { A->pos += gWtScan / 60.0f / 8.0f; if (A->pos >= 1) A->pos -= 1; if (page == 1) topDirty = 1; }
+		{ static int shown = 0; if (gMidiNet && gNetAddr[0] && !shown) { char m[48]; snprintf(m, sizeof(m), "ON YOUR PHONE: http://%s", gNetAddr); say(m); gMsgT = 8; shown = 1; topDirty = 1; } if (!gMidiNet) shown = 0; }
 		if (gMsgT > 0) { gMsgT -= 1.0f / 60; topDirty = 1; }
 		u64 now = osGetTime(); float dt = (now - last) / 1000.0f; last = now; if (dt > 0.1f) dt = 0.1f;
 		sensorsUpdate(dt);
@@ -4595,6 +4928,8 @@ int main(void) {
 				if (p->dirty & D_CHIP) { float lv = gChipLevel; gChipLevel = 1; chipSet(lv); }
 				if (p->dirty & D_GRAIN) grainsChanged();
 				if (p->dirty & D_DLYT) dlyTypeChanged();
+				if (p->dirty & D_CAMV) vidChanged();
+				if (p->dirty & D_NETMIDI) netMidiChanged();
 				if (p->dirty & D_LINK) linkChanged();
 				if (p->dirty & D_THEME) botDirty = 1;
 				if (p->dirty & (D_SCALE | D_SEQ)) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; botDirty = 1; if (p->p == &gSeqMode && gSeqMode == 2) gRecPos = 0; if (p->p == &gSeqMode && gSeqMode != 1) gSeqTr = 0; }
@@ -4718,7 +5053,7 @@ int main(void) {
 			if (page != lastMarkPage) { lastMarkPage = page; char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
 		}
 		gFxModVal = modSum(DST_FXP, newestVoice());
-		if (gAudioOK) voicesUpdate(dt, cx);
+		if (gAudioOK) voicesUpdate(dt, cx + gMidiBend);
 		// effect-bus self check: if notes are sending but the DSP never delivers aux audio, fall back to taps
 		if (gBusOK && !gBusFail && !gBusSeen && (masterActive() || busSend(0) > 0 || busSend(1) > 0)) {
 			int any = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho) any = 1;

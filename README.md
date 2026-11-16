@@ -164,3 +164,19 @@ On the PLAY page the bottom screen's XY pad becomes a 16-step grid. Each of the 
 - **DELAY TYPE:** TAPE (ping-pong with wow and saturation), DIGITAL (clean stereo), PING-PONG (clean), DUB (dark, saturated, long), LO-FI (each repeat crushed further) and REVERSE (repeats play backwards).
 
 Both are saved with patches, and factory patches pick types to suit them.
+
+## Wi-Fi MIDI (HARDWARE page: WI-FI MIDI ON)
+
+When it starts, Syrup shows an address such as `http://192.168.1.23:8080`. Your phone, tablet or computer must be on the same Wi-Fi network.
+
+- **Web remote:** open that address in any browser. You get a two-octave multitouch keyboard, an XY pad (WT position and cutoff), resonance and macro sliders, patch back/forward, sequencer PLAY/STOP and ACID.
+- **Web MIDI:** the remote page also forwards a USB MIDI keyboard plugged into the computer. Browsers only allow Web MIDI on secure pages. In desktop Chrome, add the Syrup address under `chrome://flags/#unsafely-treat-insecure-origin-as-secure`. iPhone Safari has no Web MIDI.
+- **Network MIDI (AppleMIDI / RTP-MIDI):** connect from macOS Audio MIDI Setup (Network), from rtpMIDI on Windows, or from iOS apps that support network MIDI sessions. Use the 2DS's IP address on port 5004.
+- **MIDI handled:** notes (and the arpeggiator), pitch bend, program change, mod wheel, start/stop and clock (tempo follows).
+- **CC map:** 74 cutoff, 71 resonance, 70 WT position, 1 and 16-19 macros, 102/103 previous/next patch, 104 ACID line, 120/123 all notes off.
+
+## Video wavetables (HARDWARE page)
+
+- **CAM WAVE LIVE:** OSC A's wavetable becomes the live camera picture, updated about 8 times a second, with each image row as one frame.
+- **CAM WAVE RECORD:** records about 8 seconds of camera, giving 64 moments with one waveform each. It's saved as `VID n.wav` and loaded into OSC A.
+- **WT SCAN:** sweeps OSC A's WT position automatically (1X = the whole table in 8 seconds). It works on any table, and plays a recorded video table back.
