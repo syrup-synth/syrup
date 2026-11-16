@@ -148,3 +148,12 @@ FBI > Remote Install > Scan QR Code, and scan `install-qr.png`. Sound needs the 
 - **GRAINS** (HARDWARE): granular playback of the loop. The DSP plays overlapping slices back to back. Set SIZE, SCAN (50% = frozen), SPRAY, PITCH and LEVEL.
 - **3D ORBIT / ORBIT RATE** (MASTER FX): with OUTPUT set to SURROUND, the sound circles around you.
 - **New visualizer modes**: TUNNEL, KALEIDO, SYNTHWAVE and RIPPLES.
+
+## Step grid and ACID lines (PLAY page)
+
+On the PLAY page the bottom screen's XY pad becomes a 16-step grid. Each of the 8 rows is a note of the current scale; with SCALE off the rows are a major scale.
+
+- **Placing notes:** tap a cell to place a note, and you'll hear it. Tap it again to cycle through accent (dark dot), slide (tail into the next step), accent + slide, then off. Up to 4 notes per step.
+- **Buttons:** PLAY/STOP, CLEAR, <LEN / LEN> (pattern length), ROW- / ROW+ (move the grid an octave), and ACID.
+- **ACID:** writes a random 303-style bassline. It favours the root, adds octave jumps, rests, accents and slides, and sits in the bass octave. Tap it again for a new line. Try it with the BASS > ACID patch.
+- **While it plays:** the keys transpose the pattern.

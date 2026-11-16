@@ -518,6 +518,7 @@ typedef struct {
 	float env, env2, freq, cur, gain, pan, cutMul, startDelay, gate, held, vel, hold1, hold2, relMul, tapDet;
 	unsigned parent, id, age;
 	int chipCh;   // PSG square channel for the CHIP layer, -1 if none
+	int slide;    // 303 slide: glide to the new pitch quickly, no retrigger
 } SVoice;
 static SVoice gV[NVS];
 static int gDspOwner[NCH], gCsOwner[NCS];
@@ -871,7 +872,7 @@ static void voicesUpdate(float dt, float bend) {
 		envStep(&v->env2, &v->stage2, &gEnv2, dt, &v->hold2, 1);
 		if (v->stage == 4 && v->env <= 0) { freeVoice(v); continue; }
 		if (v->stage == 3 && gEnv1.s <= 0.001f) { freeVoice(v); continue; }
-		v->cur += (v->freq - v->cur) * gl;
+		v->cur += (v->freq - v->cur) * (v->slide ? 1.0f - expf(-dt / 0.03f) : gl);
 
 		float pitch = bend * gBendRange + modSum(DST_PITCH, v) * 12.0f;
 		float pm = powf(2.0f, pitch / 12.0f);
@@ -1422,7 +1423,7 @@ static void playSet(const int* notes, int n, float vel) {
 }
 
 // ---- 16-step sequencer (step record, keys transpose while playing)
-typedef struct { s8 n; u8 note[4]; u8 vel; } Step;
+typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; } Step;   // fl: 1 accent, 2 slide into the next step
 #define NSTEP 16
 static const char* SEQ_NAMES[3] = {"OFF", "PLAY", "REC"};
 static Step gSeq[NSTEP];
@@ -1448,12 +1449,22 @@ static void seqRecord(const int* notes, int n, float vel) {
 }
 static void seqRest(void) { gSeq[gRecPos].n = 0; gRecPos++; gSeqLen = gRecPos; if (gRecPos >= NSTEP) gRecPos = 0; }
 static void seqClear(void) { memset(gSeq, 0, sizeof(gSeq)); gRecPos = 0; gSeqLen = 1; gSeqBase = -1; gSeqTr = 0; }
-static void seqStop(void) { if (gSeqPlaying) playSet(NULL, 0, 0.8f); gSeqPlaying = 0; gSeqPos = -1; gSeqPh = 0; }
+static int gSlideOn;
+static void seqStop(void) { if (gSeqPlaying) playSet(NULL, 0, 0.8f); gSlideOn = 0; gSeqPlaying = 0; gSeqPos = -1; gSeqPh = 0; }
+static int gSlideOn;   // the step before asked to slide into this one
 static void seqFire(void) {
 	Step* s = &gSeq[gSeqPos];
 	int notes[4], n = 0;
 	for (int i = 0; i < s->n; i++) notes[n++] = snapScale(s->note[i] + gSeqTr);
-	playSet(notes, n, s->n ? s->vel / 255.0f : 0.8f);
+	float vel = s->n ? s->vel / 255.0f : 0.8f;
+	if (s->fl & 1) vel = 1.0f;   // accent
+	if (gSlideOn && n == 1 && gHeldN == 1 && !gArp) {   // slide: keep the voice, bend it to the new note
+		int done = 0;
+		for (int i = 0; i < NVS; i++) { SVoice* v = &gV[i]; if (v->active && !v->isEcho && v->note == gHeld[0] && v->stage < 4) { v->note = notes[0]; v->freq = mtof((float)notes[0]); v->slide = 1; done = 1; } }
+		if (done) { gHeld[0] = notes[0]; gSlideOn = (s->fl & 2) != 0; gBeatFlash = 1; return; }
+	}
+	playSet(notes, n, vel);
+	gSlideOn = n && (s->fl & 2);
 	gBeatFlash = 1;
 }
 static void seqTick(float dt) {
@@ -1462,7 +1473,7 @@ static void seqTick(float dt) {
 	float len = (gSeqPos & 1) ? 1.0f - gSwing : 1.0f + gSwing;   // in 16ths
 	float before = gSeqPh;
 	gSeqPh += dt * gBPM / 60.0f * 4.0f;
-	if (!gArp && before < len * gSeqGate && gSeqPh >= len * gSeqGate) playSet(NULL, 0, 0.8f);
+	if (!gArp && !gSlideOn && before < len * gSeqGate && gSeqPh >= len * gSeqGate) playSet(NULL, 0, 0.8f);
 	if (gSeqPh >= len) { gSeqPh -= len; gSeqPos = (gSeqPos + 1) % (gSeqLen < 1 ? 1 : gSeqLen); seqFire(); }
 }
 
@@ -2654,6 +2665,94 @@ static int keyAt(int x, int y, int base) {
 	return base + (i / 7) * 12 + WN[i % 7];
 }
 
+static void outline(int x, int y, int w, int h, u8 r, u8 g, u8 b);
+static void say(const char* m);
+// ---- step grid on the bottom screen (PLAY page): 16 steps x 8 notes of the current scale, tap to place
+static int gGridOn = 0, gGridOct = 0;
+static float gAuditionT = 0;
+#define GRID_TOP (XY_Y + 16)
+#define GRID_ROWH 10
+static int gridNote(int row) {   // row 0 = bottom; follows the scale (major steps when the scale is off)
+	static const int MAJ[8] = {0, 2, 4, 5, 7, 9, 11, 12};
+	int root = 48 + gRoot + 12 * gGridOct;
+	return gScale ? scaleNote(root, row) : root + MAJ[row];
+}
+static void rectP(int x, int y, int w, int h, const u8* c) { rect(x, y, w, h, c[0], c[1], c[2]); }
+#define GRID_BTNS 7
+static void drawGrid(void) {
+	rectP(0, XY_Y, 320, KB_Y - XY_Y, TH->bg);
+	const char* B[GRID_BTNS] = {gSeqMode == 1 ? "STOP" : "PLAY", "CLEAR", "<LEN", "LEN>", "ROW-", "ROW+", "ACID"};
+	for (int i = 0; i < GRID_BTNS; i++) {
+		int x = i * 320 / GRID_BTNS, lit = (i == 0 && gSeqMode == 1) || i == 6;
+		rectP(x + 2, XY_Y, 320 / GRID_BTNS - 4, 14, lit ? TH->keyOn : TH->tab);
+		const u8* tc = lit ? EGA[0] : TH->tabTxt;
+		text(x + 160 / GRID_BTNS - (int)strlen(B[i]) * 4, XY_Y + 3, B[i], 1, tc[0], tc[1], tc[2]);
+	}
+	float cw = 320.0f / NSTEP;
+	for (int st = 0; st < NSTEP; st++) {
+		int x = (int)(st * cw), w = (int)((st + 1) * cw) - x - 1, act = st < gSeqLen, head = gSeqPlaying && st == gSeqPos;
+		int hit = 0;
+		for (int r = 0; r < 8; r++) {
+			int y = GRID_TOP + (7 - r) * GRID_ROWH, nt = gridNote(r), on = 0;
+			for (int k = 0; k < gSeq[st].n; k++) if (gSeq[st].note[k] == nt) on = 1;
+			hit += on;
+			const u8* c = on ? (head ? TH->keyOn : (act ? TH->val : TH->dim)) : (head ? TH->grid : (act ? ((st & 3) == 0 ? TH->tab : TH->pad) : TH->bg));
+			rectP(x + 1, y + 1, w - 1, GRID_ROWH - 2, c);
+			if (on && (gSeq[st].fl & 1)) rectP(x + w / 2 - 2, y + 3, 4, GRID_ROWH - 6, TH->bg);   // accent: dark dot
+			if (on && (gSeq[st].fl & 2)) rectP(x + w - 2, y + GRID_ROWH / 2 - 1, 4, 3, TH->keyOn);   // slide: tail into the next step
+		}
+		if (gSeq[st].n > hit) rectP(x + 1, GRID_TOP - 2, w - 1, 1, TH->val);   // notes off this grid (played on the keys)
+	}
+}
+// 303-style line: 16ths, root-heavy, octave jumps, rests, accents, slides; notes from the grid's rows
+static void acidGen(void) {
+	static const int W[8] = {34, 6, 12, 8, 10, 6, 8, 16};   // weights per grid row (row 7 = octave up)
+	memset(gSeq, 0, sizeof(gSeq));
+	int prev = 0;
+	for (int st = 0; st < 16; st++) {
+		int restP = (st % 4 == 0) ? 8 : 26;
+		if (rand() % 100 < restP) continue;
+		int r, t = rand() % 100;
+		if (st % 4 == 0 && rand() % 100 < 55) r = 0;
+		else if (prev && t < 18) r = prev;
+		else { int sum = 0, k = rand() % 100; for (r = 0; r < 8; r++) { sum += W[r]; if (k < sum) break; } if (r > 7) r = 0; }
+		Step* sp = &gSeq[st]; sp->n = 1; sp->note[0] = (u8)gridNote(r); sp->vel = 190;
+		if (rand() % 100 < (st % 4 == 2 ? 45 : 25)) sp->fl |= 1;
+		if (rand() % 100 < 22) sp->fl |= 2;
+		prev = r;
+	}
+	for (int st = 0; st < 16; st++) if ((gSeq[st].fl & 2) && !gSeq[(st + 1) % 16].n) gSeq[st].fl &= ~2;   // no slide into a rest
+	if (!gSeq[0].n) { gSeq[0].n = 1; gSeq[0].note[0] = (u8)gridNote(0); gSeq[0].vel = 190; gSeq[0].fl = 1; }
+	gSeqLen = 16; gSeqBase = gridNote(0); gSeqTr = 0;
+}
+static void gridTouch(int x, int y) {   // on press only
+	if (y < GRID_TOP) {
+		int b = x * GRID_BTNS / 320;
+		if (b == 0) { gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0); if (gSeqMode == 0) seqStop(); }
+		if (b == 1) { seqClear(); gSeqLen = 16; gSeqBase = gridNote(0); }
+		if (b == 2 && gSeqLen > 1) gSeqLen--;
+		if (b == 3 && gSeqLen < NSTEP) gSeqLen++;
+		if (b == 4 && gGridOct > -3) gGridOct--;
+		if (b == 5 && gGridOct < 2) gGridOct++;
+		if (b == 4 || b == 5) { char m[32]; int n0 = gridNote(0); snprintf(m, sizeof(m), "GRID BOTTOM ROW: %s%d", NOTE_NAMES[n0 % 12], n0 / 12 - 1); say(m); }
+		if (b == 6) { if (gGridOct > -1) gGridOct = -1; acidGen(); say("ACID LINE: TAP ACID AGAIN FOR A NEW ONE"); }
+		return;
+	}
+	int st = (int)(x * NSTEP / 320.0f), r = 7 - (y - GRID_TOP) / GRID_ROWH;
+	if (st < 0 || st >= NSTEP || r < 0 || r > 7) return;
+	int nt = gridNote(r); Step* sp = &gSeq[st];
+	for (int k = 0; k < sp->n; k++) if (sp->note[k] == nt) {   // tap a note again: accent, slide, both, then off
+		if (sp->fl < 3) { sp->fl++; return; }
+		for (int j = k; j + 1 < sp->n; j++) sp->note[j] = sp->note[j + 1];
+		sp->n--; sp->fl = 0; return;
+	}
+	if (sp->n >= 4) return;
+	sp->note[sp->n++] = (u8)nt; sp->vel = 190;
+	if (gSeqBase < 0) gSeqBase = gridNote(0);
+	if (st >= gSeqLen) { gSeqLen = (st / 4 + 1) * 4; if (gSeqLen > NSTEP) gSeqLen = NSTEP; }
+	if (!gSeqPlaying) { int n1 = nt; playSet(&n1, 1, 0.8f); gAuditionT = 0.18f; }   // hear it
+}
+
 static void outline(int x, int y, int w, int h, u8 r, u8 g, u8 b) { rect(x, y, w, 1, r, g, b); rect(x, y + h - 1, w, 1, r, g, b); rect(x, y, 1, h, r, g, b); rect(x + w - 1, y, 1, h, r, g, b); }
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
@@ -2670,6 +2769,7 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 			else { rect(x + 2, 1, bw, TAB_H - 2, RGB3(TH->tab)); text(x + 320 / 12 - w / 2, 7, TABS[i], 1, RGB3(TH->tabTxt)); }
 		}
 	}
+	if (gGridOn) drawGrid(); else {
 	// XY pad: dotted EGA grid, crosshair
 	float xv = gXyMode ? gMacro[gXyMode * 2 - 2] : gOsc[0].pos, yv = gXyMode ? gMacro[gXyMode * 2 - 1] : gCutoff;
 	int cx = 4 + (int)(xv * 311), cy = XY_Y + (int)((1 - yv) * (XY_H - 1));
@@ -2687,6 +2787,7 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	}
 	static const char* XL[3] = {"WT POS >", "MACRO 1 >", "MACRO 3 >"}; static const char* YL[3] = {"^ CUTOFF", "^ MACRO 2", "^ MACRO 4"};
 	text(8, XY_Y + 4, XL[gXyMode], 1, DIM); text(312 - (int)strlen(YL[gXyMode]) * 8, XY_Y + XY_H - 12, YL[gXyMode], 1, DIM);
+	}
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
 	float ww = 320.0f / 14;
@@ -4422,6 +4523,8 @@ int main(void) {
 					if (b == 5) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } }
 					topDirty = botDirty = 1;
 				}
+			} else if (t.py < KB_Y && gGridOn) {
+				if (!prevTouch) { gridTouch(t.px, t.py); topDirty = botDirty = 1; }
 			} else if (t.py < XY_Y + XY_H) {
 				float np = (t.px - 4) / 311.0f, nc = 1.0f - (t.py - XY_Y) / (float)(XY_H - 1);
 				if (np < 0) np = 0;
@@ -4447,6 +4550,9 @@ int main(void) {
 			}
 			curKey = key;
 		}
+		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; } }
+		if (gAuditionT > 0 && (gAuditionT -= 1.0f / 60) <= 0 && !gSeqPlaying && curKey < 0) playSet(NULL, 0, 0.8f);
+		{ static int lastPos = -2, lastMode = -1; if (gGridOn && (gSeqPos != lastPos || gSeqMode != lastMode)) { lastPos = gSeqPos; lastMode = gSeqMode; botDirty = 1; } }
 		if (gBeatFlash) { gBeatFlash = 0; gVisBeat = 1; beatLightPulse(); gVisBurst += 8; if (page == 7) topDirty = 1; }
 
 		// rebuild oscillator cycles when WT POS / WARP (incl. modulation) changed
