@@ -72,11 +72,14 @@ static void fft(cpx* a, int n, int inv) {
 	}
 }
 
-static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0;
+static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0, gGpuCopy = 1;
 static int gDrums, gKit, gKickPat, gSnarePat, gHatPat; static float gDrumLevel;
+static float gChipLevel, gCsEcho, gCsEchoFb, gOrbit, gOrbitRate, gGrainSize, gGrainScan, gGrainSpray, gGrainPitch, gGrainLevel; static int gChipDuty, gChipOct, gCsEchoT, gGrains;
+static const char* DUTY_NAMES[8]; static const char* CSECHO_T_NAMES[4];
+static void chipSet(float lv);
 static const char* KIT_NAMES[4]; static const char* KICKP_NAMES[7]; static const char* SNAREP_NAMES[6]; static const char* HATP_NAMES[6];
-#define NVISM 7
-static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM", "VOXELS", "VOXEL TABLE"};
+#define NVISM 11
+static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM", "VOXELS", "VOXEL TABLE", "TUNNEL", "KALEIDO", "SYNTHWAVE", "RIPPLES"};
 static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
 static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
 static float gVisBeat = 0;
@@ -96,9 +99,11 @@ static void crashMark(const char* stage) {
 	if (f) { fputs(stage, f); fclose(f); }
 }
 static void crashCheck(void) {
+	FILE* nc = fopen("sdmc:/3ds/syrup/nogpucopy", "r"); if (nc) { gGpuCopy = 0; fclose(nc); }
 	FILE* f = fopen(CRASH_PATH, "r");
 	if (!f) return;
 	if (!fgets(gCrashStage, sizeof(gCrashStage), f)) snprintf(gCrashStage, sizeof(gCrashStage), "START");
+	if (!strncmp(gCrashStage, "GPU COPY", 8) && strncmp(gCrashStage, "GPU COPY OK", 11)) { FILE* n = fopen("sdmc:/3ds/syrup/nogpucopy", "w"); if (n) fclose(n); }   // hung in the GPU copy: CPU copies from now on
 	fclose(f);
 	gSafeMode = 1;
 }        // set while the audio thread runs the arp/seq clock (it holds gMipsLock)
@@ -512,6 +517,7 @@ typedef struct {
 	int ch[R_COUNT], bk[R_COUNT], role[R_COUNT], lev[R_COUNT];
 	float env, env2, freq, cur, gain, pan, cutMul, startDelay, gate, held, vel, hold1, hold2, relMul, tapDet;
 	unsigned parent, id, age;
+	int chipCh;   // PSG square channel for the CHIP layer, -1 if none
 } SVoice;
 static SVoice gV[NVS];
 static int gDspOwner[NCH], gCsOwner[NCS];
@@ -546,15 +552,19 @@ static void stopCh(int bk, int ch) {
 	else { if (gCsndOK) CSND_SetPlayState(ch, 0); gCsOwner[ch] = -1; }
 }
 
+static void chipStop(SVoice* v);
 static void freeVoice(SVoice* v) {
+	chipStop(v);
 	if (v->started) for (int i = 0; i < v->nch; i++) if (v->ch[i] >= 0) { stopCh(v->bk[i], v->ch[i]); v->ch[i] = -1; }
 	v->active = 0; v->started = 0;
 }
 
-static int dspUsable(int c) { return !(gNoiseOn && c == NOISE_CH); }
+static int dspUsable(int c) { return !(gNoiseOn && c == NOISE_CH) && !(gGrains && (c == 21 || c == 22)); }
 static int loopReserved(int c);
 static int drumReserved(int c);
-static int csUsable(int c) { return gCsndOK && (csndChannels & BIT(c)) && !loopReserved(c) && !drumReserved(c); }
+static int chipReserved(int c);
+static int echoReserved(int c);
+static int csUsable(int c) { return gCsndOK && (csndChannels & BIT(c)) && !loopReserved(c) && !drumReserved(c) && !chipReserved(c) && !echoReserved(c); }
 static int freeCount(int bk) {
 	int n = 0;
 	if (bk == BK_DSP) { for (int c = 0; c < NCH; c++) if (dspUsable(c) && gDspOwner[c] < 0) n++; }
@@ -651,6 +661,7 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 	}
 }
 
+static void chipStart(SVoice* v, int vi);
 static void startVoice(int vi) {
 	SVoice* v = &gV[vi];
 	int roles[R_COUNT], bks[R_COUNT], nr = 0, nd = 0, nc = 0;
@@ -660,10 +671,11 @@ static void startVoice(int vi) {
 		if (gSubLevel > 0.01f) { roles[nr] = R_SUB; bks[nr++] = gCsndOK ? BK_CSND : BK_DSP; }
 	}
 	for (int i = 0; i < nr; i++) { if (bks[i] == BK_DSP) nd++; else nc++; }
-	if (nr == 0 || (nd && !stealFor(BK_DSP, nd, vi)) || (nc && !stealFor(BK_CSND, nc, vi))) { v->active = 0; return; }
+	if ((nr == 0 && (v->isEcho || gChipLevel <= 0.001f)) || (nd && !stealFor(BK_DSP, nd, vi)) || (nc && !stealFor(BK_CSND, nc, vi))) { v->active = 0; return; }
 	v->nch = nr;
 	for (int i = 0; i < nr; i++) startLayer(v, vi, i, roles[i], bks[i]);
 	v->started = 1;
+	chipStart(v, vi);
 }
 
 static SVoice* newVoice(void) {
@@ -677,6 +689,7 @@ static SVoice* newVoice(void) {
 
 static void initVoice(SVoice* v) {
 	memset(v, 0, sizeof(*v));
+	v->chipCh = -1;
 	for (int i = 0; i < R_COUNT; i++) v->ch[i] = -1;
 	v->active = 1; v->stage = 1; v->stage2 = 1; v->age = gAge++; v->id = ++gIdc; v->gate = -1;
 	v->gain = 1; v->cutMul = 1; v->relMul = 1;
@@ -826,6 +839,8 @@ static void noiseChannel(int want) {   // shared noise layer on DSP channel NOIS
 
 static float busSend(int bus);
 static int masterActive(void);
+static int chipRate(float f);
+static u32 csSend(float l, float r);
 static void voicesUpdate(float dt, float bend) {
 	for (int i = 0; i < 2; i++) {
 		LFO* l = &gLfo[i];
@@ -901,6 +916,13 @@ static void voicesUpdate(float dt, float bend) {
 				CSND_SetTimer(ch, timer);
 			}
 		}
+		if (v->chipCh >= 0) {   // CHIP layer: hardware square, pitch and level from the same voice
+			float pan = v->pan + panMod + 0.5f; if (pan < 0) pan = 0; if (pan > 1) pan = 1;
+			float g = vg * gChipLevel * 0.6f;
+			cL[v->chipCh] = g * sqrtf(1 - pan) * 1.41f; cR[v->chipCh] = g * sqrtf(pan) * 1.41f;
+			u32 timer = CSND_TIMER(chipRate(v->cur * pm)); if (timer < 0x42) timer = 0x42; if (timer > 0xFFFF) timer = 0xFFFF;
+			CSND_SetTimer(v->chipCh, timer);
+		}
 	}
 	if (gNoiseOn) {
 		float nc = gFiltType <= 1 ? 1.0f / (1.0f + gRes * 3.5f) : (gFiltType == 2 ? 2.5f : 1.0f);
@@ -933,7 +955,7 @@ static void voicesUpdate(float dt, float bend) {
 		if (l > 1) l = 1;
 		if (r > 1) r = 1;
 		u32 vol = (u32)(l * 0x8000) | ((u32)(r * 0x8000) << 16);
-		CSND_SetVol(c, vol, vol); any = 1;
+		CSND_SetVol(c, vol, csSend(l, r)); any = 1;
 	}
 	if (gCsndOK && any) csndExecCmds(false);
 }
@@ -1031,6 +1053,7 @@ static void auxDelay(void* data, int n, void* samples[4]) {
 	if (seen) gBusSeen = 1;
 }
 static void auxMaster(void* data, int n, void* samples[4]);
+static int gSurActive = 0;
 static int gMasterFX;
 static int masterInit(void);
 static void aux0(void* d, int n, void* s[4]) { if (gMasterFX) auxMaster(d, n, s); else auxReverb(d, n, s); }
@@ -1214,7 +1237,15 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 		L[s] = (s32)(x[0] * lg * 32768.0f); R[s] = (s32)(x[1] * lg * 32768.0f);
 	}
 	gBeatPh += n * beatInc; if (gBeatPh > 4096) gBeatPh -= 4096;
-	memset(samples[2], 0, n * 4); memset(samples[3], 0, n * 4);
+	// 3D ORBIT: in surround the DSP places the rear channels behind you; the sound circles the listener
+	if (gOrbit > 0.001f && gSurActive) {
+		static float oph = 0; oph += n / 32728.0f * gOrbitRate; if (oph >= 1) oph -= 1;
+		float a = oph * TWO_PI, pan = 0.5f + 0.5f * sinf(a), fb = 0.5f + 0.5f * cosf(a), am = gOrbit;
+		float gF = sqrtf(fb), gB = sqrtf(1 - fb), gl = sqrtf(2 * (1 - pan)), gr = sqrtf(2 * pan);
+		float fl = (1 - am) + am * gF * gl, fr = (1 - am) + am * gF * gr, bl = am * gB * gl, br = am * gB * gr;
+		s32* BL = (s32*)samples[2]; s32* BR = (s32*)samples[3];
+		for (int s = 0; s < n; s++) { float l = L[s], r = R[s]; L[s] = (s32)(l * fl); R[s] = (s32)(r * fr); BL[s] = (s32)(l * bl); BR[s] = (s32)(r * br); }
+	} else { memset(samples[2], 0, n * 4); memset(samples[3], 0, n * 4); }
 	if (seen) gBusSeen = 1;
 	gFxTicks = (u32)(svcGetSystemTick() - t0);
 }
@@ -1226,7 +1257,7 @@ static const char* DEPTH_NAMES[4] = {"25%", "50%", "75%", "100%"};
 static void outputApply(void) {
 	if (!gAudioOK) return;
 	int sur = gOutMode == 1 || (gOutMode == 2 && gHeadphones);
-	ndspSetOutputMode(sur ? NDSP_OUTPUT_SURROUND : NDSP_OUTPUT_STEREO);
+	ndspSetOutputMode(sur ? NDSP_OUTPUT_SURROUND : NDSP_OUTPUT_STEREO); gSurActive = sur;
 	ndspSurroundSetDepth((u16)((gSurDepth + 1) * 0x7FFF / 4));
 	ndspSetClippingMode(NDSP_CLIP_SOFT);
 }
@@ -1457,8 +1488,11 @@ typedef struct {
 	ModSlot mod2[4]; int modCurve[8]; float macro[4];   // v4
 	int modFx, dlySync, shimmer, freeze, pumpRate, lofiBits;
 	float modRate, modDepth, modMix, fxColor, eqLow, eqMid, eqHigh, dlyMix, dlyWow, dlySat, revMix, ott, pump, lofiRate;
+	float chipLevel, csEcho, csEchoFb, orbit, orbitRate; int chipDuty, chipOct, csEchoT;   // v5
 } SPatch;
-#define PATCH_MAGIC 0x53595234   // "SYR4"
+#define PATCH_MAGIC 0x53595235   // "SYR5"
+#define PATCH_MAGIC4 0x53595234  // v4 (no chip layer / chip echo / orbit)
+#define PATCH_V4_SIZE offsetof(SPatch, chipLevel)
 #define PATCH_MAGIC3 0x53595233  // v3 (no macros / master FX)
 #define PATCH_V3_SIZE offsetof(SPatch, mod2)
 #define PATCH_MAGIC2 0x53595232  // v2 (no LFO sync / table)
@@ -1493,6 +1527,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->modFx = 0; p->dlySync = 0; p->shimmer = 0; p->freeze = 0; p->pumpRate = 1; p->lofiBits = 0;
 	p->modRate = 0.4f; p->modDepth = 0.5f; p->modMix = 0.5f; p->fxColor = 0.5f; p->eqLow = p->eqMid = p->eqHigh = 0;
 	p->dlyMix = 0; p->dlyWow = 0.25f; p->dlySat = 0.3f; p->revMix = 0; p->ott = 0; p->pump = 0; p->lofiRate = 0;
+	p->chipLevel = 0; p->chipDuty = 3; p->chipOct = 0; p->csEcho = 0; p->csEchoFb = 0.45f; p->csEchoT = 2; p->orbit = 0; p->orbitRate = 0.2f;
 }
 
 #define OA p->osc[0]
@@ -1748,12 +1783,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -1787,6 +1822,7 @@ static void patchCapture(SPatch* p) {
 	p->modFx = gModFx; p->dlySync = gDlySync; p->shimmer = gShimmer; p->freeze = gFreeze; p->pumpRate = gPumpRate; p->lofiBits = gLofiBits;
 	p->modRate = gModRate; p->modDepth = gModDepth; p->modMix = gModMix; p->fxColor = gFxColor; p->eqLow = gEqLow; p->eqMid = gEqMid; p->eqHigh = gEqHigh;
 	p->dlyMix = gDlyMix; p->dlyWow = gDlyWow; p->dlySat = gDlySat; p->revMix = gRevMix; p->ott = gOtt; p->pump = gPump; p->lofiRate = gLofiRate;
+	p->chipLevel = gChipLevel; p->chipDuty = gChipDuty; p->chipOct = gChipOct; p->csEcho = gCsEcho; p->csEchoFb = gCsEchoFb; p->csEchoT = gCsEchoT; p->orbit = gOrbit; p->orbitRate = gOrbitRate;
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
 	p->glide = gGlide; p->chorus = gChorus; p->revSize = gRevSize; p->revDamp = gRevDamp; p->fxMix = gFxMix; p->driveAmt = gDriveAmt; p->master = gMaster;
 	p->arp = gArp; p->arpRate = gArpRate; p->arpOct = gArpOct; p->arpGate = gArpGate; p->bpm = gBPM;
@@ -1813,6 +1849,7 @@ static void patchApply(const SPatch* p) {
 	gModFx = p->modFx % 6; gDlySync = p->dlySync % 7; gShimmer = p->shimmer & 1; gFreeze = p->freeze & 1; gPumpRate = p->pumpRate % 3; gLofiBits = p->lofiBits % 6;
 	gModRate = p->modRate; gModDepth = p->modDepth; gModMix = p->modMix; gFxColor = p->fxColor; gEqLow = p->eqLow; gEqMid = p->eqMid; gEqHigh = p->eqHigh;
 	gDlyMix = p->dlyMix; gDlyWow = p->dlyWow; gDlySat = p->dlySat; gRevMix = p->revMix; gOtt = p->ott; gPump = p->pump; gLofiRate = p->lofiRate;
+	chipSet(p->chipLevel); gChipDuty = p->chipDuty; gChipOct = p->chipOct; gCsEcho = p->csEcho; gCsEchoFb = p->csEchoFb; gCsEchoT = p->csEchoT; gOrbit = p->orbit; gOrbitRate = p->orbitRate;
 	gVoiceMode = p->voiceMode; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
 	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate; if (p->bpm >= 40) gBPM = p->bpm;
@@ -1943,6 +1980,7 @@ static const char* presetName(int style, int idx) { return style == NSTYLES - 1 
 
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
+enum { D_CHIP = 1 << 26, D_GRAIN = 1 << 27 };
 enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536, D_LOOP = 1 << 17, D_LOOPTAB = 1 << 18, D_MICTAB = 1 << 19, D_CAMTAB = 1 << 20, D_CAM = 1 << 21, D_LINK = 1 << 22, D_DLWT = 1 << 23, D_DRUMS = 1 << 24, D_UPDATE = 1 << 25 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
 
@@ -1980,6 +2018,7 @@ static Param P_SUBN[] = {
 	PE("SUB SHAPE", &gSubShape, 4, SUB_SHAPES, D_SUB), PI_("SUB OCTAVE", &gSubOct, -2, 0, 0),
 	PF("SUB LEVEL", &gSubLevel, 0, 1, 0.01f, "%", 0),
 	PE("NOISE TYPE", &gNoiseType, 3, NOISE_TYPES, D_NOISE), PF("NOISE LEVEL", &gNoiseLevel, 0, 1, 0.01f, "%", 0),
+	PF("CHIP SQUARE", &gChipLevel, 0, 1, 0.02f, "%", D_CHIP), PE("CHIP WIDTH", &gChipDuty, 7, DUTY_NAMES, 0), PI_("CHIP OCTAVE", &gChipOct, -2, 2, 0),
 	PEND};
 static Param P_FILT[] = {
 	PE("FILTER", &gFiltType, 5, FILT_TYPES, 0), PF("CUTOFF", &gCutoff, 0, 1, 0.01f, "HZ", 0),
@@ -2043,12 +2082,14 @@ static Param P_VIS[] = {
 	PE("THEME", &gTheme, NTHEMES, THEME_NAMES, D_THEME), PE("SCANLINES", &gScan, 2, ONOFF, D_THEME),
 	PEND};
 static const char* LOOP_NAMES_P[3] = {"OFF", "REC", "PLAY"};
-static const char* BARS_NAMES_P[3] = {"1 BAR", "2 BARS", "4 BARS"};
+static const char* BARS_NAMES_P[5] = {"1 BAR", "2 BARS", "4 BARS", "8 BARS", "16 BARS"};
 static const char* LINK_NAMES_P[5] = {"OFF", "WIFI HOST", "WIFI JOIN", "IR SEND", "IR RECEIVE"};
 static int gLoopMode, gLoopBars, gCamOn, gLink, gBeatLight;
 static float gLoopLevel;
 static Param P_HW[] = {
-	PE("LOOPER", &gLoopMode, 3, LOOP_NAMES_P, D_LOOP), PE("LOOP BARS", &gLoopBars, 3, BARS_NAMES_P, 0), PF("LOOP LEVEL", &gLoopLevel, 0, 1, 0.05f, "%", 0),
+	PE("LOOPER", &gLoopMode, 3, LOOP_NAMES_P, D_LOOP), PE("LOOP BARS", &gLoopBars, 5, BARS_NAMES_P, 0), PF("LOOP LEVEL", &gLoopLevel, 0, 1, 0.05f, "%", 0),
+	PE("GRAINS", &gGrains, 2, ONOFF, D_GRAIN), PF("GRAIN SIZE", &gGrainSize, 0, 1, 0.02f, "%", 0), PF("GRAIN SCAN", &gGrainScan, 0, 1, 0.02f, "%", 0),
+	PF("GRAIN SPRAY", &gGrainSpray, 0, 1, 0.02f, "%", 0), PF("GRAIN PITCH", &gGrainPitch, -24, 24, 1, "ST", 0), PF("GRAIN LEVEL", &gGrainLevel, 0, 1, 0.05f, "%", 0),
 	{"LOOP > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_LOOPTAB},
 	{"MIC > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_MICTAB},
 	PE("CAMERA", &gCamOn, 2, ONOFF, D_CAM),
@@ -2067,11 +2108,13 @@ static Param P_MASTER[] = {
 	PF("REVERB MIX", &gRevMix, 0, 1, 0.02f, "%", 0), PE("SHIMMER", &gShimmer, 2, ONOFF2, 0), PE("FREEZE", &gFreeze, 2, ONOFF2, 0),
 	PF("OTT", &gOtt, 0, 1, 0.02f, "%", 0), PF("PUMP", &gPump, 0, 1, 0.02f, "%", 0), PE("PUMP RATE", &gPumpRate, 3, PUMP_NAMES, 0),
 	PE("LOFI BITS", &gLofiBits, 6, BITS_NAMES, 0), PF("LOFI RATE", &gLofiRate, 0, 1, 0.02f, "%", 0),
+	PF("3D ORBIT", &gOrbit, 0, 1, 0.02f, "%", 0), PF("ORBIT RATE", &gOrbitRate, 0, 2, 0.02f, "HZ", 0),
 	PEND};
 static Param P_DRUMS[] = {
 	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 4, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 7, KICKP_NAMES, 0),
 	PE("SNARE", &gSnarePat, 6, SNAREP_NAMES, 0), PE("HAT", &gHatPat, 6, HATP_NAMES, 0), PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0),
 	PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
+	PF("CHIP ECHO", &gCsEcho, 0, 1, 0.02f, "%", 0), PE("ECHO TIME", &gCsEchoT, 4, CSECHO_T_NAMES, 0), PF("ECHO REPEATS", &gCsEchoFb, 0, 0.85f, 0.03f, "%", 0),
 	PEND};
 #define NPAGES 12
 static Param* PAGES[NPAGES] = {P_PRESET, P_OSCA, P_OSCB, P_SUBN, P_FILT, P_MOD, P_VOICE, P_PLAY, P_VIS, P_HW, P_MASTER, P_DRUMS};
@@ -2824,14 +2867,168 @@ static void micRecTick(float dt) {
 	free(in); free(fr);
 }
 
-// ---- looper: the DSP's own output tap (ndsp capture of the final mix) records N bars, two CSND channels loop it
+// ================================================================ more chip-level sound (no CPU in the audio path)
+
+// ---- CHIP layer: the second sound chip's own square-wave generators (PSG channels 8-13), one per note
+static float gChipLevel = 0, gOrbit = 0, gOrbitRate = 0.2f; static int gChipDuty = 3, gChipOct = 0;
+static const char* DUTY_NAMES[8] = {"12.5%", "25%", "37.5%", "50%", "62.5%", "75%", "87.5%", "SILENT"};
+static int gChipOwner[6] = {-1, -1, -1, -1, -1, -1};
+static int chipReserved(int c) { return gChipLevel > 0.001f && c >= 8 && c <= 13; }
+static int chipRate(float f) {   // a PSG square takes 8 timer ticks per cycle; the timer can't run below ~1 kHz, so fold low notes up
+	float r = f * 8 * powf(2.0f, (float)gChipOct);
+	while (r < 1100 && r > 0) r *= 2;
+	return (int)r;
+}
+static void chipStop(SVoice* v) {
+	if (v->chipCh < 0) return;
+	if (gCsndOK) CSND_SetPlayState(v->chipCh, 0);
+	gChipOwner[v->chipCh - 8] = -1; v->chipCh = -1;
+}
+static void chipStart(SVoice* v, int vi) {
+	if (!gCsndOK || gChipLevel <= 0.001f || v->isEcho) return;
+	int slot = -1; unsigned oldest = 0xFFFFFFFF;
+	for (int i = 0; i < 6; i++) {
+		if (!(csndChannels & BIT(8 + i))) continue;
+		if (gChipOwner[i] < 0) { slot = i; break; }
+		if (gV[gChipOwner[i]].age < oldest) { oldest = gV[gChipOwner[i]].age; slot = i; }
+	}
+	if (slot < 0) return;
+	if (gChipOwner[slot] >= 0) chipStop(&gV[gChipOwner[slot]]);
+	int c = 8 + slot; u32 timer = CSND_TIMER(chipRate(v->cur)); if (timer < 0x42) timer = 0x42; if (timer > 0xFFFF) timer = 0xFFFF;
+	CSND_SetChnRegsPSG(SOUND_FORMAT_PSG | SOUND_ENABLE | SOUND_CHANNEL(c) | (timer << 16), 0, 0, (CSND_DutyCycle)gChipDuty);
+	gChipOwner[slot] = vi; v->chipCh = c;
+}
+
+static void chipSet(float lv) {   // main thread: turning the layer off frees channels 8-13 for everything else
+	if (lv <= 0.001f && gChipLevel > 0.001f) { for (int i = 0; i < NVS; i++) chipStop(&gV[i]); if (gCsndOK) csndExecCmds(false); }   // (main loop holds the voice lock)
+	gChipLevel = lv;
+}
+
+// ---- echo for the second sound chip: its two capture units record its own mix into a ring as long as the
+// delay, two channels replay those rings (crossed over for ping-pong), and their capture send is the feedback
+static float gCsEcho = 0, gCsEchoFb = 0.45f; static int gCsEchoT = 2;
+static const char* CSECHO_T_NAMES[4] = {"1/8", "3/16", "1/4", "3/8"};
+static const float CSECHO_BEATS[4] = {0.5f, 0.75f, 1.0f, 1.5f};
+static int gEchoUnits[2] = {-1, -1}, gEchoCh[2] = {-1, -1}, gEchoOn = 0, gEchoLen = 0, gEchoBpm = 0;
+static s16* gEchoBuf[2];
+static int echoReserved(int c) { return gEchoOn && (c == gEchoCh[0] || c == gEchoCh[1]); }
+static u32 csSend(float l, float r) {   // capture volumes for sounds that feed the chip echo
+	if (!gEchoOn) return 0;
+	return (u32)(l * gCsEcho * 0x7FFF) | ((u32)(r * gCsEcho * 0x7FFF) << 16);
+}
+static void echoStop(void) {
+	if (!gEchoOn || !gCsndOK) { gEchoOn = 0; return; }
+	for (int k = 0; k < 2; k++) { CSND_CapEnable(gEchoUnits[k], false); CSND_SetPlayState(gEchoCh[k], 0); }
+	csndExecCmds(true);
+	for (int k = 0; k < 2; k++) { CSND_ReleaseCapUnit(gEchoUnits[k]); gEchoUnits[k] = -1; }
+	gEchoOn = 0;
+}
+static void echoStart(void) {
+	if (!gCsndOK) return;
+	echoStop();
+	int len = (int)(CSECHO_BEATS[gCsEchoT] * 60.0f / gBPM * 32728); if (len > 32728) len = 32728;
+	len &= ~31;
+	for (int k = 0; k < 2; k++) {
+		if (!gEchoBuf[k]) gEchoBuf[k] = (s16*)linearAlloc(32728 * 2);
+		if (!gEchoBuf[k]) return;
+		memset(gEchoBuf[k], 0, len * 2); CSND_FlushDataCache(gEchoBuf[k], len * 2);
+		u32 u; if (R_FAILED(CSND_AcquireCapUnit(&u))) { if (k) CSND_ReleaseCapUnit(gEchoUnits[0]); say("NO CAPTURE UNIT FREE"); return; }
+		gEchoUnits[k] = u;
+	}
+	int n = 0;   // two channels nobody else uses
+	for (int c = NCS - 3; c > 18 && n < 2; c--) if (csndChannels & BIT(c)) { if (gCsOwner[c] >= 0) stopCh(BK_CSND, c); gEchoCh[n++] = c; }   // below the looper's two, above the drums
+	if (n < 2) { for (int k = 0; k < 2; k++) CSND_ReleaseCapUnit(gEchoUnits[k]); return; }
+	u32 timer = CSND_TIMER(32728);
+	for (int k = 0; k < 2; k++) {
+		CSND_SetCapRegs(gEchoUnits[k], CAPTURE_REPEAT | CAPTURE_FORMAT_16BIT | CAPTURE_ENABLE, osConvertVirtToPhys(gEchoBuf[k]), len * 2);
+		CSND_CapSetTimer(gEchoUnits[k], timer);
+	}
+	gEchoLen = len; gEchoOn = 1; gEchoBpm = gBPM;
+	for (int k = 0; k < 2; k++) {   // replay: left ring -> left out and feeds the right capture (ping-pong)
+		int c = gEchoCh[k]; u32 out = k ? ((u32)(0x5000) << 16) : 0x5000, fb = (u32)(gCsEchoFb * 0x7FFF);
+		u32 cap = k ? fb : (fb << 16);
+		CSND_SetChnRegs(SOUND_FORMAT_16BIT | SOUND_REPEAT | SOUND_ENABLE | SOUND_CHANNEL(c) | (timer << 16), osConvertVirtToPhys(gEchoBuf[k]), osConvertVirtToPhys(gEchoBuf[k]), len * 2, out, cap);
+	}
+	for (int k = 0; k < 2; k++) CSND_CapEnable(gEchoUnits[k], true);
+	csndExecCmds(true);
+}
+static void echoTickL(void) {
+	int want = gCsEcho > 0.001f && gCsndOK;
+	if (want && (!gEchoOn || gEchoBpm != gBPM)) echoStart();
+	else if (!want && gEchoOn) echoStop();
+	static float lastFb = -1;
+	if (gEchoOn && lastFb != gCsEchoFb) {
+		lastFb = gCsEchoFb; u32 fb = (u32)(gCsEchoFb * 0x7FFF);
+		CSND_SetVol(gEchoCh[0], 0x5000, fb << 16); CSND_SetVol(gEchoCh[1], 0x5000u << 16, fb); csndExecCmds(false);
+	}
+}
+
+// ---- IMA-ADPCM for the looper: the second sound chip decodes 4-bit IMA-ADPCM itself, so loops take a
+// quarter of the memory (48 s instead of 12). Encoding happens as the capture comes in.
+static const int IMA_STEP[89] = {7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130,
+	143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878,
+	2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818,
+	18500, 20350, 22385, 24623, 27086, 29794, 32767};
+static const int IMA_IDX[16] = {-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8};
+typedef struct { int pred, idx; } Ima;
+static inline int imaEnc(Ima* s, int x) {
+	int step = IMA_STEP[s->idx], d = x - s->pred, code = 0;
+	if (d < 0) { code = 8; d = -d; }
+	int dq = step >> 3;
+	if (d >= step) { code |= 4; d -= step; dq += step; }
+	if (d >= step >> 1) { code |= 2; d -= step >> 1; dq += step >> 1; }
+	if (d >= step >> 2) { code |= 1; dq += step >> 2; }
+	s->pred += (code & 8) ? -dq : dq;
+	if (s->pred > 32767) s->pred = 32767;
+	if (s->pred < -32768) s->pred = -32768;
+	s->idx += IMA_IDX[code]; if (s->idx < 0) s->idx = 0; if (s->idx > 88) s->idx = 88;
+	return code;
+}
+static inline int imaDec(Ima* s, int code) {
+	int step = IMA_STEP[s->idx], dq = step >> 3;
+	if (code & 4) dq += step;
+	if (code & 2) dq += step >> 1;
+	if (code & 1) dq += step >> 2;
+	s->pred += (code & 8) ? -dq : dq;
+	if (s->pred > 32767) s->pred = 32767;
+	if (s->pred < -32768) s->pred = -32768;
+	s->idx += IMA_IDX[code]; if (s->idx < 0) s->idx = 0; if (s->idx > 88) s->idx = 88;
+	return s->pred;
+}
+#define AD_MAX (32728 * 48)
+#define AD_BLK 1024
+static u8* gAd[2]; static Ima gAdBlk[2][AD_MAX / AD_BLK + 1];   // state at each 1024-sample block (random access for grains)
+static Ima gAdEnc[2]; static int gAdPos = 0;
+static int adpcmReady(void) {
+	for (int k = 0; k < 2; k++) if (!gAd[k] && !(gAd[k] = (u8*)linearAlloc(AD_MAX / 2 + 16))) return 0;
+	return 1;
+}
+static void adPush(int k, const s16* in, int stride, int n) {   // encode n samples onto loop channel k
+	for (int i = 0; i < n; i++) {
+		int p = gAdPos + i; if (p >= AD_MAX) return;
+		if (p % AD_BLK == 0) gAdBlk[k][p / AD_BLK] = gAdEnc[k];
+		int c = imaEnc(&gAdEnc[k], in[i * stride]);
+		if (p & 1) gAd[k][p >> 1] |= c << 4; else gAd[k][p >> 1] = c;
+	}
+}
+static float adSample(int k, int pos) {   // random access (grains): decode from the nearest block start
+	static int cacheP[2] = {-1, -1}; static Ima cs[2];   // sequential reads decode one nibble each
+	if (pos < cacheP[k] || cacheP[k] < 0 || pos - cacheP[k] > AD_BLK) { cs[k] = gAdBlk[k][pos / AD_BLK]; cacheP[k] = pos - pos % AD_BLK; }
+	while (cacheP[k] < pos) { int b = gAd[k][cacheP[k] >> 1]; imaDec(&cs[k], (cacheP[k] & 1) ? b >> 4 : b & 15); cacheP[k]++; }
+	int b = gAd[k][pos >> 1]; Ima t = cs[k]; return imaDec(&t, (pos & 1) ? b >> 4 : b & 15) / 32768.0f;
+}
+
+static void echoTick(void) { echoTickL(); }   // called inside the main loop's voice lock, so CSND commands never overlap the audio thread
+
+// ---- looper: the DSP's own output tap (ndsp capture of the final mix) streams into a small ring; the main
+// thread packs it to IMA-ADPCM as it arrives, and two second-chip channels play the ADPCM back (decoded in hardware)
 static const char* LOOP_NAMES[3] = {"OFF", "REC", "PLAY"};
-static const char* BARS_NAMES[3] = {"1 BAR", "2 BARS", "4 BARS"};
+static const char* BARS_NAMES[5] = {"1 BAR", "2 BARS", "4 BARS", "8 BARS", "16 BARS"};
 static int gLoopMode = 0, gLoopBars = 0, gLoopLen = 0, gLoopHave = 0, gLoopCh[2] = {-1, -1};
 static float gLoopLevel = 0.8f;
-#define LOOPMAX (32728 * 12)
+#define CAPRING (32728 * 2 - (32728 * 2) % 160)
 static ndspWaveBuf gCapWB;
-static s16* gCapBuf = NULL; static s16* gLoopL = NULL; static s16* gLoopR = NULL;
+static s16* gCapBuf = NULL;
 static u32 gCapLast = 0;
 static int loopReserved(int c) { return gLoopHave && gLoopMode == 2 && (c == gLoopCh[0] || c == gLoopCh[1]); }
 static void loopStopPlay(void) {
@@ -2845,45 +3042,53 @@ static void loopStartPlay(void) {
 	if (gLoopCh[1] < 0) return;
 	for (int k = 0; k < 2; k++) {
 		int c = gLoopCh[k]; stopCh(BK_CSND, c);
-		u32 flags = SOUND_FORMAT_16BIT | SOUND_REPEAT | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(c) | (CSND_TIMER(32728) << 16);
+		u32 flags = SOUND_FORMAT_ADPCM | SOUND_REPEAT | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(c) | (CSND_TIMER(32728) << 16);
 		u32 l = (u32)(gLoopLevel * 0x8000), vol = k ? (l << 16) : l;   // L buffer hard left, R buffer hard right
-		const s16* b = k ? gLoopR : gLoopL;
-		CSND_SetChnRegs(flags, osConvertVirtToPhys(b), osConvertVirtToPhys(b), gLoopLen * 2, vol, vol);
+		CSND_SetAdpcmState(c, 0, gAdBlk[k][0].pred, gAdBlk[k][0].idx);
+		CSND_SetAdpcmState(c, 1, gAdBlk[k][0].pred, gAdBlk[k][0].idx);
+		CSND_SetAdpcmReload(c, true);
+		CSND_SetChnRegs(flags, osConvertVirtToPhys(gAd[k]), osConvertVirtToPhys(gAd[k]), gLoopLen / 2, vol, 0);
 	}
 	csndExecCmds(false);
 }
 static void loopRecStart(void) {
-	if (!gCapBuf) {
-		gCapBuf = (s16*)linearAlloc(LOOPMAX * 4); gLoopL = (s16*)linearAlloc(LOOPMAX * 2); gLoopR = (s16*)linearAlloc(LOOPMAX * 2);
-		if (!gCapBuf || !gLoopL || !gLoopR) { say("NOT ENOUGH MEMORY FOR THE LOOPER"); gLoopMode = 0; return; }
-	}
+	if (!gCapBuf) gCapBuf = (s16*)linearAlloc(CAPRING * 4);
+	if (!gCapBuf || !adpcmReady()) { say("NOT ENOUGH MEMORY FOR THE LOOPER"); gLoopMode = 0; return; }
 	loopStopPlay();
 	int bars = 1 << gLoopBars;
-	int len = (int)(bars * 4 * 60.0f / gBPM * 32728.0f); if (len > LOOPMAX) len = LOOPMAX;
+	int len = (int)(bars * 4 * 60.0f / gBPM * 32728.0f); if (len > AD_MAX) len = AD_MAX;
 	len -= len % 160; if (len < 160 * 8) len = 160 * 8;
 	memset(&gCapWB, 0, sizeof(gCapWB));
-	gCapWB.data_pcm16 = gCapBuf; gCapWB.nsamples = len; gCapWB.offset = 0;
-	gLoopLen = len; gCapLast = 0;
+	gCapWB.data_pcm16 = gCapBuf; gCapWB.nsamples = CAPRING; gCapWB.offset = 0;
+	gLoopLen = len; gCapLast = 0; gAdPos = 0; gLoopHave = 0;
+	for (int k = 0; k < 2; k++) { gAdEnc[k].pred = 0; gAdEnc[k].idx = 0; }
 	ndspSetCapture(&gCapWB);
-	say("LOOPER RECORDING");
+	char m[40]; snprintf(m, sizeof(m), "LOOPER RECORDING %d S", len / 32728); say(m);
 }
-static void loopTick(void) {
+static void loopTick(void) {   // main thread: pack whatever the capture wrote since last frame
 	if (gLoopMode != 1) return;
 	u32 off = gCapWB.offset;
-	if (off < gCapLast) {   // wrapped: one full pass recorded
-		ndspSetCapture(NULL);
-		DSP_InvalidateDataCache(gCapBuf, gLoopLen * 4);
-		for (int i = 0; i < gLoopLen; i++) { gLoopL[i] = gCapBuf[i * 2]; gLoopR[i] = gCapBuf[i * 2 + 1]; }
-		if (gCsndOK) { CSND_FlushDataCache(gLoopL, gLoopLen * 2); CSND_FlushDataCache(gLoopR, gLoopLen * 2); }
-		gLoopHave = 1; gLoopMode = 2; loopStartPlay(); say("LOOP PLAYING");
+	int n = (int)off - (int)gCapLast; if (n < 0) n += CAPRING;
+	if (n <= 0) return;
+	DSP_InvalidateDataCache(gCapBuf, CAPRING * 4);
+	while (n > 0 && gAdPos < gLoopLen) {
+		int run = CAPRING - gCapLast; if (run > n) run = n;
+		if (run > gLoopLen - gAdPos) run = gLoopLen - gAdPos;
+		for (int k = 0; k < 2; k++) adPush(k, gCapBuf + gCapLast * 2 + k, 2, run);
+		gAdPos += run; gCapLast = (gCapLast + run) % CAPRING; n -= run;
 	}
 	gCapLast = off;
+	if (gAdPos >= gLoopLen) {
+		ndspSetCapture(NULL);
+		if (gCsndOK) for (int k = 0; k < 2; k++) CSND_FlushDataCache(gAd[k], gLoopLen / 2);
+		gLoopHave = 1; gLoopMode = 2; loopStartPlay(); say("LOOP PLAYING");
+	}
 }
 static void loopLevelTick(void) {   // keep the loop volume in step with LOOP LEVEL
 	static float last = -1;
 	if (!gCsndOK || gLoopMode != 2 || !gLoopHave || gLoopCh[1] < 0 || last == gLoopLevel) return;
 	last = gLoopLevel; u32 l = (u32)(gLoopLevel * 0x8000);
-	CSND_SetVol(gLoopCh[0], l, l); CSND_SetVol(gLoopCh[1], l << 16, l << 16); csndExecCmds(false);
+	CSND_SetVol(gLoopCh[0], l, 0); CSND_SetVol(gLoopCh[1], l << 16, 0); csndExecCmds(false);
 }
 static void loopModeChanged(void) {
 	if (gLoopMode == 1) loopRecStart();
@@ -2892,9 +3097,59 @@ static void loopModeChanged(void) {
 }
 static void loopToTable(void) {
 	if (!gLoopHave) { say("RECORD A LOOP FIRST"); return; }
-	float* in = (float*)malloc(sizeof(float) * gLoopLen); float* fr = (float*)malloc(sizeof(float) * CYC * WT_FR);
-	if (in && fr) { for (int i = 0; i < gLoopLen; i++) in[i] = (gLoopL[i] + gLoopR[i]) / 65536.0f; audioToFrames(in, gLoopLen, 32728, fr); wtInstall("LOOP", fr); }
+	int n = gLoopLen > 32728 * 12 ? 32728 * 12 : gLoopLen;
+	float* in = (float*)malloc(sizeof(float) * n); float* fr = (float*)malloc(sizeof(float) * CYC * WT_FR);
+	if (in && fr) { for (int i = 0; i < n; i++) in[i] = adSample(0, i) * 0.5f; for (int i = 0; i < n; i++) in[i] += adSample(1, i) * 0.5f; audioToFrames(in, n, 32728, fr); wtInstall("LOOP", fr); }
 	free(in); free(fr);
+}
+
+// ---- grains: the DSP plays short windowed slices of the loop, two channels overlapping by half; the CPU only
+// refills a slice once the DSP has finished with it (so the DSP sets the pace)
+static int gGrains = 0; static float gGrainSize = 0.35f, gGrainScan = 0.75f, gGrainSpray = 0.2f, gGrainPitch = 0, gGrainLevel = 0.8f;
+#define GR_CH0 21
+#define GR_N 4
+#define GR_MAX 8192
+static s16* gGrBuf[GR_N]; static ndspWaveBuf gGrWB[GR_N];
+static float gGrPos = 0;
+static int grainReserved(int c) { return gGrains && (c == GR_CH0 || c == GR_CH0 + 1); }
+static void grainsTick(void) {   // main thread
+	if (!gGrains || !gLoopHave || !gAudioOK) return;
+	int len = (int)(512 + gGrainSize * 7000); if (len > GR_MAX) len = GR_MAX;
+	float rate = 32728.0f * powf(2.0f, gGrainPitch / 12.0f);
+	for (int b = 0; b < GR_N; b++) {
+		if (gGrWB[b].status == NDSP_WBUF_QUEUED || gGrWB[b].status == NDSP_WBUF_PLAYING) continue;
+		if (!gGrBuf[b] && !(gGrBuf[b] = (s16*)linearAlloc(GR_MAX * 2))) return;
+		gGrPos += len * 0.5f * (gGrainScan * 2 - 1);   // SCAN: 50% = frozen, above = forwards, below = backwards
+		while (gGrPos < 0) gGrPos += gLoopLen;
+		while (gGrPos >= gLoopLen) gGrPos -= gLoopLen;
+		int st = (int)gGrPos + (int)((rand() % 1000 / 1000.0f - 0.5f) * gGrainSpray * 32728);
+		st %= gLoopLen; if (st < 0) st += gLoopLen;
+		for (int i = 0; i < len; i++) gGrBuf[b][i] = 0;
+		for (int k = 0; k < 2; k++) for (int i = 0; i < len; i++) {   // Hann window, channels decoded one after the other
+			float w = 0.5f - 0.5f * cosf(TWO_PI * i / len);
+			int q = gGrBuf[b][i] + (int)(adSample(k, (st + i) % gLoopLen) * w * gGrainLevel * 16000);
+			gGrBuf[b][i] = (s16)(q > 32767 ? 32767 : q < -32768 ? -32768 : q);
+		}
+		DSP_FlushDataCache(gGrBuf[b], len * 2);
+		int ch = GR_CH0 + (b & 1);
+		memset(&gGrWB[b], 0, sizeof(ndspWaveBuf)); gGrWB[b].data_vaddr = gGrBuf[b]; gGrWB[b].nsamples = len;
+		ndspChnSetRate(ch, rate);
+		float mix[12] = {0}; float pan = (b & 1) ? 0.65f : 0.35f;
+		if (masterActive()) { mix[4] = sqrtf(1 - pan); mix[5] = sqrtf(pan); } else { mix[0] = sqrtf(1 - pan); mix[1] = sqrtf(pan); }
+		ndspChnSetMix(ch, mix);
+		ndspChnWaveBufAdd(ch, &gGrWB[b]);
+	}
+}
+static void grainsChanged(void) {
+	if (!gAudioOK) return;
+	for (int c = GR_CH0; c <= GR_CH0 + 1; c++) {
+		if (gDspOwner[c] >= 0) stopCh(BK_DSP, c);
+		ndspChnWaveBufClear(c);
+		if (gGrains) { ndspChnReset(c); ndspChnSetInterp(c, NDSP_INTERP_LINEAR); ndspChnSetFormat(c, NDSP_FORMAT_MONO_PCM16); }
+	}
+	for (int b = 0; b < GR_N; b++) gGrWB[b].status = NDSP_WBUF_DONE;
+	gGrPos = 0;
+	if (gGrains && !gLoopHave) say("RECORD A LOOP FIRST, THEN GRAINS PLAY IT");
 }
 
 // ---- camera: brightness / colour mod sources, and photo -> wavetable (each image row is a frame)
@@ -3256,7 +3511,9 @@ static const u16 KICKP[7] = {0, 0x8888, 0x8224, 0x8022, 0x8020, 0x8000, 0x8124};
 static const u16 SNAREP[6] = {0, 0x0808, 0x0849, 0x0080, 0x0808, 0x0808};
 static const u16 HATP[6] = {0, 0xAAAA, 0xFFFF, 0x2222, 0xFDEF, 0x9249};
 static const u8 HATVEL[16] = {255, 120, 200, 110, 255, 120, 200, 140, 255, 120, 200, 110, 255, 130, 220, 160};
-static int drumReserved(int c) { return gDrums && (c == gDrumCh[0] || c == gDrumCh[1] || c == gDrumCh[2]); }
+static int gNzCh[2] = {-1, -1}; static float gNzVol[2];
+static int drumReserved(int c) { return gDrums && (c == gDrumCh[0] || c == gDrumCh[1] || c == gDrumCh[2] || (gKit == 3 && (c == 14 || c == 15))); }
+static u32 csSend(float l, float r);
 
 static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear memory for CSND
 	const float sr = 32728;
@@ -3297,8 +3554,9 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 	gDrumBuilt = kit;
 }
 static void drumPickChannels(void) {
+	gNzCh[0] = (csndChannels & BIT(14)) ? 14 : -1; gNzCh[1] = (csndChannels & BIT(15)) ? 15 : -1;
 	int n = 0;
-	for (int c = 0; c < NCS && n < 3; c++) if (gCsndOK && (csndChannels & BIT(c)) && c != gLoopCh[0] && c != gLoopCh[1]) gDrumCh[n++] = c;
+	for (int c = 16; c < NCS && n < 3; c++) if (gCsndOK && (csndChannels & BIT(c)) && c != gLoopCh[0] && c != gLoopCh[1]) gDrumCh[n++] = c;
 }
 static void drumHit(int d, float vel) {   // from the audio thread (voice lock held)
 	int c = gDrumCh[d]; if (c < 0 || !gDrumSmp[d]) return;
@@ -3306,10 +3564,26 @@ static void drumHit(int d, float vel) {   // from the audio thread (voice lock h
 	float g = gDrumLevel * vel * (d == 2 ? 0.3f : 0.5f), pan = d == 2 ? 0.62f : 0.5f;
 	u32 l = (u32)(g * sqrtf(1 - pan) * 1.41f * 0x7FFF), r = (u32)(g * sqrtf(pan) * 1.41f * 0x7FFF), vol = l | (r << 16);
 	CSND_SetPlayState(c, 0);
-	CSND_SetChnRegs(flags, osConvertVirtToPhys(gDrumSmp[d]), osConvertVirtToPhys(gDrumSmp[d]), gDrumLen[d] * 2, vol, vol);
+	if (gKit == 3 && d >= 1 && gNzCh[d - 1] >= 0) {   // CHIP kit: snare and hat straight from the hardware noise generators
+		int nc = gNzCh[d - 1]; gNzVol[d - 1] = g; CSND_SetPlayState(nc, 0);
+		u32 t = CSND_TIMER(d == 2 ? 30000 : 9000); if (t < 0x42) t = 0x42;
+		CSND_SetChnRegsNoise(SOUND_FORMAT_PSG | SOUND_ENABLE | SOUND_CHANNEL(nc) | (t << 16), vol, csSend(l / 32768.0f, r / 32768.0f));
+		return;
+	}
+	CSND_SetChnRegs(flags, osConvertVirtToPhys(gDrumSmp[d]), osConvertVirtToPhys(gDrumSmp[d]), gDrumLen[d] * 2, vol, csSend(l / 32768.0f, r / 32768.0f));
 }
 static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the sequencer when it plays
 	if (!gDrums || !gCsndOK || gDrumBuilt < 0) { gDrumStep = -1; return; }
+	if (gKit == 3) {   // noise drums have no envelope of their own: decay them from here every 5 ms
+		int any = 0;
+		for (int k = 0; k < 2; k++) if (gNzCh[k] >= 0 && gNzVol[k] > 0.001f) {
+			gNzVol[k] *= k ? 0.62f : 0.80f;
+			u32 v = (u32)(gNzVol[k] * 0x5A00); v |= v << 16;
+			if (gNzVol[k] <= 0.001f) CSND_SetPlayState(gNzCh[k], 0); else CSND_SetVol(gNzCh[k], v, csSend(gNzVol[k], gNzVol[k]));
+			any = 1;
+		}
+		if (any) csndExecCmds(false);
+	}
 	int step = -1;
 	if (gSeqPlaying) { static int lastSeq = -1; if (gSeqPos != lastSeq) { step = gSeqPos & 15; lastSeq = gSeqPos; } }
 	else {
@@ -3332,7 +3606,7 @@ static void drumsChanged(void) {   // main thread
 		if (!gCsndOK) { say("DRUMS NEED THE SECOND SOUND CHIP"); gDrums = 0; return; }
 		if (gDrumBuilt != gKit) drumBuild(gKit);
 		drumPickChannels(); gDrumStep = -1;
-	} else if (gCsndOK) { for (int d = 0; d < 3; d++) if (gDrumCh[d] >= 0) CSND_SetPlayState(gDrumCh[d], 0); csndExecCmds(false); }
+	} else if (gCsndOK) { for (int d = 0; d < 3; d++) if (gDrumCh[d] >= 0) CSND_SetPlayState(gDrumCh[d], 0); for (int k = 0; k < 2; k++) if (gNzCh[k] >= 0) CSND_SetPlayState(gNzCh[k], 0); csndExecCmds(false); }
 }
 static void drawMasterPanel(void) {
 	frame(4, 30, 196, 194);
@@ -3674,15 +3948,140 @@ static void visVoxTable(int o) {
 			voxColumn(cx, cy, cw, chh, hu, i, j, h, r * k, g * k, b * k, isCur);
 		}
 }
+// ---- more full-screen modes: all geometry on the GPU, the CPU only works out a few hundred points
+// TUNNEL: the waveform wrapped into rings that fly toward you; the tunnel bends with the LFO / wavetable position
+static void visTunnel(void) {
+	float s[TPTS]; sampleCycle(gOsc[gVisOsc].cyc, s, NULL);
+	float spd = 0.35f + gVisEnv * 1.2f; static float z0 = 0; z0 += spd / 60.0f; if (z0 > 1) z0 -= 1;
+	enum { NR = 14, NP = 48 };
+	blendAdd(1);
+	for (int k = NR - 1; k >= 0; k--) {
+		float z = (k + 1 - z0) / NR;   // 1 far .. 0 near
+		float rad = 18 + 260 * (1 - z) * (1 - z), a = 1 - z;
+		float bx = 200 + sinf(gVisT * 0.7f + z * 3) * 40 * z + (gPosEff[gVisOsc] - 0.5f) * 80 * z, by = 120 + cosf(gVisT * 0.5f + z * 2.5f) * 26 * z;
+		float r, g, b; hue(fmodf(z + gCutoff * 0.5f + gVisT * 0.05f, 1.0f), &r, &g, &b);
+		u32 c = rgba(r, g, b, (0.15f + 0.6f * a) * (0.6f + 0.4f * gVisEnv));
+		float rot = gVisT * 0.3f + z * 1.5f, px = 0, py = 0;
+		for (int i = 0; i <= NP; i++) {
+			float t = (i % NP) / (float)NP, ang = t * TWO_PI + rot, v = s[(int)(t * (TPTS - 1))];
+			float rr = rad * (1 + v * 0.18f);
+			float x = bx + cosf(ang) * rr, y = by + sinf(ang) * rr * 0.8f;
+			if (i) vLine(px, py, x, y, c, 0.6f + 2.2f * a);
+			px = x; py = y;
+		}
+	}
+	blendAdd(0);
+}
+// KALEIDO: the live waveform (and OSC B against it) mirrored into 8 rotating wedges
+static void visKaleido(void) {
+	float a[TPTS], b[TPTS]; sampleCycle(gOsc[0].cyc, a, NULL);
+	if (gOsc[1].on) sampleCycle(gOsc[1].cyc, b, NULL); else for (int i = 0; i < TPTS; i++) b[i] = a[(i + TPTS / 3) % TPTS];
+	float R = 110 * (0.8f + 0.3f * gVisEnv), rot = gVisT * 0.25f;
+	enum { NW = 8, NP = 40 };
+	float xs[NP], ys[NP];
+	for (int i = 0; i < NP; i++) {   // one wedge's curve in polar form: radius from A, angle wobble from B
+		int j = i * (TPTS - 1) / (NP - 1); float t = i / (float)(NP - 1);
+		float rr = R * (0.15f + 0.85f * t) * (1 + a[j] * 0.25f), an = (b[j] * 0.35f) * (TWO_PI / NW) * 0.5f;
+		xs[i] = rr; ys[i] = an;
+	}
+	blendAdd(1);
+	for (int w = 0; w < NW * 2; w++) {
+		float base = rot + (w >> 1) * TWO_PI / NW, sg = (w & 1) ? -1 : 1;
+		float r, g, bb; hue(fmodf(w / (float)(NW * 2) * 0.5f + gCutoff * 0.6f + gVisEnv * 0.2f, 1.0f), &r, &g, &bb);
+		u32 c = rgba(r, g, bb, 0.55f + 0.35f * gVisEnv), cg = rgba(r, g, bb, 0.12f);
+		float px = 0, py = 0;
+		for (int i = 0; i < NP; i++) {
+			float an = base + sg * (ys[i] + TWO_PI / NW * 0.25f);
+			float x = 200 + cosf(an) * xs[i], y = 120 + sinf(an) * xs[i] * 0.9f;
+			if (i) { vLine(px, py, x, y, cg, 5.0f); vLine(px, py, x, y, c, 1.3f); }
+			px = x; py = y;
+		}
+	}
+	blendAdd(0);
+	float r, g, bb; hue(gVisEnv, &r, &g, &bb);
+	blendAdd(1); vRect(196, 116, 8, 8, rgba(r, g, bb, 0.5f + gVisEnv * 0.5f)); blendAdd(0);
+}
+// SYNTHWAVE: striped sun, wavetable mountains, and a floor grid that scrolls in time with the BPM
+static void visSynthwave(void) {
+	float hz = 138;
+	for (int i = 0; i < 12; i++) { float r, g, b; hue(0.55f + i * 0.04f, &r, &g, &b); vRect(0, i * hz / 12, 400, hz / 12 + 1, rgba(r * 0.18f, g * 0.1f, b * 0.3f, 1)); }
+	float sr, sg, sb; hue(0.15f + gVisEnv * 0.1f, &sr, &sg, &sb);   // sun: horizontal bands cut out toward the bottom
+	float R = 62 + gVisBeat * 6;
+	for (int y = -62; y < 0; y += 2) {
+		float yy = y / 62.0f; int cut = y > -30 && ((y / 2) & 3) == 0; if (cut) continue;
+		float w = sqrtf(1 - yy * yy) * R;
+		vRect(200 - w, hz + y * (R / 62), w * 2, 2.2f, rgba(sr, sg * (0.5f - yy * 0.6f), sb, 1));
+	}
+	float s[TPTS]; sampleCycle(gOsc[gVisOsc].cyc, s, NULL);   // mountains: the current waveform, mirrored
+	for (int i = 0; i + 1 < TPTS; i += 2) {
+		float x0 = i * 400.0f / (TPTS - 1), x1 = (i + 2 > TPTS - 1 ? TPTS - 1 : i + 2) * 400.0f / (TPTS - 1);
+		float h0 = 18 + fabsf(s[i]) * 34 * (0.7f + 0.3f * gVisEnv), h1 = 18 + fabsf(s[i + 2 < TPTS ? i + 2 : TPTS - 1]) * 34 * (0.7f + 0.3f * gVisEnv);
+		u32 m = rgba(0.06f, 0.02f, 0.14f, 1);
+		vTri(x0, hz, x1, hz, x0, hz - h0, m); vTri(x1, hz, x1, hz - h1, x0, hz - h0, m);
+		float r, g, b; hue(0.6f, &r, &g, &b); vLine(x0, hz - h0, x1, hz - h1, rgba(r, g, b, 0.9f), 1.2f);
+	}
+	vRect(0, hz, 400, 240 - hz, rgba(0.03f, 0.0f, 0.07f, 1));
+	float gr, gg, gb; hue(0.55f + gVisEnv * 0.3f, &gr, &gg, &gb);
+	u32 gc = rgba(gr, gg, gb, 0.8f);
+	blendAdd(1);
+	float scroll = fmodf(gVisT * gBPM / 60.0f, 1.0f);   // one grid row per beat
+	for (int k = 0; k < 12; k++) {
+		float z = (k + 1 - scroll) / 12.0f, y = hz + (240 - hz) * (1 - z) * (1 - z) * (1 - z) + 1;
+		vLine(0, y, 400, y, rgba(gr, gg, gb, 0.25f + 0.6f * (1 - z)), 0.6f + 1.4f * (1 - z));
+	}
+	for (int k = -10; k <= 10; k++) vLine(200 + k * 8, hz, 200 + k * 70, 240, gc, 0.9f);
+	vRect(0, hz - 1, 400, 2, rgba(gr, gg, gb, 0.7f + gVisBeat * 0.3f));
+	blendAdd(0);
+}
+// RIPPLES: every note drops a ring shaped by the waveform, coloured by its pitch, spreading and fading
+#define NRIP 24
+typedef struct { float x, y, r, life, hue; } Rip;
+static Rip gRip[NRIP]; static int gRipN = 0;
+static void visRipples(void) {
+	static unsigned lastId = 0;
+	for (int i = 0; i < NVS; i++) {
+		SVoice* v = &gV[i]; if (!v->active || v->isEcho || v->id <= lastId) continue;
+		Rip* p = &gRip[gRipN++ % NRIP];
+		float n = log2f(v->cur / 32.7f) / 7.0f; if (n < 0) n = 0; if (n > 1) n = 1;
+		p->x = 40 + n * 320 + (rand() % 40 - 20); p->y = 70 + (rand() % 100); p->r = 4; p->life = 1; p->hue = n;
+	}
+	for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].id > lastId) lastId = gV[i].id;
+	float s[TPTS]; sampleCycle(gOsc[gVisOsc].cyc, s, NULL);
+	enum { NP = 40 };
+	blendAdd(1);
+	for (int k = 0; k < NRIP; k++) {
+		Rip* p = &gRip[k]; if (p->life <= 0) continue;
+		p->r += 1.6f + 1.2f * gVisEnv; p->life -= 1.0f / 110;
+		float r, g, b; hue(p->hue, &r, &g, &b);
+		for (int ring = 0; ring < 3; ring++) {
+			float rr = p->r - ring * 9; if (rr <= 1) continue;
+			u32 c = rgba(r, g, b, p->life * (0.7f - ring * 0.2f));
+			float px = 0, py = 0;
+			for (int i = 0; i <= NP; i++) {
+				float t = (i % NP) / (float)NP, ang = t * TWO_PI;
+				float q = rr * (1 + s[(int)(t * (TPTS - 1))] * 0.12f * p->life);
+				float x = p->x + cosf(ang) * q, y = p->y + sinf(ang) * q * 0.55f;   // flattened: rings lying on water
+				if (i) vLine(px, py, x, y, c, 1.4f - ring * 0.3f);
+				px = x; py = y;
+			}
+		}
+	}
+	blendAdd(0);
+}
+
 static void visFull(void) {
-	int mode = gVisMode ? gVisMode : 1 + ((int)(gVisT / 10.0f)) % 6;   // AUTO: change every 10 s
+	int mode = gVisMode ? gVisMode : 1 + ((int)(gVisT / 10.0f)) % (NVISM - 1);   // AUTO: change every 10 s
 	if (gVisBeat > 0.01f) { float r, g, b; hue(0.35f, &r, &g, &b); blendAdd(1); vRect(0, 0, 400, 240, rgba(r, g, b, gVisBeat * 0.12f)); blendAdd(0); }
 	if (mode == 1) visWavetable(gVisOsc, 200, 128, 1.6f);
 	else if (mode == 2) visScopes(10, 20, 380, 210);
 	else if (mode == 3) visOrbit(200, 125, 100);
 	else if (mode == 4) visSpectrum(12, 20, 376, 210, gVisOsc);
 	else if (mode == 5) visVoxels(1.0f / 60);
-	else visVoxTable(gVisOsc);
+	else if (mode == 6) visVoxTable(gVisOsc);
+	else if (mode == 7) visTunnel();
+	else if (mode == 8) visKaleido();
+	else if (mode == 9) visSynthwave();
+	else visRipples();
 	if (gVisParts) {
 		static unsigned lastId = 0; if (gIdc != lastId) { gVisBurst += 14; lastId = gIdc; }
 		if (gVisBurst > 0) { partSpawn(gVisBurst); gVisBurst = 0; }
@@ -3779,7 +4178,19 @@ static void visFrame(int page, float dt) {
 	static int lastPage = -1, have = 0;
 	int full = page == 8;
 	if (have && lastPage == page) {
-		if (full) { u8* fbp = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); GSPGPU_InvalidateDataCache(gFullLin, 240 * 400 * 3); memcpy(fbp, gFullLin, 240 * 400 * 3); }
+		if (full) {
+			u8* fbp = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
+			// the GPU's copy engine moves the finished picture into the screen (no CPU copy); if it ever hung
+			// last time, the crash marker turns this off and the CPU copies instead
+			static int copies = 0;
+			if (gGpuCopy) {
+				if (copies < 3) { snprintf(mk, sizeof(mk), "GPU COPY %d", copies + 1); crashMark(mk); }
+				GSPGPU_FlushDataCache(fbp, 240 * 400 * 3);
+				C3D_SyncTextureCopy((u32*)gFullLin, GX_BUFFER_DIM((240 * 400 * 3) >> 4, 0), (u32*)fbp, GX_BUFFER_DIM((240 * 400 * 3) >> 4, 0), 240 * 400 * 3, GX_TRANSFER_RAW_COPY(1));
+				GSPGPU_InvalidateDataCache(fbp, 240 * 400 * 3);
+				if (++copies == 3) crashMark("GPU COPY OK");
+			} else { GSPGPU_InvalidateDataCache(gFullLin, 240 * 400 * 3); memcpy(fbp, gFullLin, 240 * 400 * 3); }
+		}
 		else if (page == 1 || page == 2) visBlit(30, 206);
 		else visBlit(30, 154);
 	}
@@ -3921,7 +4332,7 @@ int main(void) {
 		if (kDown & KEY_START) break;
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
-		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick(); upTick();
+		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick();
 		if (gMsgT > 0) { gMsgT -= 1.0f / 60; topDirty = 1; }
 		u64 now = osGetTime(); float dt = (now - last) / 1000.0f; last = now; if (dt > 0.1f) dt = 0.1f;
 		sensorsUpdate(dt);
@@ -3965,6 +4376,8 @@ int main(void) {
 				if (p->dirty & D_OUT) outputApply();
 				if (p->dirty & D_LOOP) loopModeChanged();
 				if (p->dirty & D_DRUMS) drumsChanged();
+				if (p->dirty & D_CHIP) { float lv = gChipLevel; gChipLevel = 1; chipSet(lv); }
+				if (p->dirty & D_GRAIN) grainsChanged();
 				if (p->dirty & D_LINK) linkChanged();
 				if (p->dirty & D_THEME) botDirty = 1;
 				if (p->dirty & (D_SCALE | D_SEQ)) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; botDirty = 1; if (p->p == &gSeqMode && gSeqMode == 2) gRecPos = 0; if (p->p == &gSeqMode && gSeqMode != 1) gSeqTr = 0; }

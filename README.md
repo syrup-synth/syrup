@@ -138,3 +138,14 @@ FBI > Remote Install > Scan QR Code, and scan `install-qr.png`. Sound needs the 
 - With full unison on both oscillators a note uses 6 DSP channels, so 4 such notes fit; with 3-voice unison on A alone, 8.
 - Effects are built from extra voices (homebrew can't route the DSP's effect buses back for processing). REVERB is 8 diffuse taps per note: spread, slightly detuned, each darker and with a longer release. Drive is applied to the waveform.
 - Envelopes and LFOs run at about 60 Hz.
+
+## Chip-level extras (no CPU in the audio path)
+
+- **CHIP SQUARE** (SUB+NOISE page): a layer from the second sound chip's own square-wave generators, with CHIP WIDTH (pulse width) and CHIP OCTAVE.
+- **CHIP kit** (DRUMS): snare and hat come from the chip's hardware noise generators.
+- **CHIP ECHO / ECHO TIME / ECHO REPEATS** (DRUMS): a ping-pong echo made by the chip's two capture units recording its own output. It echoes the sub, drums and chip layer.
+- **Looper**: stored as IMA-ADPCM, which the chip decodes itself, so up to 16 bars (about 48 seconds).
+- **GRAINS** (HARDWARE): granular playback of the loop. The DSP plays overlapping slices back to back. Set SIZE, SCAN (50% = frozen), SPRAY, PITCH and LEVEL.
+- **3D ORBIT / ORBIT RATE** (MASTER FX): with OUTPUT set to SURROUND, the sound circles around you.
+- **Full-screen visualizer**: the GPU's copy engine moves the picture to the screen.
+- **New visualizer modes**: TUNNEL, KALEIDO, SYNTHWAVE and RIPPLES.
