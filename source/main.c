@@ -77,7 +77,10 @@ static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0;
 static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM"};
 static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
 static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
-static float gVisBeat = 0;   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
+static float gVisBeat = 0;
+#define NTHEMES 4
+static const char* THEME_NAMES[NTHEMES] = {"PIP GREEN", "DOS BLUE", "AMBER", "MAGENTA"};
+static int gTheme = 0, gScan = 1;   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
 static int gInAudioTick = 0;
 // crash guard: a marker file holds the last milestone reached; it is removed on a clean exit.
 // If it is still there at launch, the last run crashed -> SAFE MODE (new hardware features off).
@@ -1553,7 +1556,7 @@ static const char* presetName(int style, int idx) { return style == NSTYLES - 1 
 
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
-enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768 };
+enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
 
 #define PF(n, ptr, mn, mx, st, unit, d) {n, PT_F, ptr, mn, mx, st, NULL, unit, d}
@@ -1641,6 +1644,7 @@ static Param P_PLAY[] = {
 	PEND};
 static Param P_VIS[] = {
 	PE("VIS MODE", &gVisMode, NVISM, VISM_NAMES, 0), PE("VIS OSC", &gVisOsc, 2, AB_NAMES, 0), PE("OVERLAY", &gVisOverlay, 2, ONOFF, 0),
+	PE("THEME", &gTheme, NTHEMES, THEME_NAMES, D_THEME), PE("SCANLINES", &gScan, 2, ONOFF, D_THEME),
 	PEND};
 #define NPAGES 9
 static Param* PAGES[NPAGES] = {P_PRESET, P_OSCA, P_OSCB, P_SUBN, P_FILT, P_MOD, P_VOICE, P_PLAY, P_VIS};
@@ -1703,23 +1707,64 @@ static void drawChar(int x, int y, char c, int sc, u8 r, u8 g, u8 b) {
 }
 static void text(int x, int y, const char* s, int sc, u8 r, u8 g, u8 b) { for (; *s; s++, x += 8 * sc) drawChar(x, y, *s, sc, r, g, b); }
 
-#define BG    14, 9, 4
-#define PANEL 30, 19, 7
-#define AMB   255, 170, 40
-#define AMB2  200, 110, 20
-#define DIM   130, 85, 30
-#define TXT   255, 225, 170
+// ---------------------------------------------------------------- look: Pip-Boy layout, EGA 16-colour palette
+static const u8 EGA[16][3] = {
+	{0, 0, 0}, {0, 0, 170}, {0, 170, 0}, {0, 170, 170}, {170, 0, 0}, {170, 0, 170}, {170, 85, 0}, {170, 170, 170},
+	{85, 85, 85}, {85, 85, 255}, {85, 255, 85}, {85, 255, 255}, {255, 85, 85}, {255, 85, 255}, {255, 255, 85}, {255, 255, 255}};
+typedef struct {
+	const char* name;
+	u8 bg, line, dim, txt, hi, hiTxt, val, warn;   // EGA indices
+	u8 keyW, keyB, keyOn, keyLine;
+	u8 acc[4];                                     // visual ramp (filter / envelope picks one)
+} Theme;
+static const Theme THEMES[NTHEMES] = {
+	{"PIP GREEN", 0, 2, 2, 10, 10, 0, 10, 12, 0, 2, 10, 10, {2, 10, 11, 15}},
+	{"DOS BLUE", 1, 3, 7, 15, 3, 0, 14, 12, 15, 0, 14, 8, {11, 14, 13, 15}},
+	{"AMBER", 0, 6, 6, 14, 14, 0, 15, 12, 0, 6, 14, 14, {6, 14, 12, 15}},
+	{"MAGENTA", 0, 5, 5, 13, 13, 0, 11, 12, 0, 5, 11, 13, {5, 13, 11, 15}},
+};
+#define TH (&THEMES[gTheme])
+#define EC(i) EGA[i][0], EGA[i][1], EGA[i][2]
+#define BG    EC(TH->bg)
+#define PANEL EC(TH->bg)
+#define AMB   EC(TH->txt)
+#define AMB2  EC(TH->dim)
+#define DIM   EC(TH->dim)
+#define TXT   EC(TH->txt)
+#define LINE  EC(TH->line)
+#define VAL   EC(TH->val)
+#define HI    EC(TH->hi)
+#define HITXT EC(TH->hiTxt)
+#define WARN  EC(TH->warn)
+
+// Pip-Boy style corner brackets around a panel
+static void frame(int x, int y, int w, int h) {
+	int L = 8;
+	rect(x, y, L, 1, LINE); rect(x, y, 1, L, LINE);
+	rect(x + w - L, y, L, 1, LINE); rect(x + w - 1, y, 1, L, LINE);
+	rect(x, y + h - 1, L, 1, LINE); rect(x, y + h - L, 1, L, LINE);
+	rect(x + w - L, y + h - 1, L, 1, LINE); rect(x + w - 1, y + h - L, 1, L, LINE);
+}
+// CRT scanlines on the top screen: every other row a step darker
+static void scanlines(void) {
+	if (!gScan) return;
+	for (int x = 0; x < 400; x++) {
+		u8* p = fb + x * 240 * 3;
+		for (int r = 0; r < 240; r += 2) { p[r * 3] = p[r * 3] * 5 >> 3; p[r * 3 + 1] = p[r * 3 + 1] * 5 >> 3; p[r * 3 + 2] = p[r * 3 + 2] * 5 >> 3; }
+	}
+}
 
 static void drawWave(const s16* lv, int N, int x0, int y0, int w, int h, int bright) {
-	rect(x0, y0, w, h, PANEL);
-	rect(x0, y0 + h / 2, w, 1, 70, 44, 16);
+	rect(x0, y0, w, h, BG);
+	for (int x = x0; x < x0 + w; x += 2) px(x, y0 + h / 2, LINE);   // dotted centre line
 	int px0 = 0, py0 = 0;
 	for (int i = 0; i <= w - 6; i++) {
 		int n = i * N / (w - 6); if (n >= N) n = N - 1;
 		int x = x0 + 3 + i, y = y0 + h / 2 - (int)(lv[n] / 32768.0f * (h / 2 - 4));
-		if (i) { if (bright) { line(px0, py0, x, y, AMB); line(px0, py0 + 1, x, y + 1, AMB); } else line(px0, py0, x, y, 90, 55, 20); }
+		if (i) { if (bright) { line(px0, py0, x, y, TXT); line(px0, py0 + 1, x, y + 1, TXT); } else line(px0, py0, x, y, DIM); }
 		px0 = x; py0 = y;
 	}
+	frame(x0, y0, w, h);
 }
 
 static void drawStack(const Osc* o, float pos, int ox, int oy, int W, int H) {
@@ -1730,145 +1775,233 @@ static void drawStack(const Osc* o, float pos, int ox, int oy, int W, int H) {
 		int fi = (int)((float)k / (steps - 1) * (tb->nFrames - 1));
 		const float* fr = tb->frames + fi * CYC;
 		int bx = ox + k * 3, by = oy - k * 4, cur = k == curK;
-		u8 r = cur ? 255 : 80, g = cur ? 170 : 50, b = cur ? 40 : 18;
 		int px0 = bx, py0 = by - (int)(fr[0] * ds * H * 0.5f);
 		for (int n = 1; n <= 40; n++) {
 			int x = bx + n * W / 40, y = by - (int)(fr[(n * CYC / 40) & (CYC - 1)] * ds * H * 0.5f);
-			line(px0, py0, x, y, r, g, b); px0 = x; py0 = y;
+			if (cur) line(px0, py0, x, y, TXT); else line(px0, py0, x, y, DIM);
+			px0 = x; py0 = y;
 		}
 	}
 }
 
+// ---- what each control does (shown in the footer for the selected row)
+static const char* paramHelp(const char* n) {
+	static const char* H[][2] = {
+		{"STYLE", "PICK A STYLE OF PATCH"}, {"PATCH", "PICK A PATCH - IT LOADS AS YOU SCROLL"}, {"SAVE SLOT", "WHICH USER SLOT TO SAVE INTO"},
+		{"SAVE NOW", "PRESS > TO SAVE THIS SOUND"}, {"INIT PATCH", "PRESS > FOR A PLAIN SAW TO START FROM"},
+		{"ON", "OSCILLATOR ON / OFF"}, {"TABLE", "WHICH WAVETABLE"}, {"WT POS", "POSITION IN THE WAVETABLE"}, {"WARP", "HOW THE WAVE IS BENT"},
+		{"WARP AMT", "HOW MUCH WARP"}, {"LEVEL", "VOLUME OF THIS OSCILLATOR"}, {"OCTAVE", "OCTAVE UP / DOWN"}, {"SEMI", "SEMITONES UP / DOWN"},
+		{"FINE", "FINE TUNE IN CENTS"}, {"UNISON", "STACKED VOICES PER NOTE (1-3)"}, {"DETUNE", "SPREAD BETWEEN UNISON VOICES"},
+		{"BLEND", "LEVEL OF THE OUTER UNISON VOICES"}, {"WIDTH", "STEREO SPREAD OF UNISON"},
+		{"SUB SHAPE", "SUB OSCILLATOR WAVE"}, {"SUB OCTAVE", "SUB OSCILLATOR OCTAVE"}, {"SUB LEVEL", "SUB OSCILLATOR VOLUME"},
+		{"NOISE TYPE", "WHITE, PINK OR VINYL CRACKLE"}, {"NOISE LEVEL", "NOISE VOLUME"},
+		{"FILTER", "FILTER TYPE"}, {"CUTOFF", "FILTER BRIGHTNESS"}, {"FILTER 2", "SECOND HARDWARE FILTER STAGE"}, {"LOW CUT", "REMOVES LOWS UNDER THIS"},
+		{"RES", "FILTER RESONANCE"}, {"KEYTRACK", "HIGHER NOTES OPEN THE FILTER"},
+		{"ENV1 ATK", "VOLUME FADE-IN TIME"}, {"ENV1 HOLD", "TIME AT FULL BEFORE DECAY"}, {"ENV1 DEC", "TIME TO FALL TO SUSTAIN"},
+		{"ENV1 SUS", "LEVEL WHILE THE KEY IS HELD"}, {"ENV1 REL", "FADE-OUT AFTER RELEASE"},
+		{"ENV2 ATK", "MOD ENVELOPE ATTACK"}, {"ENV2 DEC", "MOD ENVELOPE DECAY"}, {"ENV2 SUS", "MOD ENVELOPE SUSTAIN"}, {"ENV2 REL", "MOD ENVELOPE RELEASE"},
+		{"LFO1 SHAPE", "LFO 1 WAVE"}, {"LFO1 RATE", "LFO 1 SPEED"}, {"LFO1 MODE", "FREE RUNNING OR RESTART PER NOTE"},
+		{"LFO2 SHAPE", "LFO 2 WAVE"}, {"LFO2 RATE", "LFO 2 SPEED"}, {"LFO2 MODE", "FREE RUNNING OR RESTART PER NOTE"},
+		{"1 SOURCE", "MOD SLOT 1: WHAT MOVES IT"}, {"1 DEST", "MOD SLOT 1: WHAT IT MOVES"}, {"1 AMOUNT", "MOD SLOT 1: HOW MUCH"},
+		{"2 SOURCE", "MOD SLOT 2: WHAT MOVES IT"}, {"2 DEST", "MOD SLOT 2: WHAT IT MOVES"}, {"2 AMOUNT", "MOD SLOT 2: HOW MUCH"},
+		{"3 SOURCE", "MOD SLOT 3: WHAT MOVES IT"}, {"3 DEST", "MOD SLOT 3: WHAT IT MOVES"}, {"3 AMOUNT", "MOD SLOT 3: HOW MUCH"},
+		{"4 SOURCE", "MOD SLOT 4: WHAT MOVES IT"}, {"4 DEST", "MOD SLOT 4: WHAT IT MOVES"}, {"4 AMOUNT", "MOD SLOT 4: HOW MUCH"},
+		{"MODE", "POLY, MONO OR LEGATO"}, {"GLIDE", "SLIDE TIME BETWEEN NOTES"}, {"BEND RANGE", "CIRCLE PAD BEND IN SEMITONES"},
+		{"CHORD", "CHORD PLAYED BY ONE KEY (ALSO A)"}, {"CHORUS", "STEREO CHORUS AMOUNT"}, {"GPU VISUALS", "GRAPHICS CHIP VISUALS ON THE LEFT"},
+		{"FX", "ECHO, SPACE OR REVERB"}, {"ECHO TIME", "DELAY TIME"}, {"ECHO FDBK", "NUMBER OF REPEATS"}, {"OUTPUT", "STEREO OR VIRTUAL SURROUND"},
+		{"SURROUND", "SURROUND DEPTH"}, {"TILT CENTER", "PRESS > TO RE-CENTRE THE TILT"}, {"REV SIZE", "REVERB ROOM SIZE"},
+		{"REV DAMP", "DARKER REVERB TAIL"}, {"FX MIX", "HOW MUCH EFFECT"}, {"DRIVE", "DISTORTION TYPE"}, {"DRIVE AMT", "HOW MUCH DISTORTION"},
+		{"MASTER", "OUTPUT VOLUME"}, {"ROOT", "KEY OF THE SCALE"}, {"SCALE", "LOCK THE KEYS TO A SCALE"}, {"ARP", "ARPEGGIATOR PATTERN"},
+		{"ARP RATE", "ARPEGGIATOR SPEED"}, {"ARP OCTAVES", "OCTAVES THE ARP CLIMBS"}, {"ARP GATE", "ARP NOTE LENGTH"}, {"BPM", "TEMPO"},
+		{"SEQ", "SEQUENCER: OFF, PLAY OR RECORD"}, {"SEQ LENGTH", "STEPS IN THE PATTERN"}, {"SEQ GATE", "STEP NOTE LENGTH"},
+		{"SWING", "SHUFFLE FEEL"}, {"ADD REST", "PRESS > TO RECORD A REST"}, {"CLEAR SEQ", "PRESS > TO ERASE THE PATTERN"},
+		{"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},
+		{"THEME", "COLOUR SCHEME"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
+	};
+	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
+	return "";
+}
+
+// ---- Pip-Boy tabs: main sections with sub-pages
+static const char* SECT_NAMES[6] = {"PATCH", "OSC", "SHAPE", "FX", "PLAY", "VIS"};
+static const int PAGE_SECT[NPAGES] = {0, 1, 1, 1, 2, 2, 3, 4, 5};
+static const char* SUB_NAMES[NPAGES] = {"PRESETS", "OSC A", "OSC B", "SUB+NOISE", "FILTER+ENV", "LFO+MOD", "VOICE+FX", "ARP+SEQ", "VISUALIZER"};
+
 static float gPosEff[2];
 static int visActive(int page);
+static void drawHeader(int page) {
+	text(4, 3, "SYRUP", 1, TXT);
+	rect(0, 13, 400, 1, LINE);
+	int x = 58, sect = PAGE_SECT[page];
+	for (int i = 0; i < 6; i++) {
+		int w = strlen(SECT_NAMES[i]) * 8;
+		if (i == sect) {   // the active tab breaks the line, Pip-Boy style
+			rect(x - 4, 13, w + 8, 1, BG);
+			rect(x - 4, 7, 1, 7, LINE); rect(x + w + 3, 7, 1, 7, LINE);
+			rect(x - 4, 7, 3, 1, LINE); rect(x + w + 1, 7, 3, 1, LINE);
+			text(x, 3, SECT_NAMES[i], 1, TXT);
+		} else text(x, 3, SECT_NAMES[i], 1, DIM);
+		x += w + 14;
+	}
+	char pn[16]; snprintf(pn, sizeof(pn), "%.12s", gPatchName);
+	text(396 - (int)strlen(pn) * 8, 3, pn, 1, VAL);
+	// sub-pages of this section
+	int sx = 8;
+	for (int p = 0; p < NPAGES; p++) if (PAGE_SECT[p] == sect) {
+		int w = strlen(SUB_NAMES[p]) * 8;
+		if (p == page) { rect(sx - 3, 16, w + 6, 11, HI); text(sx, 18, SUB_NAMES[p], 1, HITXT); }
+		else text(sx, 18, SUB_NAMES[p], 1, DIM);
+		sx += w + 16;
+	}
+}
+static void drawFooter(int page, int sel) {
+	rect(0, 226, 400, 1, LINE);
+	if (!gAudioOK) { text(4, 230, "NO AUDIO - RUN DSP1 ONCE (DUMPS DSP FIRMWARE)", 1, WARN); return; }
+	if (gSafeMode) { char m[60]; snprintf(m, sizeof(m), "SAFE MODE - LAST RUN CRASHED AT %.24s", gCrashStage); text(4, 230, m, 1, WARN); return; }
+	const char* h = paramHelp(PAGES[page][sel].name);
+	char m[52]; snprintf(m, sizeof(m), "%.49s", *h ? h : "D-PAD: PICK / CHANGE   X/Y: PAGES");
+	text(4, 230, m, 1, DIM);
+}
+
 static void drawTop(int page, int sel, int oct, int latch) {
 	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
+	if (page == 8 && visActive(8)) return;   // the GPU frame covers the whole screen; overlay is drawn after the copy
 	rect(0, 0, 400, 240, BG);
-	text(4, 3, "SYRUP", 1, AMB);
-	char pg[48]; snprintf(pg, sizeof(pg), "< %s >", PAGE_NAMES[page]);
-	text(58, 3, pg, 1, 255, 200, 120);
-	char pn[8]; snprintf(pn, sizeof(pn), "%d/%d", page + 1, NPAGES); text(170, 3, pn, 1, DIM);
-	text(396 - (int)strlen(gPatchName) * 8, 3, gPatchName, 1, TXT);
+	drawHeader(page);
 	int focus = (page == 2) ? 1 : 0;
 	if (page == 8) {
-		if (visActive(8)) return;   // the GPU frame covers the whole screen; overlay is drawn after the copy
-		rect(0, 14, 400, 226, BG);
-		text(100, 100, gGpuHung ? "GPU HUNG - NO VISUALIZER" : "VISUALIZER NEEDS THE GPU", 1, 255, 120, 80);
-		drawWave(gOsc[0].mips.lev[2], LEVN[2], 4, 120, 392, 110, gOsc[0].on);
+		text(96, 100, gGpuHung ? "GPU HUNG - NO VISUALIZER" : "VISUALIZER NEEDS THE GPU", 1, WARN);
+		drawWave(gOsc[0].mips.lev[2], LEVN[2], 4, 120, 392, 100, gOsc[0].on);
+		drawFooter(page, sel);
+		scanlines();
 		return;
 	}
 	if (page == 0) {   // preset browser: styles | patches
-		rect(4, 16, 196, 214, PANEL);
+		frame(4, 30, 196, 194);
 		for (int i = 0; i < NSTYLES; i++) {
-			int y = 21 + i * 13;
-			if (i == gStyle) rect(6, y - 3, 76, 13, 90, 56, 16);
-			text(10, y, STYLE_NAMES[i], 1, i == gStyle ? 255 : 150, i == gStyle ? 210 : 100, i == gStyle ? 130 : 40);
+			int y = 35 + i * 13;
+			if (i == gStyle) { rect(7, y - 2, 74, 11, HI); text(10, y, STYLE_NAMES[i], 1, HITXT); }
+			else text(10, y, STYLE_NAMES[i], 1, DIM);
 		}
+		rect(84, 33, 1, 186, LINE);
 		for (int i = 0; i < presetCount(gStyle); i++) {
-			int y = 21 + i * 13;
-			int cur = i == gPreset;
-			if (cur) rect(86, y - 3, 112, 13, 120, 74, 20);
+			int y = 35 + i * 13, cur = i == gPreset;
 			char nm[16]; snprintf(nm, sizeof(nm), "%.13s", presetName(gStyle, i));
-			text(90, y, nm, 1, cur ? 255 : 220, cur ? 230 : 190, cur ? 170 : 140);
+			if (cur) { rect(87, y - 2, 110, 11, HI); text(90, y, nm, 1, HITXT); }
+			else text(90, y, nm, 1, TXT);
 		}
-		char cnt[24]; snprintf(cnt, sizeof(cnt), "%d PATCHES", presetCount(gStyle)); text(10, 160, cnt, 1, DIM);
-		text(116, 160, "BUILD " SYRUP_VER, 1, DIM);
-		drawWave(gOsc[0].mips.lev[2], LEVN[2], 8, 176, 188, 50, gOsc[0].on);
+		char cnt[32]; snprintf(cnt, sizeof(cnt), "%d PATCHES  BUILD " SYRUP_VER, presetCount(gStyle)); text(10, 212, cnt, 1, DIM);
 	} else if (page == 7) {   // scale / arp / sequencer
 		char s[40];
-		rect(4, 16, 196, 214, PANEL);
-		snprintf(s, sizeof(s), "%s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); text(10, 22, s, 1, AMB);
-		snprintf(s, sizeof(s), "ARP %s %s x%d", ARP_NAMES[gArp], RATE_NAMES[gArpRate], gArpOct); text(10, 36, s, 1, TXT);
-		snprintf(s, sizeof(s), "%d BPM  SEQ %s", gBPM, SEQ_NAMES[gSeqMode]); text(10, 50, s, 1, TXT);
+		frame(4, 30, 196, 194);
+		snprintf(s, sizeof(s), "%s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); text(10, 36, s, 1, VAL);
+		snprintf(s, sizeof(s), "ARP %s %s X%d", ARP_NAMES[gArp], RATE_NAMES[gArpRate], gArpOct); text(10, 48, s, 1, TXT);
+		snprintf(s, sizeof(s), "%d BPM  SEQ %s", gBPM, SEQ_NAMES[gSeqMode]); text(10, 60, s, 1, TXT);
 		for (int i = 0; i < NSTEP; i++) {   // 2 rows of 8 steps
-			int x = 8 + (i % 8) * 24, y = 70 + (i / 8) * 40, act = i < gSeqLen;
+			int x = 8 + (i % 8) * 24, y = 76 + (i / 8) * 40, act = i < gSeqLen;
 			int playing = gSeqPlaying && i == gSeqPos, rec = gSeqMode == 2 && i == gRecPos;
-			if (playing) rect(x, y, 22, 34, AMB);
-			else if (rec) rect(x, y, 22, 34, 160, 40, 30);
-			else rect(x, y, 22, 34, act ? 70 : 34, act ? 46 : 24, act ? 18 : 10);
+			if (playing) rect(x, y, 22, 34, HI);
+			else if (rec) rect(x, y, 22, 34, WARN);
+			else { rect(x, y, 22, 34, BG); if (act) { rect(x, y, 22, 1, LINE); rect(x, y + 33, 22, 1, LINE); rect(x, y, 1, 34, LINE); rect(x + 21, y, 1, 34, LINE); } else for (int k = 0; k < 22; k += 2) px(x + k, y + 33, DIM); }
 			if (act && gSeq[i].n) {
 				int nt = gSeq[i].note[0];
-				text(x + 11 - (int)strlen(NOTE_NAMES[nt % 12]) * 4, y + 6, NOTE_NAMES[nt % 12], 1, playing ? 30 : 255, playing ? 20 : 220, playing ? 10 : 160);
-				char o[4]; snprintf(o, sizeof(o), "%d", nt / 12 - 1); text(x + 7, y + 18, o, 1, playing ? 30 : 150, playing ? 20 : 110, playing ? 10 : 60);
-				if (gSeq[i].n > 1) rect(x + 17, y + 26, 3, 3, 255, 200, 120);
+				if (playing) text(x + 11 - (int)strlen(NOTE_NAMES[nt % 12]) * 4, y + 6, NOTE_NAMES[nt % 12], 1, HITXT);
+				else text(x + 11 - (int)strlen(NOTE_NAMES[nt % 12]) * 4, y + 6, NOTE_NAMES[nt % 12], 1, TXT);
+				char o[4]; snprintf(o, sizeof(o), "%d", nt / 12 - 1);
+				if (playing) text(x + 7, y + 18, o, 1, HITXT); else text(x + 7, y + 18, o, 1, DIM);
+				if (gSeq[i].n > 1) rect(x + 16, y + 27, 3, 3, VAL);
 			} else if (act) text(x + 7, y + 12, "-", 1, DIM);
 		}
-		text(10, 158, gSeqMode == 2 ? "REC: KEYS WRITE STEPS" : (gSeqMode == 1 ? "PLAY: KEYS TRANSPOSE" : "SEQ OFF"), 1, DIM);
-		if (gSeqMode == 1 && gSeqTr) { snprintf(s, sizeof(s), "TRANSPOSE %+d", gSeqTr); text(10, 170, s, 1, DIM); }
-		drawWave(gOsc[0].mips.lev[2], LEVN[2], 8, 184, 188, 42, gOsc[0].on);
+		text(10, 162, gSeqMode == 2 ? "REC: KEYS WRITE STEPS" : (gSeqMode == 1 ? "PLAY: KEYS TRANSPOSE" : "SEQ OFF"), 1, DIM);
+		if (gSeqMode == 1 && gSeqTr) { snprintf(s, sizeof(s), "TRANSPOSE %+d", gSeqTr); text(10, 174, s, 1, DIM); }
+		drawWave(gOsc[0].mips.lev[2], LEVN[2], 8, 186, 188, 34, gOsc[0].on);
 	} else if (page == 1 || page == 2) {
 		Osc* o = &gOsc[focus];
 		if (!visActive(page)) {
-			drawWave(o->mips.lev[2], LEVN[2], 4, 16, 196, 100, o->on);
-			text(8, 19, o->on ? (focus ? "OSC B" : "OSC A") : (focus ? "OSC B OFF" : "OSC A OFF"), 1, DIM);
-			drawStack(o, gPosEff[focus], 4, 218, 150, 20);
+			drawWave(o->mips.lev[2], LEVN[2], 4, 30, 196, 100, o->on);
+			drawStack(o, gPosEff[focus], 8, 208, 150, 20);
 		}
-		text(4, 228, o->tb.name, 1, DIM);
+		text(8, 34, o->on ? (focus ? "OSC B" : "OSC A") : (focus ? "OSC B OFF" : "OSC A OFF"), 1, DIM);
+		char tn[26]; snprintf(tn, sizeof(tn), "%.24s", o->tb.name); text(6, 214, tn, 1, VAL);
 	} else {
 		if (!visActive(page)) {
-			drawWave(gOsc[0].mips.lev[2], LEVN[2], 4, 16, 196, 66, gOsc[0].on); text(8, 19, "A", 1, DIM);
-			drawWave(gOsc[1].mips.lev[2], LEVN[2], 4, 86, 196, 66, gOsc[1].on); text(8, 89, "B", 1, DIM);
+			drawWave(gOsc[0].mips.lev[2], LEVN[2], 4, 30, 196, 60, gOsc[0].on);
+			drawWave(gOsc[1].mips.lev[2], LEVN[2], 4, 94, 196, 60, gOsc[1].on);
 		}
+		text(8, 34, "A", 1, DIM); text(8, 98, "B", 1, DIM);
 		char s[40];
-		snprintf(s, sizeof(s), "%s  OCT %+d%s", VOICE_MODES[gVoiceMode], oct, latch ? "  LATCH" : "");
-		text(6, 166, s, 1, TXT);
-		snprintf(s, sizeof(s), "CHORD %s  FX %s", CHORD_NAMES[gChord], FX_NAMES[gFx]); text(6, 180, s, 1, TXT);
+		snprintf(s, sizeof(s), "%s  OCT %+d%s", VOICE_MODES[gVoiceMode], oct, latch ? "  LATCH" : ""); text(6, 160, s, 1, TXT);
+		snprintf(s, sizeof(s), "CHORD %s  FX %s", CHORD_NAMES[gChord], FX_NAMES[gFx]); text(6, 172, s, 1, TXT);
 		int voices = 0, dsp = 0, cs = 0, csTot = 0;
 		for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho) voices++;
 		for (int c = 0; c < NCH; c++) if (gDspOwner[c] >= 0 || (gNoiseOn && c == NOISE_CH)) dsp++;
 		for (int c = 0; c < NCS; c++) if (csUsable(c)) { csTot++; if (gCsOwner[c] >= 0) cs++; }
-		snprintf(s, sizeof(s), "NOTES %d  CORE2 %s  FX BUS %s", voices, gWorker ? "ON" : "OFF", busActive() ? (gBusSeen ? "OK" : "ON") : (gBusFail ? "FALLBK" : "OFF")); text(6, 194, s, 1, DIM);
-		if (gGpuHung) { snprintf(s, sizeof(s), "GPU HUNG AFTER %d FRAMES", gGpuFrames); text(6, 218, s, 1, 255, 90, 60); }
-		else if (gGpuFx && gGpuOK) { snprintf(s, sizeof(s), "GPU FRAMES %d", gGpuFrames); text(6, 218, s, 1, DIM); }
-		snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d", dsp, cs, csTot); text(6, 206, s, 1, DIM);
+		snprintf(s, sizeof(s), "NOTES %d  FX BUS %s", voices, busActive() ? (gBusSeen ? "OK" : "ON") : (gBusFail ? "FALLBK" : "OFF")); text(6, 186, s, 1, DIM);
+		snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d", dsp, cs, csTot); text(6, 198, s, 1, DIM);
+		if (gGpuHung) { snprintf(s, sizeof(s), "GPU HUNG AFTER %d FRAMES", gGpuFrames); text(6, 210, s, 1, WARN); }
+		else if (gGpuFx && gGpuOK) { snprintf(s, sizeof(s), "GPU OK  CORE2 %s", gWorker ? "ON" : "OFF"); text(6, 210, s, 1, DIM); }
 	}
+	// parameter list: inverse bar on the selected row, meters for continuous values, < > on choices
 	Param* P = PAGES[page]; int n = pageLen(page);
-	int rows = 17, first = sel - rows + 1; if (first < 0) first = 0;
-	int y = 18;
-	for (int i = first; i < n && i < first + rows; i++, y += 13) {
+	int rows = 15, first = sel - rows + 1; if (first < 0) first = 0;
+	int y = 33;
+	frame(204, 30, 194, 194);
+	for (int i = first; i < n && i < first + rows; i++, y += 12) {
 		char v[24]; paramFmt(&P[i], v, sizeof(v));
-		if (i == sel) rect(204, y - 2, 194, 12, 70, 44, 14);
-		text(208, y, P[i].name, 1, i == sel ? 255 : 150, i == sel ? 220 : 100, i == sel ? 160 : 40);
-		int w = strlen(v) * 8; text(396 - w, y, v, 1, TXT);
+		int cur = i == sel, w = strlen(v) * 8;
+		if (cur) rect(206, y - 2, 190, 11, HI);
+		if (cur) text(208, y, P[i].name, 1, HITXT); else text(208, y, P[i].name, 1, DIM);
+		if (P[i].type == PT_F) {   // 8-block meter
+			float t = (*(float*)P[i].p - P[i].mn) / (P[i].mx - P[i].mn + 1e-9f);
+			int blocks = (int)(t * 8 + 0.5f);
+			for (int b = 0; b < 8; b++) {
+				int bx = 300 + b * 4;
+				if (b < blocks) { if (cur) rect(bx, y, 3, 7, HITXT); else rect(bx, y, 3, 7, TXT); }
+				else { if (cur) rect(bx, y + 6, 3, 1, HITXT); else rect(bx, y + 6, 3, 1, DIM); }
+			}
+			if (w > 54) w = 54;
+		}
+		if (cur && P[i].type == PT_E && P[i].names != PRESS_RIGHT) { char b2[28]; snprintf(b2, sizeof(b2), "<%s>", v); text(394 - (int)strlen(b2) * 8, y, b2, 1, HITXT); }
+		else if (cur) text(394 - w, y, v, 1, HITXT);
+		else text(394 - w, y, v, 1, VAL);
 	}
-	if (!gAudioOK) text(208, 230, "NO AUDIO: RUN DSP1", 1, 255, 80, 60);
-	else if (gSafeMode) { char m[60]; snprintf(m, sizeof(m), "SAFE MODE - CRASHED AT: %.26s", gCrashStage); rect(0, 229, 400, 11, 90, 20, 10); text(4, 231, m, 1, 255, 160, 120); }
+	if (first > 0) text(388, 30, "^", 1, TXT);
+	if (first + rows < n) text(388, 216, "v", 1, TXT);
+	drawFooter(page, sel);
+	if (!visActive(page)) scanlines();
 }
 
 static void drawHelp(void) {
 	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
 	rect(0, 0, 400, 240, BG);
-	text(8, 6, "SYRUP HELP", 2, AMB); text(200, 10, "SELECT or HELP to close", 1, DIM);
+	text(4, 3, "SYRUP", 1, TXT); text(58, 3, "HELP", 1, TXT); rect(0, 13, 400, 1, LINE);
+	text(200, 3, "SELECT / HELP TO CLOSE", 1, DIM);
 	static const char* L[] = {
-		"PAGES  PRESETS, OSC A, OSC B, SUB+NOISE,",
-		"       FILT+ENV, LFO+MOD, VOICE+FX, SCALE+ARP+SEQ",
-		"  X / Y ........ next / previous page",
-		"  D-pad U/D .... pick a parameter",
-		"  D-pad L/R .... change it (hold = fast)",
+		"PAGES",
+		"  X / Y ........ NEXT / PREVIOUS PAGE",
+		"  D-PAD U/D .... PICK A CONTROL",
+		"  D-PAD L/R .... CHANGE IT (HOLD = FAST)",
 		"TOUCH",
-		"  XY pad ....... X = OSC A WT POS, Y = cutoff",
-		"  Keys ......... play; lower on key = louder",
-		"  Tabs ......... HELP, PAGE, OCT-/OCT+, LATCH",
+		"  XY PAD ....... X = OSC A WT POS, Y = CUTOFF",
+		"  KEYS ......... PLAY; LOWER ON A KEY = LOUDER",
+		"  TABS ......... HELP, PAGE, OCT-/OCT+, LATCH",
 		"BUTTONS",
-		"  A ............ chord mode",
-		"  B ............ latch (notes keep ringing)",
-		"  L / R ........ octave",
-		"  Circle pad ... L/R bend, U/D = STICK source",
-		"  START ........ quit",
+		"  A ............ CHORD MODE",
+		"  B ............ LATCH (NOTES KEEP RINGING)",
+		"  L / R ........ OCTAVE",
+		"  CIRCLE PAD ... L/R BEND, U/D = STICK SOURCE",
+		"  START ........ QUIT",
 		"NOTES",
-		"  Mod sources: TILT L/R, TILT F/B (motion), BREATH (mic)",
-		"  SCALE on: keys become scale pads, chords",
-		"    stack inside the scale",
-		"  SEQ REC: each key writes a step; PLAY: keys transpose",
-		"  WT POS / WARP mod is shared by all notes",
-		"  FM/AM/RM <OSC uses whole-octave ratios",
-		"  Own wavetables: Serum .wav in /3ds/syrup/",
+		"  MOD SOURCES: TILT L/R, TILT F/B, BREATH (MIC)",
+		"  SCALE ON: KEYS BECOME SCALE PADS",
+		"  SEQ REC: KEYS WRITE STEPS; PLAY: KEYS TRANSPOSE",
+		"  OWN WAVETABLES: SERUM .WAV IN /3DS/SYRUP/",
 	};
-	int y = 30;
-	for (unsigned i = 0; i < sizeof(L) / sizeof(L[0]); i++, y += 10) {
-		int hdr = L[i][0] != ' ';
-		text(8, y, L[i], 1, 255, hdr ? 170 : 225, hdr ? 40 : 170);
+	int y = 22;
+	for (unsigned i = 0; i < sizeof(L) / sizeof(L[0]); i++, y += 11) {
+		if (L[i][0] != ' ') text(8, y, L[i], 1, VAL); else text(8, y, L[i], 1, TXT);
 	}
+	scanlines();
 }
 
 #define TAB_H 20
@@ -1890,50 +2023,56 @@ static int keyAt(int x, int y, int base) {
 	return base + (i / 7) * 12 + WN[i % 7];
 }
 
+static void outline(int x, int y, int w, int h, u8 r, u8 g, u8 b) { rect(x, y, w, 1, r, g, b); rect(x, y + h - 1, w, 1, r, g, b); rect(x, y, 1, h, r, g, b); rect(x + w - 1, y, 1, h, r, g, b); }
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	rect(0, 0, 320, KB_Y, BG);
 	static const char* TABS[6] = {"HELP", "<PAGE", "PAGE>", "OCT-", "OCT+", "LATCH"};
 	for (int i = 0; i < 6; i++) {
 		int x = i * 320 / 6, lit = (i == 0 && helpOn) || (i == 5 && latch);
-		rect(x + 2, 1, 320 / 6 - 4, TAB_H - 2, lit ? 90 : 40, lit ? 56 : 26, lit ? 16 : 9);
-		int w = strlen(TABS[i]) * 8;
-		text(x + 320 / 12 - w / 2, 7, TABS[i], 1, lit ? 255 : 200, lit ? 200 : 150, lit ? 120 : 90);
+		int w = strlen(TABS[i]) * 8, bw = 320 / 6 - 4;
+		if (lit) { rect(x + 2, 1, bw, TAB_H - 3, HI); text(x + 320 / 12 - w / 2, 6, TABS[i], 1, HITXT); }
+		else { outline(x + 2, 1, bw, TAB_H - 3, LINE); text(x + 320 / 12 - w / 2, 6, TABS[i], 1, TXT); }
 	}
-	rect(4, XY_Y, 312, XY_H, 28, 18, 8);
-	for (int gx = 1; gx < 8; gx++) rect(4 + gx * 39, XY_Y, 1, XY_H, 44, 28, 12);
-	for (int gy = 1; gy < 4; gy++) rect(4, XY_Y + gy * XY_H / 4, 312, 1, 44, 28, 12);
+	// XY pad: dotted EGA grid, crosshair
+	for (int gx = 0; gx <= 8; gx++) for (int y = XY_Y; y < XY_Y + XY_H; y += 2) px(4 + gx * 39, y, DIM);
+	for (int gy = 0; gy <= 4; gy++) for (int x = 4; x < 316; x += 2) px(x, XY_Y + gy * (XY_H - 1) / 4, DIM);
 	int cx = 4 + (int)(gOsc[0].pos * 311), cy = XY_Y + (int)((1 - gCutoff) * (XY_H - 1));
-	rect(cx, XY_Y, 1, XY_H, AMB2); rect(4, cy, 312, 1, AMB2); rect(cx - 4, cy - 4, 9, 9, AMB);
-	text(8, XY_Y + 4, "A WT POS >", 1, DIM); text(240, XY_Y + XY_H - 12, "^ CUTOFF", 1, DIM);
+	rect(cx, XY_Y, 1, XY_H, LINE); rect(4, cy, 312, 1, LINE);
+	rect(cx - 4, cy - 4, 9, 9, TXT); rect(cx - 2, cy - 2, 5, 5, BG);
+	text(8, XY_Y + 4, "WT POS >", 1, DIM); text(248, XY_Y + XY_H - 12, "^ CUTOFF", 1, DIM);
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
 	float ww = 320.0f / 14;
-	rect(0, KB_Y, 320, 240 - KB_Y, 30, 20, 10);
+	rect(0, KB_Y, 320, 240 - KB_Y, BG);
+	rect(0, KB_Y, 320, 1, LINE);
 	if (gScale) {   // scale mode: 14 pads, one per scale degree
 		int n = scaleLen();
 		for (int i = 0; i < 14; i++) {
 			int note = scaleNote(base + gRoot, i), x = (int)(i * ww), root = i % n == 0;
-			if (note < 128 && on[note]) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, AMB);
-			else if (root) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, 200, 150, 70);
-			else rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, 240, 228, 205);
-			text(x + (int)ww / 2 - (int)strlen(NOTE_NAMES[note % 12]) * 4, 226, NOTE_NAMES[note % 12], 1, 60, 40, 20);
+			int lit = note < 128 && on[note];
+			if (lit) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->keyOn));
+			else if (root) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->dim));
+			else { rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->keyW)); outline(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->keyLine)); }
+			if (lit || root) text(x + (int)ww / 2 - (int)strlen(NOTE_NAMES[note % 12]) * 4, 226, NOTE_NAMES[note % 12], 1, EC(0));
+			else text(x + (int)ww / 2 - (int)strlen(NOTE_NAMES[note % 12]) * 4, 226, NOTE_NAMES[note % 12], 1, EC(TH->keyLine));
 		}
-		char c[24]; snprintf(c, sizeof(c), "%s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); text(3, KB_Y + 4, c, 1, 90, 60, 30);
+		char c[24]; snprintf(c, sizeof(c), "%s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); text(4, KB_Y + 5, c, 1, VAL);
 		return;
 	}
 	for (int i = 0; i < 14; i++) {
 		int n = base + (i / 7) * 12 + WN[i % 7], x = (int)(i * ww);
-		if (on[n]) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, AMB);
-		else rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, 240, 228, 205);
+		if (on[n]) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->keyOn));
+		else { rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->keyW)); outline(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, EC(TH->keyLine)); }
 	}
 	for (int i = 0; i < 14; i++) {
 		if (!BL[i % 7]) continue;
 		int n = base + (i / 7) * 12 + WN[i % 7] + 1, bx = (int)((i + 1) * ww - ww * 0.3f);
-		if (on[n]) rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, AMB2);
-		else rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, 26, 16, 8);
+		if (on[n]) rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, EC(TH->keyOn));
+		else { rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, EC(TH->keyB)); outline(bx, KB_Y + 2, (int)(ww * 0.6f), 68, EC(TH->keyLine)); }
 	}
-	char c[8]; snprintf(c, sizeof(c), "C%d", base / 12 - 1); text(3, 228, c, 1, 120, 90, 50);
+	char c[8]; snprintf(c, sizeof(c), "C%d", base / 12 - 1);
+	if (on[base]) text(4, 228, c, 1, EC(0)); else text(4, 228, c, 1, EC(TH->keyLine));
 }
 
 // ---------------------------------------------------------------- graphics chip (PICA200) visuals
@@ -1991,18 +2130,19 @@ static void blendAdd(int on) {
 	else C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
 }
 // amber -> magenta -> cyan as the filter opens / the envelope rises
-static void hue(float t, float* r, float* g, float* b) {
+static void hue(float t, float* r, float* g, float* b) {   // EGA: snap to the theme's 4-colour ramp
 	if (t < 0) t = 0;
 	if (t > 1) t = 1;
+	{ int i = (int)(t * 3.999f); const u8* c = EGA[TH->acc[i]]; *r = c[0] / 255.0f; *g = c[1] / 255.0f; *b = c[2] / 255.0f; return; }
 	if (t < 0.5f) { float u = t * 2; *r = 1.0f; *g = 0.62f * (1 - u) + 0.3f * u; *b = 0.15f * (1 - u) + 0.8f * u; }
 	else { float u = (t - 0.5f) * 2; *r = 1.0f * (1 - u) + 0.3f * u; *g = 0.3f * (1 - u) + 0.95f * u; *b = 0.8f * (1 - u) + 1.0f * u; }
 }
 static void glowLine(const float* xs, const float* ys, int n, float r, float g, float b, float k) {
 	blendAdd(1);
-	static const float TH[3] = {7.0f, 3.5f, 1.4f}, AL[3] = {0.12f, 0.28f, 1.0f};
+	static const float THK[3] = {7.0f, 3.5f, 1.4f}, AL[3] = {0.12f, 0.28f, 1.0f};
 	for (int p = 0; p < 3; p++) {
 		u32 c = rgba(r * (p == 2 ? 1 : 0.9f) + (p == 2 ? 0.25f : 0), g + (p == 2 ? 0.2f : 0), b + (p == 2 ? 0.2f : 0), AL[p] * k);
-		for (int i = 0; i + 1 < n; i++) vLine(xs[i], ys[i], xs[i + 1], ys[i + 1], c, TH[p]);
+		for (int i = 0; i + 1 < n; i++) vLine(xs[i], ys[i], xs[i + 1], ys[i + 1], c, THK[p]);
 	}
 	blendAdd(0);
 }
@@ -2051,7 +2191,7 @@ static void visWavetable(int o, float cx, float cy, float k) {
 		}
 		float near = 1.0f - fabsf(z - gPosEff[o]) * 6; if (near < 0) near = 0;
 		float depth = 0.35f + 0.65f * (1 - z);
-		u32 fill = rgba(0.07f + 0.05f * near, 0.045f + 0.03f * near, 0.02f, 0.96f);
+		u32 fill = rgba(EGA[TH->bg][0] / 255.0f, EGA[TH->bg][1] / 255.0f, EGA[TH->bg][2] / 255.0f, 0.97f);
 		for (int i = 0; i + 1 < 48; i++) { vTri(xs[i], ys[i], xs[i + 1], ys[i + 1], bx[i], by[i], fill); vTri(xs[i + 1], ys[i + 1], bx[i + 1], by[i + 1], bx[i], by[i], fill); }
 		u32 lc = rgba(cr * depth * (0.45f + 0.55f * near), cg * depth * (0.45f + 0.55f * near), cb * depth * (0.45f + 0.55f * near), 1);
 		for (int i = 0; i + 1 < 48; i++) vLine(xs[i], ys[i], xs[i + 1], ys[i + 1], lc, (0.9f + near) * (k > 1 ? 1.4f : 1));
@@ -2081,8 +2221,8 @@ static void visScopes(float X0, float Y0, float W, float H) {
 	float cr, cg, cb; hue(gCutoff * 0.7f + gVisEnv * 0.3f, &cr, &cg, &cb);
 	for (int o = 0; o < 2; o++) {
 		float h = (H - 4) / 2, y0 = Y0 + o * (h + 4), mid = y0 + h / 2;
-		vRect(X0, y0, W, h, rgba(0.07f, 0.045f, 0.02f, 1));
-		u32 grid = rgba(0.16f, 0.1f, 0.04f, 1);
+		vRect(X0, y0, W, h, rgba(EGA[TH->bg][0] / 255.0f, EGA[TH->bg][1] / 255.0f, EGA[TH->bg][2] / 255.0f, 1));
+		u32 grid = rgba(EGA[TH->line][0] / 510.0f, EGA[TH->line][1] / 510.0f, EGA[TH->line][2] / 510.0f, 1);
 		for (int g = 1; g < 6; g++) vLine(X0 + g * W / 6.0f, y0, X0 + g * W / 6.0f, y0 + h, grid, 0.6f);
 		vLine(X0, mid, X0 + W, mid, grid, 0.8f);
 		if (!gOsc[o].on) continue;
@@ -2152,7 +2292,7 @@ static void visSpectrum(float X0, float Y0, float W, float H, int o) {
 }
 static void visFull(void) {
 	int mode = gVisMode ? gVisMode : 1 + ((int)(gVisT / 10.0f)) % 4;   // AUTO: change every 10 s
-	if (gVisBeat > 0.01f) { blendAdd(1); vRect(0, 0, 400, 240, rgba(1.0f, 0.55f, 0.15f, gVisBeat * 0.12f)); blendAdd(0); }
+	if (gVisBeat > 0.01f) { const u8* c = EGA[TH->acc[1]]; blendAdd(1); vRect(0, 0, 400, 240, rgba(c[0] / 255.0f, c[1] / 255.0f, c[2] / 255.0f, gVisBeat * 0.12f)); blendAdd(0); }
 	if (mode == 1) visWavetable(gVisOsc, 200, 128, 1.6f);
 	else if (mode == 2) visScopes(10, 20, 380, 210);
 	else if (mode == 3) visOrbit(200, 125, 100);
@@ -2190,18 +2330,18 @@ static void visFrame(int page, float dt) {
 	int full = page == 8;
 	if (have && lastPage == page) {
 		if (full) { u8* fbp = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); GSPGPU_InvalidateDataCache(gFullLin, 240 * 400 * 3); memcpy(fbp, gFullLin, 240 * 400 * 3); }
-		else if (page == 1 || page == 2) visBlit(16, 216);
-		else visBlit(16, 152);
+		else if (page == 1 || page == 2) visBlit(30, 206);
+		else visBlit(30, 154);
 	}
 	lastPage = page; have = 1;
 	C3D_RenderTarget* tg = full ? gFullTgt : gVisTgt;
 	int cols = full ? 400 : VIS_W;
-	C2D_TargetClear(tg, full ? C2D_Color32(0x0a, 0x06, 0x03, 0xff) : C2D_Color32(0x14, 0x0d, 0x06, 0xff));
+	C2D_TargetClear(tg, C2D_Color32(EGA[TH->bg][0], EGA[TH->bg][1], EGA[TH->bg][2], 0xff));
 	C2D_SceneBegin(tg);
 	C2D_SceneSize(240 * VIS_SS, cols * VIS_SS, true);   // tilted like a real screen target
 	if (full) visFull();
-	else if (page == 1 || page == 2) visWavetable(page - 1, 98, 128, 1.0f);
-	else visScopes(0, 16, 196, 136);
+	else if (page == 1 || page == 2) visWavetable(page - 1, 98, 122, 0.95f);
+	else visScopes(0, 30, 196, 124);
 	C2D_Flush();
 	if (gGpuFrames < 3) { snprintf(mk, sizeof(mk), "GPU F%d DRAWN", gGpuFrames + 1); crashMark(mk); }
 	// with SCALE_XY the transfer engine takes the same (input) dimensions for both sides and halves them itself
@@ -2356,6 +2496,7 @@ int main(void) {
 			} else if (paramChange(p, dir, fast)) {
 				if (p->dirty & D_STYLE) { gPreset = 0; presetLoad(gStyle, 0); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				if (p->dirty & D_OUT) outputApply();
+				if (p->dirty & D_THEME) botDirty = 1;
 				if (p->dirty & (D_SCALE | D_SEQ)) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; botDirty = 1; if (p->p == &gSeqMode && gSeqMode == 2) gRecPos = 0; if (p->p == &gSeqMode && gSeqMode != 1) gSeqTr = 0; }
 				if (p->dirty & D_PRESET) { presetLoad(gStyle, gPreset); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				if (p->dirty & (D_TBLA | D_TBLB)) LightLock_Lock(&gMipsLock);
@@ -2499,8 +2640,9 @@ int main(void) {
 							text(6, 4, ov, 1, 255, 200, 130);
 							text(394 - (int)strlen(gPatchName) * 8, 4, gPatchName, 1, 200, 150, 90);
 						}
-					} else if (page <= 2) { Osc* o = &gOsc[page - 1]; text(8, 19, o->on ? (page == 2 ? "OSC B" : "OSC A") : (page == 2 ? "OSC B OFF" : "OSC A OFF"), 1, DIM); }
-					else { text(8, 19, "A", 1, DIM); text(8, 89, "B", 1, DIM); }
+					} else if (page <= 2) { Osc* o = &gOsc[page - 1]; frame(4, 30, 196, 177); text(8, 34, o->on ? (page == 2 ? "OSC B" : "OSC A") : (page == 2 ? "OSC B OFF" : "OSC A OFF"), 1, DIM); }
+					else { frame(4, 30, 196, 125); text(8, 34, "A", 1, DIM); text(8, 96, "B", 1, DIM); }
+					scanlines();
 				}
 			}
 			topAgain = topDirty; topDirty = 0;

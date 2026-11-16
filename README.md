@@ -26,6 +26,10 @@ Waveform rebuilds run on the 3DS's second CPU core (a worker thread on core 1, w
 - **Tilt and breath:** mod sources TILT L/R, TILT F/B (accelerometer, centred on how you hold it at start; TILT CENTER re-centres) and BREATH (microphone level). Patches: TILT WOBBLE, BREATH LEAD, TILT PAD.
 - **Clock:** the arpeggiator and sequencer run in the audio thread on every DSP frame (~4.9 ms) instead of once per screen refresh.
 
+## Look
+
+Pip-Boy style layout in the 16-colour EGA palette: section tabs across the top (PATCH, OSC, SHAPE, FX, PLAY, VIS) with sub-pages under them, an inverse bar on the selected control, 8-block meters for continuous values, a footer that explains the selected control, and optional CRT scanlines. THEME (PIP GREEN, DOS BLUE, AMBER, MAGENTA) and SCANLINES are on the VIS page; the GPU visuals use the theme's EGA colours.
+
 ## Visualizer page
 
 The last page (VISUALIZER) fills the top screen with GPU visuals while you play on the bottom screen: WAVETABLE (big 3D table), SCOPES, ORBIT (OSC A against OSC B, spirograph trails) and SPECTRUM (harmonic bars), or AUTO to cycle every 10 s. Arp/sequencer steps pulse the background. D-pad picks VIS MODE / VIS OSC / OVERLAY.
