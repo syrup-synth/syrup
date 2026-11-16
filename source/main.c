@@ -3862,6 +3862,13 @@ static size_t dlToMem(void* d, size_t sz, size_t nm, void* u) {
 	memcpy(m->p + m->n, d, k); m->n += k; m->p[m->n] = 0; return k;
 }
 static size_t dlToFile(void* d, size_t sz, size_t nm, void* u) { return fwrite(d, sz, nm, (FILE*)u); }
+static const char* curlWords(int r) {
+	switch (r) {
+	case 6: return "NO INTERNET (DNS)"; case 7: return "CAN'T CONNECT"; case 18: return "DOWNLOAD CUT OFF";
+	case 23: return "SAVE FAILED"; case 28: return "TIMED OUT"; case 35: return "SECURE LINK FAILED"; case 56: return "CONNECTION DROPPED";
+	default: return "NETWORK ERROR";
+	}
+}
 static int httpGet(const char* url, void* sink, int toFile) {
 	CURL* c = curl_easy_init(); if (!c) return 0;
 	curl_easy_setopt(c, CURLOPT_URL, url);
@@ -3877,7 +3884,7 @@ static int httpGet(const char* url, void* sink, int toFile) {
 	CURLcode r = curl_easy_perform(c); long code = 0;
 	curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
 	curl_easy_cleanup(c);
-	if (r != CURLE_OK) snprintf(gDlErr, sizeof(gDlErr), "NETWORK ERROR %d", (int)r);
+	if (r != CURLE_OK) snprintf(gDlErr, sizeof(gDlErr), "%s (%d)", curlWords((int)r), (int)r);
 	else if (code != 200) snprintf(gDlErr, sizeof(gDlErr), "SERVER SAID %ld", code);
 	return r == CURLE_OK && code == 200;
 }
@@ -3947,14 +3954,14 @@ static void dlTick(void) {   // progress in the footer; when done, rescan so the
 
 // ---- in-app updater: compare the release's version.txt with this build, then download and install the new CIA
 #define REL_URL "https://github.com/syrup-synth/syrup/releases/latest/download/"
-static volatile u32 gUpGot = 0, gUpTotal = 0;
+static volatile u32 gUpGot = 0, gUpTotal = 0; static volatile int gUpSd = 0;
 static char gUpVer[12];
 #ifndef SYRUP_NO_NET
-typedef struct { Handle cia; FILE* f; u64 off; } UpSink;
+typedef struct { Handle cia; FILE* f; u64 off; Result err; } UpSink;
 static size_t upWrite(void* d, size_t sz, size_t nm, void* u) {
 	UpSink* k = (UpSink*)u; u32 n = sz * nm, w = 0;
 	if (k->f) { w = fwrite(d, 1, n, k->f); }
-	else if (R_FAILED(FSFILE_Write(k->cia, &w, k->off, d, n, 0))) return 0;
+	else { Result rr = FSFILE_Write(k->cia, &w, k->off, d, n, FS_WRITE_FLUSH); if (R_FAILED(rr)) { k->err = rr; return 0; } }
 	k->off += w; gUpGot = (u32)k->off; return w;
 }
 static int upProgress(void* c, curl_off_t dlt, curl_off_t dl, curl_off_t ult, curl_off_t ul) { (void)c; (void)dl; (void)ult; (void)ul; if (dlt > 0) gUpTotal = (u32)dlt; return 0; }
@@ -3970,30 +3977,45 @@ static void upMain(void* arg) {
 		else {
 			gUpState = 2; gUpGot = gUpTotal = 0;
 			int hb = envIsHomebrew();   // .3dsx from the Homebrew Launcher: replace the file; installed CIA: reinstall through AM
-			UpSink k = {0};
-			if (hb) k.f = fopen("sdmc:/3ds/syrup.3dsx.part", "wb");
-			else if (R_FAILED(amInit()) || R_FAILED(AM_StartCiaInstall(MEDIATYPE_SD, &k.cia))) { snprintf(gDlErr, sizeof(gDlErr), "CAN'T START INSTALL"); ok = 0; }
-			if (ok && (hb ? k.f != NULL : 1)) {
-				CURL* c = curl_easy_init();
-				curl_easy_setopt(c, CURLOPT_URL, hb ? REL_URL "syrup.3dsx" : REL_URL "syrup.cia");
-				curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L);
-				curl_easy_setopt(c, CURLOPT_USERAGENT, "Syrup-3DS"); curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 20L); curl_easy_setopt(c, CURLOPT_TIMEOUT, 600L);
-				curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 65536L);
-				curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, upWrite); curl_easy_setopt(c, CURLOPT_WRITEDATA, &k);
-				curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, upProgress); curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
-				CURLcode r = curl_easy_perform(c); long code = 0; curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
-				curl_easy_cleanup(c);
-				ok = r == CURLE_OK && code == 200 && k.off > 1024;
-				if (!ok) snprintf(gDlErr, sizeof(gDlErr), r != CURLE_OK ? "NETWORK ERROR %d" : "SERVER SAID %d", r != CURLE_OK ? (int)r : (int)code);
+			for (int attempt = 0; attempt < 2; attempt++) {   // attempt 1 (CIA only): save the CIA to SD for FBI
+				int toSd = hb || attempt == 1;
+				UpSink k = {0}; ok = 1; gUpGot = gUpTotal = 0;
+				const char* tmp = hb ? "sdmc:/3ds/syrup.3dsx.part" : "sdmc:/cias/syrup.cia.part";
+				if (toSd) { mkdir("sdmc:/cias", 0777); k.f = fopen(tmp, "wb"); if (!k.f) { snprintf(gDlErr, sizeof(gDlErr), "CAN'T WRITE TO SD"); ok = 0; } }
+				else {
+					Result rr = amInit(); if (R_SUCCEEDED(rr)) rr = AM_StartCiaInstall(MEDIATYPE_SD, &k.cia);
+					if (R_FAILED(rr)) { snprintf(gDlErr, sizeof(gDlErr), "INSTALLER REFUSED %08lX", (unsigned long)rr); ok = 0; }
+				}
+				if (ok) {
+					CURL* c = curl_easy_init();
+					curl_easy_setopt(c, CURLOPT_URL, hb ? REL_URL "syrup.3dsx" : REL_URL "syrup.cia");
+					curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L);
+					curl_easy_setopt(c, CURLOPT_USERAGENT, "Syrup-3DS"); curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 20L); curl_easy_setopt(c, CURLOPT_TIMEOUT, 600L);
+					curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 65536L);
+					curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, upWrite); curl_easy_setopt(c, CURLOPT_WRITEDATA, &k);
+					curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, upProgress); curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+					CURLcode r = curl_easy_perform(c); long code = 0; curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
+					curl_easy_cleanup(c);
+					ok = r == CURLE_OK && code == 200 && k.off > 1024;
+					if (!ok) {
+						if (k.err) snprintf(gDlErr, sizeof(gDlErr), "INSTALL WRITE %08lX", (unsigned long)k.err);
+						else if (r != CURLE_OK) snprintf(gDlErr, sizeof(gDlErr), "%s (%d)", curlWords((int)r), (int)r);
+						else snprintf(gDlErr, sizeof(gDlErr), "SERVER SAID %ld", code);
+					}
+				}
+				if (toSd) {
+					const char* fin = hb ? "sdmc:/3ds/syrup.3dsx" : "sdmc:/cias/syrup.cia";
+					if (k.f) fclose(k.f);
+					if (ok) { remove(fin); rename(tmp, fin); } else remove(tmp);
+					if (ok && !hb) gUpSd = 1;
+				} else if (k.cia) {
+					if (ok) { Result rr = AM_FinishCiaInstall(k.cia); if (R_FAILED(rr)) { snprintf(gDlErr, sizeof(gDlErr), "INSTALL FAILED %08lX", (unsigned long)rr); ok = 0; } }
+					else AM_CancelCIAInstall(k.cia);
+				}
+				if (!toSd) amExit();
+				if (ok || hb) break;
+				// direct install failed: keep the reason, then fall back to saving the CIA for FBI
 			}
-			if (hb) {
-				if (k.f) fclose(k.f);
-				if (ok) { remove("sdmc:/3ds/syrup.3dsx"); rename("sdmc:/3ds/syrup.3dsx.part", "sdmc:/3ds/syrup.3dsx"); } else remove("sdmc:/3ds/syrup.3dsx.part");
-			} else if (k.cia) {
-				if (ok && R_FAILED(AM_FinishCiaInstall(k.cia))) { snprintf(gDlErr, sizeof(gDlErr), "INSTALL FAILED"); ok = 0; }
-				else if (!ok) AM_CancelCIAInstall(k.cia);
-			}
-			if (!hb) amExit();
 			gUpState = ok ? 3 : 5;
 		}
 	} else gUpState = 5;
@@ -4017,16 +4039,14 @@ static void upTick(void) {
 	switch (gUpState) {
 	case 1: say("CHECKING FOR AN UPDATE..."); break;
 	case 2: if (gUpTotal) snprintf(m, sizeof(m), "DOWNLOADING %s  %d%%", gUpVer, (int)(gUpGot * 100.0f / gUpTotal)); else snprintf(m, sizeof(m), "DOWNLOADING %s  %dK", gUpVer, (int)(gUpGot / 1024)); say(m); break;
-	case 3: snprintf(m, sizeof(m), "UPDATED TO %s - CLOSE AND REOPEN SYRUP", gUpVer); say(m); gMsgT = 30; gUpState = 0; break;
+	case 3: if (gUpSd) snprintf(m, sizeof(m), "%s SAVED: FBI > SD > cias > syrup.cia", gUpVer); else snprintf(m, sizeof(m), "UPDATED TO %s - CLOSE AND REOPEN SYRUP", gUpVer); say(m); gMsgT = 30; gUpState = 0; gUpSd = 0; break;
 	case 4: snprintf(m, sizeof(m), "UP TO DATE (BUILD %.7s)", SYRUP_VER); say(m); gUpState = 0; break;
-	case 5: snprintf(m, sizeof(m), "UPDATE FAILED: %.28s", gDlErr[0] ? gDlErr : "?"); say(m); gUpState = 0; break;
+	case 5: snprintf(m, sizeof(m), "UPDATE FAILED: %.30s", gDlErr[0] ? gDlErr : "?"); say(m); gMsgT = 30; gUpState = 0; break;
 	}
 }
 
 static void extrasExit(void) {
 	linkStop(); camStop();
-	if (gDlThread) { threadJoin(gDlThread, 3000000000ULL); gDlThread = NULL; }
-	if (gCapBuf) ndspSetCapture(NULL);
 	if (gLcdOK) { GSPLCD_SetBrightness(GSPLCD_SCREEN_TOP, gBrightTop); GSPLCD_SetBrightness(GSPLCD_SCREEN_BOTTOM, gBrightBot); gspLcdExit(); }
 	HIDUSER_DisableGyroscope();
 }
@@ -5115,6 +5135,13 @@ int main(void) {
 		gspWaitForVBlank();
 	}
 
+	// background threads first (network MIDI, IR, downloads, camera) so nothing is mid-call while services close
+	if (!gSafeMode) {
+		if (gMidiNet) { gMidiNet = 0; netMidiChanged(); }
+		linkStop();
+		if (gDlThread) { threadJoin(gDlThread, 5000000000ULL); threadFree(gDlThread); gDlThread = NULL; }
+		camStop();
+	}
 	if (gWorker) { ASET(gWorkerQuit, 1); LightEvent_Signal(&gJobEv); threadJoin(gWorker, U64_MAX); threadFree(gWorker); }
 	// shut the audio clock down first: the sound thread starts drum / arp / sequencer notes on the second
 	// sound chip, so it must be stopped (and out of its tick) before that chip's command memory goes away
@@ -5122,13 +5149,14 @@ int main(void) {
 	LightLock_Lock(&gVoiceLock);   // waits for a tick that's still running
 	gAudioClock = 0; gDrums = 0; gLoopMode = 0;
 	if (gCsndOK) {
+		echoStop();   // capture units off and released before the chip goes away
 		for (int c = 0; c < NCS; c++) if (gCsndOK && (csndChannels & BIT(c))) CSND_SetPlayState(c, 0);
 		csndExecCmds(true);
 		gCsndOK = 0;
 		csndExit();
 	}
 	LightLock_Unlock(&gVoiceLock);
-	if (gAudioOK) { for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }
+	if (gAudioOK) { ndspSetCapture(NULL); for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }
 	if (!gSafeMode) { extrasExit(); sensorsExit(); }
 	gpuExit();
 	remove(CRASH_PATH);   // clean exit
