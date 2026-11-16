@@ -72,7 +72,7 @@ static void fft(cpx* a, int n, int inv) {
 	}
 }
 
-static int gGpuOK = 0, gGpuFx = 0;   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
+static int gGpuOK = 0, gGpuFx = 0, gGpuHung = 0, gGpuFrames = 0;   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
 static int gInAudioTick = 0;
 // crash guard: a marker file holds the last milestone reached; it is removed on a clean exit.
 // If it is still there at launch, the last run crashed -> SAFE MODE (new hardware features off).
@@ -1803,6 +1803,8 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		for (int c = 0; c < NCH; c++) if (gDspOwner[c] >= 0 || (gNoiseOn && c == NOISE_CH)) dsp++;
 		for (int c = 0; c < NCS; c++) if (csUsable(c)) { csTot++; if (gCsOwner[c] >= 0) cs++; }
 		snprintf(s, sizeof(s), "NOTES %d  CORE2 %s  FX BUS %s", voices, gWorker ? "ON" : "OFF", busActive() ? (gBusSeen ? "OK" : "ON") : (gBusFail ? "FALLBK" : "OFF")); text(6, 194, s, 1, DIM);
+		if (gGpuHung) text(6, 218, "GPU HUNG - VISUALS OFF", 1, 255, 90, 60);
+		else if (gGpuFx && gGpuOK) { snprintf(s, sizeof(s), "GPU FRAMES %d", gGpuFrames); text(6, 218, s, 1, DIM); }
 		snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d", dsp, cs, csTot); text(6, 206, s, 1, DIM);
 	}
 	Param* P = PAGES[page]; int n = pageLen(page);
@@ -1815,7 +1817,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		int w = strlen(v) * 8; text(396 - w, y, v, 1, TXT);
 	}
 	if (!gAudioOK) text(208, 230, "NO AUDIO: RUN DSP1", 1, 255, 80, 60);
-	else if (gSafeMode) { char m[60]; snprintf(m, sizeof(m), "SAFE MODE - LAST RUN CRASHED AT: %.20s", gCrashStage); rect(0, 229, 400, 11, 90, 20, 10); text(4, 231, m, 1, 255, 160, 120); }
+	else if (gSafeMode) { char m[60]; snprintf(m, sizeof(m), "SAFE MODE - CRASHED AT: %.26s", gCrashStage); rect(0, 229, 400, 11, 90, 20, 10); text(4, 231, m, 1, 255, 160, 120); }
 }
 
 static void drawHelp(void) {
@@ -1938,7 +1940,7 @@ static float gTrailLastPos[2] = {-1, -1}, gTrailLastSum[2];
 
 static void gpuInit(void) {
 	if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) return;
-	if (!C2D_Init(8192)) { C3D_Fini(); return; }
+	if (!C2D_Init(C2D_DEFAULT_MAX_OBJECTS)) { C3D_Fini(); return; }
 	C2D_Prepare();
 	gVisTgt = C3D_RenderTargetCreate(240 * VIS_SS, VIS_W * VIS_SS, GPU_RB_RGBA8, GPU_RB_DEPTH16);
 	gVisLin = (u8*)linearAlloc(240 * VIS_W * 3);
@@ -1947,6 +1949,7 @@ static void gpuInit(void) {
 static void gpuExit(void) {
 	if (gVisTgt) C3D_RenderTargetDelete(gVisTgt);
 	if (gVisLin) linearFree(gVisLin);
+	if (gGpuHung) return;   // a stuck GPU queue would block C3D_Fini forever
 	if (gGpuOK || gVisTgt) { C2D_Fini(); C3D_Fini(); }
 }
 
@@ -2013,7 +2016,7 @@ static void visWavetable(int o) {
 	float cr, cg, cb; hue(gCutoff * 0.7f + gVisEnv * 0.3f, &cr, &cg, &cb);
 	Proj P = {0.55f + 0.22f * sinf(gVisT * 0.45f), 98, 128};
 	P.cs = cosf(P.yaw); P.sn = sinf(P.yaw);
-	int nf = tb->nFrames < 1 ? 1 : tb->nFrames, S = nf < 28 ? nf : 28;
+	int nf = tb->nFrames < 1 ? 1 : tb->nFrames, S = nf < 20 ? nf : 20;
 	float pk = tb->peak > 1e-4f ? tb->peak : 1;
 	float xs[48], ys[48], bx[48], by[48];
 	for (int s = S - 1; s >= 0; s--) {
@@ -2085,7 +2088,7 @@ static void visBlit(int y0, int y1) {
 	for (int x = 0; x < VIS_W; x++) memcpy(fbp + ((VIS_X + x) * 240 + m0) * 3, gVisLin + (x * 240 + m0) * 3, (m1 - m0 + 1) * 3);
 }
 
-static int visActive(int page) { return gGpuOK && gGpuFx && page >= 1 && page <= 6; }
+static int visActive(int page) { return gGpuOK && gGpuFx && !gGpuHung && page >= 1 && page <= 6; }
 static void visFrame(int page, float dt) {
 	gVisT += dt;
 	float e = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho) e += gV[i].env;
@@ -2094,7 +2097,15 @@ static void visFrame(int page, float dt) {
 	for (int o = 0; o < 2; o++) trailPush(o, gPosEff[o]);
 	// pipelined: C3D_FrameBegin waits for the previous frame (its render + transfer), so that
 	// result is copied in now and this frame's transfer is queued inside the frame (no PPF wait)
-	C3D_FrameBegin(0);
+	// never block: if the GPU hasn't finished the last frame, skip; if it stays stuck, give up on it
+	static int stuck = 0;
+	char mk[40];
+	if (gGpuFrames < 3) { snprintf(mk, sizeof(mk), "GPU F%d BEGIN", gGpuFrames + 1); crashMark(mk); }
+	if (!C3D_FrameBegin(C3D_FRAME_NONBLOCK)) {
+		if (++stuck > 90) { gGpuHung = 1; snprintf(mk, sizeof(mk), "GPU HUNG AFTER F%d", gGpuFrames); crashMark(mk); }
+		return;
+	}
+	stuck = 0;
 	static int lastPage = -1, have = 0;
 	if (have && lastPage == page) { if (page == 1 || page == 2) visBlit(16, 216); else visBlit(16, 152); }
 	lastPage = page; have = 1;
@@ -2104,10 +2115,14 @@ static void visFrame(int page, float dt) {
 	if (page == 1 || page == 2) visWavetable(page - 1);
 	else visScopes();
 	C2D_Flush();
+	if (gGpuFrames < 3) { snprintf(mk, sizeof(mk), "GPU F%d DRAWN", gGpuFrames + 1); crashMark(mk); }
 	C3D_SyncDisplayTransfer((u32*)gVisTgt->frameBuf.colorBuf, GX_BUFFER_DIM(240 * VIS_SS, VIS_W * VIS_SS), (u32*)gVisLin, GX_BUFFER_DIM(240, VIS_W),
 		GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) |
 		GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_XY));
 	C3D_FrameEnd(0);
+	gGpuFrames++;
+	if (gGpuFrames <= 3) { snprintf(mk, sizeof(mk), "GPU F%d SUBMITTED", gGpuFrames); crashMark(mk); }
+	if (gGpuFrames == 120) crashMark("GPU RUNNING 120 FRAMES");
 }
 
 // ---------------------------------------------------------------- second CPU core: waveform rebuild worker
