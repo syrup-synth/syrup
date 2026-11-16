@@ -4180,16 +4180,8 @@ static void visFrame(int page, float dt) {
 	if (have && lastPage == page) {
 		if (full) {
 			u8* fbp = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
-			// the GPU's copy engine moves the finished picture into the screen (no CPU copy); if it ever hung
-			// last time, the crash marker turns this off and the CPU copies instead
-			static int copies = 0;
-			if (gGpuCopy) {
-				if (copies < 3) { snprintf(mk, sizeof(mk), "GPU COPY %d", copies + 1); crashMark(mk); }
-				GSPGPU_FlushDataCache(fbp, 240 * 400 * 3);
-				C3D_SyncTextureCopy((u32*)gFullLin, GX_BUFFER_DIM((240 * 400 * 3) >> 4, 0), (u32*)fbp, GX_BUFFER_DIM((240 * 400 * 3) >> 4, 0), 240 * 400 * 3, GX_TRANSFER_RAW_COPY(1));
-				GSPGPU_InvalidateDataCache(fbp, 240 * 400 * 3);
-				if (++copies == 3) crashMark("GPU COPY OK");
-			} else { GSPGPU_InvalidateDataCache(gFullLin, 240 * 400 * 3); memcpy(fbp, gFullLin, 240 * 400 * 3); }
+			// CPU copy: a GPU copy issued inside the frame lands after the menu text is drawn and wipes it
+			GSPGPU_InvalidateDataCache(gFullLin, 240 * 400 * 3); memcpy(fbp, gFullLin, 240 * 400 * 3);
 		}
 		else if (page == 1 || page == 2) visBlit(30, 206);
 		else visBlit(30, 154);
