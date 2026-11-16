@@ -81,8 +81,8 @@ static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
 static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
 static float gVisBeat = 0;
 static int gVisTrails = 0, gVisParts = 1, gVisBurst = 0;
-#define NTHEMES 5
-static const char* THEME_NAMES[NTHEMES] = {"ORIGINAL", "PIP GREEN", "DOS BLUE", "AMBER EGA", "MAGENTA"};
+#define NTHEMES 6
+static const char* THEME_NAMES[NTHEMES] = {"ORIGINAL", "PIP GREEN", "DOS BLUE", "AMBER EGA", "MAGENTA", "STICKER"};
 static int gTheme = 0, gScan = 0;   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
 static int gInAudioTick = 0;
 // crash guard: a marker file holds the last milestone reached; it is removed on a clean exit.
@@ -2146,6 +2146,7 @@ typedef struct {
 	u8 keyW[3], keyB[3], keyOn[3], keyOnB[3], keyLine[3], kbBg[3], tab[3], tabTxt[3], pad[3], grid[3];
 	u8 acc[4];        // EGA visual ramp (unused when smooth)
 	int ega;          // 1: EGA-style (meters, dotted grids, outlined tabs, quantised visual colours)
+	int rampOn; u8 ramp[3][3];   // visual colour ramp (GPU visuals) for non-EGA themes; ORIGINAL uses amber > magenta > cyan
 } Theme;
 static const Theme THEMES[NTHEMES] = {
 	{"ORIGINAL", {14, 9, 4}, {200, 110, 20}, {150, 100, 40}, {255, 225, 170}, {70, 44, 14}, {255, 220, 160}, {255, 225, 170}, {255, 80, 60},
@@ -2158,6 +2159,10 @@ static const Theme THEMES[NTHEMES] = {
 	 {0, 0, 0}, {170, 85, 0}, {255, 255, 85}, {255, 255, 85}, {255, 255, 85}, {0, 0, 0}, {0, 0, 0}, {255, 255, 85}, {0, 0, 0}, {170, 85, 0}, {6, 14, 12, 15}, 1},
 	{"MAGENTA", {0, 0, 0}, {170, 0, 170}, {170, 0, 170}, {255, 85, 255}, {255, 85, 255}, {0, 0, 0}, {85, 255, 255}, {255, 85, 85},
 	 {0, 0, 0}, {170, 0, 170}, {85, 255, 255}, {85, 255, 255}, {255, 85, 255}, {0, 0, 0}, {0, 0, 0}, {255, 85, 255}, {0, 0, 0}, {170, 0, 170}, {5, 13, 11, 15}, 1},
+	// STICKER: orange backing, sky-blue fur, hot-pink bow, cream, navy outlines
+	{"STICKER", {26, 24, 50}, {232, 100, 52}, {110, 165, 200}, {200, 232, 245}, {226, 66, 136}, {255, 246, 238}, {255, 150, 90}, {255, 90, 90},
+	 {246, 238, 226}, {34, 38, 68}, {226, 66, 136}, {232, 100, 52}, {34, 38, 68}, {34, 38, 68}, {58, 48, 92}, {200, 232, 245}, {36, 34, 66}, {62, 60, 104}, {0, 0, 0, 0}, 0,
+	 1, {{232, 100, 52}, {226, 66, 136}, {110, 185, 225}}},
 };
 #define TH (&THEMES[gTheme])
 #define RGB3(a) (a)[0], (a)[1], (a)[2]
@@ -2618,7 +2623,7 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 			if (lit) { rect(x + 2, 1, bw, TAB_H - 3, HI); text(x + 320 / 12 - w / 2, 6, TABS[i], 1, HITXT); }
 			else { outline(x + 2, 1, bw, TAB_H - 3, LINE); text(x + 320 / 12 - w / 2, 6, TABS[i], 1, TXT); }
 		} else {
-			if (lit) { rect(x + 2, 1, bw, TAB_H - 2, 90, 56, 16); text(x + 320 / 12 - w / 2, 7, TABS[i], 1, 255, 200, 120); }
+			if (lit) { rect(x + 2, 1, bw, TAB_H - 2, HI); text(x + 320 / 12 - w / 2, 7, TABS[i], 1, HITXT); }
 			else { rect(x + 2, 1, bw, TAB_H - 2, RGB3(TH->tab)); text(x + 320 / 12 - w / 2, 7, TABS[i], 1, RGB3(TH->tabTxt)); }
 		}
 	}
@@ -3428,6 +3433,8 @@ static void hue(float t, float* r, float* g, float* b) {   // EGA: snap to the t
 	if (t < 0) t = 0;
 	if (t > 1) t = 1;
 	if (TH->ega) { int i = (int)(t * 3.999f); const u8* c = EGA[TH->acc[i]]; *r = c[0] / 255.0f; *g = c[1] / 255.0f; *b = c[2] / 255.0f; return; }
+	if (TH->rampOn) { float x = t * 2; int i = x >= 1 ? 1 : 0; float u = x - i; const u8* a = TH->ramp[i]; const u8* b2 = TH->ramp[i + 1];
+		*r = (a[0] + (b2[0] - a[0]) * u) / 255.0f; *g = (a[1] + (b2[1] - a[1]) * u) / 255.0f; *b = (a[2] + (b2[2] - a[2]) * u) / 255.0f; return; }
 	if (t < 0.5f) { float u = t * 2; *r = 1.0f; *g = 0.62f * (1 - u) + 0.3f * u; *b = 0.15f * (1 - u) + 0.8f * u; }
 	else { float u = (t - 0.5f) * 2; *r = 1.0f * (1 - u) + 0.3f * u; *g = 0.3f * (1 - u) + 0.95f * u; *b = 0.8f * (1 - u) + 1.0f * u; }
 }

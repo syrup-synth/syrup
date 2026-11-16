@@ -28,7 +28,7 @@ Waveform rebuilds run on the 3DS's second CPU core (a worker thread on core 1, w
 
 ## Look
 
-The original amber look with a tab bar across the top (PATCH, OSC, SHAPE, FX, PLAY, VIS) and sub-pages under it, bracket frames on the graphics, and a footer that explains the selected control. FILTER+ENV shows both envelopes as real A-H-D-S-R shapes (stage of the selected control highlighted, a dot riding the shape for the newest note). VIS page: THEME (ORIGINAL, or EGA PIP GREEN / DOS BLUE / AMBER EGA / MAGENTA) and SCANLINES.
+The original amber look with a tab bar across the top (PATCH, OSC, SHAPE, FX, PLAY, VIS) and sub-pages under it, bracket frames on the graphics, and a footer that explains the selected control. FILTER+ENV shows both envelopes as real A-H-D-S-R shapes (stage of the selected control highlighted, a dot riding the shape for the newest note). VIS page: THEME (ORIGINAL, STICKER, or EGA PIP GREEN / DOS BLUE / AMBER EGA / MAGENTA) and SCANLINES.
 
 ## LFOs
 
