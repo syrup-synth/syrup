@@ -226,7 +226,7 @@ AccessControlInfo:
    #- ir:rst
    #- ir:u
    #- ir:USER
-   #- mic:u
+   - mic:u
    #- ndm:u
    #- news:s
    - nwm::EXT

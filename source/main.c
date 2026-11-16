@@ -24,6 +24,7 @@
 #include <citro3d.h>
 #include <citro2d.h>
 #include <stddef.h>
+#include <malloc.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,6 +70,7 @@ static void fft(cpx* a, int n, int inv) {
 }
 
 static int gGpuOK = 0, gGpuFx = 1;   // graphics-chip visuals (see visFrame)
+static int gInAudioTick = 0;        // set while the audio thread runs the arp/seq clock (it holds gMipsLock)
 static LightLock gMipsLock;   // guards the shared FFT buffers (worker on core 1 vs main core)
 static Thread gWorker = NULL;
 
@@ -320,8 +322,9 @@ static const char* NOISE_TYPES[3] = {"WHITE", "PINK", "CRACKLE"};
 static const char* FILT_TYPES[5] = {"LOW PASS", "HIGH PASS", "BAND PASS", "NOTCH", "PEAK"};
 static const char* LFO_SHAPES[5] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "S&H"};
 static const char* LFO_MODES[2] = {"FREE", "TRIG"};
-enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_COUNT };
-static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y"};
+enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_COUNT };
+static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y", "TILT L/R", "TILT F/B", "BREATH"};
+static float gTiltX, gTiltY, gMicEnv;
 enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_COUNT };
 static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN"};
 static const char* VOICE_MODES[3] = {"POLY", "MONO", "LEGATO"};
@@ -528,6 +531,10 @@ static int takeCh(int bk, int vi) {
 	return -1;
 }
 
+static int gFilt2 = 0, gLowCut = 2;
+static const char* FILT2_NAMES[3] = {"OFF", "+6DB SLOPE", "LOW CUT"};
+static const char* LOWCUT_NAMES[6] = {"30HZ", "60HZ", "120HZ", "250HZ", "500HZ", "1KHZ"};
+static const float LOWCUT_HZ[6] = {30, 60, 120, 250, 500, 1000};
 static void filterSet(int ch, float hz, float res) {
 	if (hz < 40) hz = 40;
 	if (hz > 15000) hz = 15000;
@@ -540,6 +547,10 @@ static void filterSet(int ch, float hz, float res) {
 	case 4: ndspChnIirBiquadSetParamsPeakingEqualizer(ch, hz, 0.7f + res * 6.0f, 4.0f); break;
 	}
 	ndspChnIirBiquadSetEnable(ch, true);
+	// second DSP filter stage (one-pole): steeper low pass, or a low cut under the main filter
+	if (gFilt2 == 1 && gFiltType == 0) { ndspChnIirMonoSetParamsLowPassFilter(ch, hz * 1.3f); ndspChnIirMonoSetEnable(ch, true); }
+	else if (gFilt2 == 2) { ndspChnIirMonoSetParamsHighPassFilter(ch, LOWCUT_HZ[gLowCut]); ndspChnIirMonoSetEnable(ch, true); }
+	else ndspChnIirMonoSetEnable(ch, false);
 }
 
 static Mips* roleMips(int role) {
@@ -561,9 +572,9 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 	float f = roleFreq(v, role);
 	v->lev[i] = (role == R_TAP || (role == R_SUB && bk == BK_CSND)) ? levelDamped(f, baseCutoff() * v->cutMul + 200) : levelFor(f * 1.03f);
 	Mips* m = roleMips(role);
-	LightLock_Lock(&gMipsLock);
+	if (!gInAudioTick) LightLock_Lock(&gMipsLock);   // the audio clock already holds it
 	if (!(m->built & (1u << v->lev[i]))) mipsBuildLevel(m, v->lev[i]);
-	LightLock_Unlock(&gMipsLock);
+	if (!gInAudioTick) LightLock_Unlock(&gMipsLock);
 	int N = LEVN[v->lev[i]];
 	if (bk == BK_DSP) {
 		float mix[12] = {0};
@@ -618,7 +629,9 @@ static void initVoice(SVoice* v) {
 
 static void lfoTrig(void) { for (int i = 0; i < 2; i++) if (gLfo[i].mode == 1) gLfo[i].ph = 0; }
 
+static int busActive(void);
 static void addTaps(SVoice* v) {
+	if (busActive() && (gFx == 1 || gFx == 3)) return;   // reverb / echo run on the DSP effect buses
 	int ne = 0; float t[8], g[8], p[8], c[8], rm[8], dt[8];
 	float mix = gFxMix * 2.0f;
 	if (gFx == 1) { float d = ECHO_T[gEchoT]; for (int k = 0; k < 3; k++) { t[k] = d * (k + 1); g[k] = 0.6f * powf(0.55f, (float)k); p[k] = (k & 1) ? 0.45f : -0.45f; c[k] = powf(0.7f, (float)(k + 1)); rm[k] = 1; dt[k] = 0; } ne = 3; }
@@ -701,6 +714,9 @@ static float srcValue(int src, const SVoice* v) {
 	case SRC_VEL: return v ? v->vel : 0;
 	case SRC_STICK: return gStick;
 	case SRC_XY: return gXYmod;
+	case SRC_TILTX: return gTiltX;
+	case SRC_TILTY: return gTiltY;
+	case SRC_MIC: return gMicEnv;
 	}
 	return 0;
 }
@@ -725,6 +741,7 @@ static void noiseChannel(int want) {   // shared noise layer on DSP channel NOIS
 	} else { ndspChnWaveBufClear(NOISE_CH); gNoiseOn = 0; }
 }
 
+static float busSend(int bus);
 static void voicesUpdate(float dt, float bend) {
 	for (int i = 0; i < 2; i++) {
 		LFO* l = &gLfo[i];
@@ -813,6 +830,9 @@ static void voicesUpdate(float dt, float bend) {
 	for (int c = 0; c < NCH; c++) if (dL[c] >= 0) {
 		float mix[12] = {0};
 		mix[0] = dL[c] * gAutoGain; mix[1] = dR[c] * gAutoGain;
+		float s0 = busSend(0), s1 = busSend(1);   // per-channel sends to the DSP effect buses
+		mix[4] = mix[0] * s0; mix[5] = mix[1] * s0;
+		mix[8] = mix[0] * s1; mix[9] = mix[1] * s1;
 		ndspChnSetMix(c, mix);
 	}
 	int any = 0;
@@ -825,6 +845,165 @@ static void voicesUpdate(float dt, float bend) {
 	}
 	if (gCsndOK && any) csndExecCmds(false);
 }
+
+// ---------------------------------------------------------------- DSP effect buses (aux 0 = reverb, aux 1 = ping-pong delay)
+// Each DSP channel sends to the two aux buses at its own level (mix[4..5], mix[8..9]); the DSP
+// sums them and hands them to the audio thread every 160 samples, where the effects run, and
+// mixes the result back in. If the DSP never delivers send audio, Syrup falls back to the
+// per-note tap effects.
+static int gBusOK = 0, gBusFail = 0;
+static volatile int gBusSeen = 0;
+static float gBusWait = 0;
+static float gEchoFb = 0.45f;
+static int busActive(void) { return gBusOK && !gBusFail; }
+
+#define NCOMB 8
+#define NAP 4
+typedef struct { float* b; int n, i; float st; } Comb;
+typedef struct { float* b; int n, i; } APass;
+static Comb gCbL[NCOMB], gCbR[NCOMB];
+static APass gApL[NAP], gApR[NAP];
+static float* gDlL; static float* gDlR;
+#define DLMAX 26000   // ~0.8 s
+static int gDlW = 0;
+static float gDlLp[2];
+
+static int fxAllocLine(float** b, int n) { *b = (float*)calloc(n, sizeof(float)); return *b != NULL; }
+static int busFxInit(void) {
+	static const int CL[NCOMB] = {1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617}, AL[NAP] = {556, 441, 341, 225};
+	const float sc = DSPRATE / 44100.0f;
+	for (int i = 0; i < NCOMB; i++) {
+		gCbL[i].n = (int)(CL[i] * sc); gCbR[i].n = (int)((CL[i] + 23) * sc);
+		if (!fxAllocLine(&gCbL[i].b, gCbL[i].n) || !fxAllocLine(&gCbR[i].b, gCbR[i].n)) return 0;
+	}
+	for (int i = 0; i < NAP; i++) {
+		gApL[i].n = (int)(AL[i] * sc); gApR[i].n = (int)((AL[i] + 23) * sc);
+		if (!fxAllocLine(&gApL[i].b, gApL[i].n) || !fxAllocLine(&gApR[i].b, gApR[i].n)) return 0;
+	}
+	return fxAllocLine(&gDlL, DLMAX) && fxAllocLine(&gDlR, DLMAX);
+}
+static inline float comb(Comb* c, float in, float fb, float damp) {
+	float y = c->b[c->i];
+	c->st = y * (1 - damp) + c->st * damp;
+	c->b[c->i] = in + c->st * fb;
+	if (++c->i >= c->n) c->i = 0;
+	return y;
+}
+static inline float apass(APass* a, float in) {
+	float b = a->b[a->i], y = b - in;
+	a->b[a->i] = in + b * 0.5f;
+	if (++a->i >= a->n) a->i = 0;
+	return y;
+}
+static void auxReverb(void* data, int n, void* samples[4]) {
+	(void)data;
+	s32* L = (s32*)samples[0]; s32* R = (s32*)samples[1];
+	float fb = 0.70f + 0.28f * gRevSize, damp = 0.15f + 0.6f * gRevDamp;
+	int seen = 0;
+	for (int s = 0; s < n; s++) {
+		if (L[s] | R[s]) seen = 1;
+		float in = (L[s] + R[s]) * (0.5f / 32768.0f) * 0.03f, ol = 0, orr = 0;
+		for (int i = 0; i < NCOMB; i++) { ol += comb(&gCbL[i], in, fb, damp); orr += comb(&gCbR[i], in, fb, damp); }
+		for (int i = 0; i < NAP; i++) { ol = apass(&gApL[i], ol); orr = apass(&gApR[i], orr); }
+		float yl = ol * 3.0f * 32768.0f, yr = orr * 3.0f * 32768.0f;
+		if (yl > 2e9f) yl = 2e9f;
+		if (yl < -2e9f) yl = -2e9f;
+		if (yr > 2e9f) yr = 2e9f;
+		if (yr < -2e9f) yr = -2e9f;
+		L[s] = (s32)yl; R[s] = (s32)yr;
+	}
+	memset(samples[2], 0, n * 4); memset(samples[3], 0, n * 4);
+	if (seen) gBusSeen = 1;
+}
+static float delayTime(void) { return ECHO_T[gEchoT]; }
+static void auxDelay(void* data, int n, void* samples[4]) {
+	(void)data;
+	s32* L = (s32*)samples[0]; s32* R = (s32*)samples[1];
+	int d = (int)(delayTime() * DSPRATE); if (d >= DLMAX) d = DLMAX - 1;
+	float fb = gEchoFb;
+	int seen = 0;
+	for (int s = 0; s < n; s++) {
+		if (L[s] | R[s]) seen = 1;
+		float in = (L[s] + R[s]) * (0.5f / 32768.0f);
+		int r = gDlW - d; if (r < 0) r += DLMAX;
+		float yl = gDlL[r], yr = gDlR[r];
+		gDlLp[0] += (yr - gDlLp[0]) * 0.45f; gDlLp[1] += (yl - gDlLp[1]) * 0.45f;   // darker repeats
+		gDlL[gDlW] = in + gDlLp[0] * fb;   // ping-pong: L <- R, R <- L
+		gDlR[gDlW] = gDlLp[1] * fb;
+		if (++gDlW >= DLMAX) gDlW = 0;
+		L[s] = (s32)(yl * 32768.0f * 0.8f); R[s] = (s32)(yr * 32768.0f * 0.8f);
+	}
+	memset(samples[2], 0, n * 4); memset(samples[3], 0, n * 4);
+	if (seen) gBusSeen = 1;
+}
+static void busInit(void) {
+	if (!busFxInit()) return;
+	ndspAuxSetCallback(0, auxReverb, NULL); ndspAuxSetCallback(1, auxDelay, NULL);
+	for (int i = 0; i < 2; i++) { ndspAuxSetFrontBypass(i, false); ndspAuxSetVolume(i, 1.0f); ndspAuxSetEnable(i, true); }
+	gBusOK = 1;
+}
+// sends for the current FX choice: REVERB -> bus 0, ECHO -> bus 1 (SPACE stays on taps)
+static float busSend(int bus) {
+	if (!busActive()) return 0;
+	if (bus == 0 && gFx == 3) return gFxMix * 1.4f;
+	if (bus == 1 && gFx == 1) return gFxMix * 1.2f;
+	return 0;
+}
+
+// ---------------------------------------------------------------- output: surround + second filter stage
+static int gOutMode = 0, gSurDepth = 3;   // STEREO / SURROUND
+static const char* OUT_NAMES[2] = {"STEREO", "SURROUND"};
+static const char* DEPTH_NAMES[4] = {"25%", "50%", "75%", "100%"};
+static void outputApply(void) {
+	if (!gAudioOK) return;
+	ndspSetOutputMode(gOutMode ? NDSP_OUTPUT_SURROUND : NDSP_OUTPUT_STEREO);
+	ndspSurroundSetDepth((u16)((gSurDepth + 1) * 0x7FFF / 4));
+	ndspSetClippingMode(NDSP_CLIP_SOFT);
+}
+
+// ---------------------------------------------------------------- motion + breath (accelerometer, microphone)
+static float gTiltCX = 0, gTiltCY = 0;
+static int gTiltCal = 0, gMicOK = 0;
+static u8* gMicBuf = NULL; static u32 gMicSize = 0;
+static void sensorsInit(void) {
+	HIDUSER_EnableAccelerometer();
+	gMicBuf = (u8*)memalign(0x1000, 0x8000);
+	if (gMicBuf && R_SUCCEEDED(micInit(gMicBuf, 0x8000))) {
+		gMicSize = micGetSampleDataSize();
+		gMicOK = R_SUCCEEDED(MICU_StartSampling(MICU_ENCODING_PCM16_SIGNED, MICU_SAMPLE_RATE_16360, 0, gMicSize, true));
+	}
+}
+static void sensorsExit(void) {
+	if (gMicOK) MICU_StopSampling();
+	if (gMicBuf) { micExit(); free(gMicBuf); }
+	HIDUSER_DisableAccelerometer();
+}
+static void sensorsUpdate(float dt) {
+	accelVector a; hidAccelRead(&a);
+	float ax = a.x / 512.0f, ay = atan2f((float)a.z, (float)a.y);   // roll (1 g ~ 512), pitch angle
+	if (gTiltCal < 20) { gTiltCX += (ax - gTiltCX) * 0.3f; gTiltCY += (ay - gTiltCY) * 0.3f; gTiltCal++; }   // centre = how it's held at start
+	float tx = (ax - gTiltCX) * 2.2f, ty = (ay - gTiltCY) * 1.6f;
+	if (ty > 3.14159f) ty -= 6.28318f;
+	if (ty < -3.14159f) ty += 6.28318f;
+	if (fabsf(tx) < 0.06f) tx = 0;
+	if (fabsf(ty) < 0.06f) ty = 0;
+	if (tx > 1) tx = 1;
+	if (tx < -1) tx = -1;
+	if (ty > 1) ty = 1;
+	if (ty < -1) ty = -1;
+	float k = 1.0f - expf(-dt / 0.05f);
+	gTiltX += (tx - gTiltX) * k; gTiltY += (ty - gTiltY) * k;
+	if (gMicOK) {   // breath / voice level: RMS of the last ~30 ms
+		u32 end = micGetLastSampleOffset() / 2, N = gMicSize / 2;
+		const s16* m = (const s16*)gMicBuf;
+		float sum = 0;
+		for (int i = 0; i < 512; i++) { float v = m[(end + N - 1 - i) % N] / 32768.0f; sum += v * v; }
+		float rms = sqrtf(sum / 512) - 0.012f;   // small noise gate
+		float lvl = rms / 0.12f; if (lvl < 0) lvl = 0; if (lvl > 1) lvl = 1;
+		gMicEnv += (lvl - gMicEnv) * (lvl > gMicEnv ? 0.6f : 0.12f);
+	}
+}
+static void tiltRecenter(void) { gTiltCal = 0; }
 
 // ---------------------------------------------------------------- scales, arpeggiator, step sequencer
 static const char* NOTE_NAMES[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
@@ -907,6 +1086,25 @@ static void arpTick(float dt) {
 	gArpPh += dt * stepsPerSec;
 	if (before < gArpGate && gArpPh >= gArpGate && gArpGate < 0.99f) arpRelease();
 	if (gArpPh >= 1) { gArpPh -= floorf(gArpPh); arpStep(); gBeatFlash = 1; }
+}
+
+// ---- clock: the arp and sequencer run in the audio thread, once per DSP frame (160 samples, ~4.9 ms)
+static LightLock gVoiceLock;   // voices are touched by the main loop and by the audio thread
+static float gClockDebt = 0;
+static void arpTick(float dt);
+static void seqTick(float dt);
+static void audioTick(void* data) {
+	(void)data;
+	float dt = 160.0f / DSPRATE + gClockDebt;
+	if (LightLock_TryLock(&gVoiceLock)) { gClockDebt = dt; return; }   // main loop busy: catch up next frame
+	if (LightLock_TryLock(&gMipsLock)) { LightLock_Unlock(&gVoiceLock); gClockDebt = dt; return; }
+	gClockDebt = 0;
+	gInAudioTick = 1;
+	arpTick(dt);
+	seqTick(dt);
+	gInAudioTick = 0;
+	LightLock_Unlock(&gMipsLock);
+	LightLock_Unlock(&gVoiceLock);
 }
 
 // ---- held notes (keys or sequencer) -> voices or arp
@@ -1116,6 +1314,12 @@ static void pr_whistle(SPatch* p) { OA.pos = SINE; LFO(1, 0, 0, 5.5f); MOD(3, SR
 static void pr_glidesq(SPatch* p) { OA.table = T_PWM; OA.pos = 0.15f; p->voiceMode = 2; p->glide = 0.2f; p->cutoff = 0.65f; p->fx = 1; p->echoT = 2; p->fxMix = 0.35f; }
 static void pr_fuzzlead(SPatch* p) { p->master = 0.65f; OA.uni = 2; OA.detune = 12; p->drive = 2; p->driveAmt = 0.7f; p->cutoff = 0.6f; p->voiceMode = 1; p->fx = 1; p->fxMix = 0.3f; }
 static void pr_fifths(SPatch* p) { OB.on = 1; OB.semi = 7; OB.level = 0.6f; OA.uni = 2; OB.uni = 2; p->cutoff = 0.7f; p->voiceMode = 2; p->glide = 0.05f; p->fx = 3; p->fxMix = 0.3f; }
+// ---- motion / breath (accelerometer + microphone sources)
+static void pr_breath(SPatch* p) { OA.table = T_VOWELS; OA.pos = 0.3f; p->voiceMode = 2; p->glide = 0.05f; p->cutoff = 0.25f; p->res = 0.2f;
+	MOD(0, SRC_MIC, DST_CUTOFF, 0.7f); MOD(1, SRC_MIC, DST_APOS, 0.4f); MOD(2, SRC_TILTX, DST_PITCH, 0.02f); ENV1(0.03f, 0, 0.2f, 1.0f, 0.3f); p->fx = 3; p->fxMix = 0.35f; }
+static void pr_tiltwob(SPatch* p) { p->master = 0.55f; OA.table = T_GROWL; OA.oct = -1; p->subLevel = 0.5f; p->cutoff = 0.35f; p->res = 0.35f;
+	MOD(0, SRC_TILTX, DST_CUTOFF, 0.7f); MOD(1, SRC_TILTY, DST_APOS, 0.6f); ENV1(0.003f, 0, 0.3f, 0.9f, 0.15f); }
+static void pr_tiltpad(SPatch* p) { pr_syruppad(p); MOD(1, SRC_TILTX, DST_APOS, 0.5f); MOD(3, SRC_TILTY, DST_CUTOFF, 0.5f); }
 // ---- more PAD
 static void pr_vapor(SPatch* p) { OA.pos = TRI; OA.uni = 3; OA.detune = 20; p->noiseType = 2; p->noiseLevel = 0.2f; p->cutoff = 0.45f; ENV1(1.0f, 0, 1, 0.9f, 2.0f);
 	p->chorus = 0.8f; p->fx = 3; p->revSize = 0.9f; p->fxMix = 0.5f; }
@@ -1207,11 +1411,11 @@ static void pa_marimba(SPatch* p) { pr_marimba(p); p->chord = 2; ARPSET(3, 3, 2,
 static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "PLUCK", "KEYS", "CHORDS", "ARP", "RETRO", "AMBIENT", "FX", "USER"};
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB WOBBLE", pr_subwob}, {"REESE", pr_reese}, {"FM GROWL", pr_fmgrowl}, {"808 SUB", pr_808}, {"ACID", pr_acid},
-	 {"WOBBLE 1/8", pr_wob8}, {"DIGI BASS", pr_digibass}, {"SINE BASS", pr_sinebass}, {"PLUCK BASS", pr_pluckbass}, {"HOOVER", pr_hoover}},
+	 {"WOBBLE 1/8", pr_wob8}, {"DIGI BASS", pr_digibass}, {"SINE BASS", pr_sinebass}, {"PLUCK BASS", pr_pluckbass}, {"HOOVER", pr_hoover}, {"TILT WOBBLE", pr_tiltwob}},
 	{{"SUPERSAW", pr_supersaw}, {"SYNC SCREAM", pr_syncscream}, {"VOWEL LEAD", pr_vowellead}, {"CHIP SQUARE", pr_chip}, {"DIGI PIPE", pr_digipipe},
-	 {"BRASS LEAD", pr_brasslead}, {"WHISTLE", pr_whistle}, {"GLIDE SQUARE", pr_glidesq}, {"FUZZ LEAD", pr_fuzzlead}, {"FIFTHS", pr_fifths}},
+	 {"BRASS LEAD", pr_brasslead}, {"WHISTLE", pr_whistle}, {"GLIDE SQUARE", pr_glidesq}, {"FUZZ LEAD", pr_fuzzlead}, {"FIFTHS", pr_fifths}, {"BREATH LEAD", pr_breath}},
 	{{"SYRUP PAD", pr_syruppad}, {"GLASS", pr_glass}, {"CHOIR", pr_choir}, {"WARM STRINGS", pr_strings}, {"DARK DRONE", pr_drone},
-	 {"VAPOR PAD", pr_vapor}, {"SWEEP PAD", pr_sweeppad}, {"FORMANT PAD", pr_formantpad}, {"SHIMMER PAD", pr_shimmerpad}, {"PWM PAD", pr_pwmpad}},
+	 {"VAPOR PAD", pr_vapor}, {"SWEEP PAD", pr_sweeppad}, {"FORMANT PAD", pr_formantpad}, {"SHIMMER PAD", pr_shimmerpad}, {"PWM PAD", pr_pwmpad}, {"TILT PAD", pr_tiltpad}},
 	{{"SYRUP PLUCK", pr_syruppluck}, {"MARIMBA", pr_marimba}, {"KALIMBA", pr_kalimba}, {"HARP", pr_harp}, {"DUB STAB", pr_dubstab},
 	 {"BELL", pr_bell}, {"STEEL DRUM", pr_steeldrum}, {"SYNTH PLUCK", pr_synthpluck}, {"MUTED", pr_muted}, {"PIZZ", pr_pizz}},
 	{{"E PIANO", pr_epiano}, {"ORGAN", pr_organ}, {"CLAV", pr_clav}, {"ACORDEON", pr_acordeon}, {"VINYL KEYS", pr_vinylkeys},
@@ -1323,7 +1527,7 @@ static const char* presetName(int style, int idx) { return style == NSTYLES - 1 
 
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
-enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192 };
+enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
 
 #define PF(n, ptr, mn, mx, st, unit, d) {n, PT_F, ptr, mn, mx, st, NULL, unit, d}
@@ -1363,6 +1567,7 @@ static Param P_SUBN[] = {
 	PEND};
 static Param P_FILT[] = {
 	PE("FILTER", &gFiltType, 5, FILT_TYPES, 0), PF("CUTOFF", &gCutoff, 0, 1, 0.01f, "HZ", 0),
+	PE("FILTER 2", &gFilt2, 3, FILT2_NAMES, 0), PE("LOW CUT", &gLowCut, 6, LOWCUT_NAMES, 0),
 	PF("RES", &gRes, 0, 1, 0.01f, "%", 0), PF("KEYTRACK", &gKeytrack, 0, 1, 0.05f, "%", 0),
 	PF("ENV1 ATK", &gEnv1.a, 0, 4, 0.005f, "S", 0), PF("ENV1 HOLD", &gEnv1.h, 0, 2, 0.01f, "S", 0),
 	PF("ENV1 DEC", &gEnv1.d, 0.01f, 4, 0.02f, "S", 0), PF("ENV1 SUS", &gEnv1.s, 0, 1, 0.01f, "%", 0),
@@ -1385,6 +1590,8 @@ static Param P_VOICE[] = {
 	PE("MODE", &gVoiceMode, 3, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0),
 	PE("BEND RANGE", &gBendRange, 13, BEND_NAMES, 0), PE("CHORD", &gChord, 5, CHORD_NAMES, 0),
 	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("GPU VISUALS", &gGpuFx, 2, ONOFF, 0), PE("FX", &gFx, 4, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
+	PF("ECHO FDBK", &gEchoFb, 0, 0.9f, 0.03f, "%", 0), PE("OUTPUT", &gOutMode, 2, OUT_NAMES, D_OUT), PE("SURROUND", &gSurDepth, 4, DEPTH_NAMES, D_OUT),
+	{"TILT CENTER", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_TILT},
 	PF("REV SIZE", &gRevSize, 0, 1, 0.02f, "%", 0), PF("REV DAMP", &gRevDamp, 0, 1, 0.02f, "%", 0), PF("FX MIX", &gFxMix, 0, 1, 0.02f, "%", 0),
 	PE("DRIVE", &gDrive, 5, DRIVE_TYPES, D_A | D_B), PF("DRIVE AMT", &gDriveAmt, 0, 1, 0.02f, "%", D_A | D_B),
 	PF("MASTER", &gMaster, 0, 1.5f, 0.02f, "%", 0),
@@ -1573,7 +1780,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho) voices++;
 		for (int c = 0; c < NCH; c++) if (gDspOwner[c] >= 0 || (gNoiseOn && c == NOISE_CH)) dsp++;
 		for (int c = 0; c < NCS; c++) if (csUsable(c)) { csTot++; if (gCsOwner[c] >= 0) cs++; }
-		snprintf(s, sizeof(s), "NOTES %d   CORE 2: %s", voices, gWorker ? "ON" : "OFF"); text(6, 194, s, 1, DIM);
+		snprintf(s, sizeof(s), "NOTES %d  CORE2 %s  FX BUS %s", voices, gWorker ? "ON" : "OFF", busActive() ? (gBusSeen ? "OK" : "ON") : (gBusFail ? "FALLBK" : "OFF")); text(6, 194, s, 1, DIM);
 		snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d", dsp, cs, csTot); text(6, 206, s, 1, DIM);
 	}
 	Param* P = PAGES[page]; int n = pageLen(page);
@@ -1609,6 +1816,7 @@ static void drawHelp(void) {
 		"  Circle pad ... L/R bend, U/D = STICK source",
 		"  START ........ quit",
 		"NOTES",
+		"  Mod sources: TILT L/R, TILT F/B (motion), BREATH (mic)",
 		"  SCALE on: keys become scale pads, chords",
 		"    stack inside the scale",
 		"  SEQ REC: each key writes a step; PLAY: keys transpose",
@@ -1927,6 +2135,7 @@ int main(void) {
 	gfxSetDoubleBuffering(GFX_TOP, true);     // draw into the hidden buffer, swap on vblank: no tearing
 	gfxSetDoubleBuffering(GFX_BOTTOM, true);
 	gpuInit();
+	sensorsInit();
 	fontGfx = consoleGetDefault()->font.gfx;
 	fftInit();
 	for (int o = 0; o < 2; o++) { gOsc[o].tb.frames = (float*)malloc(sizeof(float) * CYC * MAXFR); mipsInit(&gOsc[o].mips); }
@@ -1943,6 +2152,7 @@ int main(void) {
 	B->on = 0; B->table = T_HARMONIX; B->pos = 0.3f; B->level = 0.5f; B->oct = 1; B->uni = 1; B->detune = 10; B->blend = 0.5f; B->width = 0.6f;
 	tableSelect(&A->tb, A->table); tableSelect(&B->tb, B->table);
 	LightLock_Init(&gMipsLock);
+	LightLock_Init(&gVoiceLock);
 	userLoad();
 	seqDefault();
 	presetLoad(gStyle, gPreset);   // start on PAD / SYRUP PAD
@@ -1960,6 +2170,9 @@ int main(void) {
 		ndspSetMasterVol(1.0f);
 		for (int ch = 0; ch < NCH; ch++) { ndspChnReset(ch); ndspChnSetInterp(ch, NDSP_INTERP_POLYPHASE); ndspChnSetFormat(ch, NDSP_FORMAT_MONO_PCM16); }
 		gCsndOK = R_SUCCEEDED(csndInit());   // second sound unit: sub + effect taps
+		busInit();
+		outputApply();
+		ndspSetCallback(audioTick, NULL);   // arp + sequencer clock, every 160 samples
 	}
 
 	int page = 0, sel[NPAGES] = {0}, oct = 0, helpOn = 0, latch = 0, prevTouch = 0;
@@ -1973,7 +2186,9 @@ int main(void) {
 		hidScanInput();
 		u32 kDown = hidKeysDown(), kHeld = hidKeysHeld();
 		if (kDown & KEY_START) break;
+		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		u64 now = osGetTime(); float dt = (now - last) / 1000.0f; last = now; if (dt > 0.1f) dt = 0.1f;
+		sensorsUpdate(dt);
 
 		if (helpOn && (kDown & ~(KEY_TOUCH | KEY_SELECT))) { helpOn = 0; topDirty = botDirty = 1; }
 		if (kDown & KEY_SELECT) { helpOn = !helpOn; topDirty = botDirty = 1; }
@@ -1993,7 +2208,8 @@ int main(void) {
 		else if (kHeld & (KEY_DLEFT | KEY_DRIGHT)) { repeatT -= dt; if (repeatT <= 0) { dir = (kHeld & KEY_DRIGHT) ? 1 : -1; repeatT = 0.05f; fast = 1; } }
 		if (dir) {
 			Param* p = &PAGES[page][sel[page]];
-			if ((p->dirty & (D_REST | D_CLEAR)) && dir > 0 && !fast) {
+			if ((p->dirty & D_TILT) && dir > 0 && !fast) { tiltRecenter(); topDirty = 1; }
+			else if ((p->dirty & (D_REST | D_CLEAR)) && dir > 0 && !fast) {
 				if (p->dirty & D_REST) seqRest(); else seqClear();
 				topDirty = 1;
 			} else if ((p->dirty & (D_SAVE | D_INIT)) && dir > 0 && !fast) {
@@ -2002,6 +2218,7 @@ int main(void) {
 				curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = 1;
 			} else if (paramChange(p, dir, fast)) {
 				if (p->dirty & D_STYLE) { gPreset = 0; presetLoad(gStyle, 0); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
+				if (p->dirty & D_OUT) outputApply();
 				if (p->dirty & (D_SCALE | D_SEQ)) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; botDirty = 1; if (p->p == &gSeqMode && gSeqMode == 2) gRecPos = 0; if (p->p == &gSeqMode && gSeqMode != 1) gSeqTr = 0; }
 				if (p->dirty & D_PRESET) { presetLoad(gStyle, gPreset); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				if (p->dirty & (D_TBLA | D_TBLB)) LightLock_Lock(&gMipsLock);
@@ -2075,8 +2292,6 @@ int main(void) {
 			}
 			curKey = key;
 		}
-		arpTick(dt);
-		seqTick(dt);
 		if (gBeatFlash) { gBeatFlash = 0; if (page == 7) topDirty = 1; }
 
 		// rebuild oscillator cycles when WT POS / WARP (incl. modulation) changed
@@ -2108,6 +2323,12 @@ int main(void) {
 		if (AGET(gJobDone)) { ASET(gJobDone, 0); topDirty = 1; }
 
 		if (gAudioOK) voicesUpdate(dt, cx);
+		// effect-bus self check: if notes are sending but the DSP never delivers aux audio, fall back to taps
+		if (gBusOK && !gBusFail && !gBusSeen && (busSend(0) > 0 || busSend(1) > 0)) {
+			int any = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho) any = 1;
+			if (any) { gBusWait += dt; if (gBusWait > 1.5f) { gBusFail = 1; topDirty = 1; } }
+		}
+		LightLock_Unlock(&gVoiceLock);
 
 		memset(on, 0, sizeof(on));
 		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note < 128) on[gV[i].note] = 1;
@@ -2137,6 +2358,7 @@ int main(void) {
 	if (gWorker) { ASET(gWorkerQuit, 1); LightEvent_Signal(&gJobEv); threadJoin(gWorker, U64_MAX); threadFree(gWorker); }
 	if (gCsndOK) { for (int c = 0; c < NCS; c++) if (csUsable(c)) CSND_SetPlayState(c, 0); csndExecCmds(true); csndExit(); }
 	if (gAudioOK) { for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }
+	sensorsExit();
 	gpuExit();
 	gfxExit();
 	return 0;
