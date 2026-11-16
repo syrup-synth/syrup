@@ -292,6 +292,15 @@ static void scanTables(void) {
 
 // cache: built-in tables are generated once; the last few SD wavetables stay in memory
 static float* gBuiltCache[T_BUILTIN];
+static float* builtinFrames(int t) {   // generate (once) and return a built-in table's 64 frames
+	if (t < 0 || t >= T_BUILTIN) t = 0;
+	if (!gBuiltCache[t]) {
+		Table tmp; tmp.frames = (float*)malloc(sizeof(float) * CYC * 64);
+		if (!tmp.frames) return NULL;
+		genBuiltin(&tmp, t); gBuiltCache[t] = tmp.frames;
+	}
+	return gBuiltCache[t];
+}
 #define WCACHE 4
 static struct { int idx, nFrames; float* frames; char name[40]; unsigned used; } gWCache[WCACHE];
 static unsigned gWClock = 0;
@@ -331,6 +340,7 @@ peak:;
 	tb->peak = pk > 1e-4f ? pk : 1.0f;
 }
 
+static float* builtinFrames(int t);
 // ---------------------------------------------------------------- patch parameters
 enum { W_OFF, W_SYNC, W_WSYNC, W_BENDP, W_BENDM, W_BENDPM, W_PWM, W_ASYMP, W_ASYMM, W_ASYMPM, W_FLIP, W_MIRROR,
        W_REMAP1, W_REMAP2, W_REMAP3, W_REMAP4, W_QUANT, W_FM, W_AM, W_RM, W_COUNT };
@@ -348,7 +358,12 @@ static Osc gOsc[2];
 static const char* SUB_SHAPES[4] = {"SINE", "TRIANGLE", "SAW", "SQUARE"};
 static const char* NOISE_TYPES[3] = {"WHITE", "PINK", "CRACKLE"};
 static const char* FILT_TYPES[5] = {"LOW PASS", "HIGH PASS", "BAND PASS", "NOTCH", "PEAK"};
-static const char* LFO_SHAPES[5] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "S&H"};
+#define NLFOSH 13
+enum { LS_SINE, LS_TRI, LS_SAW, LS_SQR, LS_SH, LS_STEPS, LS_BOUNCE, LS_EXPUP, LS_EXPDN, LS_PULSE, LS_WTA, LS_WTB, LS_TABLE };
+static const char* LFO_SHAPES[NLFOSH] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "S&H", "STEPS", "BOUNCE", "EXP RISE", "EXP FALL", "PULSE 25%", "WT OSC A", "WT OSC B", "WAVETABLE"};
+#define NSYNC 10
+static const char* SYNC_NAMES[NSYNC] = {"OFF", "4 BARS", "2 BARS", "1 BAR", "1/2", "1/4", "1/8", "1/16", "1/8T", "1/16T"};
+static const float SYNC_BEATS[NSYNC] = {0, 16, 8, 4, 2, 1, 0.5f, 0.25f, 1.0f / 3, 1.0f / 6};
 static const char* LFO_MODES[2] = {"FREE", "TRIG"};
 enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_COUNT };
 static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y", "TILT L/R", "TILT F/B", "BREATH"};
@@ -364,7 +379,9 @@ static const char* CHORD_NAMES[5] = {"OFF", "MIN7", "MAJ7", "POWER", "SUS"};
 static const int CHORDS[5][4] = {{0, -1, -1, -1}, {0, 3, 7, 10}, {0, 4, 7, 11}, {0, 7, 12, -1}, {0, 5, 7, 12}};
 
 typedef struct { float a, h, d, s, r; } AHDSR;
-typedef struct { int shape, mode; float rate; float ph, val, sh; } LFO;
+#define LFON 256
+static int gBPM;
+typedef struct { int shape, mode; float rate; float ph, val, sh; int sync, table; float pos; float tab[LFON]; int tabKey; } LFO;   // tab: sampled wave for table shapes
 typedef struct { int src, dst; float amt; } ModSlot;
 
 static int gSubShape = 0, gSubOct = -1, gNoiseType = 0, gFiltType = 0;
@@ -723,16 +740,31 @@ static void envStep(float* e, int* st, const AHDSR* E, float dt, float* hold, fl
 	}
 }
 
-static float lfoValue(LFO* l) {
-	float p = l->ph;
+// shape of an LFO at phase p (also used to draw it)
+static float lfoShapeAt(const LFO* l, float p) {
 	switch (l->shape) {
-	case 0: return sinf(TWO_PI * p);
-	case 1: return 1.0f - 4.0f * fabsf(p - 0.5f);
-	case 2: return 2 * p - 1;
-	case 3: return p < 0.5f ? 1 : -1;
-	default: return l->sh;
+	case LS_SINE: return sinf(TWO_PI * p);
+	case LS_TRI: return 1.0f - 4.0f * fabsf(p - 0.5f);
+	case LS_SAW: return 2 * p - 1;
+	case LS_SQR: return p < 0.5f ? 1 : -1;
+	case LS_SH: return l->sh;
+	case LS_STEPS: { static const float ST[8] = {-1, 0.43f, -0.29f, 1, -0.71f, 0.14f, 0.71f, -0.43f}; return ST[(int)(p * 8) & 7]; }
+	case LS_BOUNCE: return 2 * fabsf(sinf(TWO_PI * p)) - 1;
+	case LS_EXPUP: return 2 * (expf(4 * p) - 1) / (expf(4) - 1) - 1;
+	case LS_EXPDN: return 2 * expf(-5 * p) - 1;
+	case LS_PULSE: return p < 0.25f ? 1 : -1;
+	default: { float x = p * LFON; int i = (int)x; float u = x - i; return l->tab[i % LFON] * (1 - u) + l->tab[(i + 1) % LFON] * u; }
 	}
 }
+// ---- wavetable LFO shapes: one frame of a built-in table, or the live cycle of OSC A / B
+static void lfoFill(LFO* l, const float* cyc, float peak) {
+	float pk = 1e-6f;
+	for (int i = 0; i < LFON; i++) { l->tab[i] = cyc[i * CYC / LFON]; float a = fabsf(l->tab[i]); if (a > pk) pk = a; }
+	(void)peak;
+	for (int i = 0; i < LFON; i++) l->tab[i] /= pk;
+}
+static float lfoValue(LFO* l) { return lfoShapeAt(l, l->ph); }
+static float lfoRateHz(const LFO* l, int bpm) { return l->sync > 0 ? bpm / 60.0f / SYNC_BEATS[l->sync] : l->rate; }
 
 static float srcValue(int src, const SVoice* v) {
 	switch (src) {
@@ -773,7 +805,12 @@ static float busSend(int bus);
 static void voicesUpdate(float dt, float bend) {
 	for (int i = 0; i < 2; i++) {
 		LFO* l = &gLfo[i];
-		float prev = l->ph; l->ph += dt * l->rate; if (l->ph >= 1) l->ph -= floorf(l->ph);
+		if (l->shape == LS_WTA || l->shape == LS_WTB) lfoFill(l, gOsc[l->shape - LS_WTA].cyc, 1);   // follows the live cycle
+		else if (l->shape == LS_TABLE) {
+			int fi = (int)(l->pos * 63 + 0.5f), key = l->table * 100 + fi;
+			if (key != l->tabKey) { float* fr = builtinFrames(l->table); if (fr) { lfoFill(l, fr + fi * CYC, 1); l->tabKey = key; } }
+		}
+		float prev = l->ph; l->ph += dt * lfoRateHz(l, gBPM); if (l->ph >= 1) l->ph -= floorf(l->ph);
 		if (l->ph < prev) l->sh = hash01((int)(gAge + i * 77), (int)(l->rate * 100 + gIdc)) * 2 - 1;
 		l->val = lfoValue(l);
 	}
@@ -1209,8 +1246,11 @@ typedef struct {
 	float glide, chorus, revSize, revDamp, fxMix, driveAmt, master;
 	int arp, arpRate, arpOct, bpm;   // bpm 0 = keep the current tempo
 	float arpGate;
+	int lfoSync[2], lfoTable[2]; float lfoPos[2];   // v3
 } SPatch;
-#define PATCH_MAGIC 0x53595232   // "SYR2"
+#define PATCH_MAGIC 0x53595233   // "SYR3"
+#define PATCH_MAGIC2 0x53595232  // v2 (no LFO sync / table)
+#define PATCH_V2_SIZE offsetof(SPatch, lfoSync)
 #define PATCH_MAGIC1 0x53595231  // v1 (no arp fields)
 #define PATCH_V1_SIZE offsetof(SPatch, arp)
 
@@ -1235,6 +1275,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->bendRange = 2; p->chorus = 0.2f; p->revSize = 0.5f; p->revDamp = 0.5f; p->fxMix = 0.5f;
 	p->driveAmt = 0.4f; p->master = 0.8f; p->echoT = 1;
 	p->arp = 0; p->arpRate = 3; p->arpOct = 1; p->arpGate = 0.5f; p->bpm = 0;
+	for (int i = 0; i < 2; i++) { p->lfoSync[i] = 0; p->lfoTable[i] = T_HARMONIX; p->lfoPos[i] = 0.5f; }
 }
 
 #define OA p->osc[0]
@@ -1349,6 +1390,12 @@ static void pr_breath(SPatch* p) { OA.table = T_VOWELS; OA.pos = 0.3f; p->voiceM
 static void pr_tiltwob(SPatch* p) { p->master = 0.55f; OA.table = T_GROWL; OA.oct = -1; p->subLevel = 0.5f; p->cutoff = 0.35f; p->res = 0.35f;
 	MOD(0, SRC_TILTX, DST_CUTOFF, 0.7f); MOD(1, SRC_TILTY, DST_APOS, 0.6f); ENV1(0.003f, 0, 0.3f, 0.9f, 0.15f); }
 static void pr_tiltpad(SPatch* p) { pr_syruppad(p); MOD(1, SRC_TILTX, DST_APOS, 0.5f); MOD(3, SRC_TILTY, DST_CUTOFF, 0.5f); }
+// ---- wavetable LFOs
+static void pr_vowtalk(SPatch* p) { OA.table = T_GROWL; OA.pos = 0.4f; OA.uni = 2; OA.detune = 8; p->filtType = 2; p->cutoff = 0.5f; p->res = 0.35f;
+	LFO(0, LS_TABLE, 1, 1.0f); p->lfoTable[0] = T_VOWELS; p->lfoPos[0] = 0.5f; p->lfoSync[0] = 5;
+	MOD(2, SRC_LFO1, DST_CUTOFF, 0.45f); MOD(3, SRC_LFO1, DST_APOS, 0.35f); p->bpm = 0; p->master = 1.1f; }
+static void pr_drift(SPatch* p) { pr_syruppad(p); LFO(0, LS_WTB, 0, 0.12f); MOD(2, SRC_LFO1, DST_APOS, 0.4f); LFO(1, LS_TABLE, 0, 0.3f);
+	p->lfoTable[1] = T_DIGITAL; p->lfoPos[1] = 0.3f; MOD(3, SRC_LFO2, DST_CUTOFF, 0.25f); }
 // ---- more PAD
 static void pr_vapor(SPatch* p) { OA.pos = TRI; OA.uni = 3; OA.detune = 20; p->noiseType = 2; p->noiseLevel = 0.2f; p->cutoff = 0.45f; ENV1(1.0f, 0, 1, 0.9f, 2.0f);
 	p->chorus = 0.8f; p->fx = 3; p->revSize = 0.9f; p->fxMix = 0.5f; }
@@ -1444,7 +1491,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUPERSAW", pr_supersaw}, {"SYNC SCREAM", pr_syncscream}, {"VOWEL LEAD", pr_vowellead}, {"CHIP SQUARE", pr_chip}, {"DIGI PIPE", pr_digipipe},
 	 {"BRASS LEAD", pr_brasslead}, {"WHISTLE", pr_whistle}, {"GLIDE SQUARE", pr_glidesq}, {"FUZZ LEAD", pr_fuzzlead}, {"FIFTHS", pr_fifths}, {"BREATH LEAD", pr_breath}},
 	{{"SYRUP PAD", pr_syruppad}, {"GLASS", pr_glass}, {"CHOIR", pr_choir}, {"WARM STRINGS", pr_strings}, {"DARK DRONE", pr_drone},
-	 {"VAPOR PAD", pr_vapor}, {"SWEEP PAD", pr_sweeppad}, {"FORMANT PAD", pr_formantpad}, {"SHIMMER PAD", pr_shimmerpad}, {"PWM PAD", pr_pwmpad}, {"TILT PAD", pr_tiltpad}},
+	 {"VAPOR PAD", pr_vapor}, {"SWEEP PAD", pr_sweeppad}, {"FORMANT PAD", pr_formantpad}, {"SHIMMER PAD", pr_shimmerpad}, {"PWM PAD", pr_pwmpad}, {"TILT PAD", pr_tiltpad}, {"TABLE DRIFT", pr_drift}},
 	{{"SYRUP PLUCK", pr_syruppluck}, {"MARIMBA", pr_marimba}, {"KALIMBA", pr_kalimba}, {"HARP", pr_harp}, {"DUB STAB", pr_dubstab},
 	 {"BELL", pr_bell}, {"STEEL DRUM", pr_steeldrum}, {"SYNTH PLUCK", pr_synthpluck}, {"MUTED", pr_muted}, {"PIZZ", pr_pizz}},
 	{{"E PIANO", pr_epiano}, {"ORGAN", pr_organ}, {"CLAV", pr_clav}, {"ACORDEON", pr_acordeon}, {"VINYL KEYS", pr_vinylkeys},
@@ -1458,7 +1505,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"OCEAN", pr_ocean}, {"AURORA", pr_aurora}, {"DUST", pr_dust}, {"SLOW BLOOM", pr_bloom},
 	 {"DREAM KEYS", pr_dreamkeys}, {"DEEP SPACE", pr_deepspace}, {"RAIN", pr_rain}, {"LULLABY", pr_lullaby}},
 	{{"RISER", pr_riser}, {"LASER", pr_laser}, {"WIND", pr_wind}, {"RADIO", pr_radio}, {"ROBOT", pr_robot},
-	 {"SIREN", pr_siren}, {"BUBBLES", pr_bubbles}, {"NOISE SWEEP", pr_noisesweep}, {"ALARM", pr_alarm}, {"SPACE DRONE", pr_spacedrone}},
+	 {"SIREN", pr_siren}, {"BUBBLES", pr_bubbles}, {"NOISE SWEEP", pr_noisesweep}, {"ALARM", pr_alarm}, {"SPACE DRONE", pr_spacedrone}, {"VOWEL TALK", pr_vowtalk}},
 };
 #define NUSER 8
 static SPatch gUser[NUSER];
@@ -1475,11 +1522,14 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER)) {   // older save file: keep the patches, arp off
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER)) {   // older save files: newer fields get defaults
+		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
-			if (fread(&t, PATCH_V1_SIZE, 1, f) == 1 && t.magic == PATCH_MAGIC1) {
-				t.magic = PATCH_MAGIC; t.arp = 0; t.arpRate = 3; t.arpOct = 1; t.arpGate = 0.5f; t.bpm = 0; gUser[i] = t;
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2)) {
+				if (t.magic == PATCH_MAGIC1) { t.arp = 0; t.arpRate = 3; t.arpOct = 1; t.arpGate = 0.5f; t.bpm = 0; }
+				for (int k = 0; k < 2; k++) { t.lfoSync[k] = 0; t.lfoTable[k] = T_HARMONIX; t.lfoPos[k] = 0.5f; }
+				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
 		}
 	}
@@ -1505,7 +1555,7 @@ static void patchCapture(SPatch* p) {
 	p->subShape = gSubShape; p->subOct = gSubOct; p->noiseType = gNoiseType; p->filtType = gFiltType;
 	p->subLevel = gSubLevel; p->noiseLevel = gNoiseLevel; p->cutoff = gCutoff; p->res = gRes; p->keytrack = gKeytrack;
 	p->env1 = gEnv1; p->env2 = gEnv2;
-	for (int i = 0; i < 2; i++) { p->lfoShape[i] = gLfo[i].shape; p->lfoMode[i] = gLfo[i].mode; p->lfoRate[i] = gLfo[i].rate; }
+	for (int i = 0; i < 2; i++) { p->lfoShape[i] = gLfo[i].shape; p->lfoMode[i] = gLfo[i].mode; p->lfoRate[i] = gLfo[i].rate; p->lfoSync[i] = gLfo[i].sync; p->lfoTable[i] = gLfo[i].table; p->lfoPos[i] = gLfo[i].pos; }
 	for (int i = 0; i < 4; i++) p->mod[i] = gMod[i];
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
 	p->glide = gGlide; p->chorus = gChorus; p->revSize = gRevSize; p->revDamp = gRevDamp; p->fxMix = gFxMix; p->driveAmt = gDriveAmt; p->master = gMaster;
@@ -1527,7 +1577,7 @@ static void patchApply(const SPatch* p) {
 	gSubShape = p->subShape; gSubOct = p->subOct; gNoiseType = p->noiseType; gFiltType = p->filtType;
 	gSubLevel = p->subLevel; gNoiseLevel = p->noiseLevel; gCutoff = p->cutoff; gRes = p->res; gKeytrack = p->keytrack;
 	gEnv1 = p->env1; gEnv2 = p->env2;
-	for (int i = 0; i < 2; i++) { gLfo[i].shape = p->lfoShape[i]; gLfo[i].mode = p->lfoMode[i]; gLfo[i].rate = p->lfoRate[i]; }
+	for (int i = 0; i < 2; i++) { gLfo[i].shape = p->lfoShape[i] < NLFOSH ? p->lfoShape[i] : 0; gLfo[i].mode = p->lfoMode[i]; gLfo[i].rate = p->lfoRate[i]; gLfo[i].sync = p->lfoSync[i] < NSYNC ? p->lfoSync[i] : 0; gLfo[i].table = p->lfoTable[i] < T_BUILTIN ? p->lfoTable[i] : 0; gLfo[i].pos = p->lfoPos[i]; gLfo[i].tabKey = -1; }
 	for (int i = 0; i < 4; i++) gMod[i] = p->mod[i];
 	gVoiceMode = p->voiceMode; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
@@ -1605,10 +1655,10 @@ static Param P_FILT[] = {
 	PF("ENV2 SUS", &gEnv2.s, 0, 1, 0.01f, "%", 0), PF("ENV2 REL", &gEnv2.r, 0.01f, 5, 0.02f, "S", 0),
 	PEND};
 static Param P_MOD[] = {
-	PE("LFO1 SHAPE", &gLfo[0].shape, 5, LFO_SHAPES, 0), PF("LFO1 RATE", &gLfo[0].rate, 0.05f, 20, 0.05f, "HZ", 0),
-	PE("LFO1 MODE", &gLfo[0].mode, 2, LFO_MODES, 0),
-	PE("LFO2 SHAPE", &gLfo[1].shape, 5, LFO_SHAPES, 0), PF("LFO2 RATE", &gLfo[1].rate, 0.05f, 20, 0.05f, "HZ", 0),
-	PE("LFO2 MODE", &gLfo[1].mode, 2, LFO_MODES, 0),
+	PE("LFO1 SHAPE", &gLfo[0].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO1 RATE", &gLfo[0].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO1 SYNC", &gLfo[0].sync, NSYNC, SYNC_NAMES, 0),
+	PE("LFO1 MODE", &gLfo[0].mode, 2, LFO_MODES, 0), PE("LFO1 TABLE", &gLfo[0].table, T_BUILTIN, BUILTIN_NAMES, 0), PF("LFO1 WT POS", &gLfo[0].pos, 0, 1, 0.02f, "%", 0),
+	PE("LFO2 SHAPE", &gLfo[1].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO2 RATE", &gLfo[1].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO2 SYNC", &gLfo[1].sync, NSYNC, SYNC_NAMES, 0),
+	PE("LFO2 MODE", &gLfo[1].mode, 2, LFO_MODES, 0), PE("LFO2 TABLE", &gLfo[1].table, T_BUILTIN, BUILTIN_NAMES, 0), PF("LFO2 WT POS", &gLfo[1].pos, 0, 1, 0.02f, "%", 0),
 	PE("1 SOURCE", &gMod[0].src, SRC_COUNT, SRC_NAMES, 0), PE("1 DEST", &gMod[0].dst, DST_COUNT, DST_NAMES, 0), PF("1 AMOUNT", &gMod[0].amt, -1, 1, 0.02f, "%", 0),
 	PE("2 SOURCE", &gMod[1].src, SRC_COUNT, SRC_NAMES, 0), PE("2 DEST", &gMod[1].dst, DST_COUNT, DST_NAMES, 0), PF("2 AMOUNT", &gMod[1].amt, -1, 1, 0.02f, "%", 0),
 	PE("3 SOURCE", &gMod[2].src, SRC_COUNT, SRC_NAMES, 0), PE("3 DEST", &gMod[2].dst, DST_COUNT, DST_NAMES, 0), PF("3 AMOUNT", &gMod[2].amt, -1, 1, 0.02f, "%", 0),
@@ -1871,6 +1921,40 @@ static void drawEnvelopesCPU(void) {
 	envLabels();
 }
 
+// ---- LFO pictures (LFO+MOD page): one cycle of each LFO's shape, a playhead and the current value
+static float lfoDrawAt(const LFO* l, float p) {   // S&H drawn as random steps instead of its held value
+	if (l->shape == LS_SH) return hash01((int)(p * 8), 7) * 2 - 1;
+	return lfoShapeAt(l, p);
+}
+static int lfoSelected(int i) { return gSelName && !strncmp(gSelName, i ? "LFO2" : "LFO1", 4); }
+static void lfoLabels(void) {
+	for (int i = 0; i < 2; i++) {
+		const LFO* l = &gLfo[i]; char t[40], r[12];
+		if (l->sync) snprintf(r, sizeof(r), "%s", SYNC_NAMES[l->sync]); else snprintf(r, sizeof(r), "%.2fHZ", l->rate);
+		snprintf(t, sizeof(t), "LFO%d %s", i + 1, LFO_SHAPES[l->shape]);
+		if (lfoSelected(i)) text(8, 33 + i * 64, t, 1, TXT); else text(8, 33 + i * 64, t, 1, DIM);
+		text(196 - (int)strlen(r) * 8, 33 + i * 64, r, 1, DIM);
+	}
+}
+static void drawLfosCPU(void) {
+	for (int i = 0; i < 2; i++) {
+		const LFO* l = &gLfo[i]; int Y0 = 30 + i * 64, H = 60, mid = Y0 + 36, amp = 18;
+		rect(4, Y0, 196, H, RGB3(TH->pad));
+		rect(10, mid, 184, 1, RGB3(TH->grid));
+		int pyv = 0;
+		for (int x = 0; x <= 184; x++) {
+			int y = mid - (int)(lfoDrawAt(l, x / 184.0f) * amp);
+			if (x) { if (lfoSelected(i)) line(9 + x, pyv, 10 + x, y, TXT); else line(9 + x, pyv, 10 + x, y, LINE); }
+			pyv = y;
+		}
+		int hx = 10 + (int)(l->ph * 184), hy = mid - (int)(l->val * amp);
+		for (int y = Y0 + 12; y < Y0 + H - 2; y += 2) px(hx, y, DIM);
+		rect(hx - 2, hy - 2, 5, 5, VAL);
+		frame(4, Y0, 196, H);
+	}
+	lfoLabels();
+}
+
 // ---- what each control does (shown in the footer for the selected row)
 static const char* paramHelp(const char* n) {
 	static const char* H[][2] = {
@@ -1887,7 +1971,9 @@ static const char* paramHelp(const char* n) {
 		{"ENV1 ATK", "VOLUME FADE-IN TIME"}, {"ENV1 HOLD", "TIME AT FULL BEFORE DECAY"}, {"ENV1 DEC", "TIME TO FALL TO SUSTAIN"},
 		{"ENV1 SUS", "LEVEL WHILE THE KEY IS HELD"}, {"ENV1 REL", "FADE-OUT AFTER RELEASE"},
 		{"ENV2 ATK", "MOD ENVELOPE ATTACK"}, {"ENV2 DEC", "MOD ENVELOPE DECAY"}, {"ENV2 SUS", "MOD ENVELOPE SUSTAIN"}, {"ENV2 REL", "MOD ENVELOPE RELEASE"},
-		{"LFO1 SHAPE", "LFO 1 WAVE"}, {"LFO1 RATE", "LFO 1 SPEED"}, {"LFO1 MODE", "FREE RUNNING OR RESTART PER NOTE"},
+		{"LFO1 SHAPE", "LFO 1 WAVE - WT = WAVETABLE SHAPES"}, {"LFO1 RATE", "LFO 1 SPEED"}, {"LFO1 MODE", "FREE RUNNING OR RESTART PER NOTE"},
+		{"LFO1 SYNC", "LOCK LFO 1 TO THE TEMPO"}, {"LFO1 TABLE", "WAVETABLE FOR SHAPE: WAVETABLE"}, {"LFO1 WT POS", "WHICH FRAME OF THAT WAVETABLE"},
+		{"LFO2 SYNC", "LOCK LFO 2 TO THE TEMPO"}, {"LFO2 TABLE", "WAVETABLE FOR SHAPE: WAVETABLE"}, {"LFO2 WT POS", "WHICH FRAME OF THAT WAVETABLE"},
 		{"LFO2 SHAPE", "LFO 2 WAVE"}, {"LFO2 RATE", "LFO 2 SPEED"}, {"LFO2 MODE", "FREE RUNNING OR RESTART PER NOTE"},
 		{"1 SOURCE", "MOD SLOT 1: WHAT MOVES IT"}, {"1 DEST", "MOD SLOT 1: WHAT IT MOVES"}, {"1 AMOUNT", "MOD SLOT 1: HOW MUCH"},
 		{"2 SOURCE", "MOD SLOT 2: WHAT MOVES IT"}, {"2 DEST", "MOD SLOT 2: WHAT IT MOVES"}, {"2 AMOUNT", "MOD SLOT 2: HOW MUCH"},
@@ -2012,6 +2098,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		char tn[26]; snprintf(tn, sizeof(tn), "%.24s", o->tb.name); text(6, 214, tn, 1, VAL);
 	} else {
 		if (page == 4) { if (!visActive(page)) drawEnvelopesCPU(); }
+		else if (page == 5) { if (!visActive(page)) drawLfosCPU(); }
 		else {
 			if (!visActive(page)) {
 				drawWave(gOsc[0].mips.lev[2], LEVN[2], 4, 30, 196, 60, gOsc[0].on);
@@ -2402,6 +2489,33 @@ static void visFull(void) {
 	else visSpectrum(12, 20, 376, 210, gVisOsc);
 }
 
+// LFOs on the GPU: shape with glow, fading phase trail, playhead, value dot
+static void visLfos(void) {
+	float cr, cg, cb; hue(gCutoff * 0.7f + gVisEnv * 0.3f, &cr, &cg, &cb);
+	for (int i = 0; i < 2; i++) {
+		const LFO* l = &gLfo[i]; float Y0 = 30 + i * 64, H = 60, mid = Y0 + 36, amp = 18;
+		vRect(0, Y0, 196, H, rgba(TH->pad[0] / 255.0f, TH->pad[1] / 255.0f, TH->pad[2] / 255.0f, 1));
+		u32 grid = rgba(TH->grid[0] / 255.0f, TH->grid[1] / 255.0f, TH->grid[2] / 255.0f, 1);
+		for (int g = 1; g < 8; g++) vLine(6 + g * 23, Y0 + 12, 6 + g * 23, Y0 + H - 2, grid, 0.6f);
+		vLine(6, mid, 190, mid, grid, 0.8f);
+		float xs[93], ys[93];
+		for (int k = 0; k <= 92; k++) { xs[k] = 6 + k * 2.0f; ys[k] = mid - lfoDrawAt(l, k / 92.0f) * amp; }
+		blendAdd(1);   // area between the curve and the centre line, brighter just behind the playhead
+		for (int k = 0; k < 92; k++) {
+			float d = l->ph - k / 92.0f; if (d < 0) d += 1;
+			float a = 0.08f + 0.35f * expf(-d * 6);
+			u32 f = rgba(cr, cg, cb, a);
+			vTri(xs[k], ys[k], xs[k + 1], ys[k + 1], xs[k + 1], mid, f); vTri(xs[k], ys[k], xs[k + 1], mid, xs[k], mid, f);
+		}
+		blendAdd(0);
+		glowLine(xs, ys, 93, cr, cg, cb, lfoSelected(i) ? 1.0f : 0.6f);
+		float hx = 6 + l->ph * 184, hy = mid - l->val * amp;
+		vLine(hx, Y0 + 12, hx, Y0 + H - 2, rgba(cr, cg, cb, 0.5f), 0.8f);
+		blendAdd(1); vRect(hx - 5, hy - 5, 10, 10, rgba(cr, cg, cb, 0.3f)); blendAdd(0);
+		vRect(hx - 1.5f, hy - 1.5f, 3, 3, rgba(1, 1, 1, 1));
+	}
+}
+
 // envelopes on the GPU: filled shapes, glowing outline, highlighted stage, live note dot
 static void visEnvelopes(void) {
 	float cr, cg, cb; hue(gCutoff * 0.7f + gVisEnv * 0.3f, &cr, &cg, &cb);
@@ -2477,6 +2591,7 @@ static void visFrame(int page, float dt) {
 	if (full) visFull();
 	else if (page == 1 || page == 2) visWavetable(page - 1, 98, 122, 0.95f);
 	else if (page == 4) visEnvelopes();
+	else if (page == 5) visLfos();
 	else visScopes(0, 30, 196, 124);
 	C2D_Flush();
 	if (gGpuFrames < 3) { snprintf(mk, sizeof(mk), "GPU F%d DRAWN", gGpuFrames + 1); crashMark(mk); }
@@ -2761,6 +2876,7 @@ int main(void) {
 		gSelName = PAGES[page][sel[page]].name;
 		if (!helpOn && visActive(page)) topDirty = 1;   // animated panel: redraw every frame
 		if (!helpOn && page == 4 && newestVoice()) topDirty = 1;   // moving envelope dot
+		if (!helpOn && page == 5) topDirty = 1;                   // moving LFO playheads
 		if (topDirty || topAgain) {
 			if (helpOn) drawHelp();
 			else {
@@ -2780,6 +2896,7 @@ int main(void) {
 						}
 					} else if (page <= 2) { Osc* o = &gOsc[page - 1]; frame(4, 30, 196, 177); text(8, 34, o->on ? (page == 2 ? "OSC B" : "OSC A") : (page == 2 ? "OSC B OFF" : "OSC A OFF"), 1, DIM); }
 					else if (page == 4) { frame(4, 30, 196, 60); frame(4, 94, 196, 60); envLabels(); }
+					else if (page == 5) { frame(4, 30, 196, 60); frame(4, 94, 196, 60); lfoLabels(); }
 					else { frame(4, 30, 196, 125); text(8, 34, "A", 1, DIM); text(8, 96, "B", 1, DIM); }
 					scanlines();
 				}
