@@ -53,7 +53,8 @@ CFLAGS	:=	-g -Wall -O3 -ffast-math -mword-relocations \
 			-ffunction-sections \
 			$(ARCH)
 
-CFLAGS	+=	$(INCLUDE) -D__3DS__
+SYRUP_VER := $(shell echo $${GITHUB_SHA:-dev} | cut -c1-7)
+CFLAGS	+=	$(INCLUDE) -D__3DS__ -DSYRUP_VER=\"$(SYRUP_VER)\"
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 

@@ -24,6 +24,9 @@
 #include <citro3d.h>
 #include <citro2d.h>
 #include <stddef.h>
+#ifndef SYRUP_VER
+#define SYRUP_VER "dev"
+#endif
 #include <malloc.h>
 #include <math.h>
 #include <stdio.h>
@@ -1754,6 +1757,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			text(90, y, nm, 1, cur ? 255 : 220, cur ? 230 : 190, cur ? 170 : 140);
 		}
 		char cnt[24]; snprintf(cnt, sizeof(cnt), "%d PATCHES", presetCount(gStyle)); text(10, 160, cnt, 1, DIM);
+		text(116, 160, "BUILD " SYRUP_VER, 1, DIM);
 		drawWave(gOsc[0].mips.lev[2], LEVN[2], 8, 176, 188, 50, gOsc[0].on);
 	} else if (page == 7) {   // scale / arp / sequencer
 		char s[40];
