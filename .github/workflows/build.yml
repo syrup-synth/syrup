@@ -5,6 +5,8 @@ on:
     paths-ignore:
       - 'ds1000/**'
       - '.github/workflows/ds1000.yml'
+      - 'acidvst/**'
+      - '.github/workflows/acidvst.yml'
   workflow_dispatch:
 
 permissions:
