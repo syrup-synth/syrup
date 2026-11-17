@@ -1636,6 +1636,7 @@ static float gClockDebt = 0;
 static void arpTick(float dt);
 static void seqTick(float dt);
 static void drumTick(float dt);
+static int tqDrain(int inTick); static volatile int gTqUi;
 static void audioTick(void* data) {
 	(void)data;
 	if (!gAudioClock) return;
@@ -1644,6 +1645,7 @@ static void audioTick(void* data) {
 	if (LightLock_TryLock(&gMipsLock)) { LightLock_Unlock(&gVoiceLock); gClockDebt = dt; return; }
 	gClockDebt = 0;
 	gInAudioTick = 1;
+	if (tqDrain(1)) gTqUi = 1;   // FM-1 LINK's timed notes, on time to the tick
 	arpTick(dt);
 	seqTick(dt);
 	drumTick(dt);
@@ -2349,6 +2351,7 @@ static const char* LOOP_NAMES_P[3] = {"OFF", "REC", "PLAY"};
 static const char* BARS_NAMES_P[5] = {"1 BAR", "2 BARS", "4 BARS", "8 BARS", "16 BARS"};
 static const char* LINK_NAMES_P[6] = {"OFF", "WIFI HOST", "WIFI JOIN", "IR SEND", "IR RECEIVE", "IR MIDI IN"};
 static int gLoopMode, gLoopBars, gCamOn, gLink, gBeatLight;
+static float gNetLat = 20;   // ms: FM-1 LINK's timing buffer (steady delay instead of wobble)
 static float gLoopLevel;
 static Param P_HW[] = {
 	PE("LOOPER", &gLoopMode, 3, LOOP_NAMES_P, D_LOOP), PE("LOOP BARS", &gLoopBars, 5, BARS_NAMES_P, 0), PF("LOOP LEVEL", &gLoopLevel, 0, 1, 0.05f, "%", 0),
@@ -2360,7 +2363,7 @@ static Param P_HW[] = {
 	{"CAM > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CAMTAB},
 	PE("ADD EDITOR", &gAddEdit, 2, ONOFF, D_ADDED), {"RULE > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	PE("CAM WAVE", &gCamVid, 3, VID_NAMES, D_CAMV), PF("WT SCAN", &gWtScan, 0, 4, 0.05f, "X", 0),
-	PE("WI-FI MIDI", &gMidiNet, 2, ONOFF, D_NETMIDI),
+	PE("WI-FI MIDI", &gMidiNet, 2, ONOFF, D_NETMIDI), PF("NET BUFFER", &gNetLat, 0, 60, 1, "MS", 0),
 	{"UPDATE SYRUP", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_UPDATE},
 	{"GET WAVETABLES", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	{"NET > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
@@ -2707,7 +2710,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM MACHINE ON / OFF"}, {"KIT", "DRUM SOUNDS"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -4161,6 +4164,34 @@ static void midiParse(const u8* p, int n, u8* run) {
 	}
 }
 
+// FM-1 LINK timed packets: "SL" 1, then records of a 4-byte sender time (24 MHz ticks) + one MIDI message. Each
+// message is played at its sender time + a learned clock offset + NET BUFFER, from the audio tick: the network's
+// wobble becomes one steady delay.
+#define TQN 512
+static struct { u64 due; u8 st, a, b; } gTq[TQN];
+static volatile int gTqW = 0, gTqR = 0;
+static inline u64 nowUs(void) { return svcGetSystemTick() / (SYSCLOCK_ARM11 / 1000000); }
+static void timedParse(const u8* p, int n) {
+	static u32 lastStamp; static s64 sTicks; static s64 offset; static u64 lastArr; static int have = 0;
+	u64 now = nowUs(); int i = 3;
+	while (i + 5 <= n) {
+		u32 t = p[i] | (p[i + 1] << 8) | (p[i + 2] << 16) | ((u32)p[i + 3] << 24); i += 4;
+		u8 st = p[i]; if (!(st & 0x80)) return;
+		int k = midiLen(st); if (i + 1 + k > n) return;
+		u8 a = k > 0 ? p[i + 1] : 0, b = k > 1 ? p[i + 2] : 0; i += 1 + k;
+		s32 d = (s32)(t - lastStamp);
+		if (!have || d > 24 * 30000000 || d < -24 * 1000000) { have = 1; sTicks = 0; offset = (s64)now; lastArr = now; d = 0; }
+		lastStamp = t; sTicks += d;
+		s64 sUs = sTicks / 24, cand = (s64)now - sUs;
+		offset += (s64)(now - lastArr) / 10000;   // let it drift up 100 ppm (the two crystals, a slower route)
+		if (cand < offset) offset = cand;        // the fastest packet sets the line
+		lastArr = now;
+		u64 due = (u64)(sUs + offset) + (u64)(gNetLat * 1000.0f);
+		int nw = (gTqW + 1) % TQN; if (nw == gTqR) continue;   // full: drop
+		gTq[gTqW].due = due; gTq[gTqW].st = st; gTq[gTqW].a = a; gTq[gTqW].b = b; __sync_synchronize(); gTqW = nw;
+	}
+}
+
 static int gMidiNet = 0; static volatile int gNetRun = 0, gNetClients = 0;
 static char gNetAddr[32] = "", gNetPeer[32] = "";
 static Thread gNetThread = NULL;
@@ -4340,7 +4371,7 @@ static void netMain(void* arg) {
 			if (k <= 0) break;
 			idle = 0;
 			if (!gNetPeer[0] || strcmp(gNetPeer, "FM-1 LINK")) snprintf(gNetPeer, sizeof(gNetPeer), "FM-1 LINK");
-			midiParse(pk, k, &rawRun);
+			if (k >= 3 && pk[0] == 'S' && pk[1] == 'L' && pk[2] == 1) timedParse(pk, k); else midiParse(pk, k, &rawRun);
 		}
 		if (ub >= 0 && osGetTime() - beaconT > 2000) {   // "I'm here": lets an FM-1 LINK find this 2DS without typing an address
 			beaconT = osGetTime();
@@ -4384,37 +4415,53 @@ static void midiNoteOff(int n) {
 	if (gArp) arpSetPool(gMidiHeld, gMidiHeldN, gMidiVel); else voiceOff(n);
 }
 static void acidGen(void);
-static int midiTick(void) {   // returns 1 when something on screen changed
+// one MIDI message: inTick = from the audio tick (only light work there; patch changes etc. go to the main loop)
+static int midiApply(u8 st, u8 a, u8 b, int inTick) {
 	int ch = 0;
+	if (inTick && ((st & 0xF0) == 0xC0 || ((st & 0xF0) == 0xB0 && a >= 102 && a <= 104))) { midiPush(st, a, b); return 0; }
+	switch (st & 0xF0) {
+	case 0x90: if (b) { midiNoteOn(a, 0.25f + 0.75f * b / 127.0f); break; } /* fall through: velocity 0 = off */
+	case 0x80: midiNoteOff(a); break;
+	case 0xE0: gMidiBend = (((b << 7) | a) - 8192) / 8192.0f; break;
+	case 0xC0: { int c = presetCount(gStyle); if (c > 0) { gPreset = a % c; presetLoad(gStyle, gPreset); ch = 1; } break; }
+	case 0xB0: {
+		float v = b / 127.0f; ch = 1;
+		if (a == 74) gCutoff = v; else if (a == 71) gRes = v; else if (a == 70) { gOsc[0].pos = v; }
+		else if (a == 1) gMacro[0] = v; else if (a >= 16 && a <= 19) gMacro[a - 16] = v;
+		else if (a == 102 && b) { int c = presetCount(gStyle); if (c > 0) { gPreset = (gPreset + c - 1) % c; presetLoad(gStyle, gPreset); } }
+		else if (a == 103 && b) { int c = presetCount(gStyle); if (c > 0) { gPreset = (gPreset + 1) % c; presetLoad(gStyle, gPreset); } }
+		else if (a == 104 && b) { acidGen(); if (gSeqMode != 1) gSeqMode = 1; }
+		else if (a == 123 || a == 120) { allOff(); gMidiHeldN = 0; if (gArp) arpSetPool(NULL, 0, 0.8f); }
+		else ch = 0;
+		break; }
+	case 0xF0:
+		if (st == 0xFA || st == 0xFB) { gSeqMode = 1; ch = 1; gMidiClk = 0; }
+		else if (st == 0xFC) { gSeqMode = 0; ch = 1; }
+		else if (st == 0xF8) {   // follow an external clock: 24 per beat
+			if (++gMidiClk % 24 == 0) {
+				u64 t = osGetTime();
+				if (gMidiClkT) { float bpm = 60000.0f / (float)(t - gMidiClkT); if (bpm > 40 && bpm < 240) { gBPM = (int)(gBPM * 0.7f + bpm * 0.3f + 0.5f); } }
+				gMidiClkT = t;
+			}
+		}
+		break;
+	}
+	return ch;
+}
+static int tqDrain(int inTick) {   // timed messages that are due (voice lock held)
+	int ch = 0; u64 now = nowUs();
+	while (gTqR != gTqW && (gTq[gTqR].due <= now || gTq[gTqR].due > now + 2000000)) {
+		ch |= midiApply(gTq[gTqR].st, gTq[gTqR].a, gTq[gTqR].b, inTick);
+		gTqR = (gTqR + 1) % TQN;
+	}
+	return ch;
+}
+static volatile int gTqUi = 0;
+static int midiTick(void) {   // returns 1 when something on screen changed
+	int ch = tqDrain(0) | gTqUi; gTqUi = 0;
 	while (gMqR != gMqW) {
 		u8 st = gMq[gMqR][0], a = gMq[gMqR][1], b = gMq[gMqR][2]; gMqR = (gMqR + 1) % MQ;
-		switch (st & 0xF0) {
-		case 0x90: if (b) { midiNoteOn(a, 0.25f + 0.75f * b / 127.0f); break; } /* fall through: velocity 0 = off */
-		case 0x80: midiNoteOff(a); break;
-		case 0xE0: gMidiBend = (((b << 7) | a) - 8192) / 8192.0f; break;
-		case 0xC0: { int c = presetCount(gStyle); if (c > 0) { gPreset = a % c; presetLoad(gStyle, gPreset); ch = 1; } break; }
-		case 0xB0: {
-			float v = b / 127.0f; ch = 1;
-			if (a == 74) gCutoff = v; else if (a == 71) gRes = v; else if (a == 70) { gOsc[0].pos = v; }
-			else if (a == 1) gMacro[0] = v; else if (a >= 16 && a <= 19) gMacro[a - 16] = v;
-			else if (a == 102 && b) { int c = presetCount(gStyle); if (c > 0) { gPreset = (gPreset + c - 1) % c; presetLoad(gStyle, gPreset); } }
-			else if (a == 103 && b) { int c = presetCount(gStyle); if (c > 0) { gPreset = (gPreset + 1) % c; presetLoad(gStyle, gPreset); } }
-			else if (a == 104 && b) { acidGen(); if (gSeqMode != 1) gSeqMode = 1; }
-			else if (a == 123 || a == 120) { allOff(); gMidiHeldN = 0; if (gArp) arpSetPool(NULL, 0, 0.8f); }
-			else ch = 0;
-			break; }
-		case 0xF0:
-			if (st == 0xFA || st == 0xFB) { gSeqMode = 1; ch = 1; gMidiClk = 0; }
-			else if (st == 0xFC) { gSeqMode = 0; ch = 1; }
-			else if (st == 0xF8) {   // follow an external clock: 24 per beat
-				if (++gMidiClk % 24 == 0) {
-					u64 t = osGetTime();
-					if (gMidiClkT) { float bpm = 60000.0f / (float)(t - gMidiClkT); if (bpm > 40 && bpm < 240) { gBPM = (int)(gBPM * 0.7f + bpm * 0.3f + 0.5f); } }
-					gMidiClkT = t;
-				}
-			}
-			break;
-		}
+		ch |= midiApply(st, a, b, 0);
 	}
 	return ch;
 }
