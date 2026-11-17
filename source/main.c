@@ -4199,9 +4199,9 @@ static void b64(const u8* in, int n, char* out) {
 }
 #include "remote_html.h"
 static int sendAll(int s, const void* d, int n) { const char* p = (const char*)d; while (n > 0) { int k = send(s, p, n, 0); if (k <= 0) { if (k < 0 && errno == EAGAIN) { svcSleepThread(1000000); continue; } return 0; } p += k; n -= k; } return 1; }
-#define NCLI 4
-typedef struct { int s, ws; char buf[2048]; int n; u8 run; } Cli;
-static void cliClose(Cli* c) { if (c->s >= 0) close(c->s); c->s = -1; c->ws = 0; c->n = 0; }
+#define NCLI 8
+typedef struct { int s, ws; char buf[2048]; int n; u8 run, closing; u64 t; } Cli;   // t: last activity (ms)
+static void cliClose(Cli* c) { if (c->s >= 0) close(c->s); c->s = -1; c->ws = 0; c->n = 0; c->closing = 0; }
 static void cliHttp(Cli* c) {   // request complete in c->buf
 	c->buf[c->n] = 0;
 	char* key = strstr(c->buf, "Sec-WebSocket-Key:");
@@ -4215,10 +4215,16 @@ static void cliHttp(Cli* c) {   // request complete in c->buf
 		c->ws = 1; c->n = 0; gNetClients++;
 		return;
 	}
-	char hdr[160]; int len = (int)strlen(REMOTE_HTML);
-	int n = snprintf(hdr, sizeof(hdr), "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", len);
-	if (sendAll(c->s, hdr, n)) sendAll(c->s, REMOTE_HTML, len);
-	cliClose(c);
+	if (!strncmp(c->buf, "GET /favicon", 12)) {   // browsers ask for an icon: answer quickly with nothing
+		static const char nf[] = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"; sendAll(c->s, nf, sizeof(nf) - 1);
+	} else {
+		char hdr[160]; int len = (int)strlen(REMOTE_HTML);
+		int n = snprintf(hdr, sizeof(hdr), "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", len);
+		if (sendAll(c->s, hdr, n)) sendAll(c->s, REMOTE_HTML, len);
+	}
+	// don't close straight away: closing with data still queued can reset the connection and the browser shows
+	// "page failed to load". Half-close, then wait for the browser to hang up (or 3 s).
+	shutdown(c->s, SHUT_WR); c->closing = 1; c->n = 0; c->t = osGetTime();
 }
 static void cliWs(Cli* c) {   // parse as many frames as are complete
 	for (;;) {
@@ -4290,7 +4296,7 @@ static void netMain(void* arg) {
 	if (ls < 0 || bind(ls, (struct sockaddr*)&a, sizeof(a)) < 0 || listen(ls, 4) < 0) { snprintf(gNetAddr, sizeof(gNetAddr), "PORT 8080 BUSY"); if (ls >= 0) close(ls); netDown(); gNetRun = 0; return; }
 	fcntl(ls, F_SETFL, fcntl(ls, F_GETFL, 0) | O_NONBLOCK);
 	int uc = udpOpen(5004), ud = udpOpen(5005);
-	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; cl[i].run = 0; }
+	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; cl[i].run = 0; cl[i].closing = 0; cl[i].t = 0; }
 	gNetClients = 0;
 	while (gNetRun) {
 		int idle = 1;
@@ -4298,15 +4304,21 @@ static void netMain(void* arg) {
 		if (s >= 0) {
 			fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
 			int slot = -1; for (int i = 0; i < NCLI; i++) if (cl[i].s < 0) { slot = i; break; }
-			if (slot < 0) close(s); else { cl[slot].s = s; cl[slot].ws = 0; cl[slot].n = 0; cl[slot].run = 0; }
+			if (slot < 0) {   // full of idle browser pre-connections: drop the oldest that isn't a live remote
+				for (int i = 0; i < NCLI; i++) if (!cl[i].ws && (slot < 0 || cl[i].t < cl[slot].t)) slot = i;
+				if (slot >= 0) cliClose(&cl[slot]);
+			}
+			if (slot < 0) close(s); else { cl[slot].s = s; cl[slot].ws = 0; cl[slot].n = 0; cl[slot].run = 0; cl[slot].closing = 0; cl[slot].t = osGetTime(); }
 			idle = 0;
 		}
 		for (int i = 0; i < NCLI; i++) {
 			Cli* c = &cl[i]; if (c->s < 0) continue;
+			if (!c->ws && osGetTime() - c->t > (c->closing ? 3000 : 10000)) { cliClose(c); continue; }
+			if (c->closing) { char junk[256]; int k = recv(c->s, junk, sizeof(junk), 0); if (k == 0 || (k < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) cliClose(c); continue; }
 			int k = recv(c->s, c->buf + c->n, sizeof(c->buf) - 1 - c->n, 0);
 			if (k == 0 || (k < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) { if (c->ws) gNetClients--; cliClose(c); continue; }
 			if (k < 0) continue;
-			c->n += k; idle = 0;
+			c->n += k; idle = 0; c->t = osGetTime();
 			if (c->ws) cliWs(c);
 			else { c->buf[c->n] = 0; if (strstr(c->buf, "\r\n\r\n")) cliHttp(c); else if (c->n >= (int)sizeof(c->buf) - 1) cliClose(c); }
 		}
