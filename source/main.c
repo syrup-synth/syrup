@@ -5508,6 +5508,36 @@ static u32 usedLevels(int o) {
 	return m;
 }
 
+// ---- sleep (lid closed / HOME menu sleep): the second sound chip, the camera, Wi-Fi and IR don't survive it cleanly,
+// so they are quietened before the system sleeps and brought back on the main loop after it wakes
+static aptHookCookie gSleepCookie;
+static volatile int gSlept = 0, gWoke = 0, gNetResume = 0, gLinkResume = 0;
+static void sleepHook(APT_HookType h, void* p) {
+	(void)p;
+	if (h == APTHOOK_ONSLEEP) {
+		gSlept = 1;
+		LightLock_Lock(&gVoiceLock);
+		allOff();
+		if (gCsndOK) {
+			echoStop();
+			for (int c = 0; c < NCS; c++) if (csndChannels & BIT(c)) CSND_SetPlayState(c, 0);
+			csndExecCmds(true);
+		}
+		LightLock_Unlock(&gVoiceLock);
+		if (!gSafeMode) {
+			camStop();
+			if (gMidiNet) { gMidiNet = 0; netMidiChanged(); gNetResume = 1; }
+			if (gLink) { gLinkResume = gLink; linkStop(); gLink = gLinkPrev = 0; }
+		}
+	} else if (h == APTHOOK_ONWAKEUP) gWoke = 1;
+}
+static void wakeTick(void) {   // main loop, after a wake: Wi-Fi MIDI and the IR / local link back as they were
+	if (!gWoke) return;
+	gWoke = 0;
+	if (gNetResume) { gNetResume = 0; gMidiNet = 1; netMidiChanged(); }
+	if (gLinkResume) { gLink = gLinkResume; gLinkResume = 0; linkChanged(); }
+}
+
 int main(void) {
 	gfxInitDefault();
 	gfxSetDoubleBuffering(GFX_TOP, true);     // draw into the hidden buffer, swap on vblank: no tearing
@@ -5565,11 +5595,13 @@ int main(void) {
 	float repeatT = 0, lastPos[2] = {-1, -1}, lastWarp[2] = {-1, -1};
 	u8 on[128], onPrev[128]; memset(onPrev, 0, sizeof(onPrev));
 	u64 last = osGetTime();
+	aptHook(&gSleepCookie, sleepHook, NULL);
 
 	while (aptMainLoop()) {
 		hidScanInput();
 		u32 kDown = hidKeysDown(), kHeld = hidKeysHeld();
 		if (kDown & KEY_START) break;
+		wakeTick();
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
 		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
@@ -5835,6 +5867,7 @@ int main(void) {
 		gspWaitForVBlank();
 	}
 
+	aptUnhook(&gSleepCookie);
 	// background threads first (network MIDI, IR, downloads, camera) so nothing is mid-call while services close
 	if (!gSafeMode) {
 		if (gMidiNet) { gMidiNet = 0; netMidiChanged(); }
@@ -5851,7 +5884,7 @@ int main(void) {
 	if (gCsndOK) {
 		echoStop();   // capture units off and released before the chip goes away
 		for (int c = 0; c < NCS; c++) if (gCsndOK && (csndChannels & BIT(c))) CSND_SetPlayState(c, 0);
-		csndExecCmds(true);
+		csndExecCmds(!gSlept);   // after a sleep the chip may never report back: don't wait on it
 		gCsndOK = 0;
 		csndExit();
 	}
