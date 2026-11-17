@@ -84,7 +84,7 @@ static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0, gGpuCopy = 1;
 static int gDrums, gKit, gKickPat, gSnarePat, gHatPat; static float gDrumLevel;
 static float gChipLevel, gCsEcho, gCsEchoFb, gOrbit, gOrbitRate, gGrainSize, gGrainScan, gGrainSpray, gGrainPitch, gGrainLevel; static int gChipDuty, gChipOct, gCsEchoT, gGrains, gGrainSrc; static const char* GRAIN_MODES[3]; static const char* GRAIN_SRCS[3];
 static const char* DUTY_NAMES[8]; static const char* CSECHO_T_NAMES[4];
-static int gCamVid, gMidiNet, gAddEdit; static float gWtScan; static const char* VID_NAMES[3];
+static int gCamVid, gMidiNet, gAddEdit, gOfType; static float gOfCut, gOfRes, gOfDrive, gOfEnv; static const char* OFT_NAMES[14]; static float gWtScan; static const char* VID_NAMES[3];
 static void chipSet(float lv);
 static void grainsChanged(void);
 static const char* KIT_NAMES[4]; static const char* KICKP_NAMES[8]; static const char* SNAREP_NAMES[7]; static const char* HATP_NAMES[7]; static int gDrumRec; static const char* DREC_NAMES[5];
@@ -392,8 +392,8 @@ static int gModCurve[NMOD];
 static const char* CURVE_NAMES[4] = {"LINEAR", "EXP", "LOG", "S-CURVE"};
 static float gTiltX, gTiltY, gMicEnv, gTwist, gShake, gCamLight, gCamColor;
 static int gHeadphones = 0;
-enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_COUNT };
-static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME"};   // VOLUME: when routed, the source IS the loudness (breath control)
+enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_COUNT };
+static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF"};   // VOLUME: when routed, the source IS the loudness (breath control)
 static const char* VOICE_MODES[3] = {"POLY", "MONO", "LEGATO"};
 static const char* FX_NAMES[4] = {"OFF", "ECHO", "SPACE", "REVERB"};
 static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
@@ -1219,6 +1219,8 @@ static void bqSet(BQ* f, int type, float hz, float q, float db) {   // RBJ: 0 lo
 
 // buffers
 #define MDL 2048        // mod FX delay line
+#define OFDL 2048       // OUT FILTER comb / flanger line
+static float* gOfDl[2];
 #define PSN 4096        // shimmer pitch shifter
 static float* gMdl[2]; static int gMdlW = 0;
 static float* gPs; static int gPsW = 0; static float gPsR = 0;
@@ -1229,10 +1231,77 @@ static float gBandLp1[2][2], gBandLp2[2][2], gBandEnv[3], gBandGain[3] = {1, 1, 
 static float gLimEnv = 0;
 static int masterInit(void) {
 	for (int c = 0; c < 2; c++) if (!(gMdl[c] = (float*)calloc(MDL, sizeof(float)))) return 0;
+	for (int c = 0; c < 2; c++) gOfDl[c] = (float*)calloc(OFDL, sizeof(float));
 	return (gPs = (float*)calloc(PSN, sizeof(float))) != NULL;
 }
 static inline float rdFrac(const float* b, int n, float pos) { while (pos < 0) pos += n; int i = (int)pos; float u = pos - i; return b[i % n] * (1 - u) + b[(i + 1) % n] * u; }
 
+
+// ---- OUT FILTER: one stereo CPU filter on the summed voices (paraphonic, like SHRUB's), after the per-note DSP
+// filters. Stacked on the per-note 12 dB it makes a 24-36 dB slope; the ladders have the resonant, driven character
+// the DSP's clean biquads can't. Cutoff can be modulated (OUT CUTOFF destination) and follows the newest note's ENV 2.
+#define NOFT 14
+static const char* OFT_NAMES[NOFT] = {"OFF", "LADDER 24", "LADDER 12", "ACID 18", "DIRTY", "CREAMY 24", "SVF LP", "SVF HP", "SVF BP", "SVF NOTCH", "COMB +", "COMB -", "PHASER", "FLANGER"};
+static int gOfType = 0; static float gOfCut = 0.6f, gOfRes = 0.2f, gOfDrive = 0.2f, gOfEnv = 0; static volatile float gOfMod = 0;
+static float gOfS[2][4], gOfSv[2][2], gOfAp[2][6], gOfFb[2]; static int gOfW = 0;
+static inline float ftanh(float x) { if (x > 3) return 1; if (x < -3) return -1; float x2 = x * x; return x * (27 + x2) / (27 + 9 * x2); }
+static void ofReset(void) { memset(gOfS, 0, sizeof(gOfS)); memset(gOfSv, 0, sizeof(gOfSv)); memset(gOfAp, 0, sizeof(gOfAp)); gOfFb[0] = gOfFb[1] = 0; for (int c = 0; c < 2; c++) if (gOfDl[c]) memset(gOfDl[c], 0, OFDL * sizeof(float)); }
+static void ofBlock(s32* L, s32* R, int n) {   // audio thread, inside auxMaster
+	if (!gOfType) return;
+	if (gOfType >= 10 && !gOfDl[0]) return;
+	static float sm = -1; float tc = gOfCut + gOfMod;
+	if (tc < 0) tc = 0;
+	if (tc > 1) tc = 1;
+	if (sm < 0) sm = tc;
+	sm += (tc - sm) * 0.35f;   // per-block smoothing: no zipper on fast mod
+	float hz = 30.0f * powf(533.0f, sm);            // 30 Hz .. 16 kHz
+	if (hz > 14000) hz = 14000;
+	float g = 1 - expf(-TWO_PI * hz / DSPRATE), res = gOfRes, drv = 1 + gOfDrive * 6;
+	float f = 2 * sinf(3.14159f * hz / DSPRATE / 2), q = 1.9f - res * 1.85f;   // SVF
+	float d = DSPRATE / hz; if (d > OFDL - 4) d = OFDL - 4; if (d < 2) d = 2;
+	float apc = (1 - tanf(3.14159f * hz / DSPRATE)) / (1 + tanf(3.14159f * hz / DSPRATE));
+	float comp = 1 + res * 2.2f;   // ladders lose bass as resonance rises: give some back
+	for (int i = 0; i < n; i++) {
+		float x[2] = {L[i] / 32768.0f, R[i] / 32768.0f};
+		for (int c = 0; c < 2; c++) {
+			float in = x[c] * drv, y = in; float* s4 = gOfS[c];
+			switch (gOfType) {
+			case 1: case 2: case 5: {   // ladder: four one-pole stages with saturated resonance feedback
+				float k = gOfType == 5 ? res * 2.6f : res * 4.1f;
+				float u = ftanh(in - k * (gOfType == 2 ? s4[1] : s4[3]) + (gOfType == 5 ? 0 : 0.0f));
+				s4[0] += g * (u - s4[0]); s4[1] += g * (ftanh(s4[0]) - s4[1]); s4[2] += g * (s4[1] - s4[2]); s4[3] += g * (s4[2] - s4[3]);
+				y = (gOfType == 2 ? s4[1] : s4[3]) * comp;
+				if (gOfType == 5) y = (s4[3] * 0.85f + s4[2] * 0.15f) * (1 + res);   // creamy: softer knee, rounder peak
+				break; }
+			case 3: {   // acid: three stages, asymmetric squelch
+				float u = ftanh(in - res * 3.3f * s4[2]) + 0.02f * s4[2] * s4[2];
+				s4[0] += g * (u - s4[0]); s4[1] += g * (s4[0] - s4[1]); s4[2] += g * (ftanh(s4[1] * 1.2f) / 1.2f - s4[2]);
+				y = s4[2] * comp; break; }
+			case 4: {   // dirty: 2-pole state variable with the resonance path clipping hard
+				float* sv = gOfSv[c]; float lp = sv[1] + f * sv[0], hp = in - lp - (q * 0.6f) * ftanh(sv[0] * 2.5f), bp = f * hp + sv[0];
+				sv[0] = ftanh(bp); sv[1] = lp; y = lp * 0.85f; break; }
+			case 6: case 7: case 8: case 9: {   // clean state variable
+				float* sv = gOfSv[c]; float lp = sv[1] + f * sv[0], hp = in - lp - q * sv[0], bp = f * hp + sv[0];
+				sv[0] = bp; sv[1] = lp;
+				y = (gOfType == 6 ? lp : gOfType == 7 ? hp : gOfType == 8 ? bp : lp + hp) * (0.85f - 0.3f * res); break; }
+			case 10: case 11: {   // comb at the cutoff's period: + = metallic peaks, - = hollow
+				float dl = rdFrac(gOfDl[c], OFDL, gOfW - d), sg = gOfType == 10 ? 1 : -1;
+				gOfDl[c][gOfW] = ftanh(in + sg * dl * (0.3f + res * 0.65f)); y = (in + sg * dl) * 0.6f; break; }
+			case 12: {   // phaser: six allpasses at the cutoff, resonance = feedback
+				float v = in + gOfFb[c] * res * 0.8f;
+				for (int k2 = 0; k2 < 6; k2++) { float o = -apc * v + gOfAp[c][k2]; gOfAp[c][k2] = v + apc * o; v = o; }
+				gOfFb[c] = v; y = (in + v) * 0.6f; break; }
+			default: {   // flanger: very short comb with negative feedback
+				float dd = d * 0.25f; if (dd < 2) dd = 2;
+				float dl = rdFrac(gOfDl[c], OFDL, gOfW - dd); gOfDl[c][gOfW] = in - dl * res * 0.85f; y = (in + dl) * 0.6f; break; }
+			}
+			y /= (drv > 1 ? 0.55f + 0.45f * drv : 1);   // keep loudness roughly steady as DRIVE goes up
+			x[c] = y;
+		}
+		if (++gOfW >= OFDL) gOfW = 0;
+		L[i] = (s32)(x[0] * 32768.0f); R[i] = (s32)(x[1] * 32768.0f);
+	}
+}
 static void auxMaster(void* data, int n, void* samples[4]) {
 	(void)data;
 	u64 t0 = svcGetSystemTick();
@@ -1244,6 +1313,7 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 		bqSet(&gEq[0], 0, 150, 0.7f, gEqLow); bqSet(&gEq[1], 1, 1200, 0.8f, gEqMid); bqSet(&gEq[2], 2, 6000, 0.7f, gEqHigh);
 		lastEq[0] = gEqLow; lastEq[1] = gEqMid; lastEq[2] = gEqHigh;
 	}
+	ofBlock(L, R, n);   // OUT FILTER first, then the effects
 	float color = gFxColor + gFxModVal; if (color < 0) color = 0; if (color > 1) color = 1;
 	if (gModFx == 5) {   // formant: morph through A E I O U
 		static const float VF[5][3] = {{730, 1090, 2440}, {530, 1840, 2480}, {270, 2290, 3010}, {570, 840, 2410}, {300, 870, 2240}};
@@ -1661,8 +1731,11 @@ typedef struct {
 	float chipLevel, csEcho, csEchoFb, orbit, orbitRate; int chipDuty, chipOct, csEchoT;   // v5
 	int revType, dlyType;   // v6
 	int grainMode, grainSrc; float grainSize, grainScan, grainSpray, grainPitch, grainLevel;   // v7
+	int ofType; float ofCut, ofRes, ofDrive, ofEnv;   // v8
 } SPatch;
-#define PATCH_MAGIC 0x53595237   // "SYR7"
+#define PATCH_MAGIC 0x53595238   // "SYR8"
+#define PATCH_MAGIC7 0x53595237  // v7 (no OUT FILTER)
+#define PATCH_V7_SIZE offsetof(SPatch, ofType)
 #define PATCH_MAGIC6 0x53595236  // v6 (no grain settings)
 #define PATCH_V6_SIZE offsetof(SPatch, grainMode)
 #define PATCH_MAGIC5 0x53595235  // v5 (no reverb type)
@@ -1703,7 +1776,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->modFx = 0; p->dlySync = 0; p->shimmer = 0; p->freeze = 0; p->pumpRate = 1; p->lofiBits = 0;
 	p->modRate = 0.4f; p->modDepth = 0.5f; p->modMix = 0.5f; p->fxColor = 0.5f; p->eqLow = p->eqMid = p->eqHigh = 0;
 	p->dlyMix = 0; p->dlyWow = 0.25f; p->dlySat = 0.3f; p->revMix = 0; p->ott = 0; p->pump = 0; p->lofiRate = 0;
-	p->chipLevel = 0; p->chipDuty = 3; p->chipOct = 0; p->csEcho = 0; p->csEchoFb = 0.45f; p->csEchoT = 2; p->orbit = 0; p->orbitRate = 0.2f; p->revType = 0; p->dlyType = 0; p->grainMode = 0; p->grainSrc = 1; p->grainSize = 0.35f; p->grainScan = 0.5f; p->grainSpray = 0.2f; p->grainPitch = 0; p->grainLevel = 0.8f;
+	p->chipLevel = 0; p->chipDuty = 3; p->chipOct = 0; p->csEcho = 0; p->csEchoFb = 0.45f; p->csEchoT = 2; p->orbit = 0; p->orbitRate = 0.2f; p->revType = 0; p->dlyType = 0; p->grainMode = 0; p->grainSrc = 1; p->grainSize = 0.35f; p->grainScan = 0.5f; p->grainSpray = 0.2f; p->grainPitch = 0; p->grainLevel = 0.8f; p->ofType = 0; p->ofCut = 0.6f; p->ofRes = 0.2f; p->ofDrive = 0.2f; p->ofEnv = 0;
 }
 
 #define OA p->osc[0]
@@ -2082,12 +2155,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -2121,7 +2194,7 @@ static void patchCapture(SPatch* p) {
 	p->modFx = gModFx; p->dlySync = gDlySync; p->shimmer = gShimmer; p->freeze = gFreeze; p->pumpRate = gPumpRate; p->lofiBits = gLofiBits;
 	p->modRate = gModRate; p->modDepth = gModDepth; p->modMix = gModMix; p->fxColor = gFxColor; p->eqLow = gEqLow; p->eqMid = gEqMid; p->eqHigh = gEqHigh;
 	p->dlyMix = gDlyMix; p->dlyWow = gDlyWow; p->dlySat = gDlySat; p->revMix = gRevMix; p->ott = gOtt; p->pump = gPump; p->lofiRate = gLofiRate;
-	p->chipLevel = gChipLevel; p->chipDuty = gChipDuty; p->chipOct = gChipOct; p->csEcho = gCsEcho; p->csEchoFb = gCsEchoFb; p->csEchoT = gCsEchoT; p->orbit = gOrbit; p->orbitRate = gOrbitRate; p->revType = gRevType; p->dlyType = gDlyType; p->grainMode = gGrains; p->grainSrc = gGrainSrc; p->grainSize = gGrainSize; p->grainScan = gGrainScan; p->grainSpray = gGrainSpray; p->grainPitch = gGrainPitch; p->grainLevel = gGrainLevel;
+	p->chipLevel = gChipLevel; p->chipDuty = gChipDuty; p->chipOct = gChipOct; p->csEcho = gCsEcho; p->csEchoFb = gCsEchoFb; p->csEchoT = gCsEchoT; p->orbit = gOrbit; p->orbitRate = gOrbitRate; p->revType = gRevType; p->dlyType = gDlyType; p->grainMode = gGrains; p->grainSrc = gGrainSrc; p->grainSize = gGrainSize; p->grainScan = gGrainScan; p->grainSpray = gGrainSpray; p->grainPitch = gGrainPitch; p->grainLevel = gGrainLevel; p->ofType = gOfType; p->ofCut = gOfCut; p->ofRes = gOfRes; p->ofDrive = gOfDrive; p->ofEnv = gOfEnv;
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
 	p->glide = gGlide; p->chorus = gChorus; p->revSize = gRevSize; p->revDamp = gRevDamp; p->fxMix = gFxMix; p->driveAmt = gDriveAmt; p->master = gMaster;
 	p->arp = gArp; p->arpRate = gArpRate; p->arpOct = gArpOct; p->arpGate = gArpGate; p->bpm = gBPM;
@@ -2149,6 +2222,7 @@ static void patchApply(const SPatch* p) {
 	gModRate = p->modRate; gModDepth = p->modDepth; gModMix = p->modMix; gFxColor = p->fxColor; gEqLow = p->eqLow; gEqMid = p->eqMid; gEqHigh = p->eqHigh;
 	gDlyMix = p->dlyMix; gDlyWow = p->dlyWow; gDlySat = p->dlySat; gRevMix = p->revMix; gOtt = p->ott; gPump = p->pump; gLofiRate = p->lofiRate;
 	chipSet(p->chipLevel); gChipDuty = p->chipDuty; gChipOct = p->chipOct; gCsEcho = p->csEcho; gCsEchoFb = p->csEchoFb; gCsEchoT = p->csEchoT; gOrbit = p->orbit; gOrbitRate = p->orbitRate; gRevType = p->revType % NREVT; gDlyType = p->dlyType % NDLYT; dlyTypeChanged();
+	if (p->ofType % NOFT != gOfType) { gOfType = p->ofType % NOFT; ofReset(); } gOfCut = p->ofCut; gOfRes = p->ofRes; gOfDrive = p->ofDrive; gOfEnv = p->ofEnv;
 	gVoiceMode = p->voiceMode; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
 	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate; if (p->bpm >= 40) gBPM = p->bpm;
@@ -2305,6 +2379,7 @@ static const char* presetName(int style, int idx) { return style == NSTYLES - 1 
 enum { PT_F, PT_I, PT_E };
 enum { D_CHIP = 1 << 26, D_GRAIN = 1 << 27, D_DLYT = 1 << 28, D_CAMV = 1 << 29, D_NETMIDI = 1 << 30 };
 #define D_ADDED D_CAMV   // shares the flag; told apart by the param
+#define D_OFT D_DLYT   // shares the flag; told apart by the param
 #define D_DREC D_DRUMS   // shares the drums flag; told apart by the param
 enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536, D_LOOP = 1 << 17, D_LOOPTAB = 1 << 18, D_MICTAB = 1 << 19, D_CAMTAB = 1 << 20, D_CAM = 1 << 21, D_LINK = 1 << 22, D_DLWT = 1 << 23, D_DRUMS = 1 << 24, D_UPDATE = 1 << 25 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
@@ -2429,6 +2504,8 @@ static Param P_HW[] = {
 	PEND};
 static const char* ONOFF2[2] = {"OFF", "ON"};
 static Param P_MASTER[] = {
+	PE("OUT FILTER", &gOfType, NOFT, OFT_NAMES, D_OFT), PF("OUT CUTOFF", &gOfCut, 0, 1, 0.01f, "%", 0), PF("OUT RES", &gOfRes, 0, 1, 0.02f, "%", 0),
+	PF("OUT DRIVE", &gOfDrive, 0, 1, 0.02f, "%", 0), PF("OUT ENV2", &gOfEnv, -1, 1, 0.02f, "%", 0),
 	PE("MASTER FX", &gMasterFX, 2, ONOFF2, 0),
 	PE("MOD FX", &gModFx, 8, MODFX_NAMES, 0), PF("MOD RATE", &gModRate, 0.02f, 4, 0.02f, "HZ", 0), PF("MOD DEPTH", &gModDepth, 0, 1, 0.02f, "%", 0),
 	PF("MOD MIX", &gModMix, 0, 1, 0.02f, "%", 0), PF("FX COLOR", &gFxColor, 0, 1, 0.02f, "%", 0),
@@ -5307,6 +5384,11 @@ int main(void) {
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
 		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
 		if (midiTick()) topDirty = botDirty = 1;
+		if (gOfType) {   // OUT FILTER cutoff mod: the mod matrix and ENV 2 of the newest note
+			const SVoice* nv = newestVoice(); float m = modSum(DST_OFCUT, (SVoice*)nv);
+			if (nv && gOfEnv != 0) m += gOfEnv * nv->env2;
+			gOfMod = m;
+		}
 		gVidT += 1.0f / 60;
 		if (gWtScan > 0) { A->pos += gWtScan / 60.0f / 8.0f; if (A->pos >= 1) A->pos -= 1; if (page == 1) topDirty = 1; }
 		{ static int shown = 0; if (gMidiNet && gNetAddr[0] && !shown) { char m[48]; snprintf(m, sizeof(m), "ON YOUR PHONE: http://%s", gNetAddr); say(m); gMsgT = 8; shown = 1; topDirty = 1; } if (!gMidiNet) shown = 0; }
@@ -5363,7 +5445,8 @@ int main(void) {
 				else if (p->dirty & D_DRUMS) drumsChanged();
 				if (p->dirty & D_CHIP) { float lv = gChipLevel; gChipLevel = 1; chipSet(lv); }
 				if (p->dirty & D_GRAIN) grainsChanged();
-				if (p->dirty & D_DLYT) dlyTypeChanged();
+				if ((p->dirty & D_DLYT) && p->p == &gOfType) ofReset();
+				else if (p->dirty & D_DLYT) dlyTypeChanged();
 				if ((p->dirty & D_CAMV) && p->p == &gAddEdit) { if (gAddEdit) { addApply(); say("DRAW HARMONICS ON THE BOTTOM SCREEN"); } else if (gAddFr) { wtInstall("ADD", gAddFr); } botDirty = 1; }
 				else if (p->dirty & D_CAMV) vidChanged();
 				if (p->dirty & D_NETMIDI) netMidiChanged();

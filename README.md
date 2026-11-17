@@ -226,3 +226,12 @@ These follow the feature list and guide of Xfer's SHRUB firmware. SHRUB is close
 - **RULE > TABLE:** a cellular-automaton (Wolfram rule) wavetable, with one generation per frame.
 - **Value pop-ups:** stepping a named value shows it large on screen for a moment.
 - **Edit guard:** after you edit a patch, the first press to change patch or style only warns you; the second one goes.
+
+## OUT FILTER (MASTER FX page)
+
+One stereo CPU filter on the summed voices (paraphonic, like SHRUB's), after the per-note DSP filters.
+
+- **Types:** LADDER 24, LADDER 12, ACID 18, DIRTY, CREAMY 24, SVF LP/HP/BP/NOTCH, COMB +/-, PHASER and FLANGER. The ladders and acid have saturated resonance feedback.
+- **Controls:** OUT CUTOFF, OUT RES, OUT DRIVE, and OUT ENV2 (the newest note's ENV 2 sweeps it).
+- **Mod destination:** OUT CUTOFF can also be modulated from the matrix.
+- **Steeper slopes:** stack it on the per-note filter. FILTER 2 → +6DB SLOPE gives 18 dB per note, plus 24 dB from a ladder here.
