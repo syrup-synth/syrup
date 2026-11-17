@@ -3093,8 +3093,7 @@ static void padsTick(float dt) {   // strummed notes ring for a moment, then let
 	for (int i = 0; i < gStrumOffN; i++) if ((gStrumOff[i].t -= dt) <= 0) { voiceOff(gStrumOff[i].note); gStrumOff[i] = gStrumOff[--gStrumOffN]; i--; }
 }
 
-// ---- MOD page, bottom screen: CABLES (drag a source onto a destination to patch it; drag up/down on a destination
-// to set how much; drag a destination off to the left to unplug) and DRAW 3 / DRAW 4 (paint LFO 3 / 4).
+// ---- MOD page, bottom screen: ROUTE (destination first) and LFO 3 / LFO 4 (paint the drawn LFOs).
 
 // ---- MOTION: four lanes of movement, drawn with the stylus or recorded from the circle pad, looping over 1-8 bars
 // in time with BPM. A lane that's ON sets its setting directly as it plays, like a knob being turned for you.
@@ -3178,43 +3177,105 @@ static int motionTouch(int x, int y, int press, int release) {
 	if (!gMotOn[l]) gMotOn[l] = 1;   // drawing a lane switches it on
 	return 1;
 }
-static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 cables, 1 draw LFO 3, 2 draw LFO 4, 3 motion
-static const int CAB_SRC[12] = {SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_CHAOSX, SRC_CHAOSY, SRC_RAND, SRC_NOTE, SRC_VEL, SRC_TILTX, SRC_MIC};
-static const int CAB_DST[12] = {DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_PAN, DST_FXP, DST_OFCUT, DST_AMP};
-#define CAB_Y 42
-#define CAB_H 16
-static int gCabDrag = -1, gCabDst = -1, gCabX = 0, gCabY = 0, gCabY0 = 0, gDrawPrevX = -1, gDrawPrevY = 0;
-static float gCabAmt0 = 0;
-static int cabSlot(int src, int dst) { for (int m = 0; m < NMOD; m++) if (gMod[m].src == src && gMod[m].dst == dst) return m; return -1; }
-static int cabLast(int dst) { for (int m = NMOD - 1; m >= 0; m--) if (gMod[m].src != SRC_OFF && gMod[m].dst == dst) return m; return -1; }
+static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 route, 1 draw LFO 3, 2 draw LFO 4, 3 motion
+// ROUTE view, destination first: pick what should move, then add what moves it. Touch + buttons sources are the core
+// grid; mic, tilt and camera live behind the SENSORS tab as extras.
+static const int RT_CORE[16] = {SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_VEL, SRC_NOTE, SRC_RAND, SRC_STICK, SRC_XY, SRC_CHAOSX, SRC_CHAOSY, SRC_M1, SRC_M2, SRC_M3, SRC_M4};
+static const int RT_SENS[7] = {SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_TWIST, SRC_SHAKE, SRC_CAML, SRC_CAMC};
+#define RT_ROWY 60
+#define RT_ROWH 18
+#define RT_GRIDY 154
+static int gRtDst = -1, gRtSens = 0, gRtDrag = -1, gDrawPrevX = -1;
+static int rtRows(int dst, int* slots) { int n = 0; for (int m = 0; m < NMOD; m++) if (gMod[m].src != SRC_OFF && gMod[m].dst == dst && n < 5) slots[n++] = m; return n; }
+static int rtSlot(int src, int dst) { for (int m = 0; m < NMOD; m++) if (gMod[m].src == src && gMod[m].dst == dst) return m; return -1; }
+static void drawRoute(void) {
+	char t[40];
+	if (gRtDst < 0) {   // destination grid
+		for (int d = 0; d < DST_COUNT; d++) {
+			int x = 4 + (d % 3) * 105, y = 40 + (d / 3) * 39, n = 0; char srcs[24] = "";
+			for (int m = 0; m < NMOD; m++) if (gMod[m].src != SRC_OFF && gMod[m].dst == d) {
+				if (!n) snprintf(srcs, sizeof(srcs), "%s", SRC_NAMES[gMod[m].src]);
+				n++;
+			}
+			const u8* bc = n ? TH->tab : TH->pad; rect(x, y, 101, 35, bc[0], bc[1], bc[2]);
+			text(x + 50 - (int)strlen(DST_NAMES[d]) * 4, y + 6, DST_NAMES[d], 1, n ? TH->tabTxt[0] : TH->txt[0], n ? TH->tabTxt[1] : TH->txt[1], n ? TH->tabTxt[2] : TH->txt[2]);
+			if (n > 1) snprintf(t, sizeof(t), "%d SOURCES", n); else snprintf(t, sizeof(t), "%s", n ? srcs : "-");
+			text(x + 50 - (int)strlen(t) * 4, y + 21, t, 1, n ? TH->keyOn[0] : TH->dim[0], n ? TH->keyOn[1] : TH->dim[1], n ? TH->keyOn[2] : TH->dim[2]);
+		}
+		int used = 0; for (int m = 0; m < NMOD; m++) used += gMod[m].src != SRC_OFF;
+		text(114, 200, "TAP WHAT SHOULD MOVE,", 1, RGB3(TH->dim)); text(114, 212, "THEN ADD WHAT MOVES IT", 1, RGB3(TH->dim));
+		snprintf(t, sizeof(t), "%d/%d ROUTES USED", used, NMOD); text(114, 224, t, 1, RGB3(TH->dim));
+		return;
+	}
+	rect(4, 40, 52, 16, RGB3(TH->tab)); text(10, 44, "< ALL", 1, RGB3(TH->tabTxt));
+	text(62, 44, DST_NAMES[gRtDst], 1, RGB3(TH->val));
+	const u8* sc = gRtSens ? TH->keyOn : TH->tab; rect(236, 40, 80, 16, sc[0], sc[1], sc[2]);
+	text(244, 44, "SENSORS", 1, gRtSens ? EGA[0][0] : TH->tabTxt[0], gRtSens ? EGA[0][1] : TH->tabTxt[1], gRtSens ? EGA[0][2] : TH->tabTxt[2]);
+	int sl[5], n = rtRows(gRtDst, sl);
+	if (!n) text(8, RT_ROWY + 30, "NOTHING MOVES THIS YET - ADD A SOURCE BELOW", 1, RGB3(TH->dim));
+	for (int r = 0; r < n; r++) {
+		int y = RT_ROWY + r * RT_ROWH, m = sl[r]; float a = gMod[m].amt;
+		rect(4, y, 74, RT_ROWH - 2, RGB3(TH->pad)); text(8, y + 5, SRC_NAMES[gMod[m].src], 1, RGB3(TH->val));
+		rect(82, y, 196, RT_ROWH - 2, RGB3(TH->pad)); rect(180, y, 1, RT_ROWH - 2, RGB3(TH->grid));
+		const u8* c = a >= 0 ? TH->keyOn : TH->warn; int w = (int)(a * 98);
+		if (w >= 0) rect(180, y + 3, w + 1, RT_ROWH - 8, c[0], c[1], c[2]); else rect(180 + w, y + 3, -w + 1, RT_ROWH - 8, c[0], c[1], c[2]);
+		snprintf(t, sizeof(t), "%+d", (int)roundf(a * 100)); text(a >= 0 ? 90 : 240, y + 5, t, 1, RGB3(TH->txt));
+		rect(282, y, 34, RT_ROWH - 2, RGB3(TH->tab)); text(295, y + 5, "X", 1, RGB3(TH->tabTxt));
+	}
+	text(8, RT_GRIDY - 12 + 2, gRtSens ? "ADD A SENSOR (EXTRA)" : "ADD A SOURCE", 1, RGB3(TH->dim));
+	int cnt = gRtSens ? 7 : 16;
+	for (int i = 0; i < cnt; i++) {
+		int src = gRtSens ? RT_SENS[i] : RT_CORE[i], x = 4 + (i % 4) * 79, y = RT_GRIDY + (i / 4) * 21, on = rtSlot(src, gRtDst) >= 0;
+		const u8* bc = on ? TH->keyOn : TH->tab; rect(x, y, 75, 18, bc[0], bc[1], bc[2]);
+		const u8* tc = on ? EGA[0] : TH->tabTxt; text(x + 37 - (int)strlen(SRC_NAMES[src]) * 4, y + 5, SRC_NAMES[src], 1, tc[0], tc[1], tc[2]);
+	}
+}
+static int routeTouch(int x, int y, int press, int release) {
+	if (release) { gRtDrag = -1; return 0; }
+	if (gRtDst < 0) {
+		if (!press || y < 40) return 0;
+		int c = (x - 4) / 105, r = (y - 40) / 39, d = r * 3 + c;
+		if (c >= 0 && c < 3 && d >= 0 && d < DST_COUNT) { gRtDst = d; gRtSens = 0; return 1; }
+		return 0;
+	}
+	if (press && y >= 40 && y < 56) {
+		if (x < 58) { gRtDst = -1; return 1; }
+		if (x > 234) { gRtSens = !gRtSens; return 1; }
+		return 0;
+	}
+	int sl[5], n = rtRows(gRtDst, sl);
+	if (y >= RT_ROWY && y < RT_ROWY + 5 * RT_ROWH) {
+		int r = (y - RT_ROWY) / RT_ROWH;
+		if (press) gRtDrag = -1;
+		if (press && r < n && x >= 282) { gMod[sl[r]].src = SRC_OFF; gMod[sl[r]].amt = 0; say("REMOVED"); return 1; }
+		if (press && r < n && x >= 82 && x < 280) gRtDrag = sl[r];
+	}
+	if (gRtDrag >= 0) {   // drag along the bar: centre = 0, right = +100, left = -100
+		float a = (x - 180) / 98.0f; if (a > 1) a = 1; if (a < -1) a = -1;
+		gMod[gRtDrag].amt = roundf(a * 50) / 50; return 1;
+	}
+	if (press && y >= RT_GRIDY) {
+		int c = (x - 4) / 79, r = (y - RT_GRIDY) / 21, i = r * 4 + c, cnt = gRtSens ? 7 : 16;
+		if (c < 0 || c > 3 || i >= cnt) return 0;
+		int src = gRtSens ? RT_SENS[i] : RT_CORE[i];
+		if (rtSlot(src, gRtDst) >= 0) { say("ALREADY ROUTED - DRAG ITS BAR, OR X TO REMOVE"); return 0; }
+		if (n >= 5) { say("5 SOURCES ON ONE DESTINATION IS THE LIMIT"); return 0; }
+		int m = -1; for (int k = 0; k < NMOD; k++) if (gMod[k].src == SRC_OFF) { m = k; break; }
+		if (m < 0) { say("ALL 8 ROUTES IN USE - REMOVE ONE FIRST"); return 0; }
+		gMod[m].src = src; gMod[m].dst = gRtDst; gMod[m].amt = 0.5f; gModCurve[m] = 0; return 1;
+	}
+	return 0;
+}
 static void drawModView(void) {
 	rect(0, TAB_H, 320, 240 - TAB_H, RGB3(TH->bg));
-	static const char* VT[4] = {"CABLES", "LFO 3", "LFO 4", "MOTION"};
+	static const char* VT[4] = {"ROUTE", "LFO 3", "LFO 4", "MOTION"};
 	for (int i = 0; i < 4; i++) {
 		int x = 4 + i * 79, lit = i == gModView; rect(x, TAB_H + 2, 75, 14, lit ? TH->keyOn[0] : TH->tab[0], lit ? TH->keyOn[1] : TH->tab[1], lit ? TH->keyOn[2] : TH->tab[2]);
 		const u8* c = lit ? EGA[0] : TH->tabTxt; text(x + 37 - (int)strlen(VT[i]) * 4, TAB_H + 5, VT[i], 1, c[0], c[1], c[2]);
 	}
 	if (gModView == 3) { drawMotion(); return; }
-	if (gModView == 0) {
-		for (int i = 0; i < 12; i++) {
-			int y = CAB_Y + i * CAB_H;
-			rect(4, y, 82, CAB_H - 2, RGB3(TH->pad)); text(8, y + 4, SRC_NAMES[CAB_SRC[i]], 1, RGB3(TH->val));
-			rect(234, y, 82, CAB_H - 2, RGB3(TH->pad)); text(238, y + 4, DST_NAMES[CAB_DST[i]], 1, RGB3(TH->txt));
-		}
-		for (int m = 0; m < NMOD; m++) {   // the cables
-			if (gMod[m].src == SRC_OFF) continue;
-			int si = -1, di = -1;
-			for (int i = 0; i < 12; i++) { if (CAB_SRC[i] == gMod[m].src) si = i; if (CAB_DST[i] == gMod[m].dst) di = i; }
-			if (si < 0 || di < 0) continue;
-			int y0 = CAB_Y + si * CAB_H + 7, y1 = CAB_Y + di * CAB_H + 7; float a = gMod[m].amt;
-			const u8* c = a >= 0 ? TH->keyOn : TH->warn; int th = 1 + (int)(fabsf(a) * 3);
-			for (int k = 0; k < th; k++) line(86, y0 + k - th / 2, 234, y1 + k - th / 2, c[0], c[1], c[2]);
-			char t[8]; snprintf(t, sizeof(t), "%+d", (int)(a * 100)); text(150, (y0 + y1) / 2 - 8, t, 1, c[0], c[1], c[2]);
-		}
-		if (gCabDrag >= 0) line(86, CAB_Y + gCabDrag * CAB_H + 7, gCabX, gCabY, RGB3(TH->hiTxt));
-		int used = 0; for (int m = 0; m < NMOD; m++) used += gMod[m].src != SRC_OFF;
-		char u[24]; snprintf(u, sizeof(u), "%d/%d CABLES", used, NMOD); text(124, 226, u, 1, RGB3(TH->dim));
-	} else {
+	if (gModView == 0) { drawRoute(); return; }
+	{
 		int k = gModView - 1, x0 = 8, y0 = 46, w = 304, h = 150;
 		rect(x0, y0, w, h, RGB3(TH->pad)); rect(x0, y0 + h / 2, w, 1, RGB3(TH->grid));
 		for (int i = 0; i < 64; i++) {
@@ -3228,33 +3289,9 @@ static void drawModView(void) {
 	}
 }
 static int modViewTouch(int x, int y, int press, int release) {   // 1 = redraw
-	if (press && y < TAB_H + 18) { int v = (x - 4) / 79; if (v >= 0 && v < 4) { gModView = v; gCabDrag = gCabDst = -1; } return 1; }
+	if (press && y < TAB_H + 18) { int v = (x - 4) / 79; if (v >= 0 && v < 4) { gModView = v; gRtDrag = -1; } return 1; }
 	if (gModView == 3) return motionTouch(x, y, press, release);
-	if (gModView == 0) {
-		int row = (y - CAB_Y) / CAB_H; if (y < CAB_Y) row = -1; if (row > 11) row = -1;
-		if (press) {
-			gCabDrag = gCabDst = -1;
-			if (row >= 0 && x < 90) { gCabDrag = row; gCabX = x; gCabY = y; return 1; }
-			if (row >= 0 && x > 230) { int m = cabLast(CAB_DST[row]); if (m >= 0) { gCabDst = m; gCabY0 = y; gCabAmt0 = gMod[m].amt; } return 1; }
-			return 0;
-		}
-		if (release) {
-			if (gCabDrag >= 0 && row >= 0 && x > 230) {   // plug in
-				int src = CAB_SRC[gCabDrag], dst = CAB_DST[row], m = cabSlot(src, dst);
-				if (m < 0) for (int i = 0; i < NMOD; i++) if (gMod[i].src == SRC_OFF) { m = i; break; }
-				if (m < 0) say("ALL 8 CABLES IN USE - UNPLUG ONE FIRST");
-				else { gMod[m].src = src; gMod[m].dst = dst; if (gMod[m].amt == 0) gMod[m].amt = 0.5f; gModCurve[m] = 0; }
-			}
-			gCabDrag = gCabDst = -1; return 1;
-		}
-		if (gCabDrag >= 0) { gCabX = x; gCabY = y; return 1; }
-		if (gCabDst >= 0) {
-			if (x < 150) { gMod[gCabDst].src = SRC_OFF; gMod[gCabDst].amt = 0; gCabDst = -1; say("UNPLUGGED"); return 1; }
-			float a = gCabAmt0 + (gCabY0 - y) / 80.0f; if (a > 1) a = 1; if (a < -1) a = -1;
-			gMod[gCabDst].amt = roundf(a * 50) / 50; return 1;
-		}
-		return 0;
-	}
+	if (gModView == 0) return routeTouch(x, y, press, release);
 	int k = gModView - 1;
 	if (press && y >= 202 && y < 218) {   // shape presets
 		int b = (x - 8) / 61;
@@ -3295,7 +3332,7 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 		}
 	}
 	if (gPads && !gGridOn) { drawPads(base); return; }   // chord pads take the whole screen under the tabs
-	if (gModOn) { drawModView(); return; }               // MOD page: cables / drawn LFOs
+	if (gModOn) { drawModView(); return; }               // MOD page: route / drawn LFOs / motion
 	if (gGridOn) drawGrid(); else if (gAddEdit) drawAdd(); else {
 	// XY pad: dotted EGA grid, crosshair
 	float xv = gXyMode ? gMacro[gXyMode * 2 - 2] : gOsc[0].pos, yv = gXyMode ? gMacro[gXyMode * 2 - 1] : gCutoff;

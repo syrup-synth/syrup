@@ -243,12 +243,14 @@ A touch chord instrument that replaces the keys and XY pad. There is one pad per
 - **STRUM strip:** slide along the bottom strip to strum the last chord across three octaves, autoharp-style. Lower on the strip strums louder.
 - **With other features:** works with LATCH, the arpeggiator and every patch. Help moved to SELECT only.
 
-## MOD page bottom screen: CABLES and drawn LFOs
+## MOD page bottom screen: ROUTE and drawn LFOs
 
-- **CABLES:** sources are on the left and destinations on the right. Drag from a source onto a destination to patch a cable; the default amount is +50.
-  - Hold a destination and drag up or down to set the amount of the newest cable into it.
-  - Drag a destination left, past the middle, to unplug that cable.
-  - Up to 8 cables, using the same 8 mod slots as the MOD page list.
+- **ROUTE** (destination first) replaces CABLES:
+  - The screen shows every destination as a big button, with what's moving it underneath.
+  - Tap the thing you want to move (for example CUTOFF), then tap a source from the grid to add it at +50.
+  - Each source gets a wide bar: drag along it to set the amount (centre is 0, right is +100, left is -100). X removes it.
+  - The grid holds the touch-and-button sources: LFO 1-4, ENV 2, VELOCITY, NOTE, RANDOM, STICK, XY Y, CHAOS X/Y and MACRO 1-4. Mic, tilt and camera are behind the SENSORS tab as optional extras.
+  - Up to 8 routes in total (5 per destination), sharing the 8 mod slots of the MOD page list.
 - **DRAW LFO 3 / DRAW LFO 4:** paint a 64-point shape with the stylus, or start from SINE, RAMP, STEPS, RANDOM or FLAT. The vertical line is the playhead.
   - Rate and tempo sync are on the MOD page (LFO3 RATE / SYNC, LFO4 RATE / SYNC).
   - LFO 3 and LFO 4 are mod sources, and their shapes save with patches (format v9).
