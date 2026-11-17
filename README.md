@@ -264,3 +264,13 @@ Four lanes of movement that loop over 1, 2, 4 or 8 bars in time with BPM (tap LO
 - **Target:** tap the lane name to change it. Targets are A/B WT POS, CUTOFF, RES, OUT CUT, OUT RES, A/B WARP, FX COLOR, DLY MIX, REV MIX, GRAIN SCAN and MACRO 1-4.
 - **Saving:** lanes save with patches (format v10).
 - **While drawing:** the keys are hidden on the MOD page, so LATCH a chord or play from Wi-Fi/IR MIDI.
+
+## SYRUP LINK: the FM-1 as a Wi-Fi bridge
+
+`fm1link/` is firmware for the M-VAVE FM-1, built on Charles Vestal's fm1-base. It turns the FM-1 into a Wi-Fi MIDI bridge and controller for Syrup.
+
+- **Phone or computer to 2DS:** plug the FM-1 into an iPhone, iPad or computer over USB. Everything Drambo (or any app) sends to "SYRUP LINK" goes over Wi-Fi to Syrup: notes, CCs, clock, start/stop. TRS MIDI in is passed on too.
+- **No address to type:** with WI-FI MIDI on, Syrup announces itself on the network (UDP 5009) and listens for plain MIDI on UDP 5008. The FM-1 finds it by itself. EDIT sets an address by hand if needed.
+- **The FM-1 plays Syrup:** the keys play notes (OCT-/OCT+ move them), K1-K4 send cutoff, resonance, WT position and macro 1, PRESET steps patches, PLAY starts/stops the sequencer, ARP makes a new acid line, FX is all notes off.
+- **Wi-Fi setup on the FM-1:** SEL lists networks, SAVE joins; a new network asks for its password on the PASSWORD page (SELECT picks characters, SAVE adds, FX deletes, PLAY joins).
+- **Install:** `link.fwsc` from the `fm1link-latest` release, with fm1-base's web installer or `fm1_install.py`.

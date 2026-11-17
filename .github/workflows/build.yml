@@ -7,6 +7,8 @@ on:
       - '.github/workflows/ds1000.yml'
       - 'acidvst/**'
       - '.github/workflows/acidvst.yml'
+      - 'fm1link/**'
+      - '.github/workflows/fm1link.yml'
   workflow_dispatch:
 
 permissions:

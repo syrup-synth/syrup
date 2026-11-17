@@ -2707,7 +2707,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM MACHINE ON / OFF"}, {"KIT", "DRUM SOUNDS"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE + NETWORK MIDI ON PORT 8080 / 5004"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -4295,7 +4295,9 @@ static void netMain(void* arg) {
 	int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 	if (ls < 0 || bind(ls, (struct sockaddr*)&a, sizeof(a)) < 0 || listen(ls, 4) < 0) { snprintf(gNetAddr, sizeof(gNetAddr), "PORT 8080 BUSY"); if (ls >= 0) close(ls); netDown(); gNetRun = 0; return; }
 	fcntl(ls, F_SETFL, fcntl(ls, F_GETFL, 0) | O_NONBLOCK);
-	int uc = udpOpen(5004), ud = udpOpen(5005);
+	int uc = udpOpen(5004), ud = udpOpen(5005), ur = udpOpen(5008);   // 5008: plain MIDI bytes (FM-1 LINK and friends)
+	int ub = socket(AF_INET, SOCK_DGRAM, 0); u64 beaconT = 0; u8 rawRun = 0;
+	if (ub >= 0) { int on = 1; setsockopt(ub, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)); }
 	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; cl[i].run = 0; cl[i].closing = 0; cl[i].t = 0; }
 	gNetClients = 0;
 	while (gNetRun) {
@@ -4333,10 +4335,24 @@ static void netMain(void* arg) {
 				else if (u) rtpMidi(pk, k);
 			}
 		}
+		if (ur >= 0) for (int t = 0; t < 16; t++) {
+			fl = sizeof(from); int k = recvfrom(ur, pk, sizeof(pk), 0, (struct sockaddr*)&from, &fl);
+			if (k <= 0) break;
+			idle = 0;
+			if (!gNetPeer[0] || strcmp(gNetPeer, "FM-1 LINK")) snprintf(gNetPeer, sizeof(gNetPeer), "FM-1 LINK");
+			midiParse(pk, k, &rawRun);
+		}
+		if (ub >= 0 && osGetTime() - beaconT > 2000) {   // "I'm here": lets an FM-1 LINK find this 2DS without typing an address
+			beaconT = osGetTime();
+			static const char bc[] = "SYRUP 5008";
+			struct sockaddr_in b; memset(&b, 0, sizeof(b)); b.sin_family = AF_INET; b.sin_port = htons(5009);
+			b.sin_addr.s_addr = 0xFFFFFFFFu; sendto(ub, bc, sizeof(bc) - 1, 0, (struct sockaddr*)&b, sizeof(b));
+			b.sin_addr.s_addr = (u32)gethostid() | htonl(0xFFu); sendto(ub, bc, sizeof(bc) - 1, 0, (struct sockaddr*)&b, sizeof(b));   // x.y.z.255
+		}
 		if (idle) svcSleepThread(1000000);   // 1 ms: low latency, still mostly asleep
 	}
 	for (int i = 0; i < NCLI; i++) cliClose(&cl[i]);
-	close(ls); if (uc >= 0) close(uc); if (ud >= 0) close(ud);
+	close(ls); if (uc >= 0) close(uc); if (ud >= 0) close(ud); if (ur >= 0) close(ur); if (ub >= 0) close(ub);
 	gNetClients = 0; gNetPeer[0] = 0;
 	netDown();
 }
