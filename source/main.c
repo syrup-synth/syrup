@@ -84,6 +84,7 @@ static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0, gGpuCopy = 1;
 static int gDrums, gKit, gKickPat, gSnarePat, gHatPat; static float gDrumLevel;
 static float gChipLevel, gCsEcho, gCsEchoFb, gOrbit, gOrbitRate, gGrainSize, gGrainScan, gGrainSpray, gGrainPitch, gGrainLevel; static int gChipDuty, gChipOct, gCsEchoT, gGrains, gGrainSrc; static const char* GRAIN_MODES[3]; static const char* GRAIN_SRCS[3];
 static const char* DUTY_NAMES[8]; static const char* CSECHO_T_NAMES[4];
+static u8 gMot[4][64]; static int gMotTgt[4], gMotOn[4], gMotRec, gMotBars; static float gMotPh;
 static int gCamVid, gMidiNet, gAddEdit, gOfType; static float gOfCut, gOfRes, gOfDrive, gOfEnv; static const char* OFT_NAMES[14]; static float gWtScan; static const char* VID_NAMES[3];
 static void chipSet(float lv);
 static void grainsChanged(void);
@@ -1743,8 +1744,11 @@ typedef struct {
 	int grainMode, grainSrc; float grainSize, grainScan, grainSpray, grainPitch, grainLevel;   // v7
 	int ofType; float ofCut, ofRes, ofDrive, ofEnv;   // v8
 	s8 dl[2][64]; float dlRate[2]; int dlSync[2];   // v9: drawn LFO 3 / 4
+	u8 mot[4][64]; int motTgt[4], motOn[4], motBars;   // v10: motion lanes
 } SPatch;
-#define PATCH_MAGIC 0x53595239   // "SYR9"
+#define PATCH_MAGIC 0x5359523A   // "SYR:" (v10)
+#define PATCH_MAGIC9 0x53595239  // v9 (no motion lanes)
+#define PATCH_V9_SIZE offsetof(SPatch, mot)
 #define PATCH_MAGIC8 0x53595238  // v8 (no drawn LFOs)
 #define PATCH_V8_SIZE offsetof(SPatch, dl)
 #define PATCH_MAGIC7 0x53595237  // v7 (no OUT FILTER)
@@ -1792,6 +1796,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->chipLevel = 0; p->chipDuty = 3; p->chipOct = 0; p->csEcho = 0; p->csEchoFb = 0.45f; p->csEchoT = 2; p->orbit = 0; p->orbitRate = 0.2f; p->revType = 0; p->dlyType = 0; p->grainMode = 0; p->grainSrc = 1; p->grainSize = 0.35f; p->grainScan = 0.5f; p->grainSpray = 0.2f; p->grainPitch = 0; p->grainLevel = 0.8f; p->ofType = 0; p->ofCut = 0.6f; p->ofRes = 0.2f; p->ofDrive = 0.2f; p->ofEnv = 0;
 	for (int i = 0; i < 64; i++) { p->dl[0][i] = (s8)(sinf(TWO_PI * i / 64) * 127); p->dl[1][i] = (s8)((i < 32 ? i * 4 - 64 : 191 - i * 4) * 127 / 64); }
 	p->dlRate[0] = 1.0f; p->dlRate[1] = 0.5f; p->dlSync[0] = p->dlSync[1] = 0;
+	memset(p->mot, 128, sizeof(p->mot)); p->motTgt[0] = 0; p->motTgt[1] = 2; p->motTgt[2] = 4; p->motTgt[3] = 12; memset(p->motOn, 0, sizeof(p->motOn)); p->motBars = 1;
 }
 
 #define OA p->osc[0]
@@ -2170,12 +2175,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -2211,6 +2216,7 @@ static void patchCapture(SPatch* p) {
 	p->dlyMix = gDlyMix; p->dlyWow = gDlyWow; p->dlySat = gDlySat; p->revMix = gRevMix; p->ott = gOtt; p->pump = gPump; p->lofiRate = gLofiRate;
 	p->chipLevel = gChipLevel; p->chipDuty = gChipDuty; p->chipOct = gChipOct; p->csEcho = gCsEcho; p->csEchoFb = gCsEchoFb; p->csEchoT = gCsEchoT; p->orbit = gOrbit; p->orbitRate = gOrbitRate; p->revType = gRevType; p->dlyType = gDlyType; p->grainMode = gGrains; p->grainSrc = gGrainSrc; p->grainSize = gGrainSize; p->grainScan = gGrainScan; p->grainSpray = gGrainSpray; p->grainPitch = gGrainPitch; p->grainLevel = gGrainLevel; p->ofType = gOfType; p->ofCut = gOfCut; p->ofRes = gOfRes; p->ofDrive = gOfDrive; p->ofEnv = gOfEnv;
 	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) p->dl[k][i] = (s8)(gDl[k][i] * 127); p->dlRate[k] = gDlRate[k]; p->dlSync[k] = gDlSync[k]; }
+	memcpy(p->mot, gMot, sizeof(gMot)); memcpy(p->motTgt, gMotTgt, sizeof(gMotTgt)); memcpy(p->motOn, gMotOn, sizeof(gMotOn)); p->motBars = gMotBars;
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
 	p->glide = gGlide; p->chorus = gChorus; p->revSize = gRevSize; p->revDamp = gRevDamp; p->fxMix = gFxMix; p->driveAmt = gDriveAmt; p->master = gMaster;
 	p->arp = gArp; p->arpRate = gArpRate; p->arpOct = gArpOct; p->arpGate = gArpGate; p->bpm = gBPM;
@@ -2240,6 +2246,7 @@ static void patchApply(const SPatch* p) {
 	chipSet(p->chipLevel); gChipDuty = p->chipDuty; gChipOct = p->chipOct; gCsEcho = p->csEcho; gCsEchoFb = p->csEchoFb; gCsEchoT = p->csEchoT; gOrbit = p->orbit; gOrbitRate = p->orbitRate; gRevType = p->revType % NREVT; gDlyType = p->dlyType % NDLYT; dlyTypeChanged();
 	if (p->ofType % NOFT != gOfType) { gOfType = p->ofType % NOFT; ofReset(); } gOfCut = p->ofCut; gOfRes = p->ofRes; gOfDrive = p->ofDrive; gOfEnv = p->ofEnv;
 	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) gDl[k][i] = p->dl[k][i] / 127.0f; gDlRate[k] = p->dlRate[k]; gDlSync[k] = p->dlSync[k] % NSYNC; }
+	memcpy(gMot, p->mot, sizeof(gMot)); for (int l = 0; l < 4; l++) { gMotTgt[l] = p->motTgt[l] % 16; gMotOn[l] = p->motOn[l] & 1; } gMotBars = p->motBars & 3; gMotRec = -1; gMotPh = 0;
 	gVoiceMode = p->voiceMode; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
 	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate; if (p->bpm >= 40) gBPM = p->bpm;
@@ -3249,7 +3256,90 @@ static void padsTick(float dt) {   // strummed notes ring for a moment, then let
 
 // ---- MOD page, bottom screen: CABLES (drag a source onto a destination to patch it; drag up/down on a destination
 // to set how much; drag a destination off to the left to unplug) and DRAW 3 / DRAW 4 (paint LFO 3 / 4).
-static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 cables, 1 draw LFO 3, 2 draw LFO 4
+
+// ---- MOTION: four lanes of movement, drawn with the stylus or recorded from the circle pad, looping over 1-8 bars
+// in time with BPM. A lane that's ON sets its setting directly as it plays, like a knob being turned for you.
+#define NMOT 4
+#define NMTGT 16
+static const char* MTGT_NAMES[NMTGT] = {"A WT POS", "B WT POS", "CUTOFF", "RES", "OUT CUT", "OUT RES", "A WARP", "B WARP", "FX COLOR", "DLY MIX", "REV MIX", "GRAIN SCAN", "MACRO 1", "MACRO 2", "MACRO 3", "MACRO 4"};
+static u8 gMot[NMOT][64]; static int gMotTgt[NMOT] = {0, 2, 4, 12}, gMotOn[NMOT], gMotRec = -1, gMotRecArmed = 0, gMotBars = 1;
+static float gMotPh = 0; static const int MOT_BARS[4] = {1, 2, 4, 8};
+static float* motPtr(int t) {
+	switch (t) {
+	case 0: return &gOsc[0].pos; case 1: return &gOsc[1].pos; case 2: return &gCutoff; case 3: return &gRes;
+	case 4: return &gOfCut; case 5: return &gOfRes; case 6: return &gOsc[0].warpAmt; case 7: return &gOsc[1].warpAmt;
+	case 8: return &gFxColor; case 9: return &gDlyMix; case 10: return &gRevMix; case 11: return &gGrainScan;
+	default: return &gMacro[t - 12];
+	}
+}
+static void motTick(float dt) {   // main thread, inside the voice lock
+	int any = gMotRec >= 0; for (int l = 0; l < NMOT; l++) any |= gMotOn[l];
+	if (!any) return;
+	float prev = gMotPh;
+	gMotPh += dt * gBPM / 60.0f / (4.0f * MOT_BARS[gMotBars]);
+	int wrapped = gMotPh >= 1; if (wrapped) gMotPh -= floorf(gMotPh);
+	if (wrapped && gMotRec >= 0) {
+		if (gMotRecArmed) { gMotRecArmed = 0; say("MOTION: RECORDING - MOVE THE CIRCLE PAD"); }
+		else { gMotOn[gMotRec] = 1; gMotRec = -1; say("MOTION: LANE RECORDED"); }
+	}
+	int i = (int)(gMotPh * 64) & 63;
+	if (gMotRec >= 0 && !gMotRecArmed) {   // write the circle pad's height into the armed lane
+		circlePosition cp; hidCircleRead(&cp); float v = (cp.dy + 150) / 300.0f; if (v < 0) v = 0; if (v > 1) v = 1;
+		int i0 = (int)(prev * 64) & 63; for (int j = i0; j != ((i + 1) & 63); j = (j + 1) & 63) gMot[gMotRec][j] = (u8)(v * 255);
+	}
+	float u = gMotPh * 64 - floorf(gMotPh * 64);
+	for (int l = 0; l < NMOT; l++) {
+		if (!gMotOn[l] || l == gMotRec) continue;
+		float v = (gMot[l][i] * (1 - u) + gMot[l][(i + 1) & 63] * u) / 255.0f;
+		*motPtr(gMotTgt[l]) = v;
+	}
+}
+#define MOT_Y 58
+#define MOT_LH 43
+static void drawMotion(void) {
+	char b[24]; snprintf(b, sizeof(b), "LOOP %d BAR%s", MOT_BARS[gMotBars], gMotBars ? "S" : "");
+	rect(4, 41, 92, 14, RGB3(TH->tab)); text(8, 44, b, 1, RGB3(TH->tabTxt));
+	text(104, 44, gMotRec >= 0 ? (gMotRecArmed ? "REC STARTS NEXT LOOP" : "RECORDING: CIRCLE PAD") : "DRAW, OR REC = CIRCLE PAD", 1, gMotRec >= 0 ? TH->warn[0] : TH->dim[0], gMotRec >= 0 ? TH->warn[1] : TH->dim[1], gMotRec >= 0 ? TH->warn[2] : TH->dim[2]);
+	for (int l = 0; l < NMOT; l++) {
+		int y = MOT_Y + l * MOT_LH, h = MOT_LH - 4;
+		rect(4, y, 70, h, RGB3(TH->pad));
+		text(8, y + 3, MTGT_NAMES[gMotTgt[l]], 1, RGB3(TH->val));
+		const u8* oc = gMotOn[l] ? TH->keyOn : TH->tab; rect(8, y + 18, 28, 16, oc[0], oc[1], oc[2]); text(12, y + 22, "ON", 1, gMotOn[l] ? 0 : TH->tabTxt[0], gMotOn[l] ? 0 : TH->tabTxt[1], gMotOn[l] ? 0 : TH->tabTxt[2]);
+		const u8* rc = gMotRec == l ? TH->warn : TH->tab; rect(40, y + 18, 30, 16, rc[0], rc[1], rc[2]); text(44, y + 22, "REC", 1, RGB3(TH->tabTxt));
+		rect(78, y, 238, h, RGB3(TH->pad));
+		for (int i = 0; i < 64; i++) {
+			int x = 78 + i * 238 / 64, w = 238 / 64, v = gMot[l][i] * (h - 2) / 255;
+			rect(x, y + h - 1 - v, w, v + 1, gMotOn[l] ? TH->line[0] : TH->dim[0], gMotOn[l] ? TH->line[1] : TH->dim[1], gMotOn[l] ? TH->line[2] : TH->dim[2]);
+		}
+		for (int q = 1; q < 4; q++) rect(78 + q * 238 / 4, y, 1, h, RGB3(TH->grid));
+		rect(78 + (int)(gMotPh * 238), y, 1, h, RGB3(TH->keyOn));
+	}
+}
+static int gMotDrawL = -1, gMotPrevI = -1;
+static int motionTouch(int x, int y, int press, int release) {
+	if (release) { gMotDrawL = -1; gMotPrevI = -1; return 0; }
+	if (press && y >= 40 && y < 56 && x < 96) { gMotBars = (gMotBars + 1) % 4; return 1; }
+	int l = (y - MOT_Y) / MOT_LH; if (y < MOT_Y || l < 0 || l >= NMOT) { gMotPrevI = -1; return 0; }
+	int ly = y - MOT_Y - l * MOT_LH, h = MOT_LH - 4;
+	if (x < 76) {
+		if (!press) return 0;
+		if (ly < 16) gMotTgt[l] = (gMotTgt[l] + 1) % NMTGT;
+		else if (x < 38) gMotOn[l] = !gMotOn[l];
+		else { if (gMotRec == l) gMotRec = -1; else { gMotRec = l; gMotRecArmed = 1; say("MOTION: REC STARTS AT THE NEXT LOOP"); } }
+		return 1;
+	}
+	if (press) gMotDrawL = l;
+	if (gMotDrawL != l) return 0;
+	int i = (x - 78) * 64 / 238; if (i < 0) i = 0; if (i > 63) i = 63;
+	float v = 1 - ly / (float)h; if (v < 0) v = 0; if (v > 1) v = 1;
+	if (gMotPrevI < 0) gMotPrevI = i;
+	int a = gMotPrevI < i ? gMotPrevI : i, b = gMotPrevI < i ? i : gMotPrevI; float pv = gMot[l][gMotPrevI] / 255.0f;
+	for (int j = a; j <= b; j++) { float t = b > a ? (float)(j - (gMotPrevI < i ? a : b)) / (b - a) : 1; if (t < 0) t = -t; gMot[l][j] = (u8)((pv + (v - pv) * t) * 255); }
+	gMot[l][i] = (u8)(v * 255); gMotPrevI = i;
+	if (!gMotOn[l]) gMotOn[l] = 1;   // drawing a lane switches it on
+	return 1;
+}
+static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 cables, 1 draw LFO 3, 2 draw LFO 4, 3 motion
 static const int CAB_SRC[12] = {SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_CHAOSX, SRC_CHAOSY, SRC_RAND, SRC_NOTE, SRC_VEL, SRC_TILTX, SRC_MIC};
 static const int CAB_DST[12] = {DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_PAN, DST_FXP, DST_OFCUT, DST_AMP};
 #define CAB_Y 42
@@ -3260,11 +3350,12 @@ static int cabSlot(int src, int dst) { for (int m = 0; m < NMOD; m++) if (gMod[m
 static int cabLast(int dst) { for (int m = NMOD - 1; m >= 0; m--) if (gMod[m].src != SRC_OFF && gMod[m].dst == dst) return m; return -1; }
 static void drawModView(void) {
 	rect(0, TAB_H, 320, 240 - TAB_H, RGB3(TH->bg));
-	static const char* VT[3] = {"CABLES", "DRAW LFO 3", "DRAW LFO 4"};
-	for (int i = 0; i < 3; i++) {
-		int x = 4 + i * 105, lit = i == gModView; rect(x, TAB_H + 2, 101, 14, lit ? TH->keyOn[0] : TH->tab[0], lit ? TH->keyOn[1] : TH->tab[1], lit ? TH->keyOn[2] : TH->tab[2]);
-		const u8* c = lit ? EGA[0] : TH->tabTxt; text(x + 50 - (int)strlen(VT[i]) * 4, TAB_H + 5, VT[i], 1, c[0], c[1], c[2]);
+	static const char* VT[4] = {"CABLES", "LFO 3", "LFO 4", "MOTION"};
+	for (int i = 0; i < 4; i++) {
+		int x = 4 + i * 79, lit = i == gModView; rect(x, TAB_H + 2, 75, 14, lit ? TH->keyOn[0] : TH->tab[0], lit ? TH->keyOn[1] : TH->tab[1], lit ? TH->keyOn[2] : TH->tab[2]);
+		const u8* c = lit ? EGA[0] : TH->tabTxt; text(x + 37 - (int)strlen(VT[i]) * 4, TAB_H + 5, VT[i], 1, c[0], c[1], c[2]);
 	}
+	if (gModView == 3) { drawMotion(); return; }
 	if (gModView == 0) {
 		for (int i = 0; i < 12; i++) {
 			int y = CAB_Y + i * CAB_H;
@@ -3298,7 +3389,8 @@ static void drawModView(void) {
 	}
 }
 static int modViewTouch(int x, int y, int press, int release) {   // 1 = redraw
-	if (press && y < TAB_H + 18) { int v = (x - 4) / 105; if (v >= 0 && v < 3) { gModView = v; gCabDrag = gCabDst = -1; } return 1; }
+	if (press && y < TAB_H + 18) { int v = (x - 4) / 79; if (v >= 0 && v < 4) { gModView = v; gCabDrag = gCabDst = -1; } return 1; }
+	if (gModView == 3) return motionTouch(x, y, press, release);
 	if (gModView == 0) {
 		int row = (y - CAB_Y) / CAB_H; if (y < CAB_Y) row = -1; if (row > 11) row = -1;
 		if (press) {
@@ -5738,7 +5830,8 @@ int main(void) {
 			curKey = key;
 		}
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; } }
-		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && gModView && !gPads) botDirty = 1; }   // drawn LFO playhead
+		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && gModView && !gPads) botDirty = 1; }   // drawn LFO / motion playheads
+		motTick(dt);
 		if (gAuditionT > 0 && (gAuditionT -= 1.0f / 60) <= 0 && !gSeqPlaying && curKey < 0) playSet(NULL, 0, 0.8f);
 		{ static int lastPos = -2, lastMode = -1; if (gGridOn && (gSeqPos != lastPos || gSeqMode != lastMode)) { lastPos = gSeqPos; lastMode = gSeqMode; botDirty = 1; } }
 		if (gBeatFlash) { gBeatFlash = 0; gVisBeat = 1; beatLightPulse(); gVisBurst += 8; if (page == 7) topDirty = 1; }

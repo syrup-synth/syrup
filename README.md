@@ -253,3 +253,13 @@ A touch chord instrument that replaces the keys and XY pad. There is one pad per
 - **DRAW LFO 3 / DRAW LFO 4:** paint a 64-point shape with the stylus, or start from SINE, RAMP, STEPS, RANDOM or FLAT. The vertical line is the playhead.
   - Rate and tempo sync are on the MOD page (LFO3 RATE / SYNC, LFO4 RATE / SYNC).
   - LFO 3 and LFO 4 are mod sources, and their shapes save with patches (format v9).
+
+## MOTION (MOD page, bottom screen, fourth tab)
+
+Four lanes of movement that loop over 1, 2, 4 or 8 bars in time with BPM (tap LOOP to change it).
+
+- **Draw a lane** with the stylus. Drawing switches the lane ON, and it then sets its target as it plays.
+- **REC:** arms the lane. Recording starts at the next loop and takes the circle pad's height for one loop, then the lane switches on.
+- **Target:** tap the lane name to change it. Targets are A/B WT POS, CUTOFF, RES, OUT CUT, OUT RES, A/B WARP, FX COLOR, DLY MIX, REV MIX, GRAIN SCAN and MACRO 1-4.
+- **Saving:** lanes save with patches (format v10).
+- **While drawing:** the keys are hidden on the MOD page, so LATCH a chord or play from Wi-Fi/IR MIDI.
