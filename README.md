@@ -212,3 +212,17 @@ Any RP2040 board (Raspberry Pi Pico, RP2040-Zero and so on) becomes a USB MIDI d
   - The row's current pattern is copied into MINE first, so you can overdub. CLEAR MINE empties it.
   - MINE is saved to the SD card.
 - **Key velocity:** press lower on a key to play louder, near the top to play softer.
+
+## Shrub-inspired additions, stage 1
+
+These follow the feature list and guide of Xfer's SHRUB firmware. SHRUB is closed source, so no code or content was used.
+
+- **Scales:** 51, including modes, bebop, diminished, Japanese, Indonesian, Hungarian and raga scales.
+- **Sub shapes:** 6 (adds PULSE 25 and ROUNDED). **Noise colours:** 5 (adds BROWN and BLUE).
+- **Mod sources:** CHAOS X and CHAOS Y (a Lorenz attractor, with CHAOS RATE on the MOD page), RANDOM (a new value every note) and NOTE (keytrack).
+- **DRIVE:** 15 waveshapers on the oscillator cycle: TANH, HARD CLIP, SINE FOLD, RECTIFY, TUBE, DIODE, ASYM, LIN FOLD, ZERO SQUARE, HALF RECT, BITCRUSH, CUBIC, X-SHAPE and OVERDRIVE. They cost no CPU while playing.
+- **MOD FX:** adds HYPER (five drifting taps per side) and DIMENSION (crossed short delays for width).
+- **ADD EDITOR** (HARDWARE page): draw 24 harmonics on the bottom screen and OSC A plays the result live. WT POS sweeps from the fundamental to the full spectrum. Turning it off saves the table as `ADD n`.
+- **RULE > TABLE:** a cellular-automaton (Wolfram rule) wavetable, with one generation per frame.
+- **Value pop-ups:** stepping a named value shows it large on screen for a moment.
+- **Edit guard:** after you edit a patch, the first press to change patch or style only warns you; the second one goes.

@@ -84,7 +84,7 @@ static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0, gGpuCopy = 1;
 static int gDrums, gKit, gKickPat, gSnarePat, gHatPat; static float gDrumLevel;
 static float gChipLevel, gCsEcho, gCsEchoFb, gOrbit, gOrbitRate, gGrainSize, gGrainScan, gGrainSpray, gGrainPitch, gGrainLevel; static int gChipDuty, gChipOct, gCsEchoT, gGrains, gGrainSrc; static const char* GRAIN_MODES[3]; static const char* GRAIN_SRCS[3];
 static const char* DUTY_NAMES[8]; static const char* CSECHO_T_NAMES[4];
-static int gCamVid, gMidiNet; static float gWtScan; static const char* VID_NAMES[3];
+static int gCamVid, gMidiNet, gAddEdit; static float gWtScan; static const char* VID_NAMES[3];
 static void chipSet(float lv);
 static void grainsChanged(void);
 static const char* KIT_NAMES[4]; static const char* KICKP_NAMES[8]; static const char* SNAREP_NAMES[7]; static const char* HATP_NAMES[7]; static int gDrumRec; static const char* DREC_NAMES[5];
@@ -373,8 +373,8 @@ typedef struct {
 } Osc;
 static Osc gOsc[2];
 
-static const char* SUB_SHAPES[4] = {"SINE", "TRIANGLE", "SAW", "SQUARE"};
-static const char* NOISE_TYPES[3] = {"WHITE", "PINK", "CRACKLE"};
+static const char* SUB_SHAPES[6] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "PULSE 25", "ROUNDED"};
+static const char* NOISE_TYPES[5] = {"WHITE", "PINK", "CRACKLE", "BROWN", "BLUE"};
 static const char* FILT_TYPES[5] = {"LOW PASS", "HIGH PASS", "BAND PASS", "NOTCH", "PEAK"};
 #define NLFOSH 13
 enum { LS_SINE, LS_TRI, LS_SAW, LS_SQR, LS_SH, LS_STEPS, LS_BOUNCE, LS_EXPUP, LS_EXPDN, LS_PULSE, LS_WTA, LS_WTB, LS_TABLE };
@@ -383,8 +383,9 @@ static const char* LFO_SHAPES[NLFOSH] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "S
 static const char* SYNC_NAMES[NSYNC] = {"OFF", "4 BARS", "2 BARS", "1 BAR", "1/2", "1/4", "1/8", "1/16", "1/8T", "1/16T"};
 static const float SYNC_BEATS[NSYNC] = {0, 16, 8, 4, 2, 1, 0.5f, 0.25f, 1.0f / 3, 1.0f / 6};
 static const char* LFO_MODES[2] = {"FREE", "TRIG"};
-enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_TWIST, SRC_SHAKE, SRC_CAML, SRC_CAMC, SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_COUNT };
-static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y", "TILT L/R", "TILT F/B", "BREATH", "TWIST", "SHAKE", "CAM LIGHT", "CAM COLOR", "MACRO 1", "MACRO 2", "MACRO 3", "MACRO 4"};
+enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_TWIST, SRC_SHAKE, SRC_CAML, SRC_CAMC, SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_RAND, SRC_NOTE, SRC_COUNT };
+static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y", "TILT L/R", "TILT F/B", "BREATH", "TWIST", "SHAKE", "CAM LIGHT", "CAM COLOR", "MACRO 1", "MACRO 2", "MACRO 3", "MACRO 4", "CHAOS X", "CHAOS Y", "RANDOM", "NOTE"};
+static float gChaosX = 0, gChaosY = 0, gChaosRate = 0.3f;   // a Lorenz attractor, slowly wandering, never repeating
 static float gMacro[4] = {0, 0, 0, 0};
 #define NMOD 8
 static int gModCurve[NMOD];
@@ -397,7 +398,7 @@ static const char* VOICE_MODES[3] = {"POLY", "MONO", "LEGATO"};
 static const char* FX_NAMES[4] = {"OFF", "ECHO", "SPACE", "REVERB"};
 static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
 static const float ECHO_T[3] = {0.25f, 0.375f, 0.5f};
-static const char* DRIVE_TYPES[5] = {"OFF", "TUBE", "HARD", "FOLD", "RECTIFY"};
+static const char* DRIVE_TYPES[15] = {"OFF", "TANH", "HARD CLIP", "SINE FOLD", "RECTIFY", "TUBE", "DIODE", "ASYM", "LIN FOLD", "ZERO SQUARE", "HALF RECT", "BITCRUSH", "CUBIC", "X-SHAPE", "OVERDRIVE"};
 static const char* CHORD_NAMES[5] = {"OFF", "MIN7", "MAJ7", "POWER", "SUS"};
 static const int CHORDS[5][4] = {{0, -1, -1, -1}, {0, 3, 7, 10}, {0, 4, 7, 11}, {0, 7, 12, -1}, {0, 5, 7, 12}};
 
@@ -438,6 +439,16 @@ static float drive(float s) {
 	case 2: { float v = s * d; return v > 1 ? 1 : (v < -1 ? -1 : v); }
 	case 3: return sinf(s * d * 1.5708f);
 	case 4: return (fabsf(s) * 2.0f - 0.6f) * gDriveAmt + s * (1 - gDriveAmt);
+	case 5: { float v = s * d; return (v >= 0 ? tanhf(v) : tanhf(v * 0.6f) / 0.6f * 0.75f) / tanhf(d) * 0.9f; }   // tube: uneven halves
+	case 6: { float v = s * d; return v > 0 ? (1 - expf(-v)) / (1 - expf(-d)) : v * 0.15f; }                   // diode: one side conducts
+	case 7: { float v = s * d + gDriveAmt * 0.8f; return tanhf(v) / tanhf(d + 0.8f); }                         // asymmetric bias
+	case 8: { float v = s * (1 + gDriveAmt * 5); v = fmodf(v + 1, 4.0f); if (v < 0) v += 4; return v < 2 ? v - 1 : 3 - v; }   // triangle fold
+	case 9: { float v = s * d; v = v * fabsf(v); return v > 1 ? 1 : v < -1 ? -1 : v; }                       // zero square
+	case 10: return s > 0 ? s : s * (1 - gDriveAmt);                                                                   // half-wave rectify
+	case 11: { float q = (float)(1 << (int)(1 + (1 - gDriveAmt) * 6)); return roundf(s * q) / q; }                  // bitcrush the cycle
+	case 12: { float v = s * (1 + gDriveAmt * 2); if (v > 1) v = 1; if (v < -1) v = -1; return 1.5f * v - 0.5f * v * v * v; }   // cubic soft clip
+	case 13: { float a2 = gDriveAmt; return s * (1 - a2) + a2 * (4 * s * s * s - 3 * s); }                            // X-SHAPE: Chebyshev T3 blend
+	case 14: { float v = s * d * 1.5f; return (v / (1 + fabsf(v))) * (1 + 1 / d); }                                    // overdrive
 	}
 	return s;
 }
@@ -489,6 +500,8 @@ static void buildSub(void) {
 		case 1: s = 4.0f * fabsf(p - 0.5f) - 1.0f; break;
 		case 2: s = 2 * p - 1; break;
 		case 3: s = p < 0.5f ? 1 : -1; break;
+		case 4: s = p < 0.25f ? 1 : -1; s += 0.5f; break;
+		case 5: s = sinf(TWO_PI * p) + 0.35f * sinf(2 * TWO_PI * p) + 0.12f * sinf(3 * TWO_PI * p); s *= 0.8f; break;   // a fuller, organ-ish sine
 		}
 		gTmpCyc[n] = s;
 	}
@@ -497,7 +510,7 @@ static void buildSub(void) {
 }
 
 static void buildNoise(void) {
-	unsigned seed = 12345; float b0 = 0, b1 = 0, b2 = 0;
+	unsigned seed = 12345; float b0 = 0, b1 = 0, b2 = 0, br = 0, lw = 0;
 	for (int i = 0; i < gNoiseLen; i++) {
 		seed = seed * 1664525u + 1013904223u;
 		float w = ((seed >> 9) & 0xffff) / 32768.0f - 1.0f, s = w;
@@ -506,6 +519,8 @@ static void buildNoise(void) {
 			s = w * 0.08f;
 			if (((seed >> 3) & 1023) < 3) s += (((seed >> 13) & 1) ? 1.0f : -1.0f) * (0.4f + 0.6f * (((seed >> 17) & 255) / 255.0f));
 		}
+		if (gNoiseType == 3) { br = br * 0.985f + w * 0.12f; s = br * 2.2f; }   // brown: deep rumble
+		if (gNoiseType == 4) { s = (w - lw) * 0.6f; lw = w; }                 // blue: bright fizz
 		if (s > 1) s = 1;
 		if (s < -1) s = -1;
 		gNoise[i] = (s16)(s * 30000);
@@ -529,6 +544,7 @@ typedef struct {
 	unsigned parent, id, age;
 	int chipCh;   // PSG square channel for the CHIP layer, -1 if none
 	int slide;    // 303 slide: glide to the new pitch quickly, no retrigger
+	float rnd;    // RANDOM mod source, set per note
 } SVoice;
 static SVoice gV[NVS];
 static int gDspOwner[NCH], gCsOwner[NCS];
@@ -749,7 +765,7 @@ static void voiceOn(int note, float vel) {
 		return;
 	}
 	SVoice* v = newVoice(); initVoice(v);
-	v->note = note; v->freq = mtof((float)note); v->cur = v->freq; v->vel = vel;
+	v->note = note; v->freq = mtof((float)note); v->cur = v->freq; v->vel = vel; v->rnd = (rand() % 2001) / 1000.0f - 1;
 	lfoTrig();
 	startVoice(v - gV);
 	if (v->active) addTaps(v);
@@ -816,6 +832,10 @@ static float srcValue(int src, const SVoice* v) {
 	case SRC_CAML: return gCamLight;
 	case SRC_CAMC: return gCamColor;
 	case SRC_M1: case SRC_M2: case SRC_M3: case SRC_M4: return gMacro[src - SRC_M1];
+	case SRC_CHAOSX: return gChaosX;
+	case SRC_CHAOSY: return gChaosY;
+	case SRC_RAND: return v ? v->rnd : 0;   // a new random value for every note
+	case SRC_NOTE: { float x = v ? (v->note - 60) / 24.0f : 0; return x > 1 ? 1 : x < -1 ? -1 : x; }   // keytrack: C3 = 0
 	}
 	return 0;
 }
@@ -863,6 +883,16 @@ static void voicesUpdate(float dt, float bend) {
 		float prev = l->ph; l->ph += dt * lfoRateHz(l, gBPM); if (l->ph >= 1) l->ph -= floorf(l->ph);
 		if (l->ph < prev) l->sh = hash01((int)(gAge + i * 77), (int)(l->rate * 100 + gIdc)) * 2 - 1;
 		l->val = lfoValue(l);
+	}
+	{   // chaos: Lorenz system, normalised to about -1..1
+		static float x = 0.1f, y = 0, z = 0;
+		float h = dt * (0.2f + gChaosRate * 2.5f); if (h > 0.03f) h = 0.03f;
+		for (int k = 0; k < 2; k++) { float dx = 10 * (y - x), dy = x * (28 - z) - y, dz = x * y - 2.6667f * z; x += dx * h * 0.5f; y += dy * h * 0.5f; z += dz * h * 0.5f; }
+		gChaosX = x / 20.0f; gChaosY = (z - 25) / 25.0f;
+		if (gChaosX > 1) gChaosX = 1;
+		if (gChaosX < -1) gChaosX = -1;
+		if (gChaosY > 1) gChaosY = 1;
+		if (gChaosY < -1) gChaosY = -1;
 	}
 	gChorusPh += dt * 0.7f * TWO_PI;
 	noiseChannel(gNoiseLevel > 0.01f);
@@ -1166,7 +1196,7 @@ static float gDlyMix = 0, gDlyWow = 0.25f, gDlySat = 0.3f, gRevMix = 0, gOtt = 0
 static volatile float gFxModVal = 0;   // FX COLOR modulation from the mod matrix (set by the main loop)
 static float gBeatPh = 0;              // quarter notes, advanced by the audio clock (sidechain pump)
 static volatile u32 gFxTicks = 0;      // CPU time of the chain per frame (for the meter)
-static const char* MODFX_NAMES[6] = {"OFF", "CHORUS", "FLANGER", "PHASER", "COMB", "FORMANT"};
+static const char* MODFX_NAMES[8] = {"OFF", "CHORUS", "FLANGER", "PHASER", "COMB", "FORMANT", "HYPER", "DIMENSION"};
 static const char* DSYNC_NAMES[7] = {"FREE", "1/16", "1/8", "1/8 DOT", "1/4", "1/4 DOT", "1/2"};
 static const float DSYNC_BEATS[7] = {0, 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f};
 static const char* PUMP_NAMES[3] = {"1/2", "1/4", "1/8"};
@@ -1248,7 +1278,22 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 					for (int k = 0; k < 4; k++) { float o = -a * v + gApZ[c][k]; gApZ[c][k] = v + a * o; v = o; }
 					gPhFb[c] = v; y = v;
 				} else if (gModFx == 4) { y = rdFrac(gMdl[c], MDL, gMdlW - combD); gMdl[c][gMdlW] = x[c] + y * (0.6f + 0.35f * gModDepth); }
-				else { y = (bq(&gForm[0], c, x[c]) + 0.7f * bq(&gForm[1], c, x[c]) + 0.4f * bq(&gForm[2], c, x[c])) * 1.6f; }
+				else if (gModFx == 5) { y = (bq(&gForm[0], c, x[c]) + 0.7f * bq(&gForm[1], c, x[c]) + 0.4f * bq(&gForm[2], c, x[c])) * 1.6f; }
+				else if (gModFx == 6) {   // HYPER: five drifting taps per side, like extra unison voices on the whole mix
+					static const float RT[5] = {0.13f, 0.21f, 0.29f, 0.37f, 0.47f}, BD[5] = {0.007f, 0.011f, 0.016f, 0.021f, 0.027f};
+					static float hp[5]; float a = 0;
+					for (int k = 0; k < 5; k++) {
+						if (c == 0) { hp[k] += RT[k] * (0.5f + gModRate) / DSPRATE; if (hp[k] >= 1) hp[k] -= 1; }
+						float m = sinf(TWO_PI * (hp[k] + c * 0.37f + k * 0.19f));
+						a += rdFrac(gMdl[c], MDL, gMdlW - (BD[k] + 0.004f * gModDepth * m) * DSPRATE);
+					}
+					y = a * 0.42f;
+				} else {   // DIMENSION: two short, slowly moving delays crossed between the sides - wide, not wobbly
+					float m = sinf(TWO_PI * gModPh * 0.5f);
+					float d1 = rdFrac(gMdl[c], MDL, gMdlW - (0.0085f + 0.0012f * gModDepth * m) * DSPRATE);
+					float d2 = rdFrac(gMdl[c ^ 1], MDL, gMdlW - (0.0118f - 0.0012f * gModDepth * m) * DSPRATE);
+					y = (d1 - 0.6f * d2) * 0.9f + x[c] * 0.3f;
+				}
 				x[c] = x[c] * (1 - gModMix) + y * gModMix;
 			}
 			if (++gMdlW >= MDL) gMdlW = 0;
@@ -1428,14 +1473,9 @@ static void tiltRecenter(void) { gTiltCal = 0; }
 
 // ---------------------------------------------------------------- scales, arpeggiator, step sequencer
 static const char* NOTE_NAMES[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-#define NSCALES 14
-static const char* SCALE_NAMES[NSCALES] = {"CHROMATIC", "MAJOR", "MINOR", "DORIAN", "PHRYGIAN", "LYDIAN", "MIXOLYDIAN",
-	"HARM MINOR", "MAJ PENTA", "MIN PENTA", "BLUES", "WHOLE TONE", "JAPANESE", "ARABIC"};
-static const s8 SCALES[NSCALES][13] = {
-	{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, -1}, {0, 2, 4, 5, 7, 9, 11, -1}, {0, 2, 3, 5, 7, 8, 10, -1}, {0, 2, 3, 5, 7, 9, 10, -1},
-	{0, 1, 3, 5, 7, 8, 10, -1}, {0, 2, 4, 6, 7, 9, 11, -1}, {0, 2, 4, 5, 7, 9, 10, -1}, {0, 2, 3, 5, 7, 8, 11, -1},
-	{0, 2, 4, 7, 9, -1}, {0, 3, 5, 7, 10, -1}, {0, 3, 5, 6, 7, 10, -1}, {0, 2, 4, 6, 8, 10, -1},
-	{0, 1, 5, 7, 8, -1}, {0, 1, 4, 5, 7, 8, 11, -1}};
+#define NSCALES 51
+static const char* SCALE_NAMES[NSCALES] = {"CHROMATIC", "MAJOR", "MINOR", "DORIAN", "PHRYGIAN", "LYDIAN", "MIXOLYDIAN", "HARM MINOR", "MAJ PENTA", "MIN PENTA", "BLUES", "WHOLE TONE", "JAPANESE", "ARABIC", "LOCRIAN", "MELODIC MIN", "HARM MAJOR", "DOUBLE HARM", "HUNGARIAN MIN", "HUNGARIAN MAJ", "NEAPOLITAN MIN", "NEAPOLITAN MAJ", "ENIGMATIC", "PERSIAN", "PHRYG DOMINANT", "LYDIAN DOM", "LYDIAN AUG", "SUPER LOCRIAN", "DORIAN #4", "MAJ BLUES", "BEBOP MAJOR", "BEBOP DOM", "BEBOP MINOR", "DIMINISHED", "DIM HALF-WHOLE", "AUGMENTED", "PROMETHEUS", "TRITONE", "HIRAJOSHI", "IN SEN", "IWATO", "KUMOI", "PELOG", "SLENDRO", "EGYPTIAN", "CHINESE", "MONGOLIAN", "GYPSY", "SPANISH 8", "ALGERIAN", "RAGA BHAIRAV"};
+static const s8 SCALES[NSCALES][13] = {{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, -1}, {0, 2, 4, 5, 7, 9, 11, -1}, {0, 2, 3, 5, 7, 8, 10, -1}, {0, 2, 3, 5, 7, 9, 10, -1}, {0, 1, 3, 5, 7, 8, 10, -1}, {0, 2, 4, 6, 7, 9, 11, -1}, {0, 2, 4, 5, 7, 9, 10, -1}, {0, 2, 3, 5, 7, 8, 11, -1}, {0, 2, 4, 7, 9, -1}, {0, 3, 5, 7, 10, -1}, {0, 3, 5, 6, 7, 10, -1}, {0, 2, 4, 6, 8, 10, -1}, {0, 1, 5, 7, 8, -1}, {0, 1, 4, 5, 7, 8, 11, -1}, {0, 1, 3, 5, 6, 8, 10, -1}, {0, 2, 3, 5, 7, 9, 11, -1}, {0, 2, 4, 5, 7, 8, 11, -1}, {0, 1, 4, 5, 7, 8, 11, -1}, {0, 2, 3, 6, 7, 8, 11, -1}, {0, 3, 4, 6, 7, 9, 10, -1}, {0, 1, 3, 5, 7, 8, 11, -1}, {0, 1, 3, 5, 7, 9, 11, -1}, {0, 1, 4, 6, 8, 10, 11, -1}, {0, 1, 4, 5, 6, 8, 11, -1}, {0, 1, 4, 5, 7, 8, 10, -1}, {0, 2, 4, 6, 7, 9, 10, -1}, {0, 2, 4, 6, 8, 9, 11, -1}, {0, 1, 3, 4, 6, 8, 10, -1}, {0, 2, 3, 6, 7, 9, 10, -1}, {0, 2, 3, 4, 7, 9, -1}, {0, 2, 4, 5, 7, 8, 9, 11, -1}, {0, 2, 4, 5, 7, 9, 10, 11, -1}, {0, 2, 3, 4, 5, 7, 9, 10, -1}, {0, 2, 3, 5, 6, 8, 9, 11, -1}, {0, 1, 3, 4, 6, 7, 9, 10, -1}, {0, 3, 4, 7, 8, 11, -1}, {0, 2, 4, 6, 9, 10, -1}, {0, 1, 4, 6, 7, 10, -1}, {0, 2, 3, 7, 8, -1}, {0, 1, 5, 7, 10, -1}, {0, 1, 5, 6, 10, -1}, {0, 2, 3, 7, 9, -1}, {0, 1, 3, 7, 8, -1}, {0, 2, 5, 7, 9, -1}, {0, 2, 5, 7, 10, -1}, {0, 4, 6, 7, 11, -1}, {0, 2, 4, 7, 9, -1}, {0, 2, 3, 6, 7, 8, 10, -1}, {0, 1, 3, 4, 5, 6, 8, 10, -1}, {0, 2, 3, 6, 7, 8, 11, -1}, {0, 1, 4, 5, 7, 8, 11, -1}};
 static int gRoot = 0, gScale = 0;
 static int scaleLen(void) { int n = 0; while (n < 12 && SCALES[gScale][n] >= 0) n++; return n; }
 static int scaleNote(int rootNote, int deg) {   // degree -> MIDI note (any degree, negative ok)
@@ -2105,7 +2145,7 @@ static void patchApply(const SPatch* p) {
 	for (int i = 0; i < 2; i++) { gLfo[i].shape = p->lfoShape[i] < NLFOSH ? p->lfoShape[i] : 0; gLfo[i].mode = p->lfoMode[i]; gLfo[i].rate = p->lfoRate[i]; gLfo[i].sync = p->lfoSync[i] < NSYNC ? p->lfoSync[i] : 0; gLfo[i].table = p->lfoTable[i] < T_BUILTIN ? p->lfoTable[i] : 0; gLfo[i].pos = p->lfoPos[i]; gLfo[i].tabKey = -1; }
 	for (int i = 0; i < 4; i++) { gMod[i] = p->mod[i]; gMod[i + 4] = p->mod2[i]; gMacro[i] = p->macro[i]; }
 	for (int i = 0; i < 8; i++) gModCurve[i] = p->modCurve[i] & 3;
-	gModFx = p->modFx % 6; gDlySync = p->dlySync % 7; gShimmer = p->shimmer & 1; gFreeze = p->freeze & 1; gPumpRate = p->pumpRate % 3; gLofiBits = p->lofiBits % 6;
+	gModFx = p->modFx % 8; gDlySync = p->dlySync % 7; gShimmer = p->shimmer & 1; gFreeze = p->freeze & 1; gPumpRate = p->pumpRate % 3; gLofiBits = p->lofiBits % 6;
 	gModRate = p->modRate; gModDepth = p->modDepth; gModMix = p->modMix; gFxColor = p->fxColor; gEqLow = p->eqLow; gEqMid = p->eqMid; gEqHigh = p->eqHigh;
 	gDlyMix = p->dlyMix; gDlyWow = p->dlyWow; gDlySat = p->dlySat; gRevMix = p->revMix; gOtt = p->ott; gPump = p->pump; gLofiRate = p->lofiRate;
 	chipSet(p->chipLevel); gChipDuty = p->chipDuty; gChipOct = p->chipOct; gCsEcho = p->csEcho; gCsEchoFb = p->csEchoFb; gCsEchoT = p->csEchoT; gOrbit = p->orbit; gOrbitRate = p->orbitRate; gRevType = p->revType % NREVT; gDlyType = p->dlyType % NDLYT; dlyTypeChanged();
@@ -2244,7 +2284,11 @@ static int presetCount(int style) {
 	return n;
 }
 static void say(const char* m);
+// edit guard: after you change a patch, the first step to another patch only warns (the second one goes)
+static int gEdited = 0, gGuard = 0, gStyleCur = 0, gPresetCur = 0;
+static char gCallTxt[24]; static float gCallT = 0;   // big pop-up of a stepped value (Shrub-style)
 static void presetLoad(int style, int idx) {
+	gEdited = 0; gGuard = 0; gStyleCur = style; gPresetCur = idx;
 	if (style == NSTYLES - 1) { if (gUser[idx].magic == PATCH_MAGIC) patchApply(&gUser[idx]); return; }
 	SPatch p; patchInit(&p);
 	gPackMissing = 0;
@@ -2260,6 +2304,7 @@ static const char* presetName(int style, int idx) { return style == NSTYLES - 1 
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
 enum { D_CHIP = 1 << 26, D_GRAIN = 1 << 27, D_DLYT = 1 << 28, D_CAMV = 1 << 29, D_NETMIDI = 1 << 30 };
+#define D_ADDED D_CAMV   // shares the flag; told apart by the param
 #define D_DREC D_DRUMS   // shares the drums flag; told apart by the param
 enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536, D_LOOP = 1 << 17, D_LOOPTAB = 1 << 18, D_MICTAB = 1 << 19, D_CAMTAB = 1 << 20, D_CAM = 1 << 21, D_LINK = 1 << 22, D_DLWT = 1 << 23, D_DRUMS = 1 << 24, D_UPDATE = 1 << 25 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
@@ -2295,9 +2340,9 @@ static const char* SLOT_NAMES[NUSER] = {"USER 1", "USER 2", "USER 3", "USER 4", 
 static Param P_OSCA[] = OSC_PAGE(0, D_A, D_TBLA);
 static Param P_OSCB[] = OSC_PAGE(1, D_B, D_TBLB);
 static Param P_SUBN[] = {
-	PE("SUB SHAPE", &gSubShape, 4, SUB_SHAPES, D_SUB), PI_("SUB OCTAVE", &gSubOct, -2, 0, 0),
+	PE("SUB SHAPE", &gSubShape, 6, SUB_SHAPES, D_SUB), PI_("SUB OCTAVE", &gSubOct, -2, 0, 0),
 	PF("SUB LEVEL", &gSubLevel, 0, 1, 0.01f, "%", 0),
-	PE("NOISE TYPE", &gNoiseType, 3, NOISE_TYPES, D_NOISE), PF("NOISE LEVEL", &gNoiseLevel, 0, 1, 0.01f, "%", 0),
+	PE("NOISE TYPE", &gNoiseType, 5, NOISE_TYPES, D_NOISE), PF("NOISE LEVEL", &gNoiseLevel, 0, 1, 0.01f, "%", 0),
 	PF("CHIP SQUARE", &gChipLevel, 0, 1, 0.02f, "%", D_CHIP), PE("CHIP WIDTH", &gChipDuty, 7, DUTY_NAMES, 0), PI_("CHIP OCTAVE", &gChipOct, -2, 2, 0),
 	PEND};
 static Param P_FILT[] = {
@@ -2314,7 +2359,7 @@ static int gXyMode = 0;
 static const char* XY_NAMES[3] = {"WT + CUTOFF", "MACRO 1+2", "MACRO 3+4"};
 static Param P_MOD[] = {
 	PF("MACRO 1", &gMacro[0], 0, 1, 0.02f, "%", 0), PF("MACRO 2", &gMacro[1], 0, 1, 0.02f, "%", 0), PF("MACRO 3", &gMacro[2], 0, 1, 0.02f, "%", 0), PF("MACRO 4", &gMacro[3], 0, 1, 0.02f, "%", 0),
-	PE("XY PAD", &gXyMode, 3, XY_NAMES, D_THEME),
+	PE("XY PAD", &gXyMode, 3, XY_NAMES, D_THEME), PF("CHAOS RATE", &gChaosRate, 0, 1, 0.02f, "%", 0),
 	PE("LFO1 SHAPE", &gLfo[0].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO1 RATE", &gLfo[0].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO1 SYNC", &gLfo[0].sync, NSYNC, SYNC_NAMES, 0),
 	PE("LFO1 MODE", &gLfo[0].mode, 2, LFO_MODES, 0), PE("LFO1 TABLE", &gLfo[0].table, T_BUILTIN, BUILTIN_NAMES, 0), PF("LFO1 WT POS", &gLfo[0].pos, 0, 1, 0.02f, "%", 0),
 	PE("LFO2 SHAPE", &gLfo[1].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO2 RATE", &gLfo[1].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO2 SYNC", &gLfo[1].sync, NSYNC, SYNC_NAMES, 0),
@@ -2336,7 +2381,7 @@ static Param P_VOICE[] = {
 	PF("ECHO FDBK", &gEchoFb, 0, 0.9f, 0.03f, "%", 0), PE("OUTPUT", &gOutMode, 3, OUT_NAMES, D_OUT), PE("SURROUND", &gSurDepth, 4, DEPTH_NAMES, D_OUT),
 	{"TILT CENTER", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_TILT},
 	PF("REV SIZE", &gRevSize, 0, 1, 0.02f, "%", 0), PF("REV DAMP", &gRevDamp, 0, 1, 0.02f, "%", 0), PF("FX MIX", &gFxMix, 0, 1, 0.02f, "%", 0),
-	PE("DRIVE", &gDrive, 5, DRIVE_TYPES, D_A | D_B), PF("DRIVE AMT", &gDriveAmt, 0, 1, 0.02f, "%", D_A | D_B),
+	PE("DRIVE", &gDrive, 15, DRIVE_TYPES, D_A | D_B), PF("DRIVE AMT", &gDriveAmt, 0, 1, 0.02f, "%", D_A | D_B),
 	PF("MASTER", &gMaster, 0, 1.5f, 0.02f, "%", 0),
 	PEND};
 
@@ -2374,6 +2419,7 @@ static Param P_HW[] = {
 	{"MIC > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_MICTAB},
 	PE("CAMERA", &gCamOn, 2, ONOFF, D_CAM),
 	{"CAM > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CAMTAB},
+	PE("ADD EDITOR", &gAddEdit, 2, ONOFF, D_ADDED), {"RULE > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	PE("CAM WAVE", &gCamVid, 3, VID_NAMES, D_CAMV), PF("WT SCAN", &gWtScan, 0, 4, 0.05f, "X", 0),
 	PE("WI-FI MIDI", &gMidiNet, 2, ONOFF, D_NETMIDI),
 	{"UPDATE SYRUP", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_UPDATE},
@@ -2384,7 +2430,7 @@ static Param P_HW[] = {
 static const char* ONOFF2[2] = {"OFF", "ON"};
 static Param P_MASTER[] = {
 	PE("MASTER FX", &gMasterFX, 2, ONOFF2, 0),
-	PE("MOD FX", &gModFx, 6, MODFX_NAMES, 0), PF("MOD RATE", &gModRate, 0.02f, 4, 0.02f, "HZ", 0), PF("MOD DEPTH", &gModDepth, 0, 1, 0.02f, "%", 0),
+	PE("MOD FX", &gModFx, 8, MODFX_NAMES, 0), PF("MOD RATE", &gModRate, 0.02f, 4, 0.02f, "HZ", 0), PF("MOD DEPTH", &gModDepth, 0, 1, 0.02f, "%", 0),
 	PF("MOD MIX", &gModMix, 0, 1, 0.02f, "%", 0), PF("FX COLOR", &gFxColor, 0, 1, 0.02f, "%", 0),
 	PF("EQ LOW", &gEqLow, -12, 12, 0.5f, "DB", 0), PF("EQ MID", &gEqMid, -12, 12, 0.5f, "DB", 0), PF("EQ HIGH", &gEqHigh, -12, 12, 0.5f, "DB", 0),
 	PE("DELAY TYPE", &gDlyType, NDLYT, DLYT_NAMES, D_DLYT), PF("DELAY MIX", &gDlyMix, 0, 1, 0.02f, "%", 0), PE("DELAY SYNC", &gDlySync, 7, DSYNC_NAMES, 0), PF("TAPE WOW", &gDlyWow, 0, 1, 0.02f, "%", 0), PF("TAPE SAT", &gDlySat, 0, 1, 0.02f, "%", 0),
@@ -2942,6 +2988,9 @@ static int keyAt(int x, int y, int base) {
 }
 
 static void outline(int x, int y, int w, int h, u8 r, u8 g, u8 b);
+static void drawAdd(void);
+static void addTouch(int x, int y);
+static void addApply(void);
 static void say(const char* m);
 // ---- step grid on the bottom screen (PLAY page): 16 steps x 8 notes of the current scale, tap to place
 static int gGridOn = 0, gGridOct = 0;
@@ -3045,7 +3094,7 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 			else { rect(x + 2, 1, bw, TAB_H - 2, RGB3(TH->tab)); text(x + 160 / 7 - w / 2, 7, TABS[i], 1, RGB3(TH->tabTxt)); }
 		}
 	}
-	if (gGridOn) drawGrid(); else {
+	if (gGridOn) drawGrid(); else if (gAddEdit) drawAdd(); else {
 	// XY pad: dotted EGA grid, crosshair
 	float xv = gXyMode ? gMacro[gXyMode * 2 - 2] : gOsc[0].pos, yv = gXyMode ? gMacro[gXyMode * 2 - 1] : gCutoff;
 	int cx = 4 + (int)(xv * 311), cy = XY_Y + (int)((1 - yv) * (XY_H - 1));
@@ -3661,6 +3710,61 @@ static void vidChanged(void) {
 	if (gCamVid == 0) {   // back to OSC A's chosen table
 		LightLock_Lock(&gMipsLock); tableSelect(&gOsc[0].tb, gOsc[0].table); LightLock_Unlock(&gMipsLock); gForceBuild |= 1;
 	} else if (gCamVid == 2) say("POINT THE CAMERA: RECORDING STARTS NOW");
+}
+
+// ---- additive editor (bottom screen): 24 harmonic bars you draw with the stylus. The table it makes sweeps from
+// the fundamental alone (WT POS 0) to the full spectrum (100%), so WT POS works like a brightness / build control.
+static int gAddEdit = 0, gAddDirty = 0; static float gAddH[24] = {1, 0.5f, 0.33f, 0.25f, 0.2f, 0.17f, 0.14f, 0.12f, 0.11f, 0.1f, 0.09f, 0.08f, 0.08f, 0.07f, 0.07f, 0.06f, 0.06f, 0.05f, 0.05f, 0.05f, 0.05f, 0.04f, 0.04f, 0.04f};
+static float* gAddFr = NULL;
+static void addBuild(void) {
+	if (!gAddFr && !(gAddFr = (float*)malloc(sizeof(float) * CYC * WT_FR))) return;
+	static float sn[CYC]; static int init = 0; if (!init) { for (int i = 0; i < CYC; i++) sn[i] = sinf(TWO_PI * i / CYC); init = 1; }
+	for (int f = 0; f < WT_FR; f++) {
+		float* o = gAddFr + f * CYC; memset(o, 0, sizeof(float) * CYC);
+		float reveal = f / (float)(WT_FR - 1) * 24;
+		for (int h = 0; h < 24; h++) {
+			float g = reveal - h + 1; if (g <= 0) continue; if (g > 1) g = 1;
+			float a = gAddH[h] * g; if (a < 0.002f) continue;
+			for (int i = 0; i < CYC; i++) o[i] += a * sn[(i * (h + 1)) & (CYC - 1)];
+		}
+	}
+	wtFinish(gAddFr, WT_FR);
+}
+static void addApply(void) { addBuild(); if (gAddFr) { vidInstallLive(gAddFr); snprintf(gOsc[0].tb.name, sizeof(gOsc[0].tb.name), "ADDITIVE"); } }
+static void drawAdd(void) {
+	rect(0, XY_Y, 320, KB_Y - XY_Y, RGB3(TH->bg));
+	text(4, XY_Y + 2, "DRAW HARMONICS 1-24  (OSC A, LIVE)", 1, DIM);
+	for (int h = 0; h < 24; h++) {
+		int x = 4 + h * 13, top = XY_Y + 14, hgt = KB_Y - 4 - top, v = (int)(gAddH[h] * hgt);
+		rect(x, top, 11, hgt, RGB3(TH->pad));
+		if (v > 0) rect(x, top + hgt - v, 11, v, (h & 3) == 0 ? TH->val[0] : TH->line[0], (h & 3) == 0 ? TH->val[1] : TH->line[1], (h & 3) == 0 ? TH->val[2] : TH->line[2]);
+	}
+}
+static void addTouch(int x, int y) {
+	int h = (x - 4) / 13; if (h < 0 || h > 23) return;
+	int top = XY_Y + 14, hgt = KB_Y - 4 - top; float v = 1 - (y - top) / (float)hgt; if (v < 0) v = 0; if (v > 1) v = 1;
+	if (v < 0.03f) v = 0;
+	gAddH[h] = v * v;   // squared: finer control of quiet harmonics
+	gAddDirty = 1;
+}
+// RULE > TABLE: an elementary cellular automaton; each generation becomes one frame
+static void ruleTable(void) {
+	static const int RULES[8] = {30, 90, 110, 150, 45, 73, 105, 54};
+	int rule = RULES[rand() % 8]; u8 row[64], nx[64];
+	float* fr = (float*)malloc(sizeof(float) * CYC * WT_FR); if (!fr) return;
+	for (int i = 0; i < 64; i++) row[i] = rand() % 4 == 0;
+	row[32] = 1;
+	static float w[64];
+	for (int f = 0; f < WT_FR; f++) {
+		for (int i = 0; i < 64; i++) w[i] = row[i] ? 1.0f : -1.0f;
+		for (int pass = 0; pass < 2; pass++) for (int i = 0; i < 64; i++) w[i] = (w[(i + 63) & 63] + 2 * w[i] + w[(i + 1) & 63]) * 0.25f;
+		wtResample(w, 64, fr + f * CYC);
+		for (int i = 0; i < 64; i++) { int k = row[(i + 63) & 63] << 2 | row[i] << 1 | row[(i + 1) & 63]; nx[i] = (rule >> k) & 1; }
+		memcpy(row, nx, 64);
+	}
+	wtFinish(fr, WT_FR);
+	char nm[16]; snprintf(nm, sizeof(nm), "RULE%d", rule); wtInstall(nm, fr);
+	free(fr);
 }
 static void camToTable(void);
 static void camTick(void) {
@@ -5207,6 +5311,7 @@ int main(void) {
 		if (gWtScan > 0) { A->pos += gWtScan / 60.0f / 8.0f; if (A->pos >= 1) A->pos -= 1; if (page == 1) topDirty = 1; }
 		{ static int shown = 0; if (gMidiNet && gNetAddr[0] && !shown) { char m[48]; snprintf(m, sizeof(m), "ON YOUR PHONE: http://%s", gNetAddr); say(m); gMsgT = 8; shown = 1; topDirty = 1; } if (!gMidiNet) shown = 0; }
 		if (gMsgT > 0) { gMsgT -= 1.0f / 60; topDirty = 1; }
+		if (gCallT > 0) { gCallT -= 1.0f / 60; topDirty = 1; }
 		u64 now = osGetTime(); float dt = (now - last) / 1000.0f; last = now; if (dt > 0.1f) dt = 0.1f;
 		sensorsUpdate(dt);
 
@@ -5231,6 +5336,7 @@ int main(void) {
 			if ((p->dirty & (D_LOOPTAB | D_MICTAB | D_CAMTAB | D_DLWT | D_UPDATE)) && dir > 0 && !fast) {
 				if (p->dirty & D_UPDATE) upStart();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "NET > TABLE")) netTabStart();
+				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "RULE > TABLE")) ruleTable();
 				else if (p->dirty & D_DLWT) dlStart();
 				else if (p->dirty & D_LOOPTAB) loopToTable();
 				else if (p->dirty & D_MICTAB) micRecStart();
@@ -5245,7 +5351,11 @@ int main(void) {
 				if (p->dirty & D_SAVE) { patchCapture(&gUser[gSaveSlot]); userSave(); gStyle = NSTYLES - 1; gPreset = gSaveSlot; }
 				else { SPatch ip; patchInit(&ip); patchApply(&ip); }
 				curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = 1;
+			} else if ((p->dirty & (D_PRESET | D_STYLE)) && gEdited && !gGuard && !fast) {
+				gGuard = 1; say("PATCH EDITED: PRESS AGAIN TO LEAVE IT (SAVE IT IN USER)"); topDirty = 1;
 			} else if (paramChange(p, dir, fast)) {
+				if (p->type == PT_E && p->names && page != 0) { snprintf(gCallTxt, sizeof(gCallTxt), "%s", p->names[*(int*)p->p]); gCallT = 0.9f; }
+				if (page != 0 && page != 8 && page != 9) gEdited = 1;
 				if (p->dirty & D_STYLE) { gPreset = 0; presetLoad(gStyle, 0); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				if (p->dirty & D_OUT) outputApply();
 				if (p->dirty & D_LOOP) loopModeChanged();
@@ -5254,7 +5364,8 @@ int main(void) {
 				if (p->dirty & D_CHIP) { float lv = gChipLevel; gChipLevel = 1; chipSet(lv); }
 				if (p->dirty & D_GRAIN) grainsChanged();
 				if (p->dirty & D_DLYT) dlyTypeChanged();
-				if (p->dirty & D_CAMV) vidChanged();
+				if ((p->dirty & D_CAMV) && p->p == &gAddEdit) { if (gAddEdit) { addApply(); say("DRAW HARMONICS ON THE BOTTOM SCREEN"); } else if (gAddFr) { wtInstall("ADD", gAddFr); } botDirty = 1; }
+				else if (p->dirty & D_CAMV) vidChanged();
 				if (p->dirty & D_NETMIDI) netMidiChanged();
 				if (p->dirty & D_LINK) linkChanged();
 				if (p->dirty & D_THEME) botDirty = 1;
@@ -5310,6 +5421,8 @@ int main(void) {
 					if (b == 5) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } }
 					topDirty = botDirty = 1;
 				}
+			} else if (t.py < KB_Y && !gGridOn && gAddEdit) {
+				addTouch(t.px, t.py); botDirty = 1;
 			} else if (t.py < KB_Y && gGridOn) {
 				if (!prevTouch) { gridTouch(t.px, t.py); topDirty = botDirty = 1; }
 			} else if (t.py < XY_Y + XY_H) {
@@ -5328,6 +5441,7 @@ int main(void) {
 			}
 		}
 		prevTouch = touching;
+		{ static int f = 0; if (gAddDirty && (++f % 6 == 0 || !touching)) { gAddDirty = 0; addApply(); topDirty = 1; } }   // additive editor: rebuild a few times a second while drawing
 		if (key != curKey && !(latch && key < 0)) {
 			int notes[4], n = key >= 0 ? chordNotes(key, notes) : 0;
 			if (gSeqMode == 1) { if (key >= 0 && gSeqBase >= 0) { gSeqTr = key - gSeqBase; topDirty = 1; } }   // transpose the pattern
@@ -5420,6 +5534,12 @@ int main(void) {
 					else if (page == 5) { frame(4, 30, 196, 60); frame(4, 94, 196, 60); lfoLabels(); }
 					else { frame(4, 30, 196, 125); text(8, 34, "A", 1, DIM); text(8, 96, "B", 1, DIM); }
 					scanlines();
+				}
+				if (gCallT > 0 && page != 8) {   // big value pop-up, drawn last so the visuals don't cover it
+					fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
+					int w = (int)strlen(gCallTxt) * 16 + 16, x = 200 - w / 2;
+					rect(x, 96, w, 40, RGB3(TH->tab)); outline(x, 96, w, 40, RGB3(TH->line));
+					text(x + 8, 108, gCallTxt, 2, RGB3(TH->tabTxt));
 				}
 			}
 			topAgain = topDirty; topDirty = 0;
