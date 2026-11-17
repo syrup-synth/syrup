@@ -3156,12 +3156,85 @@ static void gridTouch(int x, int y) {   // on press only
 }
 
 static void outline(int x, int y, int w, int h, u8 r, u8 g, u8 b) { rect(x, y, w, 1, r, g, b); rect(x, y + h - 1, w, 1, r, g, b); rect(x, y, 1, h, r, g, b); rect(x + w - 1, y, 1, h, r, g, b); }
+
+// ---- PADS: a touch chord instrument on the bottom screen (in place of the keys and XY pad). One pad per chord of
+// the key; where you touch a pad picks the chord: low = triad, middle = 7th, high = 9th; left edge = inversion,
+// right edge = sus4. Slide across the STRUM strip to strum the last chord like an autoharp.
+static int gPads = 0, gPadSel = -1, gPadN = 0, gPadNotes[4], gStrumZone = -1;
+static struct { int note; float t; } gStrumOff[24]; static int gStrumOffN = 0;
+#define PAD_Y (TAB_H + 2)
+#define PAD_H 120
+#define STRUM_Y (PAD_Y + PAD_H + 4)
+static const int MAJ7[7] = {0, 2, 4, 5, 7, 9, 11};
+static int padDeg(int base, int d) {   // scale degree -> note, using the scale when it has 7 notes, else major
+	if (gScale && scaleLen() == 7) return scaleNote(base + gRoot, d);
+	int o = d / 7; return base + gRoot + 12 * o + MAJ7[d % 7];
+}
+static int padChord(int base, int pad, int band, int side, int* out) {
+	int r = padDeg(base, pad), t3 = padDeg(base, pad + 2), t5 = padDeg(base, pad + 4), t7 = padDeg(base, pad + 6), t9 = padDeg(base, pad + 8);
+	if (side == 2) t3 = padDeg(base, pad + 3);   // sus4
+	int n = 0;
+	if (band == 2) { out[n++] = r; out[n++] = t3; out[n++] = t7; out[n++] = t9; }   // 9th: drop the 5th, keep four notes
+	else { out[n++] = r; out[n++] = t3; out[n++] = t5; if (band == 1) out[n++] = t7; }
+	if (side == 0) out[0] += 12;   // first inversion
+	return n;
+}
+static void padName(int base, int pad, char* o, int len) {
+	static const char* RN[7] = {"I", "II", "III", "IV", "V", "VI", "VII"};
+	int r = padDeg(base, pad), a = padDeg(base, pad + 2) - r, b = padDeg(base, pad + 4) - r;
+	const char* q = a == 4 && b == 7 ? "" : a == 3 && b == 7 ? "m" : a == 3 && b == 6 ? "dim" : a == 4 && b == 8 ? "+" : "?";
+	char rn[8]; snprintf(rn, sizeof(rn), "%s", RN[pad]);
+	if (a == 3) for (char* c = rn; *c; c++) *c = (char)(*c - 'A' + 'a');   // minor chords in lower case, the usual way
+	snprintf(o, len, "%s|%s%s", rn, NOTE_NAMES[r % 12], q);
+}
+static void drawPads(int base) {
+	rect(0, TAB_H, 320, 240 - TAB_H, RGB3(TH->bg));
+	for (int i = 0; i < 7; i++) {
+		int x = 2 + i * 45, w = 43, lit = i == gPadSel;
+		rect(x, PAD_Y, w, PAD_H, lit ? TH->keyOn[0] : TH->pad[0], lit ? TH->keyOn[1] : TH->pad[1], lit ? TH->keyOn[2] : TH->pad[2]);
+		outline(x, PAD_Y, w, PAD_H, RGB3(TH->line));
+		for (int k = 1; k < 3; k++) rect(x + 3, PAD_Y + k * PAD_H / 3, w - 6, 1, RGB3(TH->grid));
+		char nm[24]; padName(base, i, nm, sizeof(nm)); char* bar = strchr(nm, '|'); *bar = 0;
+		const u8* tc = lit ? EGA[0] : TH->val;
+		text(x + w / 2 - (int)strlen(nm) * 4, PAD_Y + 4, nm, 1, tc[0], tc[1], tc[2]);
+		text(x + w / 2 - (int)strlen(bar + 1) * 4, PAD_Y + PAD_H - 14, bar + 1, 1, tc[0], tc[1], tc[2]);
+		text(x + 4, PAD_Y + PAD_H / 6 - 4, "9", 1, RGB3(TH->dim)); text(x + 4, PAD_Y + PAD_H / 2 - 4, "7", 1, RGB3(TH->dim));
+	}
+	int sh = 240 - STRUM_Y - 2;
+	rect(2, STRUM_Y, 316, sh, RGB3(TH->kbBg));
+	for (int z = 0; z < 24; z++) { int x = 2 + z * 316 / 24; rect(x + 6, STRUM_Y + 2, 1, sh - 4, z == gStrumZone ? TH->keyOn[0] : TH->line[0], z == gStrumZone ? TH->keyOn[1] : TH->line[1], z == gStrumZone ? TH->keyOn[2] : TH->line[2]); }
+	text(6, STRUM_Y + 3, "STRUM", 1, RGB3(TH->dim));
+}
+static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 = screen changed
+	if (y < STRUM_Y - 2) {
+		if (!press) return 0;
+		int i = (x - 2) / 45; if (i < 0 || i > 6) return 0;
+		int ly = y - PAD_Y, band = ly < PAD_H / 3 ? 2 : ly < 2 * PAD_H / 3 ? 1 : 0, lx = x - 2 - i * 45, side = lx < 10 ? 0 : lx > 33 ? 2 : 1;
+		gPadSel = i; gPadN = padChord(base, i, band, side, gPadNotes);
+		*velOut = 0.55f + 0.45f * (1 - ly / (float)PAD_H) * 0.5f + 0.2f;
+		playSet(gPadNotes, gPadN, *velOut);
+		return 1;
+	}
+	if (gPadSel < 0) { gPadSel = 0; gPadN = padChord(base, 0, 0, 1, gPadNotes); }
+	int z = (x - 2) * 24 / 316; if (z < 0) z = 0; if (z > 23) z = 23;
+	if (z == gStrumZone) return 0;
+	gStrumZone = z;
+	int nt = gPadNotes[z % gPadN] + 12 * (z / gPadN) - 12;   // walk up the chord tones, octave by octave
+	float v = 0.4f + 0.6f * (y - STRUM_Y) / (float)(240 - STRUM_Y);
+	voiceOn(nt, v);
+	if (gStrumOffN < 24) { gStrumOff[gStrumOffN].note = nt; gStrumOff[gStrumOffN].t = 0.35f; gStrumOffN++; }
+	return 1;
+}
+static void padsTick(float dt) {   // strummed notes ring for a moment, then let go
+	for (int i = 0; i < gStrumOffN; i++) if ((gStrumOff[i].t -= dt) <= 0) { voiceOff(gStrumOff[i].note); gStrumOff[i] = gStrumOff[--gStrumOffN]; i--; }
+}
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
+	(void)helpOn;
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	rect(0, 0, 320, KB_Y, BG);
-	static const char* TABS[7] = {"HELP", "<PAGE", "PAGE>", "OCT-", "OCT+", "LATCH", "SEQ"};
+	static const char* TABS[7] = {"PADS", "<PAGE", "PAGE>", "OCT-", "OCT+", "LATCH", "SEQ"};
 	for (int i = 0; i < 7; i++) {
-		int x = i * 320 / 7, lit = (i == 0 && helpOn) || (i == 5 && latch) || (i == 6 && gGridOn);
+		int x = i * 320 / 7, lit = (i == 0 && gPads) || (i == 5 && latch) || (i == 6 && gGridOn);
 		int w = strlen(TABS[i]) * 8, bw = 320 / 7 - 4;
 		if (TH->ega) {
 			if (lit) { rect(x + 2, 1, bw, TAB_H - 3, HI); text(x + 160 / 7 - w / 2, 6, TABS[i], 1, HITXT); }
@@ -3171,6 +3244,7 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 			else { rect(x + 2, 1, bw, TAB_H - 2, RGB3(TH->tab)); text(x + 160 / 7 - w / 2, 7, TABS[i], 1, RGB3(TH->tabTxt)); }
 		}
 	}
+	if (gPads && !gGridOn) { drawPads(base); return; }   // chord pads take the whole screen under the tabs
 	if (gGridOn) drawGrid(); else if (gAddEdit) drawAdd(); else {
 	// XY pad: dotted EGA grid, crosshair
 	float xv = gXyMode ? gMacro[gXyMode * 2 - 2] : gOsc[0].pos, yv = gXyMode ? gMacro[gXyMode * 2 - 1] : gCutoff;
@@ -5496,7 +5570,7 @@ int main(void) {
 					int b = t.px * 7 / 320;
 					static int seqBack = 0;
 					if (b == 6) { if (page != 7) { seqBack = page; page = 7; } else page = seqBack; if (page == 7) say("SEQUENCER: TAP THE GRID, PLAY / ACID ABOVE IT"); }
-					if (b == 0) helpOn = !helpOn;
+					if (b == 0) { gPads = !gPads; gPadSel = -1; if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: LOW = TRIAD, MID = 7TH, TOP = 9TH; EDGES = INVERSION / SUS4"); }
 					if (b == 1) page = navStep(page, -1);
 					if (b == 2) page = navStep(page, 1);
 					if (b == 3 && oct > -3) { oct--; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
@@ -5504,6 +5578,9 @@ int main(void) {
 					if (b == 5) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } }
 					topDirty = botDirty = 1;
 				}
+			} else if (gPads && !gGridOn) {
+				float pv = 0.8f;
+				if (padsTouch(base, t.px, t.py, !prevTouch, &pv)) { botDirty = 1; topDirty = 1; }
 			} else if (t.py < KB_Y && !gGridOn && gAddEdit) {
 				addTouch(t.px, t.py); botDirty = 1;
 			} else if (t.py < KB_Y && gGridOn) {
@@ -5523,6 +5600,8 @@ int main(void) {
 				vel = 0.35f + 0.65f * (t.py - KB_Y) / (float)(240 - KB_Y);
 			}
 		}
+		if (gPads && prevTouch && !touching) { gStrumZone = -1; if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
+		padsTick(dt);
 		prevTouch = touching;
 		{ static int f = 0; if (gAddDirty && (++f % 6 == 0 || !touching)) { gAddDirty = 0; addApply(); topDirty = 1; } }   // additive editor: rebuild a few times a second while drawing
 		if (key != curKey && !(latch && key < 0)) {

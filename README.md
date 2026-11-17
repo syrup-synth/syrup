@@ -235,3 +235,11 @@ One stereo CPU filter on the summed voices (paraphonic, like SHRUB's), after the
 - **Controls:** OUT CUTOFF, OUT RES, OUT DRIVE, and OUT ENV2 (the newest note's ENV 2 sweeps it).
 - **Mod destination:** OUT CUTOFF can also be modulated from the matrix.
 - **Steeper slopes:** stack it on the per-note filter. FILTER 2 → +6DB SLOPE gives 18 dB per note, plus 24 dB from a ladder here.
+
+## PADS (bottom bar, far left)
+
+A touch chord instrument that replaces the keys and XY pad. There is one pad per chord of the key (I to vii, with the chord name shown), following the current scale; with no scale or a scale that doesn't have seven notes, it uses major.
+
+- **Where you touch a pad:** low = triad, middle = 7th, top = 9th, left edge = first inversion, right edge = sus4.
+- **STRUM strip:** slide along the bottom strip to strum the last chord across three octaves, autoharp-style. Lower on the strip strums louder.
+- **With other features:** works with LATCH, the arpeggiator and every patch. Help moved to SELECT only.
