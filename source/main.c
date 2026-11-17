@@ -383,8 +383,10 @@ static const char* LFO_SHAPES[NLFOSH] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "S
 static const char* SYNC_NAMES[NSYNC] = {"OFF", "4 BARS", "2 BARS", "1 BAR", "1/2", "1/4", "1/8", "1/16", "1/8T", "1/16T"};
 static const float SYNC_BEATS[NSYNC] = {0, 16, 8, 4, 2, 1, 0.5f, 0.25f, 1.0f / 3, 1.0f / 6};
 static const char* LFO_MODES[2] = {"FREE", "TRIG"};
-enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_TWIST, SRC_SHAKE, SRC_CAML, SRC_CAMC, SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_RAND, SRC_NOTE, SRC_COUNT };
-static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y", "TILT L/R", "TILT F/B", "BREATH", "TWIST", "SHAKE", "CAM LIGHT", "CAM COLOR", "MACRO 1", "MACRO 2", "MACRO 3", "MACRO 4", "CHAOS X", "CHAOS Y", "RANDOM", "NOTE"};
+enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_TWIST, SRC_SHAKE, SRC_CAML, SRC_CAMC, SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_RAND, SRC_NOTE, SRC_LFO3, SRC_LFO4, SRC_COUNT };
+static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y", "TILT L/R", "TILT F/B", "BREATH", "TWIST", "SHAKE", "CAM LIGHT", "CAM COLOR", "MACRO 1", "MACRO 2", "MACRO 3", "MACRO 4", "CHAOS X", "CHAOS Y", "RANDOM", "NOTE", "LFO 3", "LFO 4"};
+// LFO 3 and 4 are drawn: 64 points you paint with the stylus on the MOD page
+static float gDl[2][64]; static float gDlRate[2] = {1.0f, 0.5f}, gDlPh[2], gDlVal[2]; static int gDlSync[2] = {0, 0};
 static float gChaosX = 0, gChaosY = 0, gChaosRate = 0.3f;   // a Lorenz attractor, slowly wandering, never repeating
 static float gMacro[4] = {0, 0, 0, 0};
 #define NMOD 8
@@ -836,6 +838,8 @@ static float srcValue(int src, const SVoice* v) {
 	case SRC_CHAOSY: return gChaosY;
 	case SRC_RAND: return v ? v->rnd : 0;   // a new random value for every note
 	case SRC_NOTE: { float x = v ? (v->note - 60) / 24.0f : 0; return x > 1 ? 1 : x < -1 ? -1 : x; }   // keytrack: C3 = 0
+	case SRC_LFO3: return gDlVal[0];
+	case SRC_LFO4: return gDlVal[1];
 	}
 	return 0;
 }
@@ -883,6 +887,12 @@ static void voicesUpdate(float dt, float bend) {
 		float prev = l->ph; l->ph += dt * lfoRateHz(l, gBPM); if (l->ph >= 1) l->ph -= floorf(l->ph);
 		if (l->ph < prev) l->sh = hash01((int)(gAge + i * 77), (int)(l->rate * 100 + gIdc)) * 2 - 1;
 		l->val = lfoValue(l);
+	}
+	for (int k = 0; k < 2; k++) {   // drawn LFOs: read the painted shape, smoothly
+		float hz = gDlSync[k] > 0 ? gBPM / 60.0f / SYNC_BEATS[gDlSync[k]] : gDlRate[k];
+		gDlPh[k] += dt * hz; if (gDlPh[k] >= 1) gDlPh[k] -= floorf(gDlPh[k]);
+		float x = gDlPh[k] * 64; int i = (int)x; float u = x - i;
+		gDlVal[k] = gDl[k][i & 63] * (1 - u) + gDl[k][(i + 1) & 63] * u;
 	}
 	{   // chaos: Lorenz system, normalised to about -1..1
 		static float x = 0.1f, y = 0, z = 0;
@@ -1732,8 +1742,11 @@ typedef struct {
 	int revType, dlyType;   // v6
 	int grainMode, grainSrc; float grainSize, grainScan, grainSpray, grainPitch, grainLevel;   // v7
 	int ofType; float ofCut, ofRes, ofDrive, ofEnv;   // v8
+	s8 dl[2][64]; float dlRate[2]; int dlSync[2];   // v9: drawn LFO 3 / 4
 } SPatch;
-#define PATCH_MAGIC 0x53595238   // "SYR8"
+#define PATCH_MAGIC 0x53595239   // "SYR9"
+#define PATCH_MAGIC8 0x53595238  // v8 (no drawn LFOs)
+#define PATCH_V8_SIZE offsetof(SPatch, dl)
 #define PATCH_MAGIC7 0x53595237  // v7 (no OUT FILTER)
 #define PATCH_V7_SIZE offsetof(SPatch, ofType)
 #define PATCH_MAGIC6 0x53595236  // v6 (no grain settings)
@@ -1777,6 +1790,8 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->modRate = 0.4f; p->modDepth = 0.5f; p->modMix = 0.5f; p->fxColor = 0.5f; p->eqLow = p->eqMid = p->eqHigh = 0;
 	p->dlyMix = 0; p->dlyWow = 0.25f; p->dlySat = 0.3f; p->revMix = 0; p->ott = 0; p->pump = 0; p->lofiRate = 0;
 	p->chipLevel = 0; p->chipDuty = 3; p->chipOct = 0; p->csEcho = 0; p->csEchoFb = 0.45f; p->csEchoT = 2; p->orbit = 0; p->orbitRate = 0.2f; p->revType = 0; p->dlyType = 0; p->grainMode = 0; p->grainSrc = 1; p->grainSize = 0.35f; p->grainScan = 0.5f; p->grainSpray = 0.2f; p->grainPitch = 0; p->grainLevel = 0.8f; p->ofType = 0; p->ofCut = 0.6f; p->ofRes = 0.2f; p->ofDrive = 0.2f; p->ofEnv = 0;
+	for (int i = 0; i < 64; i++) { p->dl[0][i] = (s8)(sinf(TWO_PI * i / 64) * 127); p->dl[1][i] = (s8)((i < 32 ? i * 4 - 64 : 191 - i * 4) * 127 / 64); }
+	p->dlRate[0] = 1.0f; p->dlRate[1] = 0.5f; p->dlSync[0] = p->dlSync[1] = 0;
 }
 
 #define OA p->osc[0]
@@ -2155,12 +2170,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -2195,6 +2210,7 @@ static void patchCapture(SPatch* p) {
 	p->modRate = gModRate; p->modDepth = gModDepth; p->modMix = gModMix; p->fxColor = gFxColor; p->eqLow = gEqLow; p->eqMid = gEqMid; p->eqHigh = gEqHigh;
 	p->dlyMix = gDlyMix; p->dlyWow = gDlyWow; p->dlySat = gDlySat; p->revMix = gRevMix; p->ott = gOtt; p->pump = gPump; p->lofiRate = gLofiRate;
 	p->chipLevel = gChipLevel; p->chipDuty = gChipDuty; p->chipOct = gChipOct; p->csEcho = gCsEcho; p->csEchoFb = gCsEchoFb; p->csEchoT = gCsEchoT; p->orbit = gOrbit; p->orbitRate = gOrbitRate; p->revType = gRevType; p->dlyType = gDlyType; p->grainMode = gGrains; p->grainSrc = gGrainSrc; p->grainSize = gGrainSize; p->grainScan = gGrainScan; p->grainSpray = gGrainSpray; p->grainPitch = gGrainPitch; p->grainLevel = gGrainLevel; p->ofType = gOfType; p->ofCut = gOfCut; p->ofRes = gOfRes; p->ofDrive = gOfDrive; p->ofEnv = gOfEnv;
+	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) p->dl[k][i] = (s8)(gDl[k][i] * 127); p->dlRate[k] = gDlRate[k]; p->dlSync[k] = gDlSync[k]; }
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
 	p->glide = gGlide; p->chorus = gChorus; p->revSize = gRevSize; p->revDamp = gRevDamp; p->fxMix = gFxMix; p->driveAmt = gDriveAmt; p->master = gMaster;
 	p->arp = gArp; p->arpRate = gArpRate; p->arpOct = gArpOct; p->arpGate = gArpGate; p->bpm = gBPM;
@@ -2223,6 +2239,7 @@ static void patchApply(const SPatch* p) {
 	gDlyMix = p->dlyMix; gDlyWow = p->dlyWow; gDlySat = p->dlySat; gRevMix = p->revMix; gOtt = p->ott; gPump = p->pump; gLofiRate = p->lofiRate;
 	chipSet(p->chipLevel); gChipDuty = p->chipDuty; gChipOct = p->chipOct; gCsEcho = p->csEcho; gCsEchoFb = p->csEchoFb; gCsEchoT = p->csEchoT; gOrbit = p->orbit; gOrbitRate = p->orbitRate; gRevType = p->revType % NREVT; gDlyType = p->dlyType % NDLYT; dlyTypeChanged();
 	if (p->ofType % NOFT != gOfType) { gOfType = p->ofType % NOFT; ofReset(); } gOfCut = p->ofCut; gOfRes = p->ofRes; gOfDrive = p->ofDrive; gOfEnv = p->ofEnv;
+	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) gDl[k][i] = p->dl[k][i] / 127.0f; gDlRate[k] = p->dlRate[k]; gDlSync[k] = p->dlSync[k] % NSYNC; }
 	gVoiceMode = p->voiceMode; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
 	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate; if (p->bpm >= 40) gBPM = p->bpm;
@@ -2435,6 +2452,7 @@ static const char* XY_NAMES[3] = {"WT + CUTOFF", "MACRO 1+2", "MACRO 3+4"};
 static Param P_MOD[] = {
 	PF("MACRO 1", &gMacro[0], 0, 1, 0.02f, "%", 0), PF("MACRO 2", &gMacro[1], 0, 1, 0.02f, "%", 0), PF("MACRO 3", &gMacro[2], 0, 1, 0.02f, "%", 0), PF("MACRO 4", &gMacro[3], 0, 1, 0.02f, "%", 0),
 	PE("XY PAD", &gXyMode, 3, XY_NAMES, D_THEME), PF("CHAOS RATE", &gChaosRate, 0, 1, 0.02f, "%", 0),
+	PF("LFO3 RATE", &gDlRate[0], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO3 SYNC", &gDlSync[0], NSYNC, SYNC_NAMES, 0), PF("LFO4 RATE", &gDlRate[1], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO4 SYNC", &gDlSync[1], NSYNC, SYNC_NAMES, 0),
 	PE("LFO1 SHAPE", &gLfo[0].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO1 RATE", &gLfo[0].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO1 SYNC", &gLfo[0].sync, NSYNC, SYNC_NAMES, 0),
 	PE("LFO1 MODE", &gLfo[0].mode, 2, LFO_MODES, 0), PE("LFO1 TABLE", &gLfo[0].table, T_BUILTIN, BUILTIN_NAMES, 0), PF("LFO1 WT POS", &gLfo[0].pos, 0, 1, 0.02f, "%", 0),
 	PE("LFO2 SHAPE", &gLfo[1].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO2 RATE", &gLfo[1].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO2 SYNC", &gLfo[1].sync, NSYNC, SYNC_NAMES, 0),
@@ -3228,6 +3246,107 @@ static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 
 static void padsTick(float dt) {   // strummed notes ring for a moment, then let go
 	for (int i = 0; i < gStrumOffN; i++) if ((gStrumOff[i].t -= dt) <= 0) { voiceOff(gStrumOff[i].note); gStrumOff[i] = gStrumOff[--gStrumOffN]; i--; }
 }
+
+// ---- MOD page, bottom screen: CABLES (drag a source onto a destination to patch it; drag up/down on a destination
+// to set how much; drag a destination off to the left to unplug) and DRAW 3 / DRAW 4 (paint LFO 3 / 4).
+static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 cables, 1 draw LFO 3, 2 draw LFO 4
+static const int CAB_SRC[12] = {SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_CHAOSX, SRC_CHAOSY, SRC_RAND, SRC_NOTE, SRC_VEL, SRC_TILTX, SRC_MIC};
+static const int CAB_DST[12] = {DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_PAN, DST_FXP, DST_OFCUT, DST_AMP};
+#define CAB_Y 42
+#define CAB_H 16
+static int gCabDrag = -1, gCabDst = -1, gCabX = 0, gCabY = 0, gCabY0 = 0, gDrawPrevX = -1, gDrawPrevY = 0;
+static float gCabAmt0 = 0;
+static int cabSlot(int src, int dst) { for (int m = 0; m < NMOD; m++) if (gMod[m].src == src && gMod[m].dst == dst) return m; return -1; }
+static int cabLast(int dst) { for (int m = NMOD - 1; m >= 0; m--) if (gMod[m].src != SRC_OFF && gMod[m].dst == dst) return m; return -1; }
+static void drawModView(void) {
+	rect(0, TAB_H, 320, 240 - TAB_H, RGB3(TH->bg));
+	static const char* VT[3] = {"CABLES", "DRAW LFO 3", "DRAW LFO 4"};
+	for (int i = 0; i < 3; i++) {
+		int x = 4 + i * 105, lit = i == gModView; rect(x, TAB_H + 2, 101, 14, lit ? TH->keyOn[0] : TH->tab[0], lit ? TH->keyOn[1] : TH->tab[1], lit ? TH->keyOn[2] : TH->tab[2]);
+		const u8* c = lit ? EGA[0] : TH->tabTxt; text(x + 50 - (int)strlen(VT[i]) * 4, TAB_H + 5, VT[i], 1, c[0], c[1], c[2]);
+	}
+	if (gModView == 0) {
+		for (int i = 0; i < 12; i++) {
+			int y = CAB_Y + i * CAB_H;
+			rect(4, y, 82, CAB_H - 2, RGB3(TH->pad)); text(8, y + 4, SRC_NAMES[CAB_SRC[i]], 1, RGB3(TH->val));
+			rect(234, y, 82, CAB_H - 2, RGB3(TH->pad)); text(238, y + 4, DST_NAMES[CAB_DST[i]], 1, RGB3(TH->txt));
+		}
+		for (int m = 0; m < NMOD; m++) {   // the cables
+			if (gMod[m].src == SRC_OFF) continue;
+			int si = -1, di = -1;
+			for (int i = 0; i < 12; i++) { if (CAB_SRC[i] == gMod[m].src) si = i; if (CAB_DST[i] == gMod[m].dst) di = i; }
+			if (si < 0 || di < 0) continue;
+			int y0 = CAB_Y + si * CAB_H + 7, y1 = CAB_Y + di * CAB_H + 7; float a = gMod[m].amt;
+			const u8* c = a >= 0 ? TH->keyOn : TH->warn; int th = 1 + (int)(fabsf(a) * 3);
+			for (int k = 0; k < th; k++) line(86, y0 + k - th / 2, 234, y1 + k - th / 2, c[0], c[1], c[2]);
+			char t[8]; snprintf(t, sizeof(t), "%+d", (int)(a * 100)); text(150, (y0 + y1) / 2 - 8, t, 1, c[0], c[1], c[2]);
+		}
+		if (gCabDrag >= 0) line(86, CAB_Y + gCabDrag * CAB_H + 7, gCabX, gCabY, RGB3(TH->hiTxt));
+		int used = 0; for (int m = 0; m < NMOD; m++) used += gMod[m].src != SRC_OFF;
+		char u[24]; snprintf(u, sizeof(u), "%d/%d CABLES", used, NMOD); text(124, 226, u, 1, RGB3(TH->dim));
+	} else {
+		int k = gModView - 1, x0 = 8, y0 = 46, w = 304, h = 150;
+		rect(x0, y0, w, h, RGB3(TH->pad)); rect(x0, y0 + h / 2, w, 1, RGB3(TH->grid));
+		for (int i = 0; i < 64; i++) {
+			int x = x0 + i * w / 64, bw = w / 64, v = (int)(gDl[k][i] * (h / 2 - 2)), mid = y0 + h / 2;
+			if (v >= 0) rect(x, mid - v, bw - 1, v + 1, RGB3(TH->line)); else rect(x, mid, bw - 1, -v + 1, RGB3(TH->line));
+		}
+		int px2 = x0 + (int)(gDlPh[k] * w); rect(px2, y0, 1, h, RGB3(TH->keyOn));
+		static const char* SH[5] = {"SINE", "RAMP", "STEPS", "RANDOM", "FLAT"};
+		for (int i = 0; i < 5; i++) { int x = 8 + i * 61; rect(x, 202, 57, 16, RGB3(TH->tab)); text(x + 28 - (int)strlen(SH[i]) * 4, 206, SH[i], 1, RGB3(TH->tabTxt)); }
+		text(8, 224, "PAINT THE SHAPE. RATE / SYNC: MOD PAGE", 1, RGB3(TH->dim));
+	}
+}
+static int modViewTouch(int x, int y, int press, int release) {   // 1 = redraw
+	if (press && y < TAB_H + 18) { int v = (x - 4) / 105; if (v >= 0 && v < 3) { gModView = v; gCabDrag = gCabDst = -1; } return 1; }
+	if (gModView == 0) {
+		int row = (y - CAB_Y) / CAB_H; if (y < CAB_Y) row = -1; if (row > 11) row = -1;
+		if (press) {
+			gCabDrag = gCabDst = -1;
+			if (row >= 0 && x < 90) { gCabDrag = row; gCabX = x; gCabY = y; return 1; }
+			if (row >= 0 && x > 230) { int m = cabLast(CAB_DST[row]); if (m >= 0) { gCabDst = m; gCabY0 = y; gCabAmt0 = gMod[m].amt; } return 1; }
+			return 0;
+		}
+		if (release) {
+			if (gCabDrag >= 0 && row >= 0 && x > 230) {   // plug in
+				int src = CAB_SRC[gCabDrag], dst = CAB_DST[row], m = cabSlot(src, dst);
+				if (m < 0) for (int i = 0; i < NMOD; i++) if (gMod[i].src == SRC_OFF) { m = i; break; }
+				if (m < 0) say("ALL 8 CABLES IN USE - UNPLUG ONE FIRST");
+				else { gMod[m].src = src; gMod[m].dst = dst; if (gMod[m].amt == 0) gMod[m].amt = 0.5f; gModCurve[m] = 0; }
+			}
+			gCabDrag = gCabDst = -1; return 1;
+		}
+		if (gCabDrag >= 0) { gCabX = x; gCabY = y; return 1; }
+		if (gCabDst >= 0) {
+			if (x < 150) { gMod[gCabDst].src = SRC_OFF; gMod[gCabDst].amt = 0; gCabDst = -1; say("UNPLUGGED"); return 1; }
+			float a = gCabAmt0 + (gCabY0 - y) / 80.0f; if (a > 1) a = 1; if (a < -1) a = -1;
+			gMod[gCabDst].amt = roundf(a * 50) / 50; return 1;
+		}
+		return 0;
+	}
+	int k = gModView - 1;
+	if (press && y >= 202 && y < 218) {   // shape presets
+		int b = (x - 8) / 61;
+		for (int i = 0; i < 64; i++) {
+			float v = b == 0 ? sinf(TWO_PI * i / 64) : b == 1 ? 1 - i / 31.5f : b == 2 ? ((i / 8) % 2 ? 0.8f : -0.8f) * ((i / 16) % 2 ? 0.5f : 1) : b == 3 ? (rand() % 2001) / 1000.0f - 1 : 0;
+			if (b == 3 && i % 4) v = gDl[k][i - 1];
+			gDl[k][i] = v;
+		}
+		return 1;
+	}
+	if (y < 46 || y >= 196) { gDrawPrevX = -1; return 0; }
+	int i = (x - 8) * 64 / 304; if (i < 0) i = 0; if (i > 63) i = 63;
+	float v = 1 - (y - 46) / 75.0f; if (v > 1) v = 1; if (v < -1) v = -1;
+	if (press || gDrawPrevX < 0) gDrawPrevX = i;
+	int a = gDrawPrevX < i ? gDrawPrevX : i, b = gDrawPrevX < i ? i : gDrawPrevX;
+	for (int j = a; j <= b; j++) {   // fill between touch samples so fast strokes leave no gaps
+		float t = b > a ? (float)(j - a) / (b - a) : 1; float pv = gDl[k][gDrawPrevX];
+		gDl[k][j] = gDrawPrevX < i ? pv + (v - pv) * t : v + (pv - v) * (1 - t);
+	}
+	gDl[k][i] = v; gDrawPrevX = i;
+	if (release) gDrawPrevX = -1;
+	return 1;
+}
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	(void)helpOn;
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
@@ -3245,6 +3364,7 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 		}
 	}
 	if (gPads && !gGridOn) { drawPads(base); return; }   // chord pads take the whole screen under the tabs
+	if (gModOn) { drawModView(); return; }               // MOD page: cables / drawn LFOs
 	if (gGridOn) drawGrid(); else if (gAddEdit) drawAdd(); else {
 	// XY pad: dotted EGA grid, crosshair
 	float xv = gXyMode ? gMacro[gXyMode * 2 - 2] : gOsc[0].pos, yv = gXyMode ? gMacro[gXyMode * 2 - 1] : gCutoff;
@@ -5578,6 +5698,9 @@ int main(void) {
 					if (b == 5) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } }
 					topDirty = botDirty = 1;
 				}
+			} else if (gModOn && !gPads) {
+				gLastTX = t.px; gLastTY = t.py;
+				if (modViewTouch(t.px, t.py, !prevTouch, 0)) { botDirty = 1; topDirty = 1; }
 			} else if (gPads && !gGridOn) {
 				float pv = 0.8f;
 				if (padsTouch(base, t.px, t.py, !prevTouch, &pv)) { botDirty = 1; topDirty = 1; }
@@ -5600,6 +5723,7 @@ int main(void) {
 				vel = 0.35f + 0.65f * (t.py - KB_Y) / (float)(240 - KB_Y);
 			}
 		}
+		if (gModOn && !gPads && prevTouch && !touching && modViewTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gPads && prevTouch && !touching) { gStrumZone = -1; if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
 		padsTick(dt);
 		prevTouch = touching;
@@ -5614,6 +5738,7 @@ int main(void) {
 			curKey = key;
 		}
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; } }
+		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && gModView && !gPads) botDirty = 1; }   // drawn LFO playhead
 		if (gAuditionT > 0 && (gAuditionT -= 1.0f / 60) <= 0 && !gSeqPlaying && curKey < 0) playSet(NULL, 0, 0.8f);
 		{ static int lastPos = -2, lastMode = -1; if (gGridOn && (gSeqPos != lastPos || gSeqMode != lastMode)) { lastPos = gSeqPos; lastMode = gSeqMode; botDirty = 1; } }
 		if (gBeatFlash) { gBeatFlash = 0; gVisBeat = 1; beatLightPulse(); gVisBurst += 8; if (page == 7) topDirty = 1; }
