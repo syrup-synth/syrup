@@ -71,18 +71,20 @@ On the OSC and sound pages the left panel of the top screen is drawn by the 3DS'
 
 Page 1 is a preset browser organised by style. Use the D-pad to pick a style and a patch; the patch loads immediately, so you can play keys to audition it.
 
+The factory library was rebuilt from scratch: 103 patches in 10 styles, with no duplicates, and levels matched so switching patches doesn't jump in volume. Every patch plays from the keys, buttons and circle pad alone. Mic, tilt and camera are optional extras, never required.
+
 | Style | Patches |
 |---|---|
-| BASS | Sub Wobble, Reese, FM Growl, 808 Sub, Acid, Wobble 1/8, Digi Bass, Sine Bass, Pluck Bass, Hoover |
-| LEAD | Supersaw, Sync Scream, Vowel Lead, Chip Square, Digi Pipe, Brass Lead, Whistle, Glide Square, Fuzz Lead, Fifths |
-| PAD | Syrup Pad, Glass, Choir, Warm Strings, Dark Drone, Vapor Pad, Sweep Pad, Formant Pad, Shimmer Pad, PWM Pad |
-| PLUCK | Syrup Pluck, Marimba, Kalimba, Harp, Dub Stab, Bell, Steel Drum, Synth Pluck, Muted, Pizz |
-| KEYS | E Piano, Organ, Clav, Acordeon, Vinyl Keys, Dark Rhodes, Wurli, Church Organ, Harpsichord, Lofi Piano |
-| ARP | Trance Gate, Berlin Seq, Crystal Arp, Glass Rain, Chip Arp, Synthwave Arp, Dub Echo Arp, Pad Ripple, Bass Octaves, Marimba Run (these set the arpeggiator, rate, octaves and tempo) |
-| CHORDS | House Organ, Neo Soul, Power, Sus Shimmer, Dub Chords, Min7 Pad, Maj7 Keys, Power Pluck, Sus Organ, Techno Stab |
-| RETRO | 8-Bit Lead, 8-Bit Bass, VGM Brass, Arcade, 80s Poly, Synthwave, Chip Bell, GB Wave |
-| AMBIENT | Ocean, Aurora, Dust, Slow Bloom, Dream Keys, Deep Space, Rain, Lullaby |
-| FX | Riser, Laser, Wind, Radio, Robot, Siren, Bubbles, Noise Sweep, Alarm, Space Drone |
+| BASS | Sub Floor, 303 on 3rd Ave, Reese Crate, Wobble Tide, FM Knock, Diode Buzz, SP-12 Drop, Cumbia Bajo, Rolling Notch, Stick Growl, Upright Thumb, Chip Bass |
+| LEAD | Gulf Sync, Talk Box, Wide Unison, Whistle, Fold Scream, Ladder Tape, Chip Hero, G-Funk Sine, Ringer, Acid Scream, Pad Bender, Flute, Stick Theremin, XY Sculpt |
+| PAD | Warm Felt, Glass Hour, Vowel Dusk, Comb Weather, Cloud Bank, Strings 77, Drawn Swell, Motion Haze, Swell Backward, Deep Sonar, Grain Choir |
+| KEYS | EP Saturday, Drawbar, Lofi Upright, Clav Funk, Wurli Bark, Vibes, Toy Keys, Harpsi, Rotary, Cumbia Organo |
+| PLUCK | Nylon, Marimba Wood, Kalimba, Digi Harp, Stab 1999, Koto Spring, Chip Plink, Grain Pluck, Steel Pan, Rain on Tin |
+| CHORD | Organ Stab, Neo Soul 9, Dub Chord, Techno Stab, Strum Guitar, Omni Harp, Pump Chords, Gospel Organ, Shoegaze Wall |
+| SEQUENCE | Berlin 16, Acid Circle, Trance Gate, Ping Arp, Chaos Arp, Motion Bells, Octave Bounce, Drawn Steps, Grain Run, Polyrhythm |
+| TEXTURE | Tide Pool, Frozen Table, Net Static, Tape Room, Brown Sea, Geiger, Drone 60, Shimmer Cloud, Sonar Ping, Storm Front |
+| CHIP | GB Wave, NES Pulse, C64 PWM, Arcade Arp, Power Up, Laser, 8-Bit Bass, Bit Organ, Square Choir |
+| SPACE | Orbit Pad, Helicopter, Circle Arp, Around You, 3D Bells, Spiral Pluck, Passing Car, Steer Orbit (these switch OUTPUT to SURROUND when it's on STEREO; headphones work best) |
 | USER | 8 save slots |
 
 To save, pick a SAVE SLOT and press right on SAVE NOW. User patches are stored in `sdmc:/3ds/syrup/user_presets.bin`. INIT PATCH resets to a single saw.
@@ -193,9 +195,7 @@ Any RP2040 board (Raspberry Pi Pico, RP2040-Zero and so on) becomes a USB MIDI d
 
 ## New styles and theme
 
-- **WAVES** (14 patches): built on the Syrup wavetable pack. Get the pack from HARDWARE → GET WAVETABLES first; until then a built-in table stands in, and Syrup tells you so.
-- **3D** (10 patches): sounds that orbit around you. Loading one sets OUTPUT to SURROUND; headphones work best.
-- **BREATH** (9 patches): blow into the mic while holding a key, or LATCH a note and play with breath alone. Breath sets the volume and opens the filter. The new mod destination VOLUME makes any source control loudness.
+- The WAVES, 3D, BREATH and GRAIN styles have been folded into the rebuilt library above. 3D patches are now SPACE, and the breath patches play from the keys, with breath as an optional extra.
 - **IMPULSE theme:** Impulse Tracker look, with black fields, grey panels and tabs, and a blue selection bar.
 
 ## Sequencer button, grain oscillator, GRAIN patches, NET > TABLE, mic-tap drums
@@ -205,7 +205,6 @@ Any RP2040 board (Raspberry Pi Pico, RP2040-Zero and so on) becomes a USB MIDI d
   - **LOOP** plays the grain source by itself; **KEYS** makes it an oscillator, with pitch from the keys and loudness from the voice envelope.
   - **GRAIN SOURCE** is LOOP (your loop recording), TABLE (OSC A's wavetable, where WT POS and its LFOs move through it) or MIC (the last second the mic heard).
   - Grain settings are saved with patches.
-- **GRAIN style** (12 patches): grain oscillator layered with OSC B, sub, noise and CHIP SQUARE.
 - **NET > TABLE** (HARDWARE page): fetches a random web page and turns its raw bytes into a 64-frame wavetable (data-bending).
 - **MIC TAP** (DRUMS page):
   - Pick TAP KICK, TAP SNARE or TAP HAT, then tap the 2DS near the mic. Each hit plays the drum and is written into the MINE pattern at the nearest 16th note, as loud as you hit it.
