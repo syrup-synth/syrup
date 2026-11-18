@@ -301,6 +301,40 @@ static int loadWav(Table* tb, const char* path) {
 	return ok;
 }
 
+// BUSY BOY's waveform, measured from a recording of the Korg sound: harmonic levels (dB) of 93 cycles on G#3..D4.
+// The 3rd harmonic leads on every note, the 4th close behind, with a bright knot around the 10th / 11th. Written once to
+// the SD card as a wavetable (8 frames, darker -> brighter; frame 5 is the measured one) so it lists with the others.
+static const float BUSY_DB[40] = {-31.9f, -30.2f, -0.1f, -10.3f, -25.1f, -41.4f, -32.7f, -23.9f, -33.0f, -13.0f, -23.6f, -30.7f, -38.6f, -44.0f, -33.1f, -33.1f, -28.0f, -37.7f, -44.8f, -39.1f, -46.9f, -41.3f, -38.1f, -35.5f, -40.3f, -46.7f, -34.3f, -44.0f, -41.7f, -44.1f, -43.9f, -46.3f, -44.8f, -47.1f, -41.6f, -44.9f, -45.5f, -49.5f, -52.6f, -47.9f};
+static void makeBusyTable(void) {
+	const char* path = "sdmc:/3ds/syrup/BUSY BOY.wav";
+	FILE* t = fopen(path, "rb"); if (t) { fclose(t); return; }
+	const int FR = 8, N = 2048;
+	s16* out = (s16*)malloc(FR * N * 2); if (!out) return;
+	static const float PH[40] = {0, 2.1f, 4.4f, 1.3f, 5.6f, 0.7f, 3.9f, 2.8f, 0.2f, 4.9f, 1.8f, 3.3f, 5.1f, 0.9f, 2.4f, 4.1f, 1.1f, 5.9f, 3.6f, 0.4f,
+		2.9f, 4.6f, 1.6f, 5.3f, 0.1f, 3.1f, 4.8f, 2.2f, 5.7f, 1.4f, 3.8f, 0.6f, 2.6f, 4.3f, 1.9f, 5.5f, 0.3f, 3.4f, 4.0f, 2.0f};
+	float* fr = (float*)malloc(N * sizeof(float)); if (!fr) { free(out); return; }
+	for (int f = 0; f < FR; f++) {
+		float tilt = (f - 5) * 0.6f;   // dB per harmonic above the 4th: frame 5 = as measured
+		float pk = 0;
+		for (int n = 0; n < N; n++) fr[n] = 0;
+		for (int k = 1; k <= 40; k++) {
+			float db = BUSY_DB[k - 1] + (k > 4 ? tilt * (k - 4) : 0); if (db < -70) continue;
+			float a = powf(10.0f, db / 20.0f), w = TWO_PI * k / N;
+			for (int n = 0; n < N; n++) fr[n] += a * sinf(w * n + PH[k - 1]);
+		}
+		for (int n = 0; n < N; n++) if (fabsf(fr[n]) > pk) pk = fabsf(fr[n]);
+		for (int n = 0; n < N; n++) out[f * N + n] = (s16)(fr[n] / (pk + 1e-6f) * 30000);
+	}
+	free(fr);
+	FILE* w = fopen(path, "wb");
+	if (w) {
+		u32 data = FR * N * 2; const char clm[16] = "<!>2048 10000000";
+		u32 hdr[11] = {0x46464952, 36 + 8 + 16 + data, 0x45564157, 0x20746d66, 16, 0x00010001, 44100, 88200, 0x00100002, 0x206d6c63, 16};
+		fwrite(hdr, 4, 11, w); fwrite(clm, 1, 16, w);
+		u32 dh[2] = {0x61746164, data}; fwrite(dh, 4, 2, w); fwrite(out, 2, FR * N, w); fclose(w);
+	}
+	free(out);
+}
 static void scanTables(void) {
 	gNFiles = 0;
 	DIR* d = opendir("sdmc:/3ds/syrup");
@@ -1999,13 +2033,12 @@ static void l_talkbox(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA.uni
 	MOD(2, SRC_STICK, DST_FXP, 0.8f); ENV1(0.01f, 0, 0.3f, 0.9f, 0.2f); REVB(0.12f, RV_ROOM); }
 static void l_bigunison(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 7; OA.detune = 26; OA.width = 1; ENV1(0.01f, 0, 0.4f, 0.85f, 0.4f);
 	MFX(FX_HYPER, 0.4f, 0.5f, 0.35f); DLYS(0.2f, S8D, DL_PING); REVB(0.2f, RV_HALL); OUTF(OF_LP, 0.75f, 0.1f, 0, 0); }
-// BUSY BOY: the Korg cumbia lead (M1 / N364 / X5D), as heard in cumbia villera and sonidera: a nasal, buzzy
-// pulse with a vowel "talk" on each attack, legato glide and a vibrato that comes in on held notes.
-static void l_busyboy(SPatch* p) { p->master = 0.6f; OA.table = T_PWM; OA.pos = 0.3f; OA.uni = 2; OA.detune = 5;
-	OB.on = 1; OB.table = T_VOWELS; OB.pos = 0.15f; OB.level = 0.45f; OB.semi = 0; p->voiceMode = 2; p->glide = 0.035f;
-	ENV1(0.004f, 0, 0.35f, 0.85f, 0.12f); ENV2(0.0f, 0, 0.16f, 0.0f, 0.1f); MOD(2, SRC_ENV2, DST_BPOS, 0.55f);
-	LFO(0, LS_SINE, 0, 5.8f); MOD(3, SRC_LFO1, DST_PITCH, 0.009f); MOD2(0, SRC_ENV2, DST_PITCH, -0.006f);
-	OUTF(OF_L12, 0.72f, 0.25f, 0.25f, 0.15f); MFX(FX_CHORUS, 0.35f, 0.35f, 0.3f); DLYS(0.12f, S8D, DL_DIGI); REVB(0.15f, RV_ROOM); }
+// BUSY BOY: the Korg cumbia lead (M1 / N364 / X5D), matched to a recording: its own waveform (the BUSY BOY table, the 3rd
+// harmonic on top), two slightly detuned layers (the original's harmonics drift in phase), and a pitch scoop of about 25
+// cents up into every note over ~60 ms. No glide and no vibrato: the original has neither.
+static void l_busyboy(SPatch* p) { p->master = 0.65f; OA.table = wtFile("BUSY BOY", T_PWM); OA.pos = 5.0f / 7.0f; OA.uni = 2; OA.detune = 4; OA.width = 0.4f;
+	p->voiceMode = 0; p->glide = 0; ENV1(0.004f, 0, 0.3f, 1.0f, 0.08f); ENV2(0.0f, 0, 0.06f, 0.0f, 0.05f); MOD(2, SRC_ENV2, DST_PITCH, -0.021f);
+	p->cutoff = 1.0f; p->res = 0; REVB(0.12f, RV_ROOM); }
 static void l_whistle(SPatch* p) { p->master = 0.6f; OA.table = T_PWM; OA.pos = 0.4f; p->voiceMode = 2; p->glide = 0.07f; LFO(0, LS_SINE, 0, 5.5f); MOD(2, SRC_LFO1, DST_PITCH, 0.012f);
 	MOD(3, SRC_LFO1, DST_APOS, 0.1f); ENV1(0.02f, 0, 0.2f, 0.9f, 0.2f); DLYS(0.2f, S4, DL_TAPE); }
 static void l_scream(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; DRV(8, 0.5f); MOD(2, SRC_STICK, DST_AWARP, 0); p->voiceMode = 2; p->glide = 0.03f;
@@ -5792,6 +5825,7 @@ int main(void) {
 	gNoise = (s16*)linearAlloc(gNoiseLen * sizeof(s16));
 	for (int c = 0; c < NCH; c++) gDspOwner[c] = -1;
 	for (int c = 0; c < NCS; c++) gCsOwner[c] = -1;
+	makeBusyTable();
 	scanTables();
 	gTableCount = T_BUILTIN + gNFiles;
 
