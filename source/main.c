@@ -424,8 +424,8 @@ static const char* LFO_SHAPES[NLFOSH] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "S
 static const char* SYNC_NAMES[NSYNC] = {"OFF", "4 BARS", "2 BARS", "1 BAR", "1/2", "1/4", "1/8", "1/16", "1/8T", "1/16T"};
 static const float SYNC_BEATS[NSYNC] = {0, 16, 8, 4, 2, 1, 0.5f, 0.25f, 1.0f / 3, 1.0f / 6};
 static const char* LFO_MODES[2] = {"FREE", "TRIG"};
-enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_TWIST, SRC_SHAKE, SRC_CAML, SRC_CAMC, SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_RAND, SRC_NOTE, SRC_LFO3, SRC_LFO4, SRC_COUNT };
-static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y", "TILT L/R", "TILT F/B", "BREATH", "TWIST", "SHAKE", "CAM LIGHT", "CAM COLOR", "MACRO 1", "MACRO 2", "MACRO 3", "MACRO 4", "CHAOS X", "CHAOS Y", "RANDOM", "NOTE", "LFO 3", "LFO 4"};
+enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_TWIST, SRC_SHAKE, SRC_CAML, SRC_CAMC, SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_RAND, SRC_NOTE, SRC_LFO3, SRC_LFO4, SRC_SPINX, SRC_SPINY, SRC_MICBRT, SRC_CAMMOVE, SRC_COUNT };
+static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y", "TILT L/R", "TILT F/B", "BREATH", "TWIST", "SHAKE", "CAM LIGHT", "CAM COLOR", "MACRO 1", "MACRO 2", "MACRO 3", "MACRO 4", "CHAOS X", "CHAOS Y", "RANDOM", "NOTE", "LFO 3", "LFO 4", "SPIN F/B", "SPIN L/R", "VOICE BRIGHT", "CAM MOTION"};
 // LFO 3 and 4 are drawn: 64 points you paint with the stylus on the MOD page
 static float gDl[2][64]; static float gDlRate[2] = {1.0f, 0.5f}, gDlPh[2], gDlVal[2]; static int gDlSync[2] = {0, 0};
 static float gChaosX = 0, gChaosY = 0, gChaosRate = 0.3f;   // a Lorenz attractor, slowly wandering, never repeating
@@ -434,6 +434,7 @@ static float gMacro[4] = {0, 0, 0, 0};
 static int gModCurve[NMOD];
 static const char* CURVE_NAMES[4] = {"LINEAR", "EXP", "LOG", "S-CURVE"};
 static float gTiltX, gTiltY, gMicEnv, gTwist, gShake, gCamLight, gCamColor;
+static float gSpinX, gSpinY, gMicBright, gCamMove;   // gyro pitch/roll speed, voice brightness ("ss" vs "oo"), how much the picture changes
 static int gHeadphones = 0;
 enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_COUNT };
 static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF"};   // VOLUME: when routed, the source IS the loudness (breath control)
@@ -926,6 +927,10 @@ static float srcValue(int src, const SVoice* v) {
 	case SRC_NOTE: { float x = v ? (v->note - 60) / 24.0f : 0; return x > 1 ? 1 : x < -1 ? -1 : x; }   // keytrack: C3 = 0
 	case SRC_LFO3: return gDlVal[0];
 	case SRC_LFO4: return gDlVal[1];
+	case SRC_SPINX: return gSpinX;
+	case SRC_SPINY: return gSpinY;
+	case SRC_MICBRT: return gMicBright;
+	case SRC_CAMMOVE: return gCamMove;
 	}
 	return 0;
 }
@@ -1700,7 +1705,10 @@ static void sensorsUpdate(float dt) {
 		u32 end = micGetLastSampleOffset() / 2, N = gMicSize / 2;
 		const s16* m = (const s16*)gMicBuf;
 		float sum = 0;
-		for (int i = 0; i < 512; i++) { float v = m[(end + N - 1 - i) % N] / 32768.0f; sum += v * v; }
+		int zc = 0; s16 prev = m[(end + N - 1) % N];
+		for (int i = 0; i < 512; i++) { s16 sm = m[(end + N - 1 - i) % N]; float v = sm / 32768.0f; sum += v * v; if ((sm ^ prev) < 0 && (sm > 200 || sm < -200)) zc++; prev = sm; }
+		float br = gMicEnv > 0.05f ? ((float)zc / 512 - 0.03f) / 0.3f : 0;   // zero crossings: hiss and "s" are bright, "oo" is dark
+		br = br < 0 ? 0 : br > 1 ? 1 : br; gMicBright += (br - gMicBright) * 0.3f;
 		float rms = sqrtf(sum / 512) - 0.012f;   // small noise gate
 		float lvl = rms / 0.12f; if (lvl < 0) lvl = 0; if (lvl > 1) lvl = 1;
 		gMicEnv += (lvl - gMicEnv) * (lvl > gMicEnv ? 0.6f : 0.12f);
@@ -2306,6 +2314,20 @@ static void m_graintide(SPatch* p) { p->master = 0.65f; OA.table = T_HARMONIX; O
 	lane(p, 0, 11, 2, 0.0f, 1.0f, 3); lane(p, 1, 0, 3, 0.2f, 0.9f, 2); lane(p, 2, 10, 6, 0.15f, 0.5f, 3); ORBIT(0.5f, 0.1f); REVB(0.3f, RV_HALL); }
 
 
+// sensor showcase: BREATH + MIC on (HARDWARE page) for TALK BOX, CAMERA on for HAND WAVE
+static void m_talkbox(SPatch* p) {   // hold a chord and talk: vowels open and close the filter, "s" sounds crack it open
+	p->master = 0.6f; OA.table = T_BASIC; OA.pos = SAW; OB.on = 1; OB.table = T_BASIC; OB.pos = SQR; OB.semi = -12; OB.level = 0.6f;
+	p->cutoff = 0.15f; p->res = 0.55f; ENV1(0.005f, 0, 1.0f, 1.0f, 0.2f);
+	MOD(2, SRC_MIC, DST_CUTOFF, 0.45f); MOD(3, SRC_MICBRT, DST_CUTOFF, 0.35f); MOD2(0, SRC_MICBRT, DST_APOS, 0.3f); REVB(0.15f, RV_ROOM); }
+static void m_gyrovibe(SPatch* p) {   // rock it forward and back for vibrato, roll it to sweep: rotation, not position
+	p->master = 0.6f; OA.table = T_VOWELS; OA.uni = 2; OA.detune = 6; p->voiceMode = 2; p->glide = 0.05f;
+	p->cutoff = 0.5f; p->res = 0.3f; ENV1(0.02f, 0, 0.6f, 0.9f, 0.4f);
+	MOD(2, SRC_SPINX, DST_PITCH, 0.03f); MOD(3, SRC_SPINY, DST_CUTOFF, 0.5f); MOD2(0, SRC_TWIST, DST_APOS, 0.5f); DLYS(0.2f, S8D, DL_TAPE); REVB(0.3f, RV_HALL); }
+static void m_handwave(SPatch* p) {   // wave a hand in front of the camera: movement opens the filter and pushes the table
+	p->master = 0.6f; OA.table = T_HARMONIX; OA.pos = 0.2f; OA.uni = 2; OA.detune = 5;
+	p->cutoff = 0.25f; p->res = 0.4f; ENV1(0.3f, 0, 1.0f, 0.9f, 1.0f);
+	MOD(2, SRC_CAMMOVE, DST_CUTOFF, 0.55f); MOD(3, SRC_CAMMOVE, DST_APOS, 0.5f); MOD2(0, SRC_CAML, DST_AMP, 0.2f); REVB(0.35f, RV_HALL); }
+
 // QUIRKS: one patch per hardware trick, in listening-test order. GLASS PLUCK is the clean reference.
 static void q_glasspluck(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.pos = 0.85f; p->cutoff = 0.35f; p->res = 0.2f; p->keytrack = 0.6f;
 	ENV1(0.001f, 0, 0.35f, 0.0f, 0.3f); ENV2(0.0f, 0, 0.15f, 0.0f, 0.1f); MOD(2, SRC_ENV2, DST_CUTOFF, 0.45f); MOD(3, SRC_VEL, DST_CUTOFF, 0.15f); REVB(0.2f, RV_PLATE); }
@@ -2369,7 +2391,8 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"TWO CHIPS", c_twochips}, {"QUANT GRIT", c_quantgrit}, {"GB ORBIT", c_gborbit}, {"DOUBLE ECHO", c_doubleecho}, {"SUB CHIP", c_subchip},
 	 {"SCREAM LEAD", c_screamlead}, {"RAW SAMPLER", c_rawsampler}, {"HOT ORGAN", c_hotorgan}, {"GLITCH STORM", c_glitchstorm}, {"PITCH CANYON", c_pitchcanyon}},
 	{{"KITCHEN SINK", m_busyboy}, {"TIDAL TABLE", m_tidal}, {"STEP SCULPT", m_stepsculpt}, {"GLASS BREATH", m_breathglass}, {"CHAOS GARDEN", m_chaosgarden},
-	 {"ACID MORPH", m_acidmorph}, {"VOWEL WALK", m_vowelwalk}, {"LIQUID SYNC", m_liquidsync}, {"DRAWN DANCE", m_drawndance}, {"GRAIN TIDE", m_graintide}},
+	 {"ACID MORPH", m_acidmorph}, {"VOWEL WALK", m_vowelwalk}, {"LIQUID SYNC", m_liquidsync}, {"DRAWN DANCE", m_drawndance}, {"GRAIN TIDE", m_graintide},
+	 {"TALK BOX", m_talkbox}, {"GYRO VIBE", m_gyrovibe}, {"HAND WAVE", m_handwave}},
 	{{"GLASS PLUCK", q_glasspluck}, {"SCREAM SOLO", q_screamsolo}, {"ACID SCREAM", q_acidscream}, {"GRIT KEYS", q_gritkeys}, {"CORRUPT PERC", q_corruptperc},
 	 {"SUB SCREAM", q_subscream}, {"DRIVE MONO", q_drivemono}, {"TAPE DUB", q_tapedub}, {"VOWEL PAD", q_vowelpad}},
 };
@@ -3468,7 +3491,8 @@ static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 rout
 // ROUTE view, destination first: pick what should move, then add what moves it. Touch + buttons sources are the core
 // grid; mic, tilt and camera live behind the SENSORS tab as extras.
 static const int RT_CORE[16] = {SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_VEL, SRC_NOTE, SRC_RAND, SRC_STICK, SRC_XY, SRC_CHAOSX, SRC_CHAOSY, SRC_M1, SRC_M2, SRC_M3, SRC_M4};
-static const int RT_SENS[7] = {SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_TWIST, SRC_SHAKE, SRC_CAML, SRC_CAMC};
+#define RT_NSENS 11
+static const int RT_SENS[RT_NSENS] = {SRC_TILTX, SRC_TILTY, SRC_TWIST, SRC_SPINX, SRC_SPINY, SRC_SHAKE, SRC_MIC, SRC_MICBRT, SRC_CAML, SRC_CAMC, SRC_CAMMOVE};
 #define RT_ROWY 60
 #define RT_ROWH 18
 #define RT_GRIDY 154
@@ -3510,7 +3534,7 @@ static void drawRoute(void) {
 		rect(282, y, 34, RT_ROWH - 2, RGB3(TH->tab)); text(295, y + 5, "X", 1, RGB3(TH->tabTxt));
 	}
 	text(8, RT_GRIDY - 12 + 2, gRtSens ? "ADD A SENSOR (EXTRA)" : "ADD A SOURCE", 1, RGB3(TH->dim));
-	int cnt = gRtSens ? 7 : 16;
+	int cnt = gRtSens ? RT_NSENS : 16;
 	for (int i = 0; i < cnt; i++) {
 		int src = gRtSens ? RT_SENS[i] : RT_CORE[i], x = 4 + (i % 4) * 79, y = RT_GRIDY + (i / 4) * 21, on = rtSlot(src, gRtDst) >= 0;
 		const u8* bc = on ? TH->keyOn : TH->tab; rect(x, y, 75, 18, bc[0], bc[1], bc[2]);
@@ -3542,7 +3566,7 @@ static int routeTouch(int x, int y, int press, int release) {
 		gMod[gRtDrag].amt = roundf(a * 50) / 50; return 1;
 	}
 	if (press && y >= RT_GRIDY) {
-		int c = (x - 4) / 79, r = (y - RT_GRIDY) / 21, i = r * 4 + c, cnt = gRtSens ? 7 : 16;
+		int c = (x - 4) / 79, r = (y - RT_GRIDY) / 21, i = r * 4 + c, cnt = gRtSens ? RT_NSENS : 16;
 		if (c < 0 || c > 3 || i >= cnt) return 0;
 		int src = gRtSens ? RT_SENS[i] : RT_CORE[i];
 		if (rtSlot(src, gRtDst) >= 0) { say("ALREADY ROUTED - DRAG ITS BAR, OR X TO REMOVE"); return 0; }
@@ -3707,6 +3731,11 @@ static void motionTick(float dt) {
 	if (tw > 1) tw = 1;
 	if (tw < -1) tw = -1;
 	float k = 1.0f - expf(-dt / 0.06f); gTwist += (tw - gTwist) * k;
+	float sx = g.x / 1800.0f, sy = g.y / 1800.0f;   // the other two gyro axes: how fast you tip it forward/back and roll it
+	if (fabsf(sx) < 0.04f) sx = 0;
+	if (fabsf(sy) < 0.04f) sy = 0;
+	sx = sx > 1 ? 1 : sx < -1 ? -1 : sx; sy = sy > 1 ? 1 : sy < -1 ? -1 : sy;
+	gSpinX += (sx - gSpinX) * k; gSpinY += (sy - gSpinY) * k;
 	static accelVector pa; static int have = 0;
 	accelVector a; hidAccelRead(&a);
 	if (have) {
@@ -4310,6 +4339,12 @@ static void camTick(void) {
 	for (int i = 0; i < 160 * 120; i += 7) { u16 p = gCamImg[i]; float r = (p >> 11) / 31.0f, g = ((p >> 5) & 63) / 63.0f, b = (p & 31) / 31.0f; L += 0.3f * r + 0.59f * g + 0.11f * b; C += r - b; }
 	int cnt = 160 * 120 / 7 + 1;
 	gCamLight += (L / cnt - gCamLight) * 0.4f; gCamColor += (C / cnt - gCamColor) * 0.4f;
+	{   // CAM MOTION: how much the picture changed since the last frame (wave a hand in front of it)
+		static u8 prevY[160 * 120 / 13 + 1]; static int have = 0; int d = 0, j = 0;
+		for (int i = 0; i < 160 * 120; i += 13, j++) { u16 p = gCamImg[i]; int y = ((p >> 11) * 2 + ((p >> 5) & 63) + (p & 31)) ; if (have) d += abs(y - prevY[j]); prevY[j] = (u8)y; }
+		float mv = have ? (float)d / j / 14.0f : 0; mv = mv > 1 ? 1 : mv; have = 1;
+		gCamMove += (mv - gCamMove) * (mv > gCamMove ? 0.6f : 0.15f);
+	}
 	if (gCamWant && gCamFrames > 6) { camToTable(); gCamWant = 0; }   // a few frames in, so exposure has settled
 	if (gCamVid && gCamFrames > 6) vidFrame();
 }

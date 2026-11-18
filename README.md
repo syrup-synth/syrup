@@ -86,7 +86,7 @@ The factory library was rebuilt from scratch: 123 patches in 12 styles, with no 
 | CHIP | GB Wave, NES Pulse, C64 PWM, Arcade Arp, Power Up, Laser, 8-Bit Bass, Bit Organ, Square Choir |
 | SPACE | Orbit Pad, Helicopter, Circle Arp, Around You, 3D Bells, Spiral Pluck, Passing Car, Steer Orbit (these switch OUTPUT to SURROUND when it's on STEREO; headphones work best) |
 | CHIPSET | PSG Stack, Echo Canyon, Crush Bell, 8-Bit Choir, Capture Dub, Two Chips, Quant Grit, GB Orbit, Double Echo, Sub Chip, Scream Lead, Raw Sampler, Hot Organ, Glitch Storm, Pitch Canyon (the 2DS's second sound chip: CHIP SQUARE, CHIP ECHO through its capture units, bit crush, 3D orbit) |
-| MOTION | Busy Boy, Tidal Table, Step Sculpt, Glass Breath, Chaos Garden, Acid Morph, Vowel Walk, Liquid Sync, Drawn Dance, Grain Tide (motion lanes, drawn LFOs, chaos and grains; Busy Boy uses nearly everything at once) |
+| MOTION | Busy Boy, Tidal Table, Step Sculpt, Glass Breath, Chaos Garden, Acid Morph, Vowel Walk, Liquid Sync, Drawn Dance, Grain Tide, Talk Box, Gyro Vibe, Hand Wave (motion lanes, drawn LFOs, chaos and grains; Busy Boy uses nearly everything at once; Talk Box needs the mic on, Hand Wave the camera) |
 | QUIRKS | Glass Pluck, Scream Solo, Acid Scream, Grit Keys, Corrupt Perc, Sub Scream, Drive Mono, Tape Dub, Vowel Pad (one patch per hardware trick, in listening-test order; Glass Pluck is the clean reference) |
 | USER | 8 save slots |
 
@@ -288,3 +288,7 @@ On the MASTER page (saved with patches):
 - **FX ON CORE 2:** the master effects chain runs on the second CPU core, one DSP frame (~5 ms) behind. If core 2 ever misses a frame it falls back to core 1 (HARDWARE page shows which).
 
 Elsewhere: **NOISE TYPE CORRUPT** (junk fed to the DSP's ADPCM decoder), **ECHO PITCH** on the DRUMS page (the chip echo replayed faster or slower than it records, so repeats climb or fall), and **CHIP OCTAVE** up to +5 (the squares run past the output rate and alias back as whines).
+
+## New sensor sources
+
+SPIN F/B and SPIN L/R (gyro: how fast you tip or roll it, not where it sits), VOICE BRIGHT (talk into the mic: "ss" is bright, "oo" is dark), CAM MOTION (how much the camera picture changes). They're in the mod matrix and under SENSORS in ROUTE.
