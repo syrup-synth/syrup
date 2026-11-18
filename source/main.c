@@ -635,8 +635,12 @@ static void uniParams(const Osc* o, int u, float* det, float* pan, float* gain) 
 	else { *det = (u == 1 ? -1.0f : 1.0f) * o->detune; *pan = 0.5f + (u == 1 ? -0.5f : 0.5f) * o->width; *gain = 0.35f + 0.5f * o->blend; }
 }
 
+static u8 gChClean[24];   // filter state already zeroed while the channel sat idle
 static void stopCh(int bk, int ch) {
-	if (bk == BK_DSP) { ndspChnWaveBufClear(ch); gDspOwner[ch] = -1; }
+	if (bk == BK_DSP) {
+		ndspChnWaveBufClear(ch); gDspOwner[ch] = -1;
+		if (gQScream > 0.001f && ch < 24) { ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, 0, 0, 0, 0, 0); gChClean[ch] = 1; }   // flush while silent: no gap on the next note
+	}
 	else { if (gCsndOK) CSND_SetPlayState(ch, 0); gCsOwner[ch] = -1; }
 }
 
@@ -688,12 +692,13 @@ static int gFilt2 = 0, gLowCut = 2;
 static const char* FILT2_NAMES[3] = {"OFF", "+6DB SLOPE", "LOW CUT"};
 static const char* LOWCUT_NAMES[6] = {"30HZ", "60HZ", "120HZ", "250HZ", "500HZ", "1KHZ"};
 static const float LOWCUT_HZ[6] = {30, 60, 120, 250, 500, 1000};
+static int masterActive(void);
 static u8 gScreamFlush[24];   // CONTAINMENT: one tick of a zero filter clears a voice's stale self-oscillation before its next note
 static void filterSet(int ch, float hz, float res) {
 	if (hz < 40) hz = 40;
 	if (hz > 15000) hz = 15000;
 	float q = 0.707f + res * 9.0f;
-	if (gQScream > 0.001f && gFiltType == 0 && ch != NOISE_CH) {
+	if (gQScream > 0.001f && gFiltType == 0 && ch != NOISE_CH && masterActive()) {   // only with the containment in the path
 		// FILTER SCREAM: poles at radius r around the cutoff. Past r = 1 the DSP's fixed-point filter rings by itself and
 		// saturates: a screaming self-oscillation the stock filter types never allow.
 		if (ch < 24 && gScreamFlush[ch]) {   // b = a = 0: output 0 and both state words 0 after one sample
@@ -753,7 +758,8 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 		ndspChnSetMix(ch, mix);
 		ndspChnSetRate(ch, f * N);
 		ndspChnSetInterp(ch, gQGrit == 2 ? NDSP_INTERP_NONE : gQGrit == 1 ? NDSP_INTERP_LINEAR : NDSP_INTERP_POLYPHASE);
-		if (gQScream > 0.001f && ch < 24) gScreamFlush[ch] = 1;
+		if (gQScream > 0.001f && ch < 24 && !gChClean[ch]) gScreamFlush[ch] = 1;   // stolen while ringing: flush now (one 5 ms gap)
+		if (ch < 24) gChClean[ch] = 0;
 		filterSet(ch, 2000, 0);
 		memset(&gWB[ch], 0, sizeof(ndspWaveBuf));
 		gWB[ch].data_vaddr = m->lev[v->lev[i]];
@@ -2947,7 +2953,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM MACHINE ON / OFF"}, {"KIT", "DRUM SOUNDS"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS PUSHED PAST STABLE: IT RINGS BY ITSELF"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
