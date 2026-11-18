@@ -1903,6 +1903,13 @@ static void l_talkbox(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA.uni
 	MOD(2, SRC_STICK, DST_FXP, 0.8f); ENV1(0.01f, 0, 0.3f, 0.9f, 0.2f); REVB(0.12f, RV_ROOM); }
 static void l_bigunison(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 7; OA.detune = 26; OA.width = 1; ENV1(0.01f, 0, 0.4f, 0.85f, 0.4f);
 	MFX(FX_HYPER, 0.4f, 0.5f, 0.35f); DLYS(0.2f, S8D, DL_PING); REVB(0.2f, RV_HALL); OUTF(OF_LP, 0.75f, 0.1f, 0, 0); }
+// BUSY BOY: the Korg cumbia lead (M1 / N364 / X5D), as heard in cumbia villera and sonidera: a nasal, buzzy
+// pulse with a vowel "talk" on each attack, legato glide and a vibrato that comes in on held notes.
+static void l_busyboy(SPatch* p) { p->master = 0.6f; OA.table = T_PWM; OA.pos = 0.3f; OA.uni = 2; OA.detune = 5;
+	OB.on = 1; OB.table = T_VOWELS; OB.pos = 0.15f; OB.level = 0.45f; OB.semi = 0; p->voiceMode = 2; p->glide = 0.035f;
+	ENV1(0.004f, 0, 0.35f, 0.85f, 0.12f); ENV2(0.0f, 0, 0.16f, 0.0f, 0.1f); MOD(2, SRC_ENV2, DST_BPOS, 0.55f);
+	LFO(0, LS_SINE, 0, 5.8f); MOD(3, SRC_LFO1, DST_PITCH, 0.009f); MOD2(0, SRC_ENV2, DST_PITCH, -0.006f);
+	OUTF(OF_L12, 0.72f, 0.25f, 0.25f, 0.15f); MFX(FX_CHORUS, 0.35f, 0.35f, 0.3f); DLYS(0.12f, S8D, DL_DIGI); REVB(0.15f, RV_ROOM); }
 static void l_whistle(SPatch* p) { p->master = 0.6f; OA.table = T_PWM; OA.pos = 0.4f; p->voiceMode = 2; p->glide = 0.07f; LFO(0, LS_SINE, 0, 5.5f); MOD(2, SRC_LFO1, DST_PITCH, 0.012f);
 	MOD(3, SRC_LFO1, DST_APOS, 0.1f); ENV1(0.02f, 0, 0.2f, 0.9f, 0.2f); DLYS(0.2f, S4, DL_TAPE); }
 static void l_scream(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; DRV(8, 0.5f); MOD(2, SRC_STICK, DST_AWARP, 0); p->voiceMode = 2; p->glide = 0.03f;
@@ -2131,7 +2138,7 @@ static void m_graintide(SPatch* p) { p->master = 0.65f; OA.table = T_HARMONIX; O
 
 
 typedef struct { const char* name; void (*fn)(SPatch*); } PresetDef;
-#define MAXPRE 14
+#define MAXPRE 15
 #define NSTYLES 13   // last style = USER
 static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "CHIPSET", "MOTION", "USER"};
 #define STYLE_SPACE 9
@@ -2140,7 +2147,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}},
 	{{"GULF SYNC", l_gulfsync}, {"TALK BOX", l_talkbox}, {"WIDE UNISON", l_bigunison}, {"WHISTLE", l_whistle}, {"FOLD SCREAM", l_scream}, {"LADDER TAPE", l_moogtape},
 	 {"CHIP HERO", l_chiphero}, {"G-FUNK SINE", l_glidesine}, {"RINGER", l_ringer}, {"ACID SCREAM", l_acidscream}, {"PAD BENDER", l_bender},
-	 {"FLUTE", l_flute}, {"STICK THEREMIN", l_theremin}, {"XY SCULPT", l_xysculpt}},
+	 {"FLUTE", l_flute}, {"STICK THEREMIN", l_theremin}, {"XY SCULPT", l_xysculpt}, {"BUSY BOY", l_busyboy}},
 	{{"WARM FELT", p_felt}, {"GLASS HOUR", p_glass}, {"VOWEL DUSK", p_vowel}, {"COMB WEATHER", p_combweather}, {"CLOUD BANK", p_cloudbank}, {"STRINGS 77", p_strings77},
 	 {"DRAWN SWELL", p_drawnswell}, {"MOTION HAZE", p_haze}, {"SWELL BACKWARD", p_reverse}, {"DEEP SONAR", p_sonar}, {"GRAIN CHOIR", p_hallchoir}},
 	{{"EP SATURDAY", k_epsat}, {"DRAWBAR", k_drawbar}, {"LOFI UPRIGHT", k_lofiup}, {"CLAV FUNK", k_clav}, {"WURLI BARK", k_wurli}, {"VIBES", k_vibes},
@@ -2159,7 +2166,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"PASSING CAR", s_passing}, {"STEER ORBIT", s_tilt}},
 	{{"PSG STACK", c_psgstack}, {"ECHO CANYON", c_canyon}, {"CRUSH BELL", c_crushbell}, {"8-BIT CHOIR", c_choir8}, {"CAPTURE DUB", c_capturedub},
 	 {"TWO CHIPS", c_twochips}, {"QUANT GRIT", c_quantgrit}, {"GB ORBIT", c_gborbit}, {"DOUBLE ECHO", c_doubleecho}, {"SUB CHIP", c_subchip}},
-	{{"BUSY BOY", m_busyboy}, {"TIDAL TABLE", m_tidal}, {"STEP SCULPT", m_stepsculpt}, {"GLASS BREATH", m_breathglass}, {"CHAOS GARDEN", m_chaosgarden},
+	{{"KITCHEN SINK", m_busyboy}, {"TIDAL TABLE", m_tidal}, {"STEP SCULPT", m_stepsculpt}, {"GLASS BREATH", m_breathglass}, {"CHAOS GARDEN", m_chaosgarden},
 	 {"ACID MORPH", m_acidmorph}, {"VOWEL WALK", m_vowelwalk}, {"LIQUID SYNC", m_liquidsync}, {"DRAWN DANCE", m_drawndance}, {"GRAIN TIDE", m_graintide}},
 };
 #define NUSER 8
@@ -2265,18 +2272,18 @@ static void patchApply(const SPatch* p) {
 
 
 static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every factory patch to a similar loudness
-	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.82f, 1.42f, 1.42f, 1.32f, 1.28f, 0.68f, 1.00f, 1.00f},
-	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f},
-	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.00f, 1.00f, 1.00f},
-	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{2.33f, 1.34f, 4.24f, 2.18f, 2.20f, 1.12f, 2.30f, 0.67f, 2.08f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{1.32f, 1.05f, 4.46f, 1.10f, 3.54f, 1.82f, 2.40f, 6.00f, 1.34f, 2.41f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{1.30f, 0.81f, 1.34f, 2.99f, 0.90f, 1.37f, 3.46f, 1.10f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 1.00f, 1.00f},   // CHIPSET
-	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 1.00f},   // MOTION
+	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.82f, 1.42f, 1.42f, 1.32f, 1.28f, 0.68f, 1.00f, 1.00f, 1.00f},
+	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f, 1.00f},
+	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{2.33f, 1.34f, 4.24f, 2.18f, 2.20f, 1.12f, 2.30f, 0.67f, 2.08f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{1.32f, 1.05f, 4.46f, 1.10f, 3.54f, 1.82f, 2.40f, 6.00f, 1.34f, 2.41f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{1.30f, 0.81f, 1.34f, 2.99f, 0.90f, 1.37f, 3.46f, 1.10f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // CHIPSET
+	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // MOTION
 };
 static int presetCount(int style) {
 	if (style == NSTYLES - 1) return NUSER;
