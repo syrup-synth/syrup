@@ -123,6 +123,8 @@ static void crashCheck(void) {
 }        // set while the audio thread runs the arp/seq clock (it holds gMipsLock)
 static LightLock gMipsLock;   // guards the shared FFT buffers (worker on core 1 vs main core)
 static Thread gWorker = NULL;
+static Result gCore2Rc = 0, gCore2ThRc = 0; static u32 gCore2Lim = 0;   // why core 2 is off (HARDWARE page)
+static void probeMain(void* a) { (void)a; svcExitThread(); }
 static volatile u64 gCore1Busy = 0;   // system ticks core 1 spent rebuilding (HARDWARE page meter)
 
 // a band-limited single-cycle source: spectrum + 7 mip levels in linear memory
@@ -3063,7 +3065,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			static u64 lb = 0, lt = 0; static int pct = 0; u64 nt = svcGetSystemTick();
 			if (nt - lt > SYSCLOCK_ARM11) { u64 b = gCore1Busy; pct = lt ? (int)((b - lb) * 100 / (nt - lt)) : 0; lb = b; lt = nt; }
 			if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, !gFxCore2 ? "CORE 1" : (!gFxThread || gFxC2Fail) ? "FELL BACK" : "ON CORE 2");
-			else snprintf(s, sizeof(s), "CORE 2 OFF: REBUILDS ON CORE 1");
+			else snprintf(s, sizeof(s), "CORE 2 OFF %s %08lX %08lX L%lu", envIsHomebrew() ? "3DSX" : "CIA", (unsigned long)gCore2Rc, (unsigned long)gCore2ThRc, (unsigned long)gCore2Lim);
 			if (gWorker) text(6, 210, s, 1, DIM); else text(6, 210, s, 1, WARN);
 		}
 	}
@@ -5840,10 +5842,17 @@ int main(void) {
 	seqDefault();
 	presetLoad(gStyle, gPreset);   // start on PAD / SYRUP PAD
 	LightEvent_Init(&gJobEv, RESET_ONESHOT);
-	APT_SetAppCpuTimeLimit(80);
+	gCore2Rc = APT_SetAppCpuTimeLimit(80);
+	if (R_FAILED(gCore2Rc)) gCore2Rc = APT_SetAppCpuTimeLimit(30);   // some systems refuse a high limit
+	APT_GetAppCpuTimeLimit(&gCore2Lim);
 	{
 		s32 prio = 0x30; svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
 		gWorker = threadCreate(workerMain, NULL, 64 * 1024, prio - 1 < 0x18 ? 0x18 : prio - 1, 1, false);
+		if (!gWorker) {   // try again with a smaller time slice, and find out why if it still fails
+			APT_SetAppCpuTimeLimit(30); APT_GetAppCpuTimeLimit(&gCore2Lim);
+			gWorker = threadCreate(workerMain, NULL, 64 * 1024, prio - 1 < 0x18 ? 0x18 : prio - 1, 1, false);
+		}
+		if (!gWorker) { Handle h; static u8 probeStack[4096] __attribute__((aligned(8))); gCore2ThRc = svcCreateThread(&h, probeMain, 0, (u32*)(probeStack + sizeof(probeStack)), 0x30, 1); if (R_SUCCEEDED(gCore2ThRc)) { svcWaitSynchronization(h, 1000000000LL); svcCloseHandle(h); } }
 		if (gWorker) fxCore2Start();   // the master effects on core 2 too
 	}
 	buildSub(); buildNoise();
