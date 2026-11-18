@@ -71,7 +71,7 @@ On the OSC and sound pages the left panel of the top screen is drawn by the 3DS'
 
 Page 1 is a preset browser organised by style. Use the D-pad to pick a style and a patch; the patch loads immediately, so you can play keys to audition it.
 
-The factory library was rebuilt from scratch: 103 patches in 10 styles, with no duplicates, and levels matched so switching patches doesn't jump in volume. Every patch plays from the keys, buttons and circle pad alone. Mic, tilt and camera are optional extras, never required.
+The factory library was rebuilt from scratch: 123 patches in 12 styles, with no duplicates, and levels matched so switching patches doesn't jump in volume. Every patch plays from the keys, buttons and circle pad alone. Mic, tilt and camera are optional extras, never required.
 
 | Style | Patches |
 |---|---|
@@ -85,6 +85,8 @@ The factory library was rebuilt from scratch: 103 patches in 10 styles, with no 
 | TEXTURE | Tide Pool, Frozen Table, Net Static, Tape Room, Brown Sea, Geiger, Drone 60, Shimmer Cloud, Sonar Ping, Storm Front |
 | CHIP | GB Wave, NES Pulse, C64 PWM, Arcade Arp, Power Up, Laser, 8-Bit Bass, Bit Organ, Square Choir |
 | SPACE | Orbit Pad, Helicopter, Circle Arp, Around You, 3D Bells, Spiral Pluck, Passing Car, Steer Orbit (these switch OUTPUT to SURROUND when it's on STEREO; headphones work best) |
+| CHIPSET | PSG Stack, Echo Canyon, Crush Bell, 8-Bit Choir, Capture Dub, Two Chips, Quant Grit, GB Orbit, Double Echo, Sub Chip (the 2DS's second sound chip: CHIP SQUARE, CHIP ECHO through its capture units, bit crush, 3D orbit) |
+| MOTION | Busy Boy, Tidal Table, Step Sculpt, Glass Breath, Chaos Garden, Acid Morph, Vowel Walk, Liquid Sync, Drawn Dance, Grain Tide (motion lanes, drawn LFOs, chaos and grains; Busy Boy uses nearly everything at once) |
 | USER | 8 save slots |
 
 To save, pick a SAVE SLOT and press right on SAVE NOW. User patches are stored in `sdmc:/3ds/syrup/user_presets.bin`. INIT PATCH resets to a single saw.

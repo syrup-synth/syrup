@@ -2075,11 +2075,65 @@ static void s_passing(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos 
 	OUTF(OF_L12, 0.5f, 0.2f, 0, 0); ENV1(0.3f, 0, 1.0f, 1.0f, 1.0f); ORBIT(1.0f, 0.2f); REVB(0.2f, RV_HALL); }
 static void s_tilt(SPatch* p) { p->master = 0.65f; OA.table = T_DIGITAL; OA.uni = 2; OA.detune = 10; MOD(2, SRC_XY, DST_CUTOFF, 0.5f); MOD(3, SRC_STICK, DST_PAN, 0.6f); ENV1(0.2f, 0, 1.0f, 0.9f, 1.2f); ORBIT(0.8f, 0.3f); REVB(0.3f, RV_HALL); }
 
+// ---- CHIPSET: the 2DS's own sound hardware doing the work. CHIP SQUARE is the second sound chip's PSG square
+// channels, CHIP ECHO loops that chip's capture units back into it, LO-FI is the bit / rate crush, ORBIT the 3D pan.
+static void c_psgstack(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SAW; OA.level = 0.35f; CHIP(0.8f, 1, 0); p->voiceMode = 2; p->glide = 0.04f;
+	ENV1(0.002f, 0, 0.3f, 0.8f, 0.12f); OUTF(OF_L12, 0.55f, 0.35f, 0.3f, 0); p->csEcho = 0.3f; p->csEchoFb = 0.4f; p->csEchoT = 1; }
+static void c_canyon(SPatch* p) { p->master = 0.55f; OA.table = T_PWM; OA.pos = 0.5f; OA.level = 0.3f; CHIP(0.7f, 3, 0); ENV1(0.003f, 0, 0.5f, 0.4f, 0.4f);
+	p->csEcho = 0.65f; p->csEchoFb = 0.75f; p->csEchoT = 2; REVB(0.25f, RV_HALL); }
+static void c_crushbell(SPatch* p) { p->master = 0.55f; OA.table = T_HARMONIX; OA.pos = 0.7f; CHIP(0.35f, 0, 1); ENV1(0.001f, 0, 0.9f, 0.0f, 0.9f); p->lofiBits = 3; p->lofiRate = 0.45f;
+	p->csEcho = 0.4f; p->csEchoFb = 0.55f; p->csEchoT = 3; REVB(0.2f, RV_PLATE); }
+static void c_choir8(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA.uni = 2; OA.detune = 10; OA.level = 0.5f; CHIP(0.55f, 2, 0); ENV1(0.25f, 0, 1.0f, 0.9f, 0.8f);
+	LFO(0, LS_TRI, 0, 0.15f); MOD(2, SRC_LFO1, DST_APOS, 0.5f); ORBIT(0.9f, 0.12f); p->lofiBits = 5; REVB(0.35f, RV_HALL); }
+static void c_capturedub(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = TRI; OA.level = 0.4f; CHIP(0.6f, 3, -1); ENV1(0.002f, 0, 0.25f, 0.0f, 0.2f);
+	p->csEcho = 0.75f; p->csEchoFb = 0.8f; p->csEchoT = 1; DLYS(0.3f, S4D, DL_DUB); OUTF(OF_L24, 0.5f, 0.3f, 0.2f, 0.3f); }
+static void c_twochips(SPatch* p) { p->master = 0.55f; OA.table = T_SYNC; OA.pos = 0.3f; OA.level = 0.45f; CHIP(0.6f, 1, -1); ARP(1, 3, 2, 0.55f); ENV1(0.001f, 0, 0.2f, 0.3f, 0.1f);
+	LFO(0, LS_SINE, 0, 0.2f); MOD(2, SRC_LFO1, DST_APOS, 0.5f); p->csEcho = 0.35f; p->csEchoFb = 0.5f; p->csEchoT = 2; }
+static void c_quantgrit(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.warp = W_QUANT; OA.warpAmt = 0.6f; CHIP(0.4f, 4, 0); p->lofiBits = 2; p->lofiRate = 0.25f;
+	LFO(0, LS_SH, 0, 4.0f); MOD(2, SRC_LFO1, DST_AWARP, 0.4f); ENV1(0.002f, 0, 0.35f, 0.5f, 0.15f); OUTF(OF_DIRTY, 0.6f, 0.3f, 0.5f, 0); }
+static void c_gborbit(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = TRI; OA.warp = W_QUANT; OA.warpAmt = 0.75f; CHIP(0.5f, 0, 1); ARP(2, 3, 2, 0.6f);
+	ENV1(0.001f, 0, 0.25f, 0.4f, 0.1f); ORBIT(1.0f, 0.5f); p->csEcho = 0.3f; p->csEchoFb = 0.45f; p->csEchoT = 1; p->lofiBits = 4; }
+static void c_doubleecho(SPatch* p) { p->master = 0.55f; OA.table = T_DIGITAL; OA.pos = 0.4f; CHIP(0.45f, 2, 0); ENV1(0.002f, 0, 0.4f, 0.2f, 0.3f);
+	p->csEcho = 0.5f; p->csEchoFb = 0.6f; p->csEchoT = 3; DLYS(0.3f, S8D, DL_PING); REVB(0.2f, RV_ROOM); }
+static void c_subchip(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SAW; OA.oct = -1; OA.level = 0.5f; CHIP(0.8f, 3, -2); p->voiceMode = 1; ENV1(0.002f, 0, 0.4f, 0.7f, 0.1f);
+	OUTF(OF_ACID, 0.4f, 0.55f, 0.4f, 0.5f); ENV2(0.0f, 0, 0.25f, 0.0f, 0.1f); }
+
+// ---- MOTION: patches that move by themselves, to show the engine off: MOTION lanes (bar-long automation),
+// drawn LFOs, chaos, the grain engine, 3D orbit, and the second sound chip, all at once in BUSY BOY.
+static void m_busyboy(SPatch* p) { static const s8 M[8] = {0, 12, 7, 3, 10, 7, 15, 5};
+	p->master = 0.5f; OA.table = T_VOWELS; OA.uni = 2; OA.detune = 9; OB.on = 1; OB.table = T_SYNC; OB.oct = 1; OB.level = 0.3f; OB.warp = W_SYNC;
+	ARP(3, 3, 2, 0.5f); ENV1(0.001f, 0, 0.22f, 0.35f, 0.12f); ENV2(0.0f, 0, 0.18f, 0.0f, 0.1f);
+	lane(p, 0, 0, 2, 0.05f, 0.95f, 2); lane(p, 1, 4, 4, 0.35f, 0.9f, 1); lane(p, 2, 7, 3, 0.0f, 0.8f, 2); lane(p, 3, 11, 5, 0.2f, 0.8f, 3);
+	dshape(p, 0, 2, M); p->dlSync[0] = LY_4; MOD(2, SRC_LFO3, DST_BLEV, 0.3f); dshape(p, 1, 3, NULL); p->dlSync[1] = LY_HALF; MOD(3, SRC_LFO4, DST_PAN, 0.6f);
+	MOD2(0, SRC_CHAOSX, DST_FXP, 0.4f); MOD2(1, SRC_ENV2, DST_OFCUT, 0.3f);
+	OUTF(OF_L12, 0.6f, 0.35f, 0.35f, 0); CHIP(0.3f, 1, 1); p->csEcho = 0.3f; p->csEchoFb = 0.5f; p->csEchoT = 1;
+	GRN(0.25f, 0.5f, 0.4f, 12, 0.35f); ORBIT(0.6f, 0.4f); MFX(FX_PHASER, 0.3f, 0.6f, 0.35f); DLYS(0.22f, S8D, DL_PING); REVB(0.2f, RV_PLATE); p->ott = 0.35f; }
+static void m_tidal(SPatch* p) { p->master = 0.65f; OA.table = T_HARMONIX; OA.uni = 3; OA.detune = 12; OB.on = 1; OB.table = T_VOWELS; OB.level = 0.4f; ENV1(0.4f, 0, 1.0f, 0.9f, 1.4f);
+	lane(p, 0, 0, 2, 0.0f, 1.0f, 2); lane(p, 1, 1, 3, 1.0f, 0.0f, 3); lane(p, 2, 4, 5, 0.45f, 0.85f, 2); OUTF(OF_CREAMY, 0.7f, 0.2f, 0, 0); MFX(FX_DIM, 0.3f, 0.6f, 0.5f); REVB(0.35f, RV_HALL); }
+static void m_stepsculpt(SPatch* p) { p->master = 0.6f; OA.table = T_GROWL; OA.pos = 0.3f; OA.warp = W_BENDPM; ENV1(0.002f, 0, 0.4f, 0.7f, 0.2f); p->voiceMode = 2; p->glide = 0.05f;
+	lane(p, 0, 2, 4, 0.25f, 0.9f, 0); lane(p, 1, 6, 4, 0.0f, 0.9f, 1); lane(p, 2, 0, 3, 0.1f, 0.8f, 1); OUTF(OF_L24, 0.6f, 0.45f, 0.4f, 0); DLYS(0.2f, S8, DL_DIGI); }
+static void m_breathglass(SPatch* p) { p->master = 0.65f; OA.table = T_DIGITAL; OA.pos = 0.6f; OA.uni = 3; OA.detune = 8; ENV1(0.6f, 0, 1.0f, 0.9f, 2.0f);
+	GRN(0.7f, 0.5f, 0.5f, 12, 0.5f); lane(p, 0, 10, 6, 0.1f, 0.7f, 2); lane(p, 1, 11, 2, 0.1f, 0.9f, 3); lane(p, 2, 0, 3, 0.3f, 0.9f, 2); REVB(0.3f, RV_SWELL); }
+static void m_chaosgarden(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA.uni = 2; OA.detune = 10; OB.on = 1; OB.table = T_HARMONIX; OB.level = 0.35f; ENV1(0.15f, 0, 0.8f, 0.6f, 0.8f);
+	MOD(2, SRC_CHAOSX, DST_APOS, 0.6f); MOD(3, SRC_CHAOSY, DST_PAN, 0.7f); MOD2(0, SRC_RAND, DST_BPOS, 0.5f); MOD2(1, SRC_CHAOSY, DST_OFCUT, 0.25f);
+	OUTF(OF_LP, 0.6f, 0.3f, 0.1f, 0); DLYS(0.25f, S8D, DL_TAPE); REVB(0.3f, RV_HALL); }
+static void m_acidmorph(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SAW; OA.oct = -1; ARP(1, 3, 1, 0.45f); p->voiceMode = 1; ENV1(0.001f, 0, 0.2f, 0.2f, 0.08f); ENV2(0.0f, 0, 0.2f, 0.0f, 0.1f);
+	lane(p, 0, 4, 0, 0.2f, 0.85f, 3); lane(p, 1, 5, 3, 0.3f, 0.8f, 1); OUTF(OF_ACID, 0.4f, 0.6f, 0.5f, 0.45f); DRV(3, 0.3f); DLYS(0.2f, S8D, DL_DUB); }
+static void m_vowelwalk(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA.uni = 2; OA.detune = 6; ENV1(0.05f, 0, 0.6f, 0.8f, 0.4f); p->voiceMode = 2; p->glide = 0.08f;
+	lane(p, 0, 0, 4, 0.0f, 1.0f, 1); lane(p, 1, 3, 2, 0.2f, 0.6f, 2); MFX(FX_FORMANT, 0.4f, 0.5f, 0.4f); DLYS(0.2f, S8, DL_TAPE); REVB(0.2f, RV_ROOM); }
+static void m_liquidsync(SPatch* p) { p->master = 0.55f; OA.table = T_SYNC; OA.warp = W_SYNC; OA.uni = 2; OA.detune = 7; ENV1(0.01f, 0, 0.5f, 0.8f, 0.4f);
+	lane(p, 0, 6, 2, 0.0f, 1.0f, 1); lane(p, 1, 0, 5, 0.2f, 0.8f, 2); lane(p, 2, 4, 3, 0.4f, 0.9f, 2); OUTF(OF_L12, 0.6f, 0.3f, 0.3f, 0); MFX(FX_CHORUS, 0.3f, 0.5f, 0.3f); DLYS(0.2f, S8D, DL_PING); }
+static void m_drawndance(SPatch* p) { static const s8 M[8] = {0, 7, 12, 7, 3, 7, 10, 15}; p->master = 0.55f; OA.table = T_PWM; OA.pos = 0.4f; ENV1(0.002f, 0, 0.3f, 0.8f, 0.15f);
+	dshape(p, 0, 2, M); p->dlSync[0] = LY_HALF; MOD(2, SRC_LFO3, DST_PITCH, 1.0f); dshape(p, 1, 3, NULL); p->dlSync[1] = LY_HALF + 1; MOD(3, SRC_LFO4, DST_AMP, 0.5f);
+	lane(p, 0, 0, 2, 0.1f, 0.9f, 2); OUTF(OF_L24, 0.65f, 0.3f, 0.3f, 0); DLYS(0.25f, S8D, DL_PING); REVB(0.2f, RV_PLATE); }
+static void m_graintide(SPatch* p) { p->master = 0.65f; OA.table = T_HARMONIX; OA.level = 0.25f; GRN(0.45f, 0.5f, 0.35f, 0, 0.9f); ENV1(0.3f, 0, 1.0f, 0.9f, 1.5f);
+	lane(p, 0, 11, 2, 0.0f, 1.0f, 3); lane(p, 1, 0, 3, 0.2f, 0.9f, 2); lane(p, 2, 10, 6, 0.15f, 0.5f, 3); ORBIT(0.5f, 0.1f); REVB(0.3f, RV_HALL); }
+
 
 typedef struct { const char* name; void (*fn)(SPatch*); } PresetDef;
 #define MAXPRE 14
-#define NSTYLES 11   // last style = USER
-static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "USER"};
+#define NSTYLES 13   // last style = USER
+static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "CHIPSET", "MOTION", "USER"};
 #define STYLE_SPACE 9
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
@@ -2103,6 +2157,10 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"8-BIT BASS", h_bass8}, {"BIT ORGAN", h_bitorgan}, {"SQUARE CHOIR", h_squarechoir}},
 	{{"ORBIT PAD", s_orbitpad}, {"HELICOPTER", s_heli}, {"CIRCLE ARP", s_circlearp}, {"AROUND YOU", s_aroundyou}, {"3D BELLS", s_bells}, {"SPIRAL PLUCK", s_spiral},
 	 {"PASSING CAR", s_passing}, {"STEER ORBIT", s_tilt}},
+	{{"PSG STACK", c_psgstack}, {"ECHO CANYON", c_canyon}, {"CRUSH BELL", c_crushbell}, {"8-BIT CHOIR", c_choir8}, {"CAPTURE DUB", c_capturedub},
+	 {"TWO CHIPS", c_twochips}, {"QUANT GRIT", c_quantgrit}, {"GB ORBIT", c_gborbit}, {"DOUBLE ECHO", c_doubleecho}, {"SUB CHIP", c_subchip}},
+	{{"BUSY BOY", m_busyboy}, {"TIDAL TABLE", m_tidal}, {"STEP SCULPT", m_stepsculpt}, {"GLASS BREATH", m_breathglass}, {"CHAOS GARDEN", m_chaosgarden},
+	 {"ACID MORPH", m_acidmorph}, {"VOWEL WALK", m_vowelwalk}, {"LIQUID SYNC", m_liquidsync}, {"DRAWN DANCE", m_drawndance}, {"GRAIN TIDE", m_graintide}},
 };
 #define NUSER 8
 static SPatch gUser[NUSER];
@@ -2217,6 +2275,8 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{1.30f, 0.81f, 1.34f, 2.99f, 0.90f, 1.37f, 3.46f, 1.10f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 1.00f, 1.00f},   // CHIPSET
+	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 1.00f},   // MOTION
 };
 static int presetCount(int style) {
 	if (style == NSTYLES - 1) return NUSER;
