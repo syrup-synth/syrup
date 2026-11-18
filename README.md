@@ -85,7 +85,7 @@ The factory library was rebuilt from scratch: 123 patches in 12 styles, with no 
 | TEXTURE | Tide Pool, Frozen Table, Net Static, Tape Room, Brown Sea, Geiger, Drone 60, Shimmer Cloud, Sonar Ping, Storm Front |
 | CHIP | GB Wave, NES Pulse, C64 PWM, Arcade Arp, Power Up, Laser, 8-Bit Bass, Bit Organ, Square Choir |
 | SPACE | Orbit Pad, Helicopter, Circle Arp, Around You, 3D Bells, Spiral Pluck, Passing Car, Steer Orbit (these switch OUTPUT to SURROUND when it's on STEREO; headphones work best) |
-| CHIPSET | PSG Stack, Echo Canyon, Crush Bell, 8-Bit Choir, Capture Dub, Two Chips, Quant Grit, GB Orbit, Double Echo, Sub Chip (the 2DS's second sound chip: CHIP SQUARE, CHIP ECHO through its capture units, bit crush, 3D orbit) |
+| CHIPSET | PSG Stack, Echo Canyon, Crush Bell, 8-Bit Choir, Capture Dub, Two Chips, Quant Grit, GB Orbit, Double Echo, Sub Chip, Scream Lead, Raw Sampler, Hot Organ, Glitch Storm, Pitch Canyon (the 2DS's second sound chip: CHIP SQUARE, CHIP ECHO through its capture units, bit crush, 3D orbit) |
 | MOTION | Busy Boy, Tidal Table, Step Sculpt, Glass Breath, Chaos Garden, Acid Morph, Vowel Walk, Liquid Sync, Drawn Dance, Grain Tide (motion lanes, drawn LFOs, chaos and grains; Busy Boy uses nearly everything at once) |
 | USER | 8 save slots |
 
@@ -277,3 +277,13 @@ Four lanes of movement that loop over 1, 2, 4 or 8 bars in time with BPM (tap LO
 - **Wi-Fi setup on the FM-1:** SEL lists networks, SAVE joins; a new network asks for its password on the PASSWORD page (SELECT picks characters, SAVE adds, FX deletes, PLAY joins).
 - **Timing buffer:** every message is stamped on the FM-1 when it arrives, and Syrup plays it at that time plus **NET BUFFER** (HARDWARE page, default 20 ms), from the audio clock rather than the screen loop. The Wi-Fi's wobble becomes one steady delay; if your app can send MIDI early to a port, set it that much early for SYRUP LINK. Raise NET BUFFER if notes still wobble, lower it for less delay.
 - **Install:** `link.fwsc` from the `fm1link-latest` release, with fm1-base's web installer or `fm1_install.py`.
+
+## Chip quirks and FX on core 2
+
+On the MASTER page (saved with patches):
+- **DSP GRIT:** the DSP's interpolation per voice: OFF (smooth), LINEAR (duller), RAW (none: aliased, ringing crunch on high notes).
+- **FILTER SCREAM:** the low pass's coefficients written straight into the DSP's biquad, pushed past stable, so it rings by itself and saturates.
+- **MIX OVERDRIVE:** the DSP channel volumes pushed past full and clipped at the 16-bit ceiling, then brought back down.
+- **FX ON CORE 2:** the master effects chain runs on the second CPU core, one DSP frame (~5 ms) behind. If core 2 ever misses a frame it falls back to core 1 (HARDWARE page shows which).
+
+Elsewhere: **NOISE TYPE CORRUPT** (junk fed to the DSP's ADPCM decoder), **ECHO PITCH** on the DRUMS page (the chip echo replayed faster or slower than it records, so repeats climb or fall), and **CHIP OCTAVE** up to +5 (the squares run past the output rate and alias back as whines).

@@ -82,6 +82,9 @@ static void fft(cpx* a, int n, int inv) {
 
 static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0, gGpuCopy = 1;
 static int gDrums, gKit, gKickPat, gSnarePat, gHatPat; static float gDrumLevel;
+// chip quirks: DSP GRIT (the DSP's interpolation off), FILTER SCREAM (its biquad pushed past stable), MIX OVERDRIVE (its
+// channel volumes past full, clipped at the 16-bit ceiling), ECHO PITCH (the chip echo replayed at another rate than it records)
+static int gQGrit = 0, gCsEchoPitch = 0; static float gQScream = 0, gQMixDrive = 0; static const char* GRIT_NAMES[3] = {"OFF", "LINEAR", "RAW"};
 static float gChipLevel, gCsEcho, gCsEchoFb, gOrbit, gOrbitRate, gGrainSize, gGrainScan, gGrainSpray, gGrainPitch, gGrainLevel; static int gChipDuty, gChipOct, gCsEchoT, gGrains, gGrainSrc; static const char* GRAIN_MODES[3]; static const char* GRAIN_SRCS[3];
 static const char* DUTY_NAMES[8]; static const char* CSECHO_T_NAMES[4];
 static u8 gMot[4][64]; static int gMotTgt[4], gMotOn[4], gMotRec, gMotBars; static float gMotPh;
@@ -376,7 +379,7 @@ typedef struct {
 static Osc gOsc[2];
 
 static const char* SUB_SHAPES[6] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "PULSE 25", "ROUNDED"};
-static const char* NOISE_TYPES[5] = {"WHITE", "PINK", "CRACKLE", "BROWN", "BLUE"};
+static const char* NOISE_TYPES[6] = {"WHITE", "PINK", "CRACKLE", "BROWN", "BLUE", "CORRUPT"};
 static const char* FILT_TYPES[5] = {"LOW PASS", "HIGH PASS", "BAND PASS", "NOTCH", "PEAK"};
 #define NLFOSH 13
 enum { LS_SINE, LS_TRI, LS_SAW, LS_SQR, LS_SH, LS_STEPS, LS_BOUNCE, LS_EXPUP, LS_EXPDN, LS_PULSE, LS_WTA, LS_WTB, LS_TABLE };
@@ -513,8 +516,24 @@ static void buildSub(void) {
 	mipsSet(&gSubMips, gTmpCyc, 0x7f);
 }
 
+static ndspAdpcmData gNoiseAd; static int gNoiseOn; static int gNoiseWasCorrupt = 0;
+static u16 gNoiseCoefs[16];
+static void noiseChannel(int want);
 static void buildNoise(void) {
 	unsigned seed = 12345; float b0 = 0, b1 = 0, b2 = 0, br = 0, lw = 0;
+	if (gNoiseType == 5) {   // CORRUPT: junk handed to the DSP's own ADPCM decoder: headers with predictors past the table,
+		u8* b = (u8*)gNoise;  // scales pushed high, wild coefficient pairs. The decoder's errors are the sound: crunchy, glitchy bursts.
+		for (int i = 0; i < gNoiseLen * 2; i++) {
+			seed = seed * 1664525u + 1013904223u;
+			b[i] = (i & 7) ? (u8)(seed >> 24) : (u8)(((seed >> 20) & 0x70) | (8 + ((seed >> 27) & 7)));
+		}
+		for (int i = 0; i < 16; i++) { seed = seed * 1664525u + 1013904223u; gNoiseCoefs[i] = (u16)(((s16)((seed >> 16) & 0xFFFF)) / 3); }
+		gNoiseAd.index = b[0]; gNoiseAd.history0 = 0; gNoiseAd.history1 = 0;
+		DSP_FlushDataCache(gNoise, gNoiseLen * sizeof(s16));
+		gNoiseWasCorrupt = 1;
+		if (gNoiseOn) { noiseChannel(0); noiseChannel(1); }
+		return;
+	}
 	for (int i = 0; i < gNoiseLen; i++) {
 		seed = seed * 1664525u + 1013904223u;
 		float w = ((seed >> 9) & 0xffff) / 32768.0f - 1.0f, s = w;
@@ -530,6 +549,8 @@ static void buildNoise(void) {
 		gNoise[i] = (s16)(s * 30000);
 	}
 	DSP_FlushDataCache(gNoise, gNoiseLen * sizeof(s16));
+	if (gNoiseWasCorrupt && gNoiseOn) { noiseChannel(0); noiseChannel(1); }   // back to plain PCM
+	gNoiseWasCorrupt = 0;
 }
 
 // ---------------------------------------------------------------- voices: DSP + CSND channels
@@ -635,6 +656,16 @@ static void filterSet(int ch, float hz, float res) {
 	if (hz < 40) hz = 40;
 	if (hz > 15000) hz = 15000;
 	float q = 0.707f + res * 9.0f;
+	if (gQScream > 0.001f && gFiltType == 0 && ch != NOISE_CH) {
+		// FILTER SCREAM: poles at radius r around the cutoff. Past r = 1 the DSP's fixed-point filter rings by itself and
+		// saturates: a screaming self-oscillation the stock filter types never allow.
+		float r = 0.985f + gQScream * 0.03f + res * 0.004f, w = TWO_PI * hz / DSPRATE, a1 = -2.0f * r * cosf(w), a2 = r * r;
+		float b0 = (1.0f + a1 + a2) * 0.6f + 0.002f;
+		ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, a1, a2, b0, 0, 0);
+		ndspChnIirBiquadSetEnable(ch, true);
+		ndspChnIirMonoSetEnable(ch, false);
+		return;
+	}
 	switch (gFiltType) {
 	case 0: ndspChnIirBiquadSetParamsLowPassFilter(ch, hz, q); break;
 	case 1: ndspChnIirBiquadSetParamsHighPassFilter(ch, hz, q); break;
@@ -676,6 +707,7 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 		float mix[12] = {0};
 		ndspChnSetMix(ch, mix);
 		ndspChnSetRate(ch, f * N);
+		ndspChnSetInterp(ch, gQGrit == 2 ? NDSP_INTERP_NONE : gQGrit == 1 ? NDSP_INTERP_LINEAR : NDSP_INTERP_POLYPHASE);
 		filterSet(ch, 2000, 0);
 		memset(&gWB[ch], 0, sizeof(ndspWaveBuf));
 		gWB[ch].data_vaddr = m->lev[v->lev[i]];
@@ -687,7 +719,7 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 		u32 timer = CSND_TIMER(f * N);
 		if (timer < 0x42) timer = 0x42;
 		if (timer > 0xFFFF) timer = 0xFFFF;
-		u32 flags = SOUND_FORMAT_16BIT | SOUND_REPEAT | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(ch) | (timer << 16);
+		u32 flags = SOUND_FORMAT_16BIT | SOUND_REPEAT | (gQGrit == 2 ? 0 : SOUND_LINEAR_INTERP) | SOUND_ENABLE | SOUND_CHANNEL(ch) | (timer << 16);
 		CSND_SetChnRegs(flags, pa, pa, N * 2, 0, 0);
 	}
 }
@@ -870,6 +902,10 @@ static void noiseChannel(int want) {   // shared noise layer on DSP channel NOIS
 		ndspChnSetRate(NOISE_CH, DSPRATE);
 		memset(&gWB[NOISE_CH], 0, sizeof(ndspWaveBuf));
 		gWB[NOISE_CH].data_vaddr = gNoise; gWB[NOISE_CH].nsamples = gNoiseLen; gWB[NOISE_CH].looping = true;
+		if (gNoiseType == 5) {   // CORRUPT: the DSP decodes junk ADPCM (14 samples per 8-byte frame)
+			ndspChnSetFormat(NOISE_CH, NDSP_FORMAT_MONO_ADPCM); ndspChnSetAdpcmCoefs(NOISE_CH, gNoiseCoefs);
+			gWB[NOISE_CH].nsamples = gNoiseLen * 2 / 8 * 14; gWB[NOISE_CH].adpcm_data = &gNoiseAd;
+		} else ndspChnSetFormat(NOISE_CH, NDSP_FORMAT_MONO_PCM16);
 		ndspChnWaveBufAdd(NOISE_CH, &gWB[NOISE_CH]);
 	} else { ndspChnWaveBufClear(NOISE_CH); gNoiseOn = 0; }
 }
@@ -996,6 +1032,7 @@ static void voicesUpdate(float dt, float bend) {
 	for (int c = 0; c < NCH; c++) if (dL[c] >= 0) {
 		float mix[12] = {0};
 		mix[0] = dL[c] * gAutoGain; mix[1] = dR[c] * gAutoGain;
+		if (gQMixDrive > 0.001f && masterActive()) { float k = 1.0f + gQMixDrive * 15.0f; mix[0] *= k; mix[1] *= k; }   // MIX OVERDRIVE
 		if (masterActive()) { mix[4] = mix[0]; mix[5] = mix[1]; mix[0] = mix[1] = 0; }   // whole sound through the master chain
 		else {
 			float s0 = busSend(0), s1 = busSend(1);   // per-channel sends to the DSP effect buses
@@ -1173,7 +1210,55 @@ static void auxMaster(void* data, int n, void* samples[4]);
 static int gSurActive = 0;
 static int gMasterFX;
 static int masterInit(void);
-static void aux0(void* d, int n, void* s[4]) { if (gMasterFX) auxMaster(d, n, s); else auxReverb(d, n, s); }
+// FX ON CORE 2: the master chain runs on the second core, one DSP frame (160 samples, ~5 ms) behind. The DSP's audio
+// thread hands each frame over and takes back the one finished last time, so the main core never waits on the effects.
+// If core 2 ever misses a frame, the chain falls back to running here (and says so).
+static int gFxCore2 = 1, gFxC2Fail = 0;
+static Thread gFxThread = NULL;
+static LightEvent gFxGo, gFxDone;
+static volatile int gFxQuit = 0, gFxN = 0;
+static s32 gFxIn[2][160], gFxOut[2][160], gFxZ[2][160];
+static volatile u64 gCore1Busy;
+static void fxMain(void* a) {
+	(void)a;
+	for (;;) {
+		LightEvent_Wait(&gFxGo);
+		if (gFxQuit) break;
+		u64 t0 = svcGetSystemTick();
+		void* smp[4] = {gFxIn[0], gFxIn[1], gFxZ[0], gFxZ[1]};
+		auxMaster(NULL, gFxN, smp);
+		memcpy(gFxOut[0], gFxIn[0], gFxN * 4); memcpy(gFxOut[1], gFxIn[1], gFxN * 4);
+		gCore1Busy += svcGetSystemTick() - t0;
+		LightEvent_Signal(&gFxDone);
+	}
+}
+static void fxCore2Start(void) {
+	if (gFxThread) return;
+	LightEvent_Init(&gFxGo, RESET_ONESHOT); LightEvent_Init(&gFxDone, RESET_ONESHOT);
+	LightEvent_Signal(&gFxDone);   // "the last frame is done" (silence) so the first hand-over doesn't wait
+	memset(gFxOut, 0, sizeof(gFxOut));
+	gFxThread = threadCreate(fxMain, NULL, 0x4000, 0x18, 1, false);
+}
+static void fxCore2Stop(void) {
+	if (!gFxThread) return;
+	gFxQuit = 1; LightEvent_Signal(&gFxGo); threadJoin(gFxThread, 1000000000ULL); threadFree(gFxThread); gFxThread = NULL; gFxQuit = 0;
+}
+static void aux0(void* d, int n, void* s[4]) {
+	if (!gMasterFX) { auxReverb(d, n, s); return; }
+	if (!gFxCore2) gFxC2Fail = 0;   // switching it off and on again retries core 2
+	if (!gFxCore2 || !gFxThread || gFxC2Fail || n > 160) { auxMaster(d, n, s); return; }
+	if (LightEvent_WaitTimeout(&gFxDone, 4000000LL) != 0) {   // core 2 missed the frame: run it here from now on
+		gFxC2Fail = 1; auxMaster(d, n, s); return;
+	}
+	s32* L = (s32*)s[0]; s32* R = (s32*)s[1];
+	int prevN = gFxN;
+	memcpy(gFxIn[0], L, n * 4); memcpy(gFxIn[1], R, n * 4);
+	if (prevN == n) { memcpy(L, gFxOut[0], n * 4); memcpy(R, gFxOut[1], n * 4); }
+	else { memset(L, 0, n * 4); memset(R, 0, n * 4); }
+	memset(s[2], 0, n * 4); memset(s[3], 0, n * 4);
+	gFxN = n;
+	LightEvent_Signal(&gFxGo);
+}
 static void busInit(void) {
 	if (!busFxInit()) return;
 	if (!masterInit()) gMasterFX = 0;
@@ -1324,6 +1409,13 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 	if (lastEq[0] != gEqLow || lastEq[1] != gEqMid || lastEq[2] != gEqHigh) {
 		bqSet(&gEq[0], 0, 150, 0.7f, gEqLow); bqSet(&gEq[1], 1, 1200, 0.8f, gEqMid); bqSet(&gEq[2], 2, 6000, 0.7f, gEqHigh);
 		lastEq[0] = gEqLow; lastEq[1] = gEqMid; lastEq[2] = gEqHigh;
+	}
+	if (gQMixDrive > 0.001f) {   // MIX OVERDRIVE: the boosted channels hit the DSP mix's 16-bit ceiling, then come back down
+		float k = 1.0f / (1.0f + gQMixDrive * 4.0f);
+		for (int s = 0; s < n; s++) {
+			s32 l = L[s], r = R[s]; if (l > 32767) l = 32767; if (l < -32768) l = -32768; if (r > 32767) r = 32767; if (r < -32768) r = -32768;
+			L[s] = (s32)(l * k); R[s] = (s32)(r * k);
+		}
 	}
 	ofBlock(L, R, n);   // OUT FILTER first, then the effects
 	float color = gFxColor + gFxModVal; if (color < 0) color = 0; if (color > 1) color = 1;
@@ -1748,8 +1840,11 @@ typedef struct {
 	int ofType; float ofCut, ofRes, ofDrive, ofEnv;   // v8
 	s8 dl[2][64]; float dlRate[2]; int dlSync[2];   // v9: drawn LFO 3 / 4
 	u8 mot[4][64]; int motTgt[4], motOn[4], motBars;   // v10: motion lanes
+	int qGrit, csEchoPitch; float qScream, qMixDrive;   // v11: chip quirks
 } SPatch;
-#define PATCH_MAGIC 0x5359523A   // "SYR:" (v10)
+#define PATCH_MAGIC 0x5359523B   // "SYR;" (v11)
+#define PATCH_MAGIC10 0x5359523A // v10 (no chip quirks)
+#define PATCH_V10_SIZE offsetof(SPatch, qGrit)
 #define PATCH_MAGIC9 0x53595239  // v9 (no motion lanes)
 #define PATCH_V9_SIZE offsetof(SPatch, mot)
 #define PATCH_MAGIC8 0x53595238  // v8 (no drawn LFOs)
@@ -1797,6 +1892,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->modRate = 0.4f; p->modDepth = 0.5f; p->modMix = 0.5f; p->fxColor = 0.5f; p->eqLow = p->eqMid = p->eqHigh = 0;
 	p->dlyMix = 0; p->dlyWow = 0.25f; p->dlySat = 0.3f; p->revMix = 0; p->ott = 0; p->pump = 0; p->lofiRate = 0;
 	p->chipLevel = 0; p->chipDuty = 3; p->chipOct = 0; p->csEcho = 0; p->csEchoFb = 0.45f; p->csEchoT = 2; p->orbit = 0; p->orbitRate = 0.2f; p->revType = 0; p->dlyType = 0; p->grainMode = 0; p->grainSrc = 1; p->grainSize = 0.35f; p->grainScan = 0.5f; p->grainSpray = 0.2f; p->grainPitch = 0; p->grainLevel = 0.8f; p->ofType = 0; p->ofCut = 0.6f; p->ofRes = 0.2f; p->ofDrive = 0.2f; p->ofEnv = 0;
+	p->qGrit = 0; p->csEchoPitch = 0; p->qScream = 0; p->qMixDrive = 0;
 	for (int i = 0; i < 64; i++) { p->dl[0][i] = (s8)(sinf(TWO_PI * i / 64) * 127); p->dl[1][i] = (s8)((i < 32 ? i * 4 - 64 : 191 - i * 4) * 127 / 64); }
 	p->dlRate[0] = 1.0f; p->dlRate[1] = 0.5f; p->dlSync[0] = p->dlSync[1] = 0;
 	memset(p->mot, 128, sizeof(p->mot)); p->motTgt[0] = 0; p->motTgt[1] = 2; p->motTgt[2] = 4; p->motTgt[3] = 12; memset(p->motOn, 0, sizeof(p->motOn)); p->motBars = 1;
@@ -2105,6 +2201,17 @@ static void c_doubleecho(SPatch* p) { p->master = 0.55f; OA.table = T_DIGITAL; O
 static void c_subchip(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SAW; OA.oct = -1; OA.level = 0.5f; CHIP(0.8f, 3, -2); p->voiceMode = 1; ENV1(0.002f, 0, 0.4f, 0.7f, 0.1f);
 	OUTF(OF_ACID, 0.4f, 0.55f, 0.4f, 0.5f); ENV2(0.0f, 0, 0.25f, 0.0f, 0.1f); }
 
+// chip quirks: FILTER SCREAM, DSP GRIT, MIX OVERDRIVE, CORRUPT noise, ECHO PITCH, CHIP OCTAVE past the output rate
+static void c_screamlead(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; p->voiceMode = 2; p->glide = 0.05f; p->cutoff = 0.45f; p->res = 0.3f; p->qScream = 0.6f;
+	ENV1(0.005f, 0, 0.4f, 0.9f, 0.2f); ENV2(0.0f, 0, 0.3f, 0.2f, 0.2f); MOD(2, SRC_ENV2, DST_CUTOFF, 0.3f); LFO(0, LS_SINE, 0, 5.0f); MOD(3, SRC_LFO1, DST_PITCH, 0.006f); DLYS(0.15f, S8D, DL_TAPE); }
+static void c_rawsampler(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.pos = 0.8f; OA.oct = 1; p->qGrit = 2; ENV1(0.001f, 0, 0.5f, 0.3f, 0.3f); p->lofiRate = 0.2f; REVB(0.15f, RV_ROOM); }
+static void c_hotorgan(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = SINE; OB.on = 1; OB.table = T_BASIC; OB.pos = SQR; OB.oct = 1; OB.level = 0.45f; p->subLevel = 0.3f;
+	p->qMixDrive = 0.65f; ENV1(0.003f, 0, 0.1f, 1.0f, 0.06f); MFX(FX_CHORUS, 0.7f, 0.4f, 0.4f); REVB(0.15f, RV_ROOM); }
+static void c_glitchstorm(SPatch* p) { p->master = 0.55f; OA.table = T_DIGITAL; OA.level = 0.4f; p->noiseType = 5; p->noiseLevel = 0.5f; CHIP(0.35f, 1, 4); p->qScream = 0.35f; p->cutoff = 0.5f;
+	LFO(0, LS_SH, 0, 7.0f); MOD(2, SRC_LFO1, DST_CUTOFF, 0.4f); ENV1(0.002f, 0, 0.3f, 0.6f, 0.2f); DLYS(0.2f, S16, DL_LOFI); }
+static void c_pitchcanyon(SPatch* p) { p->master = 0.55f; OA.table = T_PWM; OA.pos = 0.4f; OA.level = 0.4f; CHIP(0.6f, 2, 0); ENV1(0.002f, 0, 0.3f, 0.0f, 0.25f);
+	p->csEcho = 0.6f; p->csEchoFb = 0.7f; p->csEchoT = 1; p->csEchoPitch = 7; REVB(0.2f, RV_HALL); }
+
 // ---- MOTION: patches that move by themselves, to show the engine off: MOTION lanes (bar-long automation),
 // drawn LFOs, chaos, the grain engine, 3D orbit, and the second sound chip, all at once in BUSY BOY.
 static void m_busyboy(SPatch* p) { static const s8 M[8] = {0, 12, 7, 3, 10, 7, 15, 5};
@@ -2165,7 +2272,8 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"ORBIT PAD", s_orbitpad}, {"HELICOPTER", s_heli}, {"CIRCLE ARP", s_circlearp}, {"AROUND YOU", s_aroundyou}, {"3D BELLS", s_bells}, {"SPIRAL PLUCK", s_spiral},
 	 {"PASSING CAR", s_passing}, {"STEER ORBIT", s_tilt}},
 	{{"PSG STACK", c_psgstack}, {"ECHO CANYON", c_canyon}, {"CRUSH BELL", c_crushbell}, {"8-BIT CHOIR", c_choir8}, {"CAPTURE DUB", c_capturedub},
-	 {"TWO CHIPS", c_twochips}, {"QUANT GRIT", c_quantgrit}, {"GB ORBIT", c_gborbit}, {"DOUBLE ECHO", c_doubleecho}, {"SUB CHIP", c_subchip}},
+	 {"TWO CHIPS", c_twochips}, {"QUANT GRIT", c_quantgrit}, {"GB ORBIT", c_gborbit}, {"DOUBLE ECHO", c_doubleecho}, {"SUB CHIP", c_subchip},
+	 {"SCREAM LEAD", c_screamlead}, {"RAW SAMPLER", c_rawsampler}, {"HOT ORGAN", c_hotorgan}, {"GLITCH STORM", c_glitchstorm}, {"PITCH CANYON", c_pitchcanyon}},
 	{{"KITCHEN SINK", m_busyboy}, {"TIDAL TABLE", m_tidal}, {"STEP SCULPT", m_stepsculpt}, {"GLASS BREATH", m_breathglass}, {"CHAOS GARDEN", m_chaosgarden},
 	 {"ACID MORPH", m_acidmorph}, {"VOWEL WALK", m_vowelwalk}, {"LIQUID SYNC", m_liquidsync}, {"DRAWN DANCE", m_drawndance}, {"GRAIN TIDE", m_graintide}},
 };
@@ -2184,12 +2292,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -2224,6 +2332,7 @@ static void patchCapture(SPatch* p) {
 	p->modRate = gModRate; p->modDepth = gModDepth; p->modMix = gModMix; p->fxColor = gFxColor; p->eqLow = gEqLow; p->eqMid = gEqMid; p->eqHigh = gEqHigh;
 	p->dlyMix = gDlyMix; p->dlyWow = gDlyWow; p->dlySat = gDlySat; p->revMix = gRevMix; p->ott = gOtt; p->pump = gPump; p->lofiRate = gLofiRate;
 	p->chipLevel = gChipLevel; p->chipDuty = gChipDuty; p->chipOct = gChipOct; p->csEcho = gCsEcho; p->csEchoFb = gCsEchoFb; p->csEchoT = gCsEchoT; p->orbit = gOrbit; p->orbitRate = gOrbitRate; p->revType = gRevType; p->dlyType = gDlyType; p->grainMode = gGrains; p->grainSrc = gGrainSrc; p->grainSize = gGrainSize; p->grainScan = gGrainScan; p->grainSpray = gGrainSpray; p->grainPitch = gGrainPitch; p->grainLevel = gGrainLevel; p->ofType = gOfType; p->ofCut = gOfCut; p->ofRes = gOfRes; p->ofDrive = gOfDrive; p->ofEnv = gOfEnv;
+	p->qGrit = gQGrit; p->csEchoPitch = gCsEchoPitch; p->qScream = gQScream; p->qMixDrive = gQMixDrive;
 	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) p->dl[k][i] = (s8)(gDl[k][i] * 127); p->dlRate[k] = gDlRate[k]; p->dlSync[k] = gDlSync[k]; }
 	memcpy(p->mot, gMot, sizeof(gMot)); memcpy(p->motTgt, gMotTgt, sizeof(gMotTgt)); memcpy(p->motOn, gMotOn, sizeof(gMotOn)); p->motBars = gMotBars;
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
@@ -2243,7 +2352,7 @@ static void patchApply(const SPatch* p) {
 		if (newTable || !s->tb.nFrames) tableSelect(&s->tb, s->table);
 	}
 	int subChg = p->subShape != gSubShape, noiseChg = p->noiseType != gNoiseType;
-	gSubShape = p->subShape; gSubOct = p->subOct; gNoiseType = p->noiseType; gFiltType = p->filtType;
+	gSubShape = p->subShape; gSubOct = p->subOct; gNoiseType = p->noiseType % 6; gFiltType = p->filtType;
 	gSubLevel = p->subLevel; gNoiseLevel = p->noiseLevel; gCutoff = p->cutoff; gRes = p->res; gKeytrack = p->keytrack;
 	gEnv1 = p->env1; gEnv2 = p->env2;
 	for (int i = 0; i < 2; i++) { gLfo[i].shape = p->lfoShape[i] < NLFOSH ? p->lfoShape[i] : 0; gLfo[i].mode = p->lfoMode[i]; gLfo[i].rate = p->lfoRate[i]; gLfo[i].sync = p->lfoSync[i] < NSYNC ? p->lfoSync[i] : 0; gLfo[i].table = p->lfoTable[i] < T_BUILTIN ? p->lfoTable[i] : 0; gLfo[i].pos = p->lfoPos[i]; gLfo[i].tabKey = -1; }
@@ -2253,6 +2362,7 @@ static void patchApply(const SPatch* p) {
 	gModRate = p->modRate; gModDepth = p->modDepth; gModMix = p->modMix; gFxColor = p->fxColor; gEqLow = p->eqLow; gEqMid = p->eqMid; gEqHigh = p->eqHigh;
 	gDlyMix = p->dlyMix; gDlyWow = p->dlyWow; gDlySat = p->dlySat; gRevMix = p->revMix; gOtt = p->ott; gPump = p->pump; gLofiRate = p->lofiRate;
 	chipSet(p->chipLevel); gChipDuty = p->chipDuty; gChipOct = p->chipOct; gCsEcho = p->csEcho; gCsEchoFb = p->csEchoFb; gCsEchoT = p->csEchoT; gOrbit = p->orbit; gOrbitRate = p->orbitRate; gRevType = p->revType % NREVT; gDlyType = p->dlyType % NDLYT; dlyTypeChanged();
+	gQGrit = p->qGrit % 3; gCsEchoPitch = p->csEchoPitch; gQScream = p->qScream; gQMixDrive = p->qMixDrive;
 	if (p->ofType % NOFT != gOfType) { gOfType = p->ofType % NOFT; ofReset(); } gOfCut = p->ofCut; gOfRes = p->ofRes; gOfDrive = p->ofDrive; gOfEnv = p->ofEnv;
 	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) gDl[k][i] = p->dl[k][i] / 127.0f; gDlRate[k] = p->dlRate[k]; gDlSync[k] = p->dlSync[k] % NSYNC; }
 	memcpy(gMot, p->mot, sizeof(gMot)); for (int l = 0; l < 4; l++) { gMotTgt[l] = p->motTgt[l] % 16; gMotOn[l] = p->motOn[l] & 1; } gMotBars = p->motBars & 3; gMotRec = -1; gMotPh = 0;
@@ -2282,7 +2392,7 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{1.30f, 0.81f, 1.34f, 2.99f, 0.90f, 1.37f, 3.46f, 1.10f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // CHIPSET
+	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 0.60f, 1.20f, 1.20f},   // CHIPSET
 	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // MOTION
 };
 static int presetCount(int style) {
@@ -2350,8 +2460,8 @@ static Param P_OSCB[] = OSC_PAGE(1, D_B, D_TBLB);
 static Param P_SUBN[] = {
 	PE("SUB SHAPE", &gSubShape, 6, SUB_SHAPES, D_SUB), PI_("SUB OCTAVE", &gSubOct, -2, 0, 0),
 	PF("SUB LEVEL", &gSubLevel, 0, 1, 0.01f, "%", 0),
-	PE("NOISE TYPE", &gNoiseType, 5, NOISE_TYPES, D_NOISE), PF("NOISE LEVEL", &gNoiseLevel, 0, 1, 0.01f, "%", 0),
-	PF("CHIP SQUARE", &gChipLevel, 0, 1, 0.02f, "%", D_CHIP), PE("CHIP WIDTH", &gChipDuty, 7, DUTY_NAMES, 0), PI_("CHIP OCTAVE", &gChipOct, -2, 2, 0),
+	PE("NOISE TYPE", &gNoiseType, 6, NOISE_TYPES, D_NOISE), PF("NOISE LEVEL", &gNoiseLevel, 0, 1, 0.01f, "%", 0),
+	PF("CHIP SQUARE", &gChipLevel, 0, 1, 0.02f, "%", D_CHIP), PE("CHIP WIDTH", &gChipDuty, 7, DUTY_NAMES, 0), PI_("CHIP OCTAVE", &gChipOct, -2, 5, 0),
 	PEND};
 static Param P_FILT[] = {
 	PE("FILTER", &gFiltType, 5, FILT_TYPES, 0), PF("CUTOFF", &gCutoff, 0, 1, 0.01f, "HZ", 0),
@@ -2450,12 +2560,13 @@ static Param P_MASTER[] = {
 	PF("OTT", &gOtt, 0, 1, 0.02f, "%", 0), PF("PUMP", &gPump, 0, 1, 0.02f, "%", 0), PE("PUMP RATE", &gPumpRate, 3, PUMP_NAMES, 0),
 	PE("LOFI BITS", &gLofiBits, 6, BITS_NAMES, 0), PF("LOFI RATE", &gLofiRate, 0, 1, 0.02f, "%", 0),
 	PF("3D ORBIT", &gOrbit, 0, 1, 0.02f, "%", 0), PF("ORBIT RATE", &gOrbitRate, 0, 2, 0.02f, "HZ", 0),
+	PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
 	PEND};
 static Param P_DRUMS[] = {
 	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 4, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 8, KICKP_NAMES, 0),
 	PE("SNARE", &gSnarePat, 7, SNAREP_NAMES, 0), PE("HAT", &gHatPat, 7, HATP_NAMES, 0), PE("MIC TAP", &gDrumRec, 5, DREC_NAMES, D_DREC), PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0),
 	PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
-	PF("CHIP ECHO", &gCsEcho, 0, 1, 0.02f, "%", 0), PE("ECHO TIME", &gCsEchoT, 4, CSECHO_T_NAMES, 0), PF("ECHO REPEATS", &gCsEchoFb, 0, 0.85f, 0.03f, "%", 0),
+	PF("CHIP ECHO", &gCsEcho, 0, 1, 0.02f, "%", 0), PE("ECHO TIME", &gCsEchoT, 4, CSECHO_T_NAMES, 0), PF("ECHO REPEATS", &gCsEchoFb, 0, 0.85f, 0.03f, "%", 0), PI_("ECHO PITCH", &gCsEchoPitch, -12, 12, 0),
 	PEND};
 #define NPAGES 12
 static Param* PAGES[NPAGES] = {P_PRESET, P_OSCA, P_OSCB, P_SUBN, P_FILT, P_MOD, P_VOICE, P_PLAY, P_VIS, P_HW, P_MASTER, P_DRUMS};
@@ -2778,7 +2889,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM MACHINE ON / OFF"}, {"KIT", "DRUM SOUNDS"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS PUSHED PAST STABLE: IT RINGS BY ITSELF"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -2918,7 +3029,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		else {
 			static u64 lb = 0, lt = 0; static int pct = 0; u64 nt = svcGetSystemTick();
 			if (nt - lt > SYSCLOCK_ARM11) { u64 b = gCore1Busy; pct = lt ? (int)((b - lb) * 100 / (nt - lt)) : 0; lb = b; lt = nt; }
-			if (gWorker) snprintf(s, sizeof(s), "%sCORE 2 ON  %d%% BUSY", gGpuFx && gGpuOK ? "GPU OK  " : "", pct);
+			if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, !gFxCore2 ? "CORE 1" : (!gFxThread || gFxC2Fail) ? "FELL BACK" : "ON CORE 2");
 			else snprintf(s, sizeof(s), "CORE 2 OFF: REBUILDS ON CORE 1");
 			if (gWorker) text(6, 210, s, 1, DIM); else text(6, 210, s, 1, WARN);
 		}
@@ -3619,6 +3730,7 @@ static int chipReserved(int c) { return gChipLevel > 0.001f && c >= 8 && c <= 13
 static int chipRate(float f) {   // a PSG square takes 8 timer ticks per cycle; the timer can't run below ~1 kHz, so fold low notes up
 	float r = f * 8 * powf(2.0f, (float)gChipOct);
 	while (r < 1100 && r > 0) r *= 2;
+	if (r > 4000000) r = 4000000;   // CHIP OCTAVE +3..+5 run the squares past the output rate: they alias back as whines
 	return (int)r;
 }
 static void chipStop(SVoice* v) {
@@ -3689,14 +3801,16 @@ static void echoStart(void) {
 	for (int k = 0; k < 2; k++) {   // replay: left ring -> left out and feeds the right capture (ping-pong)
 		int c = gEchoCh[k]; u32 out = k ? ((u32)(0x5000) << 16) : 0x5000, fb = (u32)(gCsEchoFb * 0x7FFF);
 		u32 cap = k ? fb : (fb << 16);
-		CSND_SetChnRegs(SOUND_FORMAT_16BIT | SOUND_REPEAT | SOUND_ENABLE | SOUND_CHANNEL(c) | (timer << 16), osConvertVirtToPhys(gEchoBuf[k]), osConvertVirtToPhys(gEchoBuf[k]), len * 2, out, cap);
+		u32 pt = gCsEchoPitch ? CSND_TIMER(32728.0f * powf(2.0f, gCsEchoPitch / 12.0f)) : timer;   // ECHO PITCH: replayed faster / slower than it records
+		CSND_SetChnRegs(SOUND_FORMAT_16BIT | SOUND_REPEAT | SOUND_ENABLE | SOUND_CHANNEL(c) | (pt << 16), osConvertVirtToPhys(gEchoBuf[k]), osConvertVirtToPhys(gEchoBuf[k]), len * 2, out, cap);
 	}
 	for (int k = 0; k < 2; k++) CSND_CapEnable(gEchoUnits[k], true);
 	csndExecCmds(true);
 }
 static void echoTickL(void) {
 	int want = gCsEcho > 0.001f && gCsndOK;
-	if (want && (!gEchoOn || gEchoBpm != gBPM)) echoStart();
+	static int pitchWas = 0;
+	if (want && (!gEchoOn || gEchoBpm != gBPM || pitchWas != gCsEchoPitch)) { pitchWas = gCsEchoPitch; echoStart(); }
 	else if (!want && gEchoOn) echoStop();
 	static float lastFb = -1;
 	if (gEchoOn && lastFb != gCsEchoFb) {
@@ -5696,6 +5810,7 @@ int main(void) {
 	{
 		s32 prio = 0x30; svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
 		gWorker = threadCreate(workerMain, NULL, 64 * 1024, prio - 1 < 0x18 ? 0x18 : prio - 1, 1, false);
+		if (gWorker) fxCore2Start();   // the master effects on core 2 too
 	}
 	buildSub(); buildNoise();
 
@@ -6012,6 +6127,7 @@ int main(void) {
 		csndExit();
 	}
 	LightLock_Unlock(&gVoiceLock);
+	gFxCore2 = 0; svcSleepThread(20000000); fxCore2Stop();   // effects back on the DSP thread before it goes away
 	if (gAudioOK) { ndspSetCapture(NULL); for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }
 	if (!gSafeMode) { extrasExit(); sensorsExit(); }
 	myDrumSave();
