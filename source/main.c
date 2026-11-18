@@ -91,7 +91,7 @@ static u8 gMot[4][64]; static int gMotTgt[4], gMotOn[4], gMotRec, gMotBars; stat
 static int gCamVid, gMidiNet, gAddEdit, gOfType; static float gOfCut, gOfRes, gOfDrive, gOfEnv; static const char* OFT_NAMES[14]; static float gWtScan; static const char* VID_NAMES[3];
 static void chipSet(float lv);
 static void grainsChanged(void);
-static const char* KIT_NAMES[4]; static const char* KICKP_NAMES[8]; static const char* SNAREP_NAMES[7]; static const char* HATP_NAMES[7]; static int gDrumRec; static const char* DREC_NAMES[5];
+static const char* KIT_NAMES[4]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[5];
 #define NVISM 11
 static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM", "VOXELS", "VOXEL TABLE", "TUNNEL", "KALEIDO", "SYNTHWAVE", "RIPPLES"};
 static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
@@ -2459,7 +2459,7 @@ enum { D_CHIP = 1 << 26, D_GRAIN = 1 << 27, D_DLYT = 1 << 28, D_CAMV = 1 << 29, 
 #define D_ADDED D_CAMV   // shares the flag; told apart by the param
 #define D_OFT D_DLYT   // shares the flag; told apart by the param
 #define D_DREC D_DRUMS   // shares the drums flag; told apart by the param
-enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536, D_LOOP = 1 << 17, D_LOOPTAB = 1 << 18, D_MICTAB = 1 << 19, D_CAMTAB = 1 << 20, D_CAM = 1 << 21, D_LINK = 1 << 22, D_DLWT = 1 << 23, D_DRUMS = 1 << 24, D_UPDATE = 1 << 25 };
+enum { D_A = 1, D_B = 2, D_SUB = 4, D_NOISE = 8, D_TBLA = 16, D_TBLB = 32, D_STYLE = 64, D_PRESET = 128, D_SAVE = 256, D_INIT = 512, D_REST = 1024, D_CLEAR = 2048, D_SEQ = 4096, D_SCALE = 8192, D_OUT = 16384, D_TILT = 32768, D_THEME = 65536, D_LOOP = 1 << 17, D_LOOPTAB = 1 << 18, D_MICTAB = 1 << 19, D_CAMTAB = 1 << 20, D_CAM = 1 << 21, D_LINK = 1 << 22, D_DLWT = 1 << 23, D_DRUMS = 1 << 24, D_UPDATE = 1 << 25, D_EUCLID = 1 << 26 };
 typedef struct { const char* name; int type; void* p; float mn, mx, step; const char** names; const char* unit; int dirty; } Param;
 
 #define PF(n, ptr, mn, mx, st, unit, d) {n, PT_F, ptr, mn, mx, st, NULL, unit, d}
@@ -2598,9 +2598,11 @@ static Param P_MASTER[] = {
 	PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
 	PEND};
 static Param P_DRUMS[] = {
-	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 4, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 8, KICKP_NAMES, 0),
-	PE("SNARE", &gSnarePat, 7, SNAREP_NAMES, 0), PE("HAT", &gHatPat, 7, HATP_NAMES, 0), PE("MIC TAP", &gDrumRec, 5, DREC_NAMES, D_DREC), PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0),
+	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 4, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 9, KICKP_NAMES, 0),
+	PE("SNARE", &gSnarePat, 8, SNAREP_NAMES, 0), PE("HAT", &gHatPat, 8, HATP_NAMES, 0), PE("MIC TAP", &gDrumRec, 5, DREC_NAMES, D_DREC), PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0),
 	PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
+	PI_("EUCLID STEPS", &gEuLen, 2, 16, D_EUCLID), PI_("KICK HITS", &gEuHits[0], 0, 16, D_EUCLID), PI_("KICK ROTATE", &gEuRot[0], 0, 15, D_EUCLID),
+	PI_("SNARE HITS", &gEuHits[1], 0, 16, D_EUCLID), PI_("SNARE ROTATE", &gEuRot[1], 0, 15, D_EUCLID), PI_("HAT HITS", &gEuHits[2], 0, 16, D_EUCLID), PI_("HAT ROTATE", &gEuRot[2], 0, 15, D_EUCLID),
 	PF("CHIP ECHO", &gCsEcho, 0, 1, 0.02f, "%", 0), PE("ECHO TIME", &gCsEchoT, 4, CSECHO_T_NAMES, 0), PF("ECHO REPEATS", &gCsEchoFb, 0, 0.85f, 0.03f, "%", 0), PI_("ECHO PITCH", &gCsEchoPitch, -12, 12, 0),
 	PEND};
 #define NPAGES 12
@@ -2924,7 +2926,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM MACHINE ON / OFF"}, {"KIT", "DRUM SOUNDS"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS PUSHED PAST STABLE: IT RINGS BY ITSELF"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS PUSHED PAST STABLE: IT RINGS BY ITSELF"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -3801,6 +3803,7 @@ static const float CSECHO_BEATS[4] = {0.5f, 0.75f, 1.0f, 1.5f};
 static int gEchoUnits[2] = {-1, -1}, gEchoCh[2] = {-1, -1}, gEchoOn = 0, gEchoLen = 0, gEchoBpm = 0;
 static s16* gEchoBuf[2];
 static int echoReserved(int c) { return gEchoOn && (c == gEchoCh[0] || c == gEchoCh[1]); }
+static void csWait(void) { csndExecCmds(false); svcSleepThread(6000000); }   // never spin on the chip's done flag: a wedged chip would hang Syrup forever
 static u32 csSend(float l, float r) {   // capture volumes for sounds that feed the chip echo
 	if (!gEchoOn) return 0;
 	return (u32)(l * gCsEcho * 0x7FFF) | ((u32)(r * gCsEcho * 0x7FFF) << 16);
@@ -3808,7 +3811,7 @@ static u32 csSend(float l, float r) {   // capture volumes for sounds that feed 
 static void echoStop(void) {
 	if (!gEchoOn || !gCsndOK) { gEchoOn = 0; return; }
 	for (int k = 0; k < 2; k++) { CSND_CapEnable(gEchoUnits[k], false); CSND_SetPlayState(gEchoCh[k], 0); }
-	csndExecCmds(true);
+	csWait();
 	for (int k = 0; k < 2; k++) { CSND_ReleaseCapUnit(gEchoUnits[k]); gEchoUnits[k] = -1; }
 	gEchoOn = 0;
 }
@@ -3840,7 +3843,7 @@ static void echoStart(void) {
 		CSND_SetChnRegs(SOUND_FORMAT_16BIT | SOUND_REPEAT | SOUND_ENABLE | SOUND_CHANNEL(c) | (pt << 16), osConvertVirtToPhys(gEchoBuf[k]), osConvertVirtToPhys(gEchoBuf[k]), len * 2, out, cap);
 	}
 	for (int k = 0; k < 2; k++) CSND_CapEnable(gEchoUnits[k], true);
-	csndExecCmds(true);
+	csWait();
 }
 static void echoTickL(void) {
 	int want = gCsEcho > 0.001f && gCsndOK;
@@ -4974,28 +4977,42 @@ static int gDrumCh[3] = {-1, -1, -1}, gDrumStep = -1;
 static float gDrumPh = 0;
 static s16* gDrumSmp[3]; static int gDrumLen[3];
 static const char* KIT_NAMES[4] = {"808", "909", "LOFI", "CHIP"};
-static const char* KICKP_NAMES[8] = {"OFF", "FOUR FLOOR", "BREAK", "TRAP", "DNB", "HALFTIME", "BOOM BAP", "MINE"};
-static const char* SNAREP_NAMES[7] = {"OFF", "BACKBEAT", "BREAK", "TRAP", "DNB", "CLAP 2+4", "MINE"};
-static const char* HATP_NAMES[7] = {"OFF", "8THS", "16THS", "OFFBEAT", "TRAP ROLL", "SHUFFLE", "MINE"};
+static const char* KICKP_NAMES[9] = {"OFF", "FOUR FLOOR", "BREAK", "TRAP", "DNB", "HALFTIME", "BOOM BAP", "MINE", "EUCLID"};
+static const char* SNAREP_NAMES[8] = {"OFF", "BACKBEAT", "BREAK", "TRAP", "DNB", "CLAP 2+4", "MINE", "EUCLID"};
+static const char* HATP_NAMES[8] = {"OFF", "8THS", "16THS", "OFFBEAT", "TRAP ROLL", "SHUFFLE", "MINE", "EUCLID"};
 static const u16 KICKP[8] = {0, 0x8888, 0x8224, 0x8022, 0x8020, 0x8000, 0x8124, 0};
 static const u16 SNAREP[7] = {0, 0x0808, 0x0849, 0x0080, 0x0808, 0x0808, 0};
 static const u16 HATP[7] = {0, 0xAAAA, 0xFFFF, 0x2222, 0xFDEF, 0x9249, 0};
 // MINE: your own pattern, a velocity (0 = rest) per step per drum, recorded by tapping on the mic
 static u8 gMyDrum[3][16];
+// EUCLID: HITS spread as evenly as possible over STEPS, turned by ROTATE. Rows shorter than 16 run polymetric.
+static int gEuHits[3] = {5, 2, 11}, gEuRot[3] = {0, 4, 0}, gEuLen = 16, gEuPos = 0, gEuIdx = -1;
+static const int EU_IDX[3] = {8, 7, 7};
+static int euOn(int r, int i) {   // Bresenham form of Bjorklund's pattern: same spacing, first hit on step 1
+	int n = gEuLen, k = gEuHits[r]; if (k <= 0 || n <= 0) return 0; if (k >= n) return 1;
+	int j = ((i - gEuRot[r]) % n + n) % n;
+	return (j * k) % n < k;
+}
+static int drumRowOn(int r, int pat, int i) {   // a preset pattern's step, for copying into MINE
+	if (pat == EU_IDX[r]) return i < gEuLen && euOn(r, i);
+	const u16* pt = r == 0 ? KICKP : r == 1 ? SNAREP : HATP;
+	return (pt[pat] & (0x8000 >> i)) != 0;
+}
 static const int MINE_IDX[3] = {7, 6, 6};
 static int* const DPAT[3] = {&gKickPat, &gSnarePat, &gHatPat};
 static int gDrumRec = 0;   // 0 off, 1 kick, 2 snare, 3 hat, 4 clear
 static const char* DREC_NAMES[5] = {"OFF", "TAP KICK", "TAP SNARE", "TAP HAT", "CLEAR MINE"};
 static float gTapLevel = 0, gTapHold = 0;
 static const u8 HATVEL[16] = {255, 120, 200, 110, 255, 120, 200, 140, 255, 120, 200, 110, 255, 130, 220, 160};
-static int gNzCh[2] = {-1, -1}; static float gNzVol[2];
-static int drumReserved(int c) { return gDrums && (c == gDrumCh[0] || c == gDrumCh[1] || c == gDrumCh[2] || (gKit == 3 && (c == 14 || c == 15))); }
+static int gNzCh[2] = {-1, -1}; static float gNzVol[2];   // hardware noise drums: retired (they wedged the sound chip); CHIP kit is now sampled LFSR noise
+static int drumReserved(int c) { return gDrums && (c == gDrumCh[0] || c == gDrumCh[1] || c == gDrumCh[2]); }
 static u32 csSend(float l, float r);
 
 static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear memory for CSND
 	const float sr = 32728;
 	int len[3] = {(int)(sr * 0.6f), (int)(sr * 0.3f), (int)(sr * (kit == 1 ? 0.12f : 0.07f))};
 	unsigned seed = 1234;
+	unsigned lfsr = 0x7FFF; float lph = 0;   // CHIP kit: Game Boy style noise register
 	for (int d = 0; d < 3; d++) {
 		if (!gDrumSmp[d]) gDrumSmp[d] = (s16*)linearAlloc(sr * 0.6f * 2 + 64);
 		if (!gDrumSmp[d]) return;
@@ -5008,19 +5025,25 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 				float f0 = kit == 1 ? 60 : (kit == 2 ? 50 : 45), f1 = kit == 3 ? 400 : 160, dec = kit == 0 ? 2.2f : (kit == 1 ? 5 : 4);
 				float f = f0 + (f1 - f0) * expf(-t * 35);
 				ph += f / sr; v = sinf(TWO_PI * ph) * expf(-t * dec) + (t < 0.004f ? nz * 0.4f : 0);
-				if (kit == 3) v = v > 0 ? 0.8f : -0.8f, v *= expf(-t * 6);
+				if (kit == 3) v = v > 0 ? 0.8f : -0.8f, v *= floorf(expf(-t * 6) * 15) / 15;
 				if (kit == 2) v = tanhf(v * 2.5f) * 0.8f;
 			} else if (d == 1) {   // snare: body tone + filtered noise
 				float body = sinf(TWO_PI * 185 * t) * expf(-t * 22);
 				lp += (nz - lp) * (kit == 2 ? 0.25f : 0.55f);
 				float sn = (nz - lp * 0.6f) * expf(-t * (kit == 1 ? 13 : 17));
 				v = body * (kit == 0 ? 0.7f : 0.45f) + sn * (kit == 3 ? 0.3f : 0.8f);
-				if (kit == 3) v = (v > 0 ? 0.6f : -0.6f) * expf(-t * 15);
+				if (kit == 3) {   // 15-bit LFSR clocked at 9 kHz, 4-bit stepped decay
+					lph += 9000.0f / sr; while (lph >= 1) { lph -= 1; unsigned b = (lfsr ^ (lfsr >> 1)) & 1; lfsr = (lfsr >> 1) | (b << 14); }
+					float e = floorf(expf(-t * 15) * 15) / 15; v = ((lfsr & 1) ? 0.6f : -0.6f) * e + (t < 0.03f ? (fmodf(t * 220, 1) < 0.5f ? 0.3f : -0.3f) * e : 0);
+				}
 			} else {   // hat: high-passed noise, very short
 				hp = nz - prev; prev = nz;
 				v = hp * expf(-t * (kit == 1 ? 30 : 55)) * 0.7f;
 				if (kit == 2) v = roundf(v * 8) / 8;
-				if (kit == 3) v = (v > 0 ? 0.4f : -0.4f) * expf(-t * 60);
+				if (kit == 3) {   // short 7-bit LFSR mode at 30 kHz: the metallic chip hat
+					lph += 30000.0f / sr; while (lph >= 1) { lph -= 1; unsigned b = (lfsr ^ (lfsr >> 1)) & 1; lfsr = ((lfsr >> 1) & ~0x40u) | (b << 6) | (b << 14); }
+					v = ((lfsr & 1) ? 0.45f : -0.45f) * (floorf(expf(-t * 60) * 15) / 15);
+				}
 			}
 			if (v > 1) v = 1;
 			if (v < -1) v = -1;
@@ -5031,7 +5054,7 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 	gDrumBuilt = kit;
 }
 static void drumPickChannels(void) {
-	gNzCh[0] = (csndChannels & BIT(14)) ? 14 : -1; gNzCh[1] = (csndChannels & BIT(15)) ? 15 : -1;
+	gNzCh[0] = gNzCh[1] = -1;
 	int n = 0;
 	for (int c = 16; c < NCS && n < 3; c++) if (gCsndOK && (csndChannels & BIT(c)) && c != gLoopCh[0] && c != gLoopCh[1]) gDrumCh[n++] = c;
 }
@@ -5073,11 +5096,16 @@ static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the
 	gDrumStep = step;
 	if ((step & 3) == 0) gBeatPh = step / 4;   // keep the sidechain pump on the kick grid
 	u16 bit = 0x8000 >> step; int any = 0;
-	if (gKickPat == 7) { if (gMyDrum[0][step]) { drumHit(0, gMyDrum[0][step] / 255.0f); any = 1; } }
+	int eu = gEuLen >= 16 ? step : gEuPos % gEuLen; gEuPos++; gEuIdx = eu;
+	for (int r = 0; r < 3; r++) if (*DPAT[r] == EU_IDX[r] && euOn(r, eu)) { drumHit(r, r == 2 ? HATVEL[eu] / 255.0f : (eu == gEuRot[r] % gEuLen ? 1.0f : 0.85f)); any = 1; }
+	if (gKickPat == EU_IDX[0]) {}
+	else if (gKickPat == 7) { if (gMyDrum[0][step]) { drumHit(0, gMyDrum[0][step] / 255.0f); any = 1; } }
 	else if (KICKP[gKickPat] & bit) { drumHit(0, 1.0f); any = 1; }
-	if (gSnarePat == 6) { if (gMyDrum[1][step]) { drumHit(1, gMyDrum[1][step] / 255.0f); any = 1; } }
+	if (gSnarePat == EU_IDX[1]) {}
+	else if (gSnarePat == 6) { if (gMyDrum[1][step]) { drumHit(1, gMyDrum[1][step] / 255.0f); any = 1; } }
 	else if (SNAREP[gSnarePat] & bit) { drumHit(1, (gSnarePat == 5 && (step & 4)) ? 0.85f : 1.0f); any = 1; }
-	if (gHatPat == 6) { if (gMyDrum[2][step]) { drumHit(2, gMyDrum[2][step] / 255.0f); any = 1; } }
+	if (gHatPat == EU_IDX[2]) {}
+	else if (gHatPat == 6) { if (gMyDrum[2][step]) { drumHit(2, gMyDrum[2][step] / 255.0f); any = 1; } }
 	else if (HATP[gHatPat] & bit) { drumHit(2, HATVEL[step] / 255.0f); any = 1; }
 	if (any) csndExecCmds(false);
 }
@@ -5087,7 +5115,7 @@ static void drumsChanged(void) {   // main thread
 	if (gDrums) {
 		if (!gCsndOK) { say("DRUMS NEED THE SECOND SOUND CHIP"); gDrums = 0; return; }
 		if (gDrumBuilt != gKit) drumBuild(gKit);
-		drumPickChannels(); gDrumStep = -1;
+		drumPickChannels(); gDrumStep = -1; gEuPos = 0;
 	} else if (gCsndOK) { for (int d = 0; d < 3; d++) if (gDrumCh[d] >= 0) CSND_SetPlayState(gDrumCh[d], 0); for (int k = 0; k < 2; k++) if (gNzCh[k] >= 0) CSND_SetPlayState(gNzCh[k], 0); csndExecCmds(false); }
 }
 // MIC TAP: knock or tap near the mic; each hit plays the drum now and is written into MINE at the nearest 16th,
@@ -5101,8 +5129,7 @@ static void drumRecChanged(void) {
 	if (!gDrumRec) { myDrumSave(); return; }
 	int r = gDrumRec - 1;
 	if (*DPAT[r] != MINE_IDX[r]) {   // start from what's playing on that row
-		const u16* pt = r == 0 ? KICKP : r == 1 ? SNAREP : HATP;
-		for (int i = 0; i < 16; i++) gMyDrum[r][i] = (pt[*DPAT[r]] & (0x8000 >> i)) ? (r == 2 ? HATVEL[i] : 230) : 0;
+		for (int i = 0; i < 16; i++) gMyDrum[r][i] = drumRowOn(r, *DPAT[r], i) ? (r == 2 ? HATVEL[i] : 230) : 0;
 		*DPAT[r] = MINE_IDX[r];
 	}
 	if (!gDrums) { gDrums = 1; drumsChanged(); }
@@ -5148,13 +5175,15 @@ static void drawMasterPanel(void) {
 static void drawDrumsPanel(void) {
 	frame(4, 30, 196, 194);
 	static const char* RN[3] = {"KICK", "SNARE", "HAT"};
-	const u16 pats[3] = {KICKP[gKickPat], SNAREP[gSnarePat], HATP[gHatPat]};
 	char s[40]; snprintf(s, sizeof(s), "%s KIT  %d BPM  %s", KIT_NAMES[gKit], gBPM, gDrums ? "ON" : "OFF"); text(10, 36, s, 1, gDrums ? TH->val[0] : TH->dim[0], gDrums ? TH->val[1] : TH->dim[1], gDrums ? TH->val[2] : TH->dim[2]);
 	for (int r = 0; r < 3; r++) {
 		int y = 56 + r * 34;
 		text(10, y, RN[r], 1, DIM);
+		if (*DPAT[r] == EU_IDX[r]) { char e[24]; snprintf(e, sizeof(e), "E(%d,%d) R%d", gEuHits[r], gEuLen, gEuRot[r]); text(70, y, e, 1, DIM); }
 		for (int i = 0; i < 16; i++) {
-			int x = 10 + i * 11, mine = *DPAT[r] == MINE_IDX[r], on = mine ? gMyDrum[r][i] > 0 : (pats[r] >> (15 - i)) & 1, cur = gDrums && i == gDrumStep;
+			int x = 10 + i * 11, mine = *DPAT[r] == MINE_IDX[r], isEu = *DPAT[r] == EU_IDX[r];
+			if (isEu && i >= gEuLen) continue;   // EUCLID rows shorter than 16 show only their own steps
+			int on = mine ? gMyDrum[r][i] > 0 : drumRowOn(r, *DPAT[r], i), cur = gDrums && (isEu ? i == gEuIdx : i == gDrumStep);
 			int hgt = mine && on ? 3 + gMyDrum[r][i] * 11 / 255 : 14;   // MINE: bar height = how hard you hit
 			if (on) rect(x, y + 25 - hgt, 9, hgt, cur ? TH->txt[0] : TH->line[0], cur ? TH->txt[1] : TH->line[1], cur ? TH->txt[2] : TH->line[2]);
 			else { rect(x, y + 23, 9, 2, DIM); if (cur) rect(x, y + 11, 9, 14, RGB3(TH->grid)); }
@@ -5793,7 +5822,7 @@ static void sleepHook(APT_HookType h, void* p) {
 		if (gCsndOK) {
 			echoStop();
 			for (int c = 0; c < NCS; c++) if (csndChannels & BIT(c)) CSND_SetPlayState(c, 0);
-			csndExecCmds(true);
+			csWait();
 		}
 		LightLock_Unlock(&gVoiceLock);
 		if (!gSafeMode) {
@@ -5946,6 +5975,10 @@ int main(void) {
 				if (p->dirty & D_LOOP) loopModeChanged();
 				if ((p->dirty & D_DRUMS) && p->p == &gDrumRec) drumRecChanged();
 				else if (p->dirty & D_DRUMS) drumsChanged();
+				else if (p->dirty & D_EUCLID) {   // touching a row's HITS or ROTATE switches that row to EUCLID and starts the drums
+					for (int r = 0; r < 3; r++) if (p->p == &gEuHits[r] || p->p == &gEuRot[r]) *DPAT[r] = EU_IDX[r];
+					if (!gDrums) { gDrums = 1; drumsChanged(); }
+				}
 				if (p->dirty & D_CHIP) { float lv = gChipLevel; gChipLevel = 1; chipSet(lv); }
 				if (p->dirty & D_GRAIN) grainsChanged();
 				if ((p->dirty & D_DLYT) && p->p == &gOfType) ofReset();
@@ -6165,7 +6198,7 @@ int main(void) {
 	if (gCsndOK) {
 		echoStop();   // capture units off and released before the chip goes away
 		for (int c = 0; c < NCS; c++) if (gCsndOK && (csndChannels & BIT(c))) CSND_SetPlayState(c, 0);
-		csndExecCmds(!gSlept);   // after a sleep the chip may never report back: don't wait on it
+		csWait();   // bounded: after a sleep or a fault the chip may never report back
 		gCsndOK = 0;
 		csndExit();
 	}
