@@ -87,6 +87,7 @@ The factory library was rebuilt from scratch: 123 patches in 12 styles, with no 
 | SPACE | Orbit Pad, Helicopter, Circle Arp, Around You, 3D Bells, Spiral Pluck, Passing Car, Steer Orbit (these switch OUTPUT to SURROUND when it's on STEREO; headphones work best) |
 | CHIPSET | PSG Stack, Echo Canyon, Crush Bell, 8-Bit Choir, Capture Dub, Two Chips, Quant Grit, GB Orbit, Double Echo, Sub Chip, Scream Lead, Raw Sampler, Hot Organ, Glitch Storm, Pitch Canyon (the 2DS's second sound chip: CHIP SQUARE, CHIP ECHO through its capture units, bit crush, 3D orbit) |
 | MOTION | Busy Boy, Tidal Table, Step Sculpt, Glass Breath, Chaos Garden, Acid Morph, Vowel Walk, Liquid Sync, Drawn Dance, Grain Tide (motion lanes, drawn LFOs, chaos and grains; Busy Boy uses nearly everything at once) |
+| QUIRKS | Glass Pluck, Scream Solo, Acid Scream, Grit Keys, Corrupt Perc, Sub Scream, Drive Mono, Tape Dub, Vowel Pad (one patch per hardware trick, in listening-test order; Glass Pluck is the clean reference) |
 | USER | 8 save slots |
 
 To save, pick a SAVE SLOT and press right on SAVE NOW. User patches are stored in `sdmc:/3ds/syrup/user_presets.bin`. INIT PATCH resets to a single saw.

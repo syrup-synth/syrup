@@ -2306,10 +2306,42 @@ static void m_graintide(SPatch* p) { p->master = 0.65f; OA.table = T_HARMONIX; O
 	lane(p, 0, 11, 2, 0.0f, 1.0f, 3); lane(p, 1, 0, 3, 0.2f, 0.9f, 2); lane(p, 2, 10, 6, 0.15f, 0.5f, 3); ORBIT(0.5f, 0.1f); REVB(0.3f, RV_HALL); }
 
 
+// QUIRKS: one patch per hardware trick, in listening-test order. GLASS PLUCK is the clean reference.
+static void q_glasspluck(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.pos = 0.85f; p->cutoff = 0.35f; p->res = 0.2f; p->keytrack = 0.6f;
+	ENV1(0.001f, 0, 0.35f, 0.0f, 0.3f); ENV2(0.0f, 0, 0.15f, 0.0f, 0.1f); MOD(2, SRC_ENV2, DST_CUTOFF, 0.45f); MOD(3, SRC_VEL, DST_CUTOFF, 0.15f); REVB(0.2f, RV_PLATE); }
+static void q_screamsolo(SPatch* p) {   // the ring is the note: cutoff tracks the key so it holds pitch across a run
+	p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 2; OA.detune = 5; p->voiceMode = 2; p->glide = 0.04f;
+	p->cutoff = 0.55f; p->res = 0.6f; p->keytrack = 1.0f; p->qScream = 0.75f; ENV1(0.015f, 0, 0.5f, 0.85f, 0.25f);
+	ENV2(0.0f, 0, 0.12f, 0.0f, 0.1f); MOD(2, SRC_ENV2, DST_CUTOFF, 0.25f); MOD(3, SRC_M1, DST_RES, 0.4f); DLYS(0.12f, S8D, DL_TAPE); }
+static void q_acidscream(SPatch* p) {   // mid-register 303 line; press ACID on the SEQ page for a pattern
+	p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; p->voiceMode = 1; ARP(1, 3, 1, 0.45f);
+	p->cutoff = 0.3f; p->res = 0.5f; p->keytrack = 0.6f; p->qScream = 0.45f; ENV1(0.002f, 0, 0.2f, 0.3f, 0.08f);
+	ENV2(0.0f, 0, 0.18f, 0.0f, 0.1f); MOD(2, SRC_ENV2, DST_CUTOFF, 0.5f); MOD(3, SRC_VEL, DST_RES, 0.3f); DLYS(0.2f, S8D, DL_DUB); }
+static void q_gritkeys(SPatch* p) {   // narrow pulse, raw interpolation: play it high, the aliasing is the sound
+	p->master = 0.6f; OA.table = T_PWM; OA.pos = 0.85f; OA.oct = 1; p->qGrit = 2; p->cutoff = 0.9f; p->res = 0.1f;
+	ENV1(0.001f, 0, 0.3f, 0.2f, 0.2f); MOD(2, SRC_VEL, DST_APOS, 0.12f); REVB(0.12f, RV_ROOM); }
+static void q_corruptperc(SPatch* p) {   // the decoder's garbage is the drum: hold a note, the arp plays it
+	p->master = 0.6f; OA.level = 0; p->noiseType = 5; p->noiseLevel = 0.9f; p->cutoff = 1.0f; p->res = 0;
+	ENV1(0.001f, 0, 0.08f, 0.0f, 0.05f); ARP(1, 3, 1, 0.25f); MOD(2, SRC_RAND, DST_AMP, 0.3f); }
+static void q_subscream(SPatch* p) {   // clean CSND sub under the low end, Scream growls above it
+	p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; p->subShape = 0; p->subOct = -1; p->subLevel = 0.75f;
+	p->cutoff = 0.5f; p->res = 0.5f; p->keytrack = 1.0f; p->qScream = 0.6f; ENV1(0.003f, 0, 0.4f, 0.7f, 0.15f);
+	ENV2(0.0f, 0, 0.2f, 0.1f, 0.1f); MOD(2, SRC_ENV2, DST_CUTOFF, 0.3f); }
+static void q_drivemono(SPatch* p) {   // one voice into the mixer's ceiling; MACRO 1 pushes it harder
+	p->master = 0.5f; OA.table = T_BASIC; OA.pos = SQR; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.semi = 7; OB.level = 0.5f; p->voiceMode = 2; p->glide = 0.03f;
+	p->qMixDrive = 0.5f; p->macro[0] = 0.3f; MOD(2, SRC_M1, DST_AMP, 0.6f); MOD(3, SRC_VEL, DST_AMP, 0.3f); ENV1(0.003f, 0, 0.3f, 0.9f, 0.1f); p->cutoff = 0.7f; }
+static void q_tapedub(SPatch* p) {   // chip echo replayed slow: each repeat drops; few repeats so the tail stays put
+	p->master = 0.6f; OA.table = T_BASIC; OA.pos = TRI; OA.level = 0.4f; CHIP(0.55f, 2, 0); ENV1(0.002f, 0, 0.2f, 0.0f, 0.15f);
+	p->csEcho = 0.65f; p->csEchoFb = 0.35f; p->csEchoT = 3; p->csEchoPitch = -2; p->cutoff = 0.6f; }
+static void q_vowelpad(SPatch* p) {   // no quirks: slow vowel morph, breath bends it, tilt opens it
+	p->master = 0.6f; OA.table = T_VOWELS; OA.uni = 2; OA.detune = 8; OA.warp = W_BENDP; OA.warpAmt = 0.1f;
+	ENV1(0.6f, 0, 1.0f, 0.9f, 1.5f); LFO(0, LS_SINE, 0, 0.08f); MOD(2, SRC_LFO1, DST_APOS, 0.6f); MOD(3, SRC_MIC, DST_AWARP, 0.3f);
+	MOD2(0, SRC_TILTY, DST_CUTOFF, 0.2f); p->cutoff = 0.55f; REVB(0.4f, RV_HALL); }
+
 typedef struct { const char* name; void (*fn)(SPatch*); } PresetDef;
 #define MAXPRE 15
-#define NSTYLES 13   // last style = USER
-static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "CHIPSET", "MOTION", "USER"};
+#define NSTYLES 14   // last style = USER
+static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "CHIPSET", "MOTION", "QUIRKS", "USER"};
 #define STYLE_SPACE 9
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
@@ -2338,6 +2370,8 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"SCREAM LEAD", c_screamlead}, {"RAW SAMPLER", c_rawsampler}, {"HOT ORGAN", c_hotorgan}, {"GLITCH STORM", c_glitchstorm}, {"PITCH CANYON", c_pitchcanyon}},
 	{{"KITCHEN SINK", m_busyboy}, {"TIDAL TABLE", m_tidal}, {"STEP SCULPT", m_stepsculpt}, {"GLASS BREATH", m_breathglass}, {"CHAOS GARDEN", m_chaosgarden},
 	 {"ACID MORPH", m_acidmorph}, {"VOWEL WALK", m_vowelwalk}, {"LIQUID SYNC", m_liquidsync}, {"DRAWN DANCE", m_drawndance}, {"GRAIN TIDE", m_graintide}},
+	{{"GLASS PLUCK", q_glasspluck}, {"SCREAM SOLO", q_screamsolo}, {"ACID SCREAM", q_acidscream}, {"GRIT KEYS", q_gritkeys}, {"CORRUPT PERC", q_corruptperc},
+	 {"SUB SCREAM", q_subscream}, {"DRIVE MONO", q_drivemono}, {"TAPE DUB", q_tapedub}, {"VOWEL PAD", q_vowelpad}},
 };
 #define NUSER 8
 static SPatch gUser[NUSER];
@@ -2456,6 +2490,7 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{1.30f, 0.81f, 1.34f, 2.99f, 0.90f, 1.37f, 3.46f, 1.10f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 0.60f, 1.20f, 1.20f},   // CHIPSET
 	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // MOTION
+	{1.73f, 3.00f, 2.80f, 2.50f, 1.60f, 0.70f, 0.69f, 2.50f, 1.86f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // QUIRKS
 };
 static int presetCount(int style) {
 	if (style == NSTYLES - 1) return NUSER;
