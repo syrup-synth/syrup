@@ -120,6 +120,7 @@ static void crashCheck(void) {
 }        // set while the audio thread runs the arp/seq clock (it holds gMipsLock)
 static LightLock gMipsLock;   // guards the shared FFT buffers (worker on core 1 vs main core)
 static Thread gWorker = NULL;
+static volatile u64 gCore1Busy = 0;   // system ticks core 1 spent rebuilding (HARDWARE page meter)
 
 // a band-limited single-cycle source: spectrum + 7 mip levels in linear memory
 typedef struct {
@@ -2847,7 +2848,13 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		snprintf(s, sizeof(s), "NOTES %d  FX BUS %s", voices, busActive() ? (gBusSeen ? "OK" : "ON") : (gBusFail ? "FALLBK" : "OFF")); text(6, 186, s, 1, DIM);
 		snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d", dsp, cs, csTot); text(6, 198, s, 1, DIM);
 		if (gGpuHung) { snprintf(s, sizeof(s), "GPU HUNG AFTER %d FRAMES", gGpuFrames); text(6, 210, s, 1, WARN); }
-		else if (gGpuFx && gGpuOK) { snprintf(s, sizeof(s), "GPU OK  CORE2 %s", gWorker ? "ON" : "OFF"); text(6, 210, s, 1, DIM); }
+		else {
+			static u64 lb = 0, lt = 0; static int pct = 0; u64 nt = svcGetSystemTick();
+			if (nt - lt > SYSCLOCK_ARM11) { u64 b = gCore1Busy; pct = lt ? (int)((b - lb) * 100 / (nt - lt)) : 0; lb = b; lt = nt; }
+			if (gWorker) snprintf(s, sizeof(s), "%sCORE 2 ON  %d%% BUSY", gGpuFx && gGpuOK ? "GPU OK  " : "", pct);
+			else snprintf(s, sizeof(s), "CORE 2 OFF: REBUILDS ON CORE 1");
+			if (gWorker) text(6, 210, s, 1, DIM); else text(6, 210, s, 1, WARN);
+		}
 	}
 	// parameter list: inverse bar on the selected row, meters for continuous values, < > on choices
 	Param* P = PAGES[page]; int n = pageLen(page);
@@ -5536,9 +5543,11 @@ static void workerMain(void* arg) {
 		LightEvent_Wait(&gJobEv);
 		if (AGET(gWorkerQuit)) break;
 		RebuildJob j = gJob;
+		u64 t0 = svcGetSystemTick();
 		LightLock_Lock(&gMipsLock);
 		doRebuild(&j);
 		LightLock_Unlock(&gMipsLock);
+		gCore1Busy += svcGetSystemTick() - t0;
 		ASET(gJobDone, 1);
 		ASET(gJobBusy, 0);
 	}
