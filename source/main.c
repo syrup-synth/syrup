@@ -688,6 +688,7 @@ static int gFilt2 = 0, gLowCut = 2;
 static const char* FILT2_NAMES[3] = {"OFF", "+6DB SLOPE", "LOW CUT"};
 static const char* LOWCUT_NAMES[6] = {"30HZ", "60HZ", "120HZ", "250HZ", "500HZ", "1KHZ"};
 static const float LOWCUT_HZ[6] = {30, 60, 120, 250, 500, 1000};
+static u8 gScreamFlush[24];   // CONTAINMENT: one tick of a zero filter clears a voice's stale self-oscillation before its next note
 static void filterSet(int ch, float hz, float res) {
 	if (hz < 40) hz = 40;
 	if (hz > 15000) hz = 15000;
@@ -695,7 +696,15 @@ static void filterSet(int ch, float hz, float res) {
 	if (gQScream > 0.001f && gFiltType == 0 && ch != NOISE_CH) {
 		// FILTER SCREAM: poles at radius r around the cutoff. Past r = 1 the DSP's fixed-point filter rings by itself and
 		// saturates: a screaming self-oscillation the stock filter types never allow.
-		float r = 0.985f + gQScream * 0.03f + res * 0.004f, w = TWO_PI * hz / DSPRATE, a1 = -2.0f * r * cosf(w), a2 = r * r;
+		if (ch < 24 && gScreamFlush[ch]) {   // b = a = 0: output 0 and both state words 0 after one sample
+			gScreamFlush[ch] = 0;
+			ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, 0, 0, 0, 0, 0); ndspChnIirBiquadSetEnable(ch, true); ndspChnIirMonoSetEnable(ch, false);
+			return;
+		}
+		float w = TWO_PI * hz / DSPRATE, cw = cosf(w), r = 0.985f + gQScream * 0.03f + res * 0.004f;
+		float rmax = 0.9995f / (cw > 0.5f ? cw : 0.5f);   // ceiling: keep a1 inside the DSP's Q14 range (past it the coefficient wraps and the filter latches)
+		if (r > rmax) r = rmax;
+		float a1 = -2.0f * r * cw, a2 = r * r;
 		float b0 = (1.0f + a1 + a2) * 0.6f + 0.002f;
 		ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, a1, a2, b0, 0, 0);
 		ndspChnIirBiquadSetEnable(ch, true);
@@ -744,6 +753,7 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 		ndspChnSetMix(ch, mix);
 		ndspChnSetRate(ch, f * N);
 		ndspChnSetInterp(ch, gQGrit == 2 ? NDSP_INTERP_NONE : gQGrit == 1 ? NDSP_INTERP_LINEAR : NDSP_INTERP_POLYPHASE);
+		if (gQScream > 0.001f && ch < 24) gScreamFlush[ch] = 1;
 		filterSet(ch, 2000, 0);
 		memset(&gWB[ch], 0, sizeof(ndspWaveBuf));
 		gWB[ch].data_vaddr = m->lev[v->lev[i]];
@@ -1451,6 +1461,17 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 		for (int s = 0; s < n; s++) {
 			s32 l = L[s], r = R[s]; if (l > 32767) l = 32767; if (l < -32768) l = -32768; if (r > 32767) r = 32767; if (r < -32768) r = -32768;
 			L[s] = (s32)(l * k); R[s] = (s32)(r * k);
+		}
+	}
+	{   // CONTAINMENT: DC block (a latched filter or clipped mix leaves an offset) and a ceiling before the effects
+		static float dx[2], dy[2];
+		for (int s = 0; s < n; s++) {
+			s32* io[2] = {&L[s], &R[s]};
+			for (int c = 0; c < 2; c++) {
+				float x = (float)*io[c], y = x - dx[c] + 0.9985f * dy[c]; dx[c] = x;
+				if (!(y == y) || y > 131072 || y < -131072) y = y > 0 ? 131072 : (y < 0 ? -131072 : 0);   // NaN / runaway
+				dy[c] = y; *io[c] = (s32)y;
+			}
 		}
 	}
 	ofBlock(L, R, n);   // OUT FILTER first, then the effects
