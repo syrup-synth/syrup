@@ -1089,7 +1089,7 @@ static void voicesUpdate(float dt, float bend) {
 				CSND_SetTimer(ch, timer);
 			}
 		}
-		if (v->chipCh >= 0) {   // CHIP layer: hardware square, pitch and level from the same voice
+		if (v->chipCh >= 8 && v->chipCh <= 13) {   // CHIP layer: hardware square, pitch and level from the same voice
 			float pan = v->pan + panMod + 0.5f; if (pan < 0) pan = 0; if (pan > 1) pan = 1;
 			float g = vg * gChipLevel * 0.6f;
 			cL[v->chipCh] = g * sqrtf(1 - pan) * 1.41f; cR[v->chipCh] = g * sqrtf(pan) * 1.41f;
@@ -3140,6 +3140,7 @@ static void paramFmt(const Param* p, char* out, int len) {
 		if (p->names == TABLE_NAME_DUMMY) snprintf(out, len, "%.16s", p->p == &gOsc[0].table ? gOsc[0].tb.name : gOsc[1].tb.name);
 		else if (p->names == PRESET_DUMMY) snprintf(out, len, "%.16s", presetName(gStyle, gPreset));
 		else if (p->names == PRESS_RIGHT) snprintf(out, len, "PRESS >");
+		else if (!p->names || v < (int)p->mn || v > (int)p->mx) snprintf(out, len, "%d", v);   // out of range: show the number, never read past the list
 		else snprintf(out, len, "%s", p->names[v]);
 		return;
 	}
@@ -4943,7 +4944,7 @@ static int chipRate(float f) {   // a PSG square takes 8 timer ticks per cycle; 
 	return (int)r;
 }
 static void chipStop(SVoice* v) {
-	if (v->chipCh < 0) return;
+	if (v->chipCh < 8 || v->chipCh > 13) { v->chipCh = -1; return; }   // (a voice cleared to 0 has no chip channel either)
 	if (gCsndOK) CSND_SetPlayState(v->chipCh, 0);
 	gChipOwner[v->chipCh - 8] = -1; v->chipCh = -1;
 }
@@ -7435,7 +7436,7 @@ int main(void) {
 				gGuard = 1; say("PATCH EDITED: PRESS AGAIN TO LEAVE IT (SAVE IT IN USER)"); topDirty = 1;
 			} else if (paramChange(p, dir, fast)) {
 				if (page != 0 && p->names != PRESS_RIGHT) {   // VALUE HUD: the new value, big, for a moment
-					if (p->type == PT_E && p->names) snprintf(gCallTxt, sizeof(gCallTxt), "%s", p->names[*(int*)p->p]); else paramFmt(p, gCallTxt, sizeof(gCallTxt));
+					paramFmt(p, gCallTxt, sizeof(gCallTxt));   // (paramFmt knows the TABLE / PRESET name stand-ins; indexing names[] directly read past them)
 					gCallT = p->type == PT_E ? 0.9f : 0.6f; gCallP = p;
 				}
 				if (page != 0 && page != 8 && page != 9) gEdited = 1;
