@@ -32,7 +32,8 @@ jobs:
           chmod +x makerom && mv makerom /usr/local/bin/
 
       - name: Install portlibs (curl + mbedtls for Wi-Fi downloads)
-        run: dkp-pacman -Sy --noconfirm --needed 3ds-curl 3ds-mbedtls 3ds-zlib
+        # already in the devkitarm image; only reach pkg.devkitpro.org (which sometimes refuses CI) when one is missing
+        run: dkp-pacman -Q 3ds-curl 3ds-mbedtls 3ds-zlib || dkp-pacman -Sy --noconfirm --needed 3ds-curl 3ds-mbedtls 3ds-zlib
 
       - name: Build .3dsx
         run: make
