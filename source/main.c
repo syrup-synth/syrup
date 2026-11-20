@@ -2800,7 +2800,7 @@ static void patchApply(const SPatch* p) {
 	// v12. Sound settings always follow the patch; a beat or a loop setup only when the patch carries one
 	gThru = p->thru & 1; gThruCut = p->thruCut; gThruRes = p->thruRes; gThruEnv = p->thruEnv; gThruLfo = p->thruLfo; gEchoWow = p->echoWow;
 	fxOrderSet(p->fxOrder);
-	gXyMode = p->xyMode >= 0 && p->xyMode < 4 ? p->xyMode : 0;
+	gXyMode = p->xyMode >= 0 && p->xyMode < 7 ? p->xyMode : 0;   // NXY
 	if (gTapeKeys && !p->tapeKeys) gTapeStop = 0;
 	gTapeKeys = p->tapeKeys & 1;
 	if (p->hasLoop) { gLoopBars = p->loopBars >= 0 && p->loopBars < 5 ? p->loopBars : 0; gLoopSpeed = p->loopSpeed; gLoopWow = p->loopWow; }
@@ -2974,12 +2974,13 @@ static Param P_FILT[] = {
 	PF("ENV2 SUS", &gEnv2.s, 0, 1, 0.01f, "%", 0), PF("ENV2 REL", &gEnv2.r, 0.01f, 5, 0.02f, "S", 0),
 	PEND};
 static int gXyMode = 0;
-static const char* XY_NAMES[4] = {"WT + CUTOFF", "MACRO 1+2", "MACRO 3+4", "KNOBS"};
+#define NXY 7
+static const char* XY_NAMES[NXY] = {"WT + CUTOFF", "MACRO 1+2", "MACRO 3+4", "CUTOFF + RES", "WT A + WT B", "FX MIX + COLOR", "PERF"};
 static int gStickMode = 0;
 static const char* STICK_NAMES[3] = {"BEND + MOD", "PAGE", "MACROS"};
 static Param P_MOD[] = {
 	PF("MACRO 1", &gMacro[0], 0, 1, 0.02f, "%", 0), PF("MACRO 2", &gMacro[1], 0, 1, 0.02f, "%", 0), PF("MACRO 3", &gMacro[2], 0, 1, 0.02f, "%", 0), PF("MACRO 4", &gMacro[3], 0, 1, 0.02f, "%", 0),
-	PE("XY PAD", &gXyMode, 4, XY_NAMES, D_THEME), PF("CHAOS RATE", &gChaosRate, 0, 1, 0.02f, "%", 0),
+	PE("XY PAD", &gXyMode, NXY, XY_NAMES, D_THEME), PF("CHAOS RATE", &gChaosRate, 0, 1, 0.02f, "%", 0),
 	PF("LFO3 RATE", &gDlRate[0], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO3 SYNC", &gDlSync[0], NSYNC, SYNC_NAMES, 0), PF("LFO4 RATE", &gDlRate[1], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO4 SYNC", &gDlSync[1], NSYNC, SYNC_NAMES, 0),
 	PE("LFO1 SHAPE", &gLfo[0].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO1 RATE", &gLfo[0].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO1 SYNC", &gLfo[0].sync, NSYNC, SYNC_NAMES, 0),
 	PE("LFO1 MODE", &gLfo[0].mode, 2, LFO_MODES, 0), PE("LFO1 TABLE", &gLfo[0].table, T_BUILTIN, BUILTIN_NAMES, 0), PF("LFO1 WT POS", &gLfo[0].pos, 0, 1, 0.02f, "%", 0),
@@ -4488,49 +4489,79 @@ static int chainTouch(int x, int y, int press, int release) {   // 1 = redraw
 }
 static u16* gCamImg; static int gCamOn;   // (camera, further down)
 // ---- bottom views for pages that only had the XY pad: KNOBS (XY PAD mode), VISUALIZER tiles, HARDWARE sensors
-static int gVisOnB = 0, gHwOnB = 0, gKnDrag = -1, gKnLastY = 0;
+static int gVisOnB = 0, gHwOnB = 0;
 static int xyShown(void) { return !gPads && !gModOn && !gGridOn && !gAddEdit && !gShapeOn && !gChainOn && !gVisOnB && !gHwOnB; }
-#define XYB_X 262   // the XY PAD mode button, top right of the pad
-static void drawXyModeBtn(void) {
-	static const char* M[4] = {"WT", "M1+2", "M3+4", "KNOBS"};
-	char t[12]; snprintf(t, sizeof(t), "%s >", M[gXyMode]);
-	rect(XYB_X, XY_Y + 1, 52, 12, RGB3(TH->tab)); text(XYB_X + 26 - (int)strlen(t) * 4, XY_Y + 3, t, 1, RGB3(TH->tabTxt));
-}
-static float* const KN_P[4] = {&gCutoff, &gRes, &gOsc[0].pos, &gFxMix};
-static const char* KN_N[4] = {"CUTOFF", "RES", "WT POS", "FX MIX"};
-#define KN_Y (XY_Y + 34)
-static void drawKnob(int cx, int cy, int r, float v) {
-	for (int k = 0; k <= 40; k++) {   // 270 degree track, lit up to the value
-		float a = (-135 + 270 * k / 40.0f) * 3.14159f / 180, on = k / 40.0f <= v + 0.001f;
-		int x = cx + (int)lroundf(sinf(a) * r), y = cy - (int)lroundf(cosf(a) * r);
-		if (on) { rect(x - 1, y - 1, 3, 3, RGB3(TH->keyOn)); } else px(x, y, RGB3(TH->grid));
+// XY PAD modes: what the two axes move, and the matrix destination that can push them (for the ghost)
+static void xyAxes(float** xp, float** yp, int* xd, int* yd) {
+	switch (gXyMode) {
+	case 1: case 6: *xp = &gMacro[0]; *yp = &gMacro[1]; *xd = *yd = -1; break;   // PERF: the pad plays macros 1 + 2
+	case 2: *xp = &gMacro[2]; *yp = &gMacro[3]; *xd = *yd = -1; break;
+	case 3: *xp = &gCutoff; *yp = &gRes; *xd = DST_CUTOFF; *yd = DST_RES; break;
+	case 4: *xp = &gOsc[0].pos; *yp = &gOsc[1].pos; *xd = DST_APOS; *yd = DST_BPOS; break;
+	case 5: *xp = &gFxMix; *yp = &gFxColor; *xd = -1; *yd = DST_FXP; break;
+	default: *xp = &gOsc[0].pos; *yp = &gCutoff; *xd = DST_APOS; *yd = DST_CUTOFF; break;
 	}
-	float a = (-135 + 270 * v) * 3.14159f / 180;
-	line(cx, cy, cx + (int)(sinf(a) * (r - 4)), cy - (int)(cosf(a) * (r - 4)), RGB3(TH->txt));
 }
-static void drawKnobs(void) {
+static const char* XY_XL[NXY] = {"WT POS >", "MACRO 1 >", "MACRO 3 >", "CUTOFF >", "A WT POS >", "FX MIX >", "MACRO 1 >"};
+static const char* XY_YL[NXY] = {"^ CUTOFF", "^ MACRO 2", "^ MACRO 4", "^ RES", "^ B WT POS", "^ FX COLOR", "^ MACRO 2"};
+static float xyEff(float v, int d) {   // where modulation has the value right now
+	if (d < 0) return v;
+	float m = modSum(d, newestVoice()); v += d == DST_CUTOFF ? m * 5.0f / 7.97f : m;
+	return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+static int xyModulated(void) { float* a; float* b; int xd, yd; xyAxes(&a, &b, &xd, &yd); return fabsf(xyEff(*a, xd) - *a) > 0.01f || fabsf(xyEff(*b, yd) - *b) > 0.01f; }
+static int xyTop(void) { return gXyMode == 6 ? XY_Y + 28 : XY_Y; }
+#define XYB_W 64
+// PERF sliders: four values that matter most while playing, as bars you can slide
+static float* const SL_P[4] = {&gCutoff, &gRes, &gOsc[0].pos, &gFxMix};
+static const char* SL_N[4] = {"CUTOFF", "RES", "WT POS", "FX MIX"};
+static int gSlDrag = -1;
+static void drawXyPad(void) {
+	int top = xyTop(), h = XY_Y + XY_H - top;
 	rect(0, XY_Y, 320, WORK_B - XY_Y, RGB3(TH->bg));
-	for (int i = 0; i < 4; i++) {
-		int cx = 40 + i * 80; drawKnob(cx, KN_Y - 4, 17, *KN_P[i] < 0 ? 0 : *KN_P[i] > 1 ? 1 : *KN_P[i]);
-		const u8* c = gKnDrag == i ? TH->keyOn : TH->txt; text(cx - (int)strlen(KN_N[i]) * 4, KN_Y + 18, KN_N[i], 1, c[0], c[1], c[2]);
+	if (gXyMode == 6) for (int i = 0; i < 4; i++) {
+		int x = 4 + (i & 1) * 158, y = XY_Y + 1 + (i / 2) * 13; float v = *SL_P[i]; v = v < 0 ? 0 : v > 1 ? 1 : v;
+		const u8* c = gSlDrag == i ? TH->keyOn : TH->txt; text(x, y + 2, SL_N[i], 1, c[0], c[1], c[2]);
+		rect(x + 54, y + 1, 96, 10, RGB3(TH->pad)); rect(x + 54, y + 1, (int)(v * 96), 10, RGB3(TH->val));
+		float e = xyEff(v, paramDst(SL_P[i])); if (fabsf(e - v) > 0.01f) rect(x + 54 + (int)(e * 95), y - 1, 2, 14, RGB3(TH->warn));
 	}
-	for (int m = 0; m < 4; m++) {   // macro sliders, 2 x 2
-		int x = 4 + (m & 1) * 158, y = XY_Y + 74 + (m / 2) * 11; char t[4]; snprintf(t, sizeof(t), "M%d", m + 1);
-		text(x, y, t, 1, RGB3(TH->dim)); rect(x + 24, y + 2, 126, 5, RGB3(TH->pad)); rect(x + 24, y + 2, (int)(gMacro[m] * 126), 5, RGB3(TH->val));
+	float* xp; float* yp; int xd, yd; xyAxes(&xp, &yp, &xd, &yd);
+	float xv = *xp < 0 ? 0 : *xp > 1 ? 1 : *xp, yv = *yp < 0 ? 0 : *yp > 1 ? 1 : *yp;
+	int cx = 4 + (int)(xv * 311), cy = top + (int)((1 - yv) * (h - 1));
+	if (TH->ega) {
+		for (int gx = 0; gx <= 8; gx++) for (int y = top; y < top + h; y += 2) px(4 + gx * 39, y, DIM);
+		for (int gy = 0; gy <= 4; gy++) for (int x = 4; x < 316; x += 2) px(x, top + gy * (h - 1) / 4, DIM);
+	} else {
+		rect(4, top, 312, h, RGB3(TH->pad));
+		for (int gx = 1; gx < 8; gx++) rect(4 + gx * 39, top, 1, h, RGB3(TH->grid));
+		for (int gy = 1; gy < 4; gy++) rect(4, top + gy * h / 4, 312, 1, RGB3(TH->grid));
+		frame(4, top, 312, h);
 	}
-	drawXyModeBtn();
+	float ex = xyEff(xv, xd), ey = xyEff(yv, yd);
+	if (fabsf(ex - xv) > 0.01f || fabsf(ey - yv) > 0.01f) {   // modulation ghost: a line to where the sound actually is
+		int gx = 4 + (int)(ex * 311), gy = top + (int)((1 - ey) * (h - 1));
+		for (int k = 0; k <= 16; k++) px(cx + (gx - cx) * k / 16, cy + (gy - cy) * k / 16, RGB3(TH->warn));
+		outline(gx - 3, gy - 3, 7, 7, RGB3(TH->warn));
+	}
+	rect(cx, top, 1, h, LINE); rect(4, cy, 312, 1, LINE);
+	rect(cx - 4, cy - 4, 9, 9, TXT); if (TH->ega) rect(cx - 2, cy - 2, 5, 5, BG);
+	text(8, top + 4, XY_XL[gXyMode], 1, DIM); text(312 - (int)strlen(XY_YL[gXyMode]) * 8, top + h - 12, XY_YL[gXyMode], 1, DIM);
+	static const char* M[NXY] = {"WT/CUT", "M1/M2", "M3/M4", "CUT/RES", "A/B", "FX", "PERF"};
+	char t[12]; snprintf(t, sizeof(t), "%s>", M[gXyMode]);
+	rect(316 - XYB_W, top + 1, XYB_W - 1, 12, RGB3(TH->tab)); text(316 - XYB_W / 2 - (int)strlen(t) * 4, top + 3, t, 1, RGB3(TH->tabTxt));
 }
-static int knobsTouch(int x, int y, int press, int release) {
-	if (release) { int r = gKnDrag >= 0; gKnDrag = -1; return r; }
-	if (press) {
-		if (y >= XY_Y + 72) gKnDrag = 4 + (x >= 160) + ((y >= XY_Y + 83) ? 2 : 0);
-		else { gKnDrag = x / 80; if (gKnDrag > 3) gKnDrag = 3; }
-		gKnLastY = y;
-	}
-	if (gKnDrag < 0) return 0;
-	if (gKnDrag >= 4) { int m = gKnDrag - 4, bx = 4 + (m & 1) * 158 + 24; float v = (x - bx) / 126.0f; gMacro[m] = v < 0 ? 0 : v > 1 ? 1 : v; }
-	else { float* p = KN_P[gKnDrag]; float v = *p + (gKnLastY - y) / 90.0f; *p = v < 0 ? 0 : v > 1 ? 1 : v; gKnLastY = y; }
-	gEdited = 1; return 1;
+static int xyTouch(int x, int y, int press, int release) {   // 1 = redraw
+	int top = xyTop(), h = XY_Y + XY_H - top;
+	if (release) { int r = gSlDrag >= 0; gSlDrag = -1; return r; }
+	if (press && x >= 316 - XYB_W && y >= top && y < top + 14) { gXyMode = (gXyMode + 1) % NXY; gSlDrag = -1; say(XY_NAMES[gXyMode]); return 1; }
+	if (press && gXyMode == 6 && y < top) { gSlDrag = (x >= 160) + ((y - XY_Y) / 13 ? 2 : 0); }
+	if (gSlDrag >= 0) { float v = (x - (4 + (gSlDrag & 1) * 158 + 54)) / 96.0f; *SL_P[gSlDrag] = v < 0 ? 0 : v > 1 ? 1 : v; gEdited = 1; return 1; }
+	if (y < top) return 0;
+	float np = (x - 4) / 311.0f, nc = 1.0f - (y - top) / (float)(h - 1);
+	np = np < 0 ? 0 : np > 1 ? 1 : np; nc = nc < 0 ? 0 : nc > 1 ? 1 : nc;
+	float* xp; float* yp; int xd, yd; xyAxes(&xp, &yp, &xd, &yd); *xp = np; *yp = nc;
+	gXYmod = nc * 2 - 1;
+	return 1;
 }
 static void drawVisTiles(void) {   // VISUALIZER: one tile per mode, plus OVERLAY
 	rect(0, TAB_H, 320, WORK_B - TAB_H, RGB3(TH->bg));
@@ -4600,24 +4631,7 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	if (gPads && !gGridOn) { drawPads(base); return; }   // chord pads take the whole screen under the tabs
 	if (gModOn) { drawModView(); return; }               // MOD page: route / drawn LFOs / motion
 	if (gGridOn) drawGrid(); else if (gAddEdit) drawAdd(); else {
-	// XY pad: dotted EGA grid, crosshair
-	int xm = gXyMode > 2 ? 0 : gXyMode;   // (KNOBS draws over this)
-	float xv = xm ? gMacro[xm * 2 - 2] : gOsc[0].pos, yv = xm ? gMacro[xm * 2 - 1] : gCutoff;
-	int cx = 4 + (int)(xv * 311), cy = XY_Y + (int)((1 - yv) * (XY_H - 1));
-	if (TH->ega) {
-		for (int gx = 0; gx <= 8; gx++) for (int y = XY_Y; y < XY_Y + XY_H; y += 2) px(4 + gx * 39, y, DIM);
-		for (int gy = 0; gy <= 4; gy++) for (int x = 4; x < 316; x += 2) px(x, XY_Y + gy * (XY_H - 1) / 4, DIM);
-		rect(cx, XY_Y, 1, XY_H, LINE); rect(4, cy, 312, 1, LINE);
-		rect(cx - 4, cy - 4, 9, 9, TXT); rect(cx - 2, cy - 2, 5, 5, BG);
-	} else {
-		rect(4, XY_Y, 312, XY_H, RGB3(TH->pad));
-		for (int gx = 1; gx < 8; gx++) rect(4 + gx * 39, XY_Y, 1, XY_H, RGB3(TH->grid));
-		for (int gy = 1; gy < 4; gy++) rect(4, XY_Y + gy * XY_H / 4, 312, 1, RGB3(TH->grid));
-		rect(cx, XY_Y, 1, XY_H, LINE); rect(4, cy, 312, 1, LINE); rect(cx - 4, cy - 4, 9, 9, TXT);
-		frame(4, XY_Y, 312, XY_H);
-	}
-	static const char* XL[3] = {"WT POS >", "MACRO 1 >", "MACRO 3 >"}; static const char* YL[3] = {"^ CUTOFF", "^ MACRO 2", "^ MACRO 4"};
-	text(8, XY_Y + 4, XL[xm], 1, DIM); text(312 - (int)strlen(YL[xm]) * 8, XY_Y + XY_H - 12, YL[xm], 1, DIM);
+	drawXyPad();
 	}
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
@@ -4686,7 +4700,6 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	if (gChainOn && !gGridOn && !gAddEdit) drawChainView();
 	if (gVisOnB && !gGridOn && !gAddEdit) drawVisTiles();
 	if (gHwOnB && !gGridOn && !gAddEdit) drawHwView();
-	if (xyShown()) { if (gXyMode == 3) drawKnobs(); else drawXyModeBtn(); }
 	if (!gGridOn && !gAddEdit) drawSeqStrip();
 	drawPerfRow(latch);
 	if (latch) { outline(0, KB_Y, 320, 240 - KB_Y, HI); outline(1, KB_Y + 1, 318, 238 - KB_Y, HI); }   // LATCH: notes hold, and the keyboard says so
@@ -7470,24 +7483,12 @@ int main(void) {
 			} else if (t.py < WORK_B && gGridOn) {
 				gLastTX = t.px; gLastTY = t.py;
 				if (gridTouch(t.px, t.py, !prevTouch, 0)) topDirty = botDirty = 1;
-			} else if (xyShown() && !prevTouch && t.px >= XYB_X && t.py >= XY_Y && t.py < XY_Y + 14) {
-				gXyMode = (gXyMode + 1) % 4; gKnDrag = -1; say(XY_NAMES[gXyMode]); botDirty = 1;
-			} else if (xyShown() && gXyMode == 3 && t.py < WORK_B && t.py >= XY_Y) {
+			} else if (xyShown() && t.py < WORK_B && t.py >= XY_Y) {
 				gLastTX = t.px; gLastTY = t.py;
-				if (knobsTouch(t.px, t.py, !prevTouch, 0)) { botDirty = 1; topDirty = 1; }
+				if (xyTouch(t.px, t.py, !prevTouch, 0)) { botDirty = 1; topDirty = 1; }
 			} else if (gVisOnB && t.py < WORK_B && t.py >= TAB_H && !gGridOn && !gAddEdit) {
 				if (!prevTouch && visTilesTouch(t.px, t.py)) { botDirty = 1; topDirty = 1; }
 			} else if (gHwOnB && t.py < WORK_B && t.py >= TAB_H) {
-			} else if (t.py < XY_Y + XY_H) {
-				float np = (t.px - 4) / 311.0f, nc = 1.0f - (t.py - XY_Y) / (float)(XY_H - 1);
-				if (np < 0) np = 0;
-				if (np > 1) np = 1;
-				if (nc < 0) nc = 0;
-				if (nc > 1) nc = 1;
-				if (gXyMode == 0) { A->pos = np; gCutoff = nc; }
-				else if (gXyMode < 3) { gMacro[gXyMode * 2 - 2] = np; gMacro[gXyMode * 2 - 1] = nc; }
-				gXYmod = nc * 2 - 1;
-				topDirty = botDirty = 1;
 			} else if (t.py >= KB_Y) {
 				key = keyAt(t.px, t.py, base);
 				vel = 0.35f + 0.65f * (t.py - KB_Y) / (float)(240 - KB_Y);
@@ -7498,7 +7499,8 @@ int main(void) {
 		if (gShapeOn && prevTouch && !touching && shapeTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gChainOn && prevTouch && !touching && chainTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gGridOn && prevTouch && !touching && gridTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
-		if (gKnDrag >= 0 && prevTouch && !touching && knobsTouch(gLastTX, gLastTY, 0, 1)) botDirty = 1;
+		if (gSlDrag >= 0 && prevTouch && !touching && xyTouch(gLastTX, gLastTY, 0, 1)) botDirty = 1;
+		{ static int gT = 0; if (xyShown() && ++gT % 3 == 0 && xyModulated()) botDirty = 1; }   // the ghost follows the modulation
 		if (gPads && prevTouch && !touching) { gStrumZone = -1; if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
 		padsTick(dt);
 		prevTouch = touching;

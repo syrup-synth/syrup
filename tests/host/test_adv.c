@@ -1,4 +1,4 @@
-// Playability pass: start on the last page, KNOBS view + XY mode button, circle pad PAGE mode, matrix long-press
+// Playability pass: start on the last page, XY modes + PERF sliders + mod ghost, circle pad PAGE mode, matrix long-press
 // clears a slot, VISUALIZER tiles, HARDWARE sensor view, the HUD's modulation ghost, SPEAKER EQ.
 #include "syrup_host.c"
 #include "harness.h"
@@ -8,15 +8,19 @@ static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0; gFxCore2 = 0; CX = 0; CY = 0;
 	if (fr == 3) { int st, ix; if (findPreset("REESE CRATE", &st, &ix)) presetLoad(st, ix); }
 	if (fr == 5) { if (!xyShown()) fail("settings: should start on OSC A (saved page) with the XY pad"); gXyMode = 0; }
-	// XY mode button -> KNOBS, then drag the CUTOFF knob up
-	if (fr == 8) { TOUCH = 1; TX = XYB_X + 20; TY = XY_Y + 6; }
-	if (fr == 10) { if (gXyMode != 1) fail("XY mode button should step the XY PAD mode (%d)", gXyMode); gXyMode = 3; }
+	// XY mode button steps the mode; PERF: sliders over the pad; CUTOFF + RES mode moves both
+	if (fr == 8) { TOUCH = 1; TX = 300; TY = XY_Y + 6; }
+	if (fr == 10) { if (gXyMode != 1) fail("XY mode button should step the XY PAD mode (%d)", gXyMode); gXyMode = 6; }
 	if (fr == 12) cut0 = gCutoff;
-	if (fr == 27) shotBot("shots/knobs.ppm");
-	if (fr >= 14 && fr < 24) { TOUCH = 1; TX = 40; TY = KN_Y + 10 - (fr - 14) * 4; }
-	if (fr == 26 && gCutoff < cut0 + 0.2f) fail("KNOBS: dragging CUTOFF up should raise it (%.2f -> %.2f)", cut0, gCutoff);
-	if (fr >= 28 && fr < 31) { TOUCH = 1; TX = 4 + 158 + 24 + 100; TY = XY_Y + 74 + 3; }   // macro 2 slider
-	if (fr == 33 && gMacro[1] < 0.7f) fail("KNOBS: macro slider should follow the finger (%.2f)", gMacro[1]);
+	if (fr >= 14 && fr < 18) { TOUCH = 1; TX = 4 + 54 + 90; TY = XY_Y + 6; }   // CUTOFF slider near the top
+	if (fr == 20 && gCutoff < 0.85f) fail("PERF: CUTOFF slider should follow the finger (%.2f)", gCutoff);
+	if (fr >= 22 && fr < 25) { TOUCH = 1; TX = 250; TY = xyTop() + 20; }   // pad: macros 1 + 2
+	if (fr == 27) { shotBot("shots/perf.ppm"); if (gMacro[0] < 0.7f || gMacro[1] < 0.6f) fail("PERF: the pad should play macros 1 + 2 (%.2f %.2f)", gMacro[0], gMacro[1]); }
+	if (fr == 28) { gXyMode = 3; }
+	if (fr >= 29 && fr < 31) { TOUCH = 1; TX = 60; TY = XY_Y + XY_H - 10; }
+	if (fr == 33 && (gCutoff > 0.3f || gRes > 0.3f)) fail("CUTOFF + RES mode: bottom left should close both (%.2f %.2f)", gCutoff, gRes);
+	if (fr == 34) { gXyMode = 0; gMod[2].src = SRC_LFO1; gMod[2].dst = DST_CUTOFF; gMod[2].amt = 0.8f; midiPush(0x90, 50, 100); }
+	if (fr == 60) { shotBot("shots/xy_ghost.ppm"); if (!xyModulated()) fail("XY ghost: an LFO on cutoff should show"); midiPush(0x80, 50, 0); gMod[2].src = SRC_OFF; }
 	// circle pad PAGE mode on OSC A: X pushes WT POS
 	if (fr == 35) { gStickMode = 1; pos0 = gOsc[0].pos; if (pos0 > 0.8f) gOsc[0].pos = pos0 = 0.2f; }
 	if (fr >= 36 && fr < 66) CX = 150;
@@ -47,6 +51,6 @@ int main(void) {
 	FILE* f = fopen("sd/settings.bin", "wb"); int d[4] = {0x53455431, 1, 0, 0}; fwrite(d, sizeof(d), 1, f); fclose(f);
 	loadFont(); FRMAX = 190; app_main();
 	remove("sd/settings.bin");
-	printf("adv: last page, knobs, circle pad, matrix hold, HUD ghost, vis tiles, hardware view\n");
+	printf("adv: last page, XY modes, PERF, circle pad, matrix hold, HUD ghost, vis tiles, hardware view\n");
 	return gFails ? 1 : 0;
 }

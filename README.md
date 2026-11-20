@@ -127,7 +127,7 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | X / Y | Next / previous page (OSC A, OSC B, SUB+NOISE, FILT+ENV, LFO+MOD, VOICE+FX) |
 | Bottom top row | WORK chips: PADS, MATRIX, MOTION, ENV (FILT+ENV editor), CHAIN (FX ORDER), SEQ: one tap to each editor |
 | Bottom PERF row | Above the keys: OCT-, OCT+, SCALE (scale on/off, back to the last one), LATCH, CHORD (on/off, last chord), PLAY/STOP (sequencer), PANIC (all notes off, latch and sequencer stop) |
-| XY pad mode button | Top right of the XY pad: WT / M1+2 / M3+4 / KNOBS. KNOBS shows four knobs (CUTOFF, RES, WT POS, FX MIX; drag up / down) and the four macro sliders |
+| XY pad mode button | Top right of the XY pad steps through WT + CUTOFF, MACRO 1+2, MACRO 3+4, CUTOFF + RES, WT A + WT B, FX MIX + COLOR and PERF (four sliders: CUTOFF, RES, WT POS, FX MIX over a smaller pad that plays macros 1 + 2). When modulation is moving an axis, a ghost square shows where the sound really is, with a line back to your finger |
 | Circle pad | HARDWARE > CIRCLE PAD: BEND + MOD (default), PAGE (pushes two values on the page you're on: OSC = WT POS / CUTOFF, FILT+ENV and most pages = CUTOFF / RES, VOICE+FX = FX MIX / CHORUS, ARP+SEQ = SWING / GATE, MASTER FX = DELAY / REVERB MIX, LFO+MOD = MACRO 1 / 2) or MACROS (M1 / M2). Hold it over to keep moving the value |
 | Matrix slot | Tap a box to pick, hold it to clear the slot |
 | VISUALIZER / HARDWARE pages | Bottom screen: a tile per visualizer mode (plus OVERLAY); live sensor meters and the camera picture |
