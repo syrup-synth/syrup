@@ -68,6 +68,15 @@ static void SCRIPT(int fr) {
 		gEdited = 0; gXyMode = 0; xyTouch(100, XY_Y + 40, 1, 0); xyTouch(0, 0, 0, 1); if (!gEdited) fail("edited: the XY pad");
 		gModView = 0;
 	}
+	// LATCH on, tap the same key twice: the second tap restrikes it (a released voice + a new one)
+	if (fr == 200) { int st, ix; if (findPreset("WARM FELT", &st, &ix)) presetLoad(st, ix); gPads = 0; gVoiceMode = 0; gArp = 0; gSeqMode = 0; gChord = 0; gScale = 0; gEdited = 0; }
+	if (fr == 201) HD = KEY_B;   // LATCH
+	if (fr == 204 || fr == 205 || fr == 210 || fr == 211) { TOUCH = 1; TX = 30; TY = KB_Y + 80; }
+	{ static int rel0; if (fr == 209 || fr == 214) {
+		int rel = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage == 4) rel++;
+		if (fr == 209) rel0 = rel; else if (rel <= rel0) fail("keys: with LATCH, tapping the held key again should restrike it");
+	} }
+	if (fr == 215) HD = KEY_B;
 	if (fr == 197) {   // the browser: a GROOVE patch's beat and a DRUMS kit stop when you move on, also into USER
 		gStyle = 14; gPreset = 0; presetLoad(14, 0); gEdited = 0; gGuard = 0;
 		if (gVoiceMode < 3) fail("browser: a DRUMS kit should play the kit");
@@ -95,7 +104,7 @@ static void SCRIPT(int fr) {
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	FILE* f = fopen("sd/settings.bin", "wb"); int d[4] = {0x53455431, 1, 0, 0}; fwrite(d, sizeof(d), 1, f); fclose(f);
-	loadFont(); FRMAX = 200; app_main();
+	loadFont(); FRMAX = 218; app_main();
 	remove("sd/settings.bin");
 	printf("adv: last page, XY modes, PERF, circle pad, matrix hold, HUD ghost, vis tiles, hardware view\n");
 	return gFails ? 1 : 0;

@@ -7587,9 +7587,10 @@ int main(void) {
 		{ static int gT = 0; if (xyShown() && ++gT % 3 == 0 && xyModulated()) botDirty = 1; }   // the ghost follows the modulation
 		if (gPads && prevTouch && !touching) { gStrumZone = -1; if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
 		padsTick(dt);
+		int freshPress = touching && !prevTouch;   // a new tap restrikes the key even if it's the one still held (LATCH, drum pads)
 		prevTouch = touching;
 		{ static int f = 0; if (gAddDirty && (++f % 6 == 0 || !touching)) { gAddDirty = 0; addApply(); topDirty = 1; } }   // additive editor: rebuild a few times a second while drawing
-		if (key != curKey && !(latch && key < 0)) {
+		if ((key != curKey || (freshPress && key >= 0)) && !(latch && key < 0)) {
 			int notes[4], n = key >= 0 ? chordNotes(key, notes) : 0;
 			if (gSeqMode == 1) { if (key >= 0 && gSeqBase >= 0) { gSeqTr = key - gSeqBase; topDirty = 1; } }   // transpose the pattern
 			else {
