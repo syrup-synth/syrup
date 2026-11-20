@@ -854,7 +854,10 @@ static void addTaps(SVoice* v) {
 }
 
 static void kitNoteOn(int note, float vel); static void kitHitSound(int d, float vel);
+static float gNoteVel[128], gKeyFade[128];   // keyboard feedback: how hard each held note was hit; the glow a released key leaves
+static int gChordKey = -1;
 static void voiceOn(int note, float vel) {
+	if (note >= 0 && note < 128) gNoteVel[note] = vel;
 	if (!gAudioOK) return;
 	if (gVoiceMode >= 3) { kitNoteOn(note, vel); return; }   // DRUM KIT patch: a key is a drum hit
 	if (gVoiceMode != 0) {   // mono / legato: one voice
@@ -2717,7 +2720,7 @@ static int presetCount(int style) {
 static void say(const char* m);
 // edit guard: after you change a patch, the first step to another patch only warns (the second one goes)
 static int gEdited = 0, gGuard = 0, gStyleCur = 0, gPresetCur = 0;
-static char gCallTxt[24]; static float gCallT = 0;   // big pop-up of a stepped value (Shrub-style)
+static char gCallTxt[24]; static float gCallT = 0; static const void* gCallP = NULL;   // big pop-up of the value being changed (Shrub-style); gCallP: its Param, for the bar
 static void presetLoad(int style, int idx) {
 	gEdited = 0; gGuard = 0; gStyleCur = style; gPresetCur = idx;
 	if (style == NSTYLES - 1) { if (gUser[idx].magic == PATCH_MAGIC) patchApply(&gUser[idx]); return; }
@@ -3142,6 +3145,61 @@ static void envLabels(void) {
 	}
 }
 // CPU version
+// FILTER RESPONSE (FILT+ENV page): the main filter and FILTER 2 evaluated at 188 log-spaced frequencies, with the
+// harmonics of OSC A's live cycle at the newest note before (dim) and after (bright) the filter
+static float bqMag(float b0, float b1, float b2, float a0, float a1, float a2, float w) {
+	float c1 = cosf(w), s1 = sinf(w), c2 = cosf(2 * w), s2 = sinf(2 * w);
+	float nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2), dr = a0 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
+	return sqrtf((nr * nr + ni * ni) / (dr * dr + di * di + 1e-12f));
+}
+static float filterGain(float f) {   // |H| of the voice filter at f Hz, as the DSP is set up
+	float hz = baseCutoff(); if (hz < 40) hz = 40; if (hz > 15000) hz = 15000;
+	float w0 = TWO_PI * hz / DSPRATE, w = TWO_PI * f / DSPRATE, cw = cosf(w0), sw = sinf(w0), g = 1;
+	float q = 0.707f + gRes * 9.0f, qb = 0.5f + gRes * 6.0f, al = sw / (2 * (gFiltType >= 2 ? (gFiltType == 4 ? 0.7f + gRes * 6.0f : qb) : q));
+	switch (gFiltType) {
+	case 0: g = bqMag((1 - cw) / 2, 1 - cw, (1 - cw) / 2, 1 + al, -2 * cw, 1 - al, w); break;
+	case 1: g = bqMag((1 + cw) / 2, -(1 + cw), (1 + cw) / 2, 1 + al, -2 * cw, 1 - al, w); break;
+	case 2: g = bqMag(al, 0, -al, 1 + al, -2 * cw, 1 - al, w); break;
+	case 3: g = bqMag(1, -2 * cw, 1, 1 + al, -2 * cw, 1 - al, w); break;
+	default: { float A = 2.0f; g = bqMag(1 + al * A, -2 * cw, 1 - al * A, 1 + al / A, -2 * cw, 1 - al / A, w); }
+	}
+	if (gFilt2 == 1) { float k = expf(-TWO_PI * hz / DSPRATE); g *= (1 - k) / sqrtf(1 + k * k - 2 * k * cosf(w)); }   // +6 dB slope: one pole at the cutoff
+	else if (gFilt2 == 2) { float fc = LOWCUT_HZ[gLowCut]; g *= f / sqrtf(f * f + fc * fc); }   // LOW CUT
+	return g;
+}
+static void drawFilterPlot(int x0, int y0, int w, int h) {
+	frame(x0, y0, w, h);
+	int ix = x0 + 4, iw = w - 8, iy = y0 + 3, ih = h - 6;
+	static const float FLO = 30, FHI = 15000;
+	#define FX(f) (ix + (int)(logf((f) / FLO) / logf(FHI / FLO) * (iw - 1)))
+	#define DBY(d) (iy + (int)((12 - (d)) / 60.0f * (ih - 1)))
+	for (int d = 0; d >= -36; d -= 12) for (int x = ix; x < ix + iw; x += 3) px(x, DBY(d), RGB3(TH->grid));   // 0, -12, -24, -36 dB
+	static const float DEC[3] = {100, 1000, 10000}; for (int k = 0; k < 3; k++) for (int y = iy; y < iy + ih; y += 3) px(FX(DEC[k]), y, RGB3(TH->grid));
+	// harmonics of OSC A's live cycle at the newest note (or A3), before / after the filter
+	const SVoice* v = newestVoice(); float f0 = v ? v->cur * oscTune(0) : 220.0f; const Mips* m = &gOsc[0].mips;
+	float top = 1e-6f; for (int k = 1; k < 128; k++) { float a = sqrtf(m->spec[k].re * m->spec[k].re + m->spec[k].im * m->spec[k].im); if (a > top) top = a; }
+	for (int k = 1; k < 128 && f0 * k < FHI; k++) {
+		float f = f0 * k; if (f < FLO) continue;
+		float a = sqrtf(m->spec[k].re * m->spec[k].re + m->spec[k].im * m->spec[k].im) / top; if (a < 1e-4f) continue;
+		float db = 20 * log10f(a), dbf = db + 20 * log10f(filterGain(f) + 1e-6f); int x = FX(f), yb = iy + ih - 1;
+		int y1 = DBY(db < -48 ? -48 : db); if (y1 < yb) rect(x, y1, 1, yb - y1, RGB3(TH->dim));
+		int y2 = DBY(dbf < -48 ? -48 : dbf > 12 ? 12 : dbf); if (y2 < yb) rect(x, y2, 1, yb - y2, RGB3(TH->txt));
+	}
+	// the response curve, bright
+	int py = -1;
+	for (int x = ix; x < ix + iw; x++) {
+		float f = FLO * powf(FHI / FLO, (float)(x - ix) / (iw - 1)), db = 20 * log10f(filterGain(f) + 1e-6f);
+		if (db > 12) db = 12; if (db < -48) db = -48;
+		int y = DBY(db); if (y > iy + ih - 1) y = iy + ih - 1;
+		if (py >= 0) { int a = py < y ? py : y, b = py < y ? y : py; rect(x, a, 1, b - a + 1, RGB3(TH->val)); }
+		py = y;
+	}
+	float hz = baseCutoff(); if (hz >= FLO && hz <= FHI) { int cx = FX(hz); for (int y = iy; y < iy + ih; y += 2) px(cx, y, RGB3(TH->line)); }
+	char t[32]; snprintf(t, sizeof(t), hz >= 1000 ? "%.1fK" : "%.0f", hz >= 1000 ? hz / 1000 : hz); text(x0 + w - 6 - (int)strlen(t) * 8, y0 + 4, t, 1, RGB3(TH->val));
+	static const char* FT[5] = {"LP", "HP", "BP", "NOTCH", "PEAK"}; text(x0 + 6, y0 + 4, FT[gFiltType % 5], 1, RGB3(TH->dim));
+	#undef FX
+	#undef DBY
+}
 static void drawEnvelopesCPU(void) {
 	for (int w = 0; w < 2; w++) {
 		int Y0 = 30 + w * 64, H = 60;
@@ -3382,6 +3440,8 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			}
 			text(8, 34, "A", 1, DIM); text(8, 98, "B", 1, DIM);
 		}
+		if (page == 4) drawFilterPlot(4, 158, 196, 66);   // FILT+ENV: the filter response instead of the status lines
+		else {
 		char s[40];
 		snprintf(s, sizeof(s), "%s  OCT %+d%s", VOICE_MODES[gVoiceMode], oct, latch ? "  LATCH" : ""); text(6, 160, s, 1, TXT);
 		snprintf(s, sizeof(s), "CHORD %s  FX %s", CHORD_NAMES[gChord], FX_NAMES[gFx]); text(6, 172, s, 1, TXT);
@@ -3399,6 +3459,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, (!gFxCore2 || (gCore2Lim && gCore2Lim < 50)) ? "CORE 1" : (!(gFxThread || gFxOnWorker) || gFxC2Fail) ? "FELL BACK" : gFxThread ? "CORE 3" : "ON CORE 2");
 			else snprintf(s, sizeof(s), "CORE 2 OFF %s %08lX %08lX L%lu", envIsHomebrew() ? "3DSX" : "CIA", (unsigned long)gCore2Rc, (unsigned long)gCore2ThRc, (unsigned long)gCore2Lim);
 			if (gWorker) text(6, 210, s, 1, DIM); else text(6, 210, s, 1, WARN);
+		}
 		}
 	}
 	if (page == 0) {   // browser info: what's loaded and how to drive the list
@@ -3441,8 +3502,9 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			}
 			if (w > 54) w = 54;
 		}
-		if (cur && TH->ega && P[i].type == PT_E && P[i].names != PRESS_RIGHT) { char b2[28]; snprintf(b2, sizeof(b2), "<%s>", v); text(394 - (int)strlen(b2) * 8, y, b2, 1, HITXT); }
-		else if (cur && TH->ega) text(394 - w, y, v, 1, HITXT);
+		if (cur && TH->ega && P[i].type == PT_E && P[i].names != PRESS_RIGHT) { char b2[28]; snprintf(b2, sizeof(b2), "<%s>", v); int bx = 394 - (int)strlen(b2) * 8; text(bx, y, b2, 1, HITXT); text(bx - 1, y, b2, 1, HITXT); }
+		else if (cur && TH->ega) { text(394 - w, y, v, 1, HITXT); text(393 - w, y, v, 1, HITXT); }   // the selected value, bold
+		else if (cur) { text(394 - w, y, v, 1, VAL); text(393 - w, y, v, 1, VAL); }
 		else text(394 - w, y, v, 1, VAL);
 	}
 	if (first > 0) text(388, 30, "^", 1, TXT);
@@ -3891,7 +3953,21 @@ static int modViewTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (release) gDrawPrevX = -1;
 	return 1;
 }
-static void drawBottom(int base, const u8* on, int helpOn, int latch) {
+static void keyColor(const u8* lo, const u8* hi, float t, u8* out) { t = t < 0 ? 0 : t > 1 ? 1 : t; for (int k = 0; k < 3; k++) out[k] = (u8)(lo[k] + (hi[k] - lo[k]) * t); }
+// SEQ STRIP: while the sequencer plays, a thin bar over the keyboard on every page: one segment per step (swing
+// shows as uneven widths), notes lit, accents brighter, the playing step brightest
+static void drawSeqStrip(void) {
+	if (!gSeqPlaying || gSeqLen < 1) return;
+	int y = KB_Y - 6; float tot = 0; for (int i = 0; i < gSeqLen; i++) tot += (i & 1) ? 1 - gSwing : 1 + gSwing;
+	float x = 4;
+	for (int i = 0; i < gSeqLen; i++) {
+		float w = ((i & 1) ? 1 - gSwing : 1 + gSwing) / tot * 312; int xi = (int)x, wi = (int)(x + w) - xi - 1;
+		const u8* c = i == gSeqPos ? TH->keyOn : gSeq[i].n ? ((gSeq[i].fl & 1) ? TH->val : TH->txt) : TH->grid;
+		rect(xi, y, wi < 1 ? 1 : wi, i == gSeqPos ? 4 : 3, c[0], c[1], c[2]);
+		x += w;
+	}
+}
+static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	(void)helpOn;
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	rect(0, 0, 320, KB_Y, BG);
@@ -3958,18 +4034,31 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 		return;
 	}
 	for (int i = 0; i < 14; i++) {
-		int n = base + (i / 7) * 12 + WN[i % 7], x = (int)(i * ww);
-		if (on[n]) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyOn));
+		int n = base + (i / 7) * 12 + WN[i % 7], x = (int)(i * ww); u8 c[3];
+		if (on[n]) { keyColor(TH->keyW, TH->keyOn, 0.45f + 0.55f * gNoteVel[n], c); rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, c[0], c[1], c[2]); }   // harder = brighter
+		else if (gKeyFade[n] > 0) { keyColor(TH->keyW, TH->keyOn, gKeyFade[n] * 0.6f, c); rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, c[0], c[1], c[2]); if (TH->ega) outline(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyLine)); }
 		else { rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyW)); if (TH->ega) outline(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyLine)); }
 	}
 	for (int i = 0; i < 14; i++) {
 		if (!BL[i % 7]) continue;
 		int n = base + (i / 7) * 12 + WN[i % 7] + 1, bx = (int)((i + 1) * ww - ww * 0.3f);
-		if (on[n]) rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, RGB3(TH->keyOnB));
+		u8 c[3];
+		if (on[n]) { keyColor(TH->keyB, TH->keyOnB, 0.45f + 0.55f * gNoteVel[n], c); rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, c[0], c[1], c[2]); }
+		else if (gKeyFade[n] > 0) { keyColor(TH->keyB, TH->keyOnB, gKeyFade[n] * 0.6f, c); rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, c[0], c[1], c[2]); }
 		else { rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, RGB3(TH->keyB)); if (TH->ega) outline(bx, KB_Y + 2, (int)(ww * 0.6f), 68, RGB3(TH->keyLine)); }
 	}
 	char c[8]; snprintf(c, sizeof(c), "C%d", base / 12 - 1);
 	if (on[base] || !TH->ega) text(4, 228, c, 1, TH->ega ? 0 : 120, TH->ega ? 0 : 90, TH->ega ? 0 : 50); else text(4, 228, c, 1, RGB3(TH->keyLine));
+}
+static void drawBottom(int base, const u8* on, int helpOn, int latch) {
+	drawBottomMain(base, on, helpOn, latch);
+	if ((gPads && !gGridOn) || gModOn) return;
+	if (!gGridOn && !gAddEdit) drawSeqStrip();
+	if (latch) { outline(0, KB_Y, 320, 240 - KB_Y, HI); outline(1, KB_Y + 1, 318, 238 - KB_Y, HI); }   // LATCH: notes hold, and the keyboard says so
+	if (gChordKey >= 0 && gVoiceMode < 3 && !gGridOn && !gAddEdit) {   // chord mode: the chord you're holding, by name
+		char t[24]; snprintf(t, sizeof(t), "%s %s", NOTE_NAMES[gChordKey % 12], CHORD_NAMES[gChord]);
+		int w = (int)strlen(t) * 8 + 8; rect(6, KB_Y - 20, w, 12, RGB3(TH->tab)); text(10, KB_Y - 18, t, 1, RGB3(TH->tabTxt));
+	}
 }
 
 // ================================================================ hardware extras (HARDWARE page)
@@ -6593,7 +6682,10 @@ int main(void) {
 			} else if ((p->dirty & (D_PRESET | D_STYLE)) && gEdited && !gGuard && !fast) {
 				gGuard = 1; say("PATCH EDITED: PRESS AGAIN TO LEAVE IT (SAVE IT IN USER)"); topDirty = 1;
 			} else if (paramChange(p, dir, fast)) {
-				if (p->type == PT_E && p->names && page != 0) { snprintf(gCallTxt, sizeof(gCallTxt), "%s", p->names[*(int*)p->p]); gCallT = 0.9f; }
+				if (page != 0 && p->names != PRESS_RIGHT) {   // VALUE HUD: the new value, big, for a moment
+					if (p->type == PT_E && p->names) snprintf(gCallTxt, sizeof(gCallTxt), "%s", p->names[*(int*)p->p]); else paramFmt(p, gCallTxt, sizeof(gCallTxt));
+					gCallT = p->type == PT_E ? 0.9f : 0.6f; gCallP = p;
+				}
 				if (page != 0 && page != 8 && page != 9) gEdited = 1;
 				if (p->dirty & D_STYLE) { gPreset = 0; presetLoad(gStyle, 0); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				if (p->dirty & D_OUT) outputApply();
@@ -6763,7 +6855,12 @@ int main(void) {
 
 		memset(on, 0, sizeof(on));
 		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note < 128) on[gV[i].note] = 1;
+		{ int fading = 0;   // a key let go keeps a short glow: slides leave a trail
+			for (int n = 0; n < 128; n++) { if (onPrev[n] && !on[n]) gKeyFade[n] = 1; if (on[n]) gKeyFade[n] = 0; if (gKeyFade[n] > 0) { gKeyFade[n] -= 1.0f / 60 * 3.5f; if (gKeyFade[n] < 0) gKeyFade[n] = 0; fading = 1; } }
+			if (fading) botDirty = 1; }
 		if (memcmp(on, onPrev, sizeof(on))) { memcpy(onPrev, on, sizeof(on)); botDirty = 1; topDirty = 1; }
+		gChordKey = gChord && curKey >= 0 ? curKey : -1;
+		{ static int lastStep = -1; if (gSeqPlaying && gSeqPos != lastStep && !gGridOn) { lastStep = gSeqPos; botDirty = 1; } if (!gSeqPlaying && lastStep != -1) { lastStep = -1; botDirty = 1; } }
 
 		gSelName = PAGES[page][sel[page]].name;
 		if (!helpOn && visActive(page)) topDirty = 1;   // animated panel: redraw every frame
@@ -6788,16 +6885,28 @@ int main(void) {
 							text(394 - (int)strlen(gPatchName) * 8, 4, gPatchName, 1, 200, 150, 90);
 						}
 					} else if (page <= 2) { Osc* o = &gOsc[page - 1]; frame(4, 30, 196, 177); text(8, 34, o->on ? (page == 2 ? "OSC B" : "OSC A") : (page == 2 ? "OSC B OFF" : "OSC A OFF"), 1, DIM); }
-					else if (page == 4) { frame(4, 30, 196, 60); frame(4, 94, 196, 60); envLabels(); }
+					else if (page == 4) { frame(4, 30, 196, 60); frame(4, 94, 196, 60); envLabels(); drawFilterPlot(4, 158, 196, 66); }
 					else if (page == 5) { frame(4, 30, 196, 60); frame(4, 94, 196, 60); lfoLabels(); }
 					else { frame(4, 30, 196, 125); text(8, 34, "A", 1, DIM); text(8, 96, "B", 1, DIM); }
 					scanlines();
 				}
 				if (gCallT > 0 && page != 8) {   // big value pop-up, drawn last so the visuals don't cover it
 					fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
-					int w = (int)strlen(gCallTxt) * 16 + 16, x = 200 - w / 2;
-					rect(x, 96, w, 40, RGB3(TH->tab)); outline(x, 96, w, 40, RGB3(TH->line));
-					text(x + 8, 108, gCallTxt, 2, RGB3(TH->tabTxt));
+					const Param* cp = (const Param*)gCallP; int bar = cp && cp->type != PT_E && cp->mx > cp->mn;
+					int w = (int)strlen(gCallTxt) * 16 + 16; if (bar && w < 160) w = 160;
+					int x = 200 - w / 2, h = bar ? 52 : 40;
+					rect(x, 96, w, h, RGB3(TH->tab)); outline(x, 96, w, h, RGB3(TH->line));
+					text(200 - (int)strlen(gCallTxt) * 8, 106, gCallTxt, 2, RGB3(TH->tabTxt));
+					if (bar) {   // where it sits in its range; bipolar values grow from the centre so the sign shows
+						float v = cp->type == PT_F ? *(float*)cp->p : (float)*(int*)cp->p, t = (v - cp->mn) / (cp->mx - cp->mn);
+						t = t < 0 ? 0 : t > 1 ? 1 : t;
+						int bx = x + 10, bw = w - 20, by = 130; rect(bx, by, bw, 8, RGB3(TH->bg)); outline(bx, by, bw, 8, RGB3(TH->line));
+						if (cp->mn < 0 && cp->mx > 0) {
+							int z = bx + (int)((0 - cp->mn) / (cp->mx - cp->mn) * bw), e = bx + (int)(t * bw);
+							rect(z, by - 2, 1, 12, RGB3(TH->tabTxt));
+							if (e > z) rect(z + 1, by + 2, e - z, 4, RGB3(TH->keyOn)); else if (e < z) rect(e, by + 2, z - e, 4, RGB3(TH->warn));
+						} else rect(bx + 2, by + 2, (int)(t * (bw - 4)), 4, RGB3(TH->keyOn));
+					}
 				}
 			}
 			topAgain = topDirty; topDirty = 0;

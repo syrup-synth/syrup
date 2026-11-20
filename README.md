@@ -150,6 +150,13 @@ FBI > Remote Install > Scan QR Code, and scan `install-qr.png`. Sound needs the 
 - With MASTER FX on core 2, the DSP mix comes out one frame (~4.9 ms) after the second sound chip's parts.
 - Envelopes and LFOs update once per screen frame (about 60 Hz); the arpeggiator, sequencer and drums run in the audio thread (~4.9 ms).
 
+## Screens
+
+- **Values:** the selected parameter's value is drawn bold. While you change a value it also appears large in the middle of the top screen for a moment, with a bar showing where it sits in its range; values that go both ways (pan, warp, macros, bend) grow from a centre line so the sign shows at a glance.
+- **Filter response (FILT+ENV page):** the voice filter and FILTER 2 drawn as a curve from 30 Hz to 15 kHz, with the harmonics of OSC A at the note you're playing: dim before the filter, bright after it. The dotted line is the cutoff.
+- **Keyboard:** a key lights brighter the harder you play it, keys you let go of glow for a moment (slides leave a trail), the held chord's name shows in chord mode, and LATCH frames the keyboard.
+- **Sequencer strip:** while the sequencer plays, a thin bar over the keyboard shows every step on every page: notes lit, accents brighter, the playing step brightest, swing as uneven widths.
+
 ## CHIP > FX and tape speed (HARDWARE page)
 
 - **CHIP > FX:** the second sound chip's parts (sub, CHIP SQUARE, the drums and kits) stop going straight to the speakers. Its two capture units record them instead, and DSP channels 19 and 20 play that recording through a low-pass (CHIP CUTOFF, CHIP RES) and the MASTER FX chain, so the drums get reverb, delay, OTT and pump. Both chips run off the same clock, so it never drifts; it adds about 10 ms. It uses both capture units, so CHIP ECHO is off while it's on (use the master delay instead). The looper stays dry.

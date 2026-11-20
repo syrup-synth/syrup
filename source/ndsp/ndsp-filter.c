@@ -92,12 +92,15 @@ bool ndspChnIirBiquadSetParamsPeakingEqualizer(int id, float f0, float Q, float 
 	const float w0 = 2.f * M_PI * f0 / Fs;
 	const float a = sinf(w0) / (2.f * Q);
 
-	const float a0 = 1.f + a*gain;
+	// Syrup fix: the upstream formula had the same terms above and below the line, so the filter was flat.
+	// RBJ peaking EQ with gain as a linear amplitude: A = sqrt(gain).
+	const float A = sqrtf(gain > 0.f ? gain : 1.f);
+	const float a0 = 1.f + a/A;
 	const float a1 = -2.f * cosf(w0);
-	const float a2 = 1.f - a*gain;
-	const float b0 = 1.f + a*gain;
+	const float a2 = 1.f - a/A;
+	const float b0 = 1.f + a*A;
 	const float b1 = -2.f * cosf(w0);
-	const float b2 = 1.f - a*gain;
+	const float b2 = 1.f - a*A;
 
 	return ndspChnIirBiquadSetParamsCustomFilter(id, a0, a1, a2, b0, b1, b2);
 }
