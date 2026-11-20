@@ -1924,7 +1924,8 @@ static void playSet(const int* notes, int n, float vel) {
 // ---- 16-step sequencer (step record, keys transpose while playing)
 // fl: 1 accent, 2 slide into the next step. Per-step locks (0 = none): gate % (0 = SEQ GATE), skip = chance in % that
 // the step doesn't play, cut / res -100..100 on top of the patch, pitch in semitones, nudge -50..50 % of a step
-typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; u8 gate, skip; s8 cut, res, pitch, nudge; } Step;
+typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; u8 gate, skip; s8 cut, res, pitch, nudge; u8 len[4]; u8 rat; } Step;   // len: steps each note lasts (0 = 1); rat: hits in the step (0/1 = one, 2-4 = a roll)
+typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; u8 gate, skip; s8 cut, res, pitch, nudge; } StepV1;   // seq.bin before note lengths
 #define NSTEP 16
 static const char* SEQ_NAMES[3] = {"OFF", "PLAY", "REC"};
 static Step gSeq[NSTEP];
@@ -1935,23 +1936,24 @@ static int gSeqPlaying = 0;
 // Rows of the grid can run their own length (polymeter) or an euclid rhythm instead of the steps.
 #define NPAT 16
 #define NSONG 32
-typedef struct { Step st[NSTEP]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8]; } SeqPat;
+typedef struct { Step st[NSTEP]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8], rowNote[8]; } SeqPat;   // rowNote: the pitch a rhythm row plays
+typedef struct { StepV1 st[NSTEP]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8]; } SeqPatV1;
 static SeqPat gPat[NPAT];
 static int gPatCur = 0, gPatNext = -1;
 static u8 gSong[NSONG]; static int gSongLen = 0, gSongPos = 0, gSongOn = 0;
-static u8 gRowLen[8], gRowHits[8], gRowRot[8];
+static u8 gRowLen[8], gRowHits[8], gRowRot[8], gRowNote[8];
 static unsigned gSeqClock = 0;   // steps since PLAY: polymeter rows count from this
 static float gLockCut = 0, gLockRes = 0, gStepGate = 0.6f, gFireOff = 0;   // the playing step's locks
 static int gPendFire = -1, gEarlyDone = 0;
 static void patStore(void) {
 	SeqPat* p = &gPat[gPatCur]; memcpy(p->st, gSeq, sizeof(gSeq)); p->len = gSeqLen; p->base = gSeqBase;
-	memcpy(p->rowLen, gRowLen, 8); memcpy(p->rowHits, gRowHits, 8); memcpy(p->rowRot, gRowRot, 8);
+	memcpy(p->rowLen, gRowLen, 8); memcpy(p->rowHits, gRowHits, 8); memcpy(p->rowRot, gRowRot, 8); memcpy(p->rowNote, gRowNote, 8);
 }
 static void patSwitch(int i) {   // store the working pattern, load pattern i
 	if (i < 0 || i >= NPAT) return;
 	patStore(); gPatCur = i; SeqPat* p = &gPat[i];
 	memcpy(gSeq, p->st, sizeof(gSeq)); gSeqLen = p->len < 1 ? 16 : p->len > NSTEP ? NSTEP : p->len; gSeqBase = p->base;
-	memcpy(gRowLen, p->rowLen, 8); memcpy(gRowHits, p->rowHits, 8); memcpy(gRowRot, p->rowRot, 8);
+	memcpy(gRowLen, p->rowLen, 8); memcpy(gRowHits, p->rowHits, 8); memcpy(gRowRot, p->rowRot, 8); memcpy(gRowNote, p->rowNote, 8);
 	if (gSeqPos >= gSeqLen) gSeqPos = 0;
 }
 static int patUsed(int i) { const SeqPat* p = i == gPatCur ? NULL : &gPat[i]; for (int k = 0; k < NSTEP; k++) if ((p ? p->st[k].n : gSeq[k].n)) return 1; return 0; }
@@ -1969,15 +1971,29 @@ static void seqWriteSnap(void) {   // the slow part, done without the lock
 static void seqSave(void) { seqSnap(); seqWriteSnap(); }
 static void seqLoad(void) {
 	FILE* f = fopen(SEQ_PATH, "rb"); if (!f) return;
-	u32 m = 0; int hdr[4]; static SeqPat tmp[NPAT]; u8 song[NSONG];
-	if (fread(&m, 4, 1, f) == 1 && m == SEQ_MAGIC && fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[3] == (int)sizeof(SeqPat)
-		&& fread(tmp, sizeof(tmp), 1, f) == 1 && fread(song, sizeof(song), 1, f) == 1) {
+	u32 m = 0; int hdr[4]; static SeqPat tmp[NPAT]; static SeqPatV1 old[NPAT]; u8 song[NSONG]; int ok = 0;
+	if (fread(&m, 4, 1, f) == 1 && m == SEQ_MAGIC && fread(hdr, sizeof(hdr), 1, f) == 1) {
+		if (hdr[3] == (int)sizeof(SeqPat)) ok = fread(tmp, sizeof(tmp), 1, f) == 1;
+		else if (hdr[3] == (int)sizeof(SeqPatV1) && fread(old, sizeof(old), 1, f) == 1) {   // before note lengths: every note one step, rows keep their pitch
+			static const int MAJ[8] = {0, 2, 4, 5, 7, 9, 11, 12};
+			memset(tmp, 0, sizeof(tmp));
+			for (int p = 0; p < NPAT; p++) {
+				for (int k = 0; k < NSTEP; k++) memcpy(&tmp[p].st[k], &old[p].st[k], sizeof(StepV1));
+				tmp[p].len = old[p].len; tmp[p].base = old[p].base;
+				memcpy(tmp[p].rowLen, old[p].rowLen, 8); memcpy(tmp[p].rowHits, old[p].rowHits, 8); memcpy(tmp[p].rowRot, old[p].rowRot, 8);
+				for (int r = 0; r < 8; r++) tmp[p].rowNote[r] = (u8)(48 + MAJ[r]);
+			}
+			ok = 1;
+		}
+		ok = ok && fread(song, sizeof(song), 1, f) == 1;
+	}
+	if (ok) {
 		memcpy(gPat, tmp, sizeof(gPat)); memcpy(gSong, song, sizeof(gSong));
 		gSongLen = hdr[1] < 0 ? 0 : hdr[1] > NSONG ? NSONG : hdr[1]; gSongOn = hdr[2] & 1;
 		for (int i = 0; i < gSongLen; i++) if (gSong[i] >= NPAT) gSong[i] = 0;
 		int c = hdr[0] < 0 || hdr[0] >= NPAT ? 0 : hdr[0]; gPatCur = c;
 		memcpy(gSeq, gPat[c].st, sizeof(gSeq)); gSeqLen = gPat[c].len < 1 ? 16 : gPat[c].len > NSTEP ? NSTEP : gPat[c].len; gSeqBase = gPat[c].base;
-		memcpy(gRowLen, gPat[c].rowLen, 8); memcpy(gRowHits, gPat[c].rowHits, 8); memcpy(gRowRot, gPat[c].rowRot, 8);
+		memcpy(gRowLen, gPat[c].rowLen, 8); memcpy(gRowHits, gPat[c].rowHits, 8); memcpy(gRowRot, gPat[c].rowRot, 8); memcpy(gRowNote, gPat[c].rowNote, 8);
 	}
 	fclose(f);
 }
@@ -1987,7 +2003,7 @@ static void seqDefault(void) {   // a little pattern so PLAY makes sound straigh
 	memset(gSeq, 0, sizeof(gSeq));
 	for (int i = 0; i < 8; i++) if (pat[i] >= 0) { gSeq[i].n = 1; gSeq[i].note[0] = 48 + pat[i]; gSeq[i].vel = 200; }
 	gSeqLen = 8; gSeqBase = 48;
-	memset(gRowLen, 0, 8); memset(gRowHits, 0, 8); memset(gRowRot, 0, 8);
+	memset(gRowLen, 0, 8); memset(gRowHits, 0, 8); memset(gRowRot, 0, 8); memset(gRowNote, 0, 8);
 	static int init = 0; if (!init) { init = 1; for (int i = 0; i < NPAT; i++) { memset(&gPat[i], 0, sizeof(SeqPat)); gPat[i].len = 16; gPat[i].base = -1; } }
 }
 static void seqRecord(const int* notes, int n, float vel) {
@@ -2001,42 +2017,68 @@ static void seqRecord(const int* notes, int n, float vel) {
 	if (gRecPos >= NSTEP) gRecPos = 0;
 }
 static void seqRest(void) { gSeq[gRecPos].n = 0; gRecPos++; gSeqLen = gRecPos; if (gRecPos >= NSTEP) gRecPos = 0; }
-static void seqClear(void) { memset(gSeq, 0, sizeof(gSeq)); gRecPos = 0; gSeqLen = 1; gSeqBase = -1; gSeqTr = 0; memset(gRowLen, 0, 8); memset(gRowHits, 0, 8); memset(gRowRot, 0, 8); }
+static void seqClear(void) { memset(gSeq, 0, sizeof(gSeq)); gRecPos = 0; gSeqLen = 1; gSeqBase = -1; gSeqTr = 0; memset(gRowLen, 0, 8); memset(gRowHits, 0, 8); memset(gRowRot, 0, 8); memset(gRowNote, 0, 8); }
 static int gSlideOn;
-static void seqStop(void) { if (gSeqPlaying) playSet(NULL, 0, 0.8f); gSlideOn = 0; gSeqPlaying = 0; gSeqPos = -1; gSeqPh = 0; gLockCut = gLockRes = 0; gPendFire = -1; gEarlyDone = 0; gFireOff = 0; }
+// the sequencer plays its own notes (not through the keys' held list), each with its own length:
+// a note lasts len steps and lets go at the step's GATE in its last step; SLIDE keeps it and bends it to the next note
+typedef struct { int note, left, rel, slide; float thr; } SqN;
+static SqN gSqN[16]; static int gSqNn = 0;
+static unsigned gSeqHits = 0;   // notes the sequencer has struck (tests count it)
+static void sqRelease(SqN* q) { if (!q->rel) { voiceOff(q->note); q->rel = 1; } }
+static void sqCompact(void) { int k = 0; for (int i = 0; i < gSqNn; i++) if (!(gSqN[i].rel && gSqN[i].left <= 0)) gSqN[k++] = gSqN[i]; gSqNn = k; }
+static void sqAllOff(void) { for (int i = 0; i < gSqNn; i++) sqRelease(&gSqN[i]); gSqNn = 0; }
 static int gSlideOn;   // the step before asked to slide into this one
+static void seqStop(void) { if (gSeqPlaying) { sqAllOff(); if (gArp) playSet(NULL, 0, 0.8f); } gSlideOn = 0; gSeqPlaying = 0; gSeqPos = -1; gSeqPh = 0; gLockCut = gLockRes = 0; gPendFire = -1; gEarlyDone = 0; gFireOff = 0; }
 static int gridNote(int row);
 static int rowCustom(int r) { return gRowLen[r] || gRowHits[r]; }
 static int rowLenOf(int r) { int L = gRowLen[r] ? gRowLen[r] : gSeqLen; return L < 1 ? 1 : L > NSTEP ? NSTEP : L; }
 static int stepHasNote(int st, int nt) { for (int k = 0; k < gSeq[st].n; k++) if (gSeq[st].note[k] == nt) return 1; return 0; }
+static int noteLen(const Step* s, int k) { return s->len[k] ? s->len[k] : 1; }
 static int euclidHit(int i, int len, int hits, int rot) { if (hits <= 0) return 0; if (hits >= len) return 1; i = ((i - rot) % len + len) % len; return (i * hits) % len < hits; }
-static int rowCellOn(int r, int i) {   // does row r play at its own step i?
+static int rowCellOn(int r, int i) {   // does rhythm row r play at its own step i?
 	int L = rowLenOf(r); i %= L;
-	return gRowHits[r] ? euclidHit(i, L, gRowHits[r], gRowRot[r]) : stepHasNote(i, gridNote(r));
+	return gRowHits[r] ? euclidHit(i, L, gRowHits[r], gRowRot[r]) : stepHasNote(i, gRowNote[r]);
 }
-static int noteOnCustomRow(int nt) { for (int r = 0; r < 8; r++) if (rowCustom(r) && gridNote(r) == nt) return 1; return 0; }
-static void seqFireAt(int idx, unsigned clock) {
+static int rowOfNote(int nt) { for (int r = 0; r < 8; r++) if (rowCustom(r) && gRowNote[r] == nt) return r; return -1; }
+static int rowSlotFor(int nt) {   // the rhythm row for this pitch, or a free one for it (-1 if all 8 are used)
+	int r = rowOfNote(nt); if (r >= 0) return r;
+	for (r = 0; r < 8; r++) if (!rowCustom(r)) { gRowNote[r] = (u8)nt; return r; }
+	return -1;
+}
+static int noteOnCustomRow(int nt) { return rowOfNote(nt) >= 0; }
+static float stepLen(int i) { return (i & 1) ? 1.0f - gSwing : 1.0f + gSwing; }   // in 16ths
+static void seqFireAt(int idx, unsigned clock, int early, float off0) {
 	Step* s = &gSeq[idx];
 	gLockCut = s->cut * 0.006f; gLockRes = s->res * 0.01f;
-	gStepGate = s->gate ? s->gate * 0.01f : gSeqGate;
-	int notes[8], n = 0, skip = s->skip && rand() % 100 < s->skip;
+	float g = s->gate ? s->gate * 0.01f : gSeqGate; gStepGate = g;
+	int notes[8], lens[8], n = 0, skip = s->skip && rand() % 100 < s->skip;
 	if (!skip) {
-		for (int i = 0; i < s->n && n < 8; i++) { if (noteOnCustomRow(s->note[i])) continue; notes[n++] = snapScale(s->note[i] + gSeqTr + s->pitch); }
-		for (int r = 0; r < 8 && n < 8; r++) if (rowCustom(r) && rowCellOn(r, clock % rowLenOf(r))) notes[n++] = snapScale(gridNote(r) + gSeqTr + s->pitch);
+		for (int i = 0; i < s->n && n < 8; i++) { if (noteOnCustomRow(s->note[i])) continue; lens[n] = noteLen(s, i); notes[n++] = snapScale(s->note[i] + gSeqTr + s->pitch); }
+		for (int r = 0; r < 8 && n < 8; r++) if (rowCustom(r) && rowCellOn(r, clock % rowLenOf(r))) { lens[n] = 1; notes[n++] = snapScale(gRowNote[r] + gSeqTr + s->pitch); }
 	}
 	float vel = s->n ? s->vel / 255.0f : 0.8f;
 	if (s->fl & 1) vel = 1.0f;   // accent
-	if (gSlideOn && n == 1 && gHeldN == 1 && !gArp) {   // slide: keep the voice, bend it to the new note
-		int done = 0;
-		for (int i = 0; i < NVS; i++) { SVoice* v = &gV[i]; if (v->active && !v->isEcho && v->note == gHeld[0] && v->stage < 4) { v->note = notes[0]; v->freq = mtof((float)notes[0]); v->slide = 1; done = 1; } }
-		if (done) { gHeld[0] = notes[0]; gSlideOn = (s->fl & 2) != 0; gBeatFlash = 1; return; }
-	}
-	playSet(notes, n, vel);
-	gSlideOn = n && (s->fl & 2);
 	gBeatFlash = 1;
+	if (gArp) { playSet(notes, n, vel); gSlideOn = n && (s->fl & 2); return; }   // the arp takes the step's notes as its pool
+	int sl = -1, nsl = 0; for (int i = 0; i < gSqNn; i++) if (gSqN[i].slide && !gSqN[i].rel) { sl = i; nsl++; }
+	if (gSlideOn && n == 1 && nsl == 1) {   // slide: keep the voice, bend it to the new note
+		int from = gSqN[sl].note;
+		for (int i = 0; i < NVS; i++) { SVoice* v = &gV[i]; if (v->active && !v->isEcho && v->note == from && v->stage < 4) { v->note = notes[0]; v->freq = mtof((float)notes[0]); v->slide = 1; } }
+		SqN* q = &gSqN[sl]; q->note = notes[0]; q->left = lens[0] + early; q->slide = (s->fl & 2) != 0; q->thr = (lens[0] == 1 ? off0 : 0) + stepLen((idx + lens[0] - 1) % NSTEP) * g;
+		gSlideOn = q->slide; return;
+	}
+	for (int i = 0; i < gSqNn; i++) if (gSqN[i].slide) { sqRelease(&gSqN[i]); gSqN[i].left = 0; gSqN[i].slide = 0; }   // a slide into something else just ends
+	for (int j = 0; j < n; j++) {
+		for (int i = 0; i < gSqNn; i++) if (gSqN[i].note == notes[j] && !gSqN[i].rel) { sqRelease(&gSqN[i]); gSqN[i].left = 0; }   // the same pitch again: restrike
+		sqCompact();
+		if (gSqNn >= 16) break;
+		voiceOn(notes[j], vel); gSeqHits++;
+		SqN* q = &gSqN[gSqNn++]; q->note = notes[j]; q->left = lens[j] + early; q->rel = 0; q->slide = (s->fl & 2) != 0 && n == 1;
+		q->thr = (lens[j] == 1 ? off0 : 0) + stepLen((idx + lens[j] - 1) % NSTEP) * g;
+	}
+	gSlideOn = n && (s->fl & 2);
 }
-static void seqFire(void) { seqFireAt(gSeqPos, gSeqClock); }
-static float stepLen(int i) { return (i & 1) ? 1.0f - gSwing : 1.0f + gSwing; }   // in 16ths
+static void seqFire(void) { seqFireAt(gSeqPos, gSeqClock, 0, gFireOff); }
 static void seqAdvance(void) {   // to the next step; at the end of the pattern the song or a queued pattern takes over
 	int len = gSeqLen < 1 ? 1 : gSeqLen;
 	gSeqPos++; gSeqClock++;
@@ -2049,7 +2091,7 @@ static void seqAdvance(void) {   // to the next step; at the end of the pattern 
 static void seqTick(float dt) {
 	if (gSeqMode != 1) { if (gSeqPlaying) seqStop(); return; }
 	if (!gSeqPlaying) {
-		gSeqPlaying = 1; gSeqPos = 0; gSeqPh = 0; gSeqClock = 0; gPendFire = -1; gEarlyDone = 0; gFireOff = 0;
+		gSeqPlaying = 1; gSeqPos = 0; gSeqPh = 0; gSeqClock = 0; gPendFire = -1; gEarlyDone = 0; gFireOff = 0; gSqNn = 0;
 		if (gSongOn && gSongLen > 0) { gSongPos = 0; if (gSong[0] != gPatCur) patSwitch(gSong[0]); }
 		else if (gPatNext >= 0) { patSwitch(gPatNext); gPatNext = -1; }
 		if (gSeq[0].nudge > 0) { gPendFire = 0; gFireOff = gSeq[0].nudge * 0.01f * stepLen(0); } else seqFire();
@@ -2059,18 +2101,28 @@ static void seqTick(float dt) {
 	float before = gSeqPh;
 	gSeqPh += dt * gBPM / 60.0f * 4.0f;
 	if (gPendFire >= 0 && gSeqPh >= gFireOff) { gPendFire = -1; seqFire(); }   // a late step
-	float off = gFireOff + len * gStepGate;
-	if (!gArp && !gSlideOn && gPendFire < 0 && !gEarlyDone && before < off && gSeqPh >= off) playSet(NULL, 0, 0.8f);   // (an early next step already took over)
+	{ int rat = gSeqPos >= 0 ? gSeq[gSeqPos].rat : 0;   // RATCHET: the step's one-step notes hit again, evenly through the step
+	  if (rat > 1 && gPendFire < 0 && !gArp) for (int k = 1; k < rat; k++) { float at = gFireOff + len * k / rat; if (before < at && gSeqPh >= at) {
+		Step* s = &gSeq[gSeqPos]; float vel = (s->fl & 1) ? 1.0f : s->vel / 255.0f * 0.85f;
+		for (int i = 0; i < s->n; i++) if (noteLen(s, i) == 1) { int nt = snapScale(s->note[i] + gSeqTr + s->pitch);
+			for (int j = 0; j < gSqNn; j++) if (gSqN[j].note == nt) sqRelease(&gSqN[j]);
+			sqCompact(); if (gSqNn < 16) { voiceOn(nt, vel); gSeqHits++; SqN* q = &gSqN[gSqNn++]; q->note = nt; q->left = 1; q->rel = 0; q->slide = 0; q->thr = at + len / rat * (s->gate ? s->gate * 0.01f : gSeqGate); } }
+	  } } }
+	if (!gArp) for (int i = 0; i < gSqNn; i++) { SqN* q = &gSqN[i]; if (q->left == 1 && !q->slide && !q->rel && before < q->thr && gSeqPh >= q->thr) sqRelease(q); }   // notes ending in this step let go at the gate
+	else if (!gSlideOn && gPendFire < 0 && !gEarlyDone && before < gFireOff + len * gStepGate && gSeqPh >= gFireOff + len * gStepGate) playSet(NULL, 0, 0.8f);
 	int L = gSeqLen < 1 ? 1 : gSeqLen, nx = gSeqPos + 1;
 	if (!gEarlyDone && nx < L && gSeq[nx].nudge < 0 && gSeqPh >= len + gSeq[nx].nudge * 0.01f * len && gSeqPh < len) {   // an early step
-		gEarlyDone = 1; seqFireAt(nx, gSeqClock + 1);
+		gEarlyDone = 1; seqFireAt(nx, gSeqClock + 1, 1, gSeq[nx].nudge * 0.01f * len);
 	}
 	if (gSeqPh >= len) {
 		gSeqPh -= len; seqAdvance();
+		for (int i = 0; i < gSqNn; i++) { SqN* q = &gSqN[i]; q->left--; if (q->left <= 0 && !q->slide) sqRelease(q); }
+		sqCompact();
 		Step* s = &gSeq[gSeqPos];
-		if (gEarlyDone) { gEarlyDone = 0; gFireOff = s->nudge * 0.01f * len; if (!gArp && !gSlideOn && gFireOff + stepLen(gSeqPos) * gStepGate <= gSeqPh) playSet(NULL, 0, 0.8f); }
+		if (gEarlyDone) gEarlyDone = 0;
 		else if (s->nudge > 0) { gPendFire = gSeqPos; gFireOff = s->nudge * 0.01f * stepLen(gSeqPos); }
 		else { gFireOff = 0; seqFire(); }
+		for (int i = 0; i < gSqNn; i++) { SqN* q = &gSqN[i]; if (q->left == 1 && !q->slide && !q->rel && q->thr <= gSeqPh) sqRelease(q); }   // a gate that ends before the step starts (early notes)
 	}
 }
 
@@ -3844,12 +3896,30 @@ static int gridNote(int row) {   // row 0 = bottom; follows the scale (major ste
 static void rectP(int x, int y, int w, int h, const u8* c) { rect(x, y, w, h, c[0], c[1], c[2]); }
 #define GRID_BTNS 7
 static int gPatView = 0, gStepEd = -1, gStepEdRow = 0;
+static SeqPat gUndoPat; static int gUndoOk = 0, gUndoIdx = 0;   // one step back for ACID and CLEAR
+static void undoMark(void) { patStore(); gUndoPat = gPat[gPatCur]; gUndoIdx = gPatCur; gUndoOk = 1; }
 static void drawPatView(void);
 static void drawStepEd(void);
+// PIANO ROLL (SEQ page, the whole bottom screen): pitch up the side with a keyboard, the 16 steps across.
+// Tap an empty cell: a note. Drag from it: a longer note. Tap a note: gone. Drag a note's tail: its length.
+// Hold a cell: the step editor. Drag the keys up / down to scroll; OCT- / OCT+ jump an octave.
+#define ROLL_KW 24
+#define ROLL_TOP (XY_Y + 16)
+#define ROLL_RH 12
+#define ROLL_ROWS 16
+#define ROLL_CW ((320 - ROLL_KW) / (float)NSTEP)
+static int gRollLow = 45;   // lowest pitch on screen
+static int rollX(int st) { return ROLL_KW + (int)(st * ROLL_CW); }
+static int rollY(int nt) { return ROLL_TOP + (ROLL_ROWS - 1 - (nt - gRollLow)) * ROLL_RH; }
+static int isBlack(int nt) { static const u8 B[12] = {0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0}; return B[nt % 12]; }
+static int noteCover(int st, int nt, int* k0) {   // the step whose note nt covers step st, or -1
+	for (int s0 = st; s0 >= 0; s0--) { const Step* p = &gSeq[s0]; for (int k = 0; k < p->n; k++) if (p->note[k] == nt && s0 + noteLen(p, k) > st) { if (k0) *k0 = k; return s0; } }
+	return -1;
+}
 static void drawGrid(void) {
-	rectP(0, XY_Y, 320, WORK_B - XY_Y, TH->bg);
+	rectP(0, XY_Y, 320, 240 - XY_Y, TH->bg);
 	char pb[8]; snprintf(pb, sizeof(pb), "PAT %c", 'A' + gPatCur);
-	const char* B[GRID_BTNS] = {gSeqMode == 1 ? "STOP" : "PLAY", pb, "<LEN", "LEN>", "ROW-", "ROW+", "ACID"};
+	const char* B[GRID_BTNS] = {gSeqMode == 1 ? "STOP" : "PLAY", pb, "<LEN", "LEN>", "OCT-", "OCT+", "ACID"};
 	for (int i = 0; i < GRID_BTNS; i++) {
 		int x = i * 320 / GRID_BTNS, lit = (i == 0 && gSeqMode == 1) || (i == 1 && gPatView) || i == 6;
 		rectP(x + 2, XY_Y, 320 / GRID_BTNS - 4, 14, lit ? TH->keyOn : TH->tab);
@@ -3858,26 +3928,43 @@ static void drawGrid(void) {
 	}
 	if (gStepEd >= 0) { drawStepEd(); return; }
 	if (gPatView) { drawPatView(); return; }
-	float cw = 320.0f / NSTEP;
-	for (int st = 0; st < NSTEP; st++) {
-		int x = (int)(st * cw), w = (int)((st + 1) * cw) - x - 1, act = st < gSeqLen, head = gSeqPlaying && st == gSeqPos;
-		int hit = 0;
-		for (int r = 0; r < 8; r++) {
-			int y = GRID_TOP + (7 - r) * GRID_ROWH, nt = gridNote(r), on, cact = act, chead = head;
-			if (rowCustom(r)) {   // polymeter / euclid row: its own length and playhead
-				int L = rowLenOf(r); cact = st < L; on = cact && rowCellOn(r, st); chead = gSeqPlaying && (int)(gSeqClock % L) == st;
-				hit += stepHasNote(st, nt);
-			} else { on = stepHasNote(st, nt); hit += on; }
-			const u8* c = on ? (chead ? TH->keyOn : (cact ? TH->val : TH->dim)) : (chead ? TH->grid : (cact ? ((st & 3) == 0 ? TH->tab : TH->pad) : TH->bg));
-			rectP(x + 1, y + 1, w - 1, GRID_ROWH - 2, c);
-			if (rowCustom(r) && st == 0) rectP(x + 1, y + 1, 2, GRID_ROWH - 2, TH->keyOn);   // marks a row with its own rhythm
-			if (on && !rowCustom(r) && (gSeq[st].fl & 1)) rectP(x + w / 2 - 2, y + 3, 4, GRID_ROWH - 6, TH->bg);   // accent: dark dot
-			if (on && !rowCustom(r) && (gSeq[st].fl & 2)) rectP(x + w - 2, y + GRID_ROWH / 2 - 1, 4, 3, TH->keyOn);   // slide: tail into the next step
-		}
-		const Step* sp = &gSeq[st];
-		if (sp->n > hit) rectP(x + 1, GRID_TOP - 2, w - 1, 1, TH->val);   // notes off this grid (played on the keys)
-		if (sp->gate || sp->skip || sp->cut || sp->res || sp->pitch || sp->nudge) rectP(x + w / 2 - 1, GRID_TOP - 2, 3, 2, TH->keyOn);   // the step has locks
+	int below = 0, above = 0;
+	for (int r = 0; r < ROLL_ROWS; r++) {   // lanes and the keyboard down the side
+		int nt = gRollLow + r, y = rollY(nt), bk = isBlack(nt), cr = rowOfNote(nt);
+		rectP(ROLL_KW, y, 320 - ROLL_KW, ROLL_RH - 1, bk ? TH->bg : TH->pad);
+		for (int st = 0; st < NSTEP; st++) { int x = rollX(st); if (st >= gSeqLen) rectP(x, y, (int)ROLL_CW + 1, ROLL_RH - 1, TH->bg); rectP(x, y, 1, ROLL_RH - 1, (st & 3) == 0 ? TH->line : TH->grid); }
+		rectP(0, y, ROLL_KW - 1, ROLL_RH - 1, bk ? TH->keyB : TH->keyW);
+		if (nt % 12 == 0) { char t[6]; snprintf(t, sizeof(t), "C%d", nt / 12 - 1); text(2, y + 2, t, 1, RGB3(TH->keyB)); }
+		if (cr >= 0) rectP(ROLL_KW - 4, y, 3, ROLL_RH - 1, TH->keyOn);   // this pitch runs its own rhythm (step editor > ROW)
 	}
+	if (gSeqPlaying && gSeqPos >= 0) { int x = rollX(gSeqPos); rectP(x, ROLL_TOP, (int)ROLL_CW, 1, TH->keyOn); rectP(x, ROLL_TOP + ROLL_ROWS * ROLL_RH - 1, (int)ROLL_CW, 1, TH->keyOn); }
+	for (int st = 0; st < NSTEP; st++) {   // the notes, as bars as long as they last
+		const Step* p = &gSeq[st];
+		for (int k = 0; k < p->n; k++) {
+			int nt = p->note[k];
+			if (nt < gRollLow) { below = 1; continue; } if (nt >= gRollLow + ROLL_ROWS) { above = 1; continue; }
+			if (rowOfNote(nt) >= 0) continue;
+			int L = noteLen(p, k), e = st + L > NSTEP ? NSTEP : st + L, x = rollX(st) + 1, w = rollX(e) - x - 1, y = rollY(nt) + 1;
+			int play = gSeqPlaying && gSeqPos >= st && gSeqPos < e;
+			int vh = 3 + (ROLL_RH - 6) * p->vel / 255;   // velocity: how much of the bar is lit
+			rectP(x, y, w, ROLL_RH - 3, TH->grid); rectP(x, y + ROLL_RH - 3 - vh, w, vh, play ? TH->keyOn : st < gSeqLen ? TH->val : TH->dim);
+			rectP(x, y, 2, ROLL_RH - 3, TH->txt);   // the note's start
+			if (p->fl & 1) rectP(x + 3, y + 2, 3, ROLL_RH - 7, TH->bg);   // accent
+			if (p->fl & 2) rectP(x + w, y + ROLL_RH / 2 - 2, 3, 2, TH->keyOn);   // slide into the next note
+		}
+		if (p->gate || p->skip || p->cut || p->res || p->pitch || p->nudge || p->rat > 1) rectP(rollX(st) + (int)ROLL_CW / 2 - 1, ROLL_TOP - 2, 3, 2, TH->keyOn);   // the step has locks
+		if (p->rat > 1) for (int k = 0; k < p->rat; k++) rectP(rollX(st) + 2 + k * 4, ROLL_TOP - 5, 2, 2, TH->warn);   // ratchet dots
+	}
+	for (int r = 0; r < 8; r++) if (rowCustom(r) && gRowNote[r] >= gRollLow && gRowNote[r] < gRollLow + ROLL_ROWS) {   // rhythm rows: their own length and hits
+		int L = rowLenOf(r), y = rollY(gRowNote[r]) + 1;
+		for (int i = 0; i < NSTEP; i++) {
+			int x = rollX(i) + 1, w = (int)ROLL_CW - 2, head = gSeqPlaying && (int)(gSeqClock % L) == i;
+			if (i >= L) continue;
+			if (rowCellOn(r, i)) rectP(x, y, w, ROLL_RH - 3, head ? TH->keyOn : TH->val); else if (head) outline(x, y, w, ROLL_RH - 3, RGB3(TH->keyOn));
+		}
+	}
+	if (above) { int x = 312; rectP(x, ROLL_TOP + 1, 5, 2, TH->warn); rectP(x + 1, ROLL_TOP, 3, 1, TH->warn); }   // more notes up there
+	if (below) { int x = 312, y = ROLL_TOP + ROLL_ROWS * ROLL_RH - 4; rectP(x, y, 5, 2, TH->warn); rectP(x + 1, y + 2, 3, 1, TH->warn); }
 }
 // pattern + song view (PAT button): 16 patterns, COPY / CLEAR, and a song chain of up to 32 patterns
 #define PV_Y (XY_Y + 18)
@@ -3894,6 +3981,7 @@ static void drawPatView(void) {
 		rectP(x, y, 59, 14, lit ? TH->keyOn : TH->tab); const u8* tc = lit ? EGA[0] : TH->tabTxt;
 		text(x + 30 - (int)strlen(PB[i]) * 4, y + 3, PB[i], 1, tc[0], tc[1], tc[2]);
 	}
+	if (gUndoOk) { rectP(4, PV_Y + 84, 122, 14, TH->tab); char u[20]; snprintf(u, sizeof(u), "UNDO (PAT %c)", 'A' + gUndoIdx); text(65 - (int)strlen(u) * 4, PV_Y + 87, u, 1, RGB3(TH->tabTxt)); }   // takes back the last ACID / CLEAR
 	for (int i = 0; i < NSONG; i++) {
 		int x = 4 + (i % 16) * 19, y = PV_Y + 46 + (i / 16) * 16, has = i < gSongLen, cur = has && gSongOn && gSeqPlaying && i == gSongPos;
 		rectP(x, y, 17, 14, cur ? TH->keyOn : has ? TH->pad : TH->bg); outline(x, y, 17, 14, RGB3(TH->grid));
@@ -3908,13 +3996,20 @@ static void patViewTouch(int x, int y) {   // on press
 		else say("SONG IS ON: IT PICKS THE PATTERNS");
 		return;
 	}
+	if (gUndoOk && y >= PV_Y + 84 && y < PV_Y + 98 && x < 126) {
+		patStore(); SeqPat cur = gPat[gUndoIdx]; gPat[gUndoIdx] = gUndoPat; gUndoPat = cur;   // swap: UNDO again redoes
+		int c = gPatCur; gPatCur = -1; { gPatCur = gUndoIdx; SeqPat* p = &gPat[gPatCur]; memcpy(gSeq, p->st, sizeof(gSeq)); gSeqLen = p->len < 1 ? 16 : p->len; gSeqBase = p->base;
+			memcpy(gRowLen, p->rowLen, 8); memcpy(gRowHits, p->rowHits, 8); memcpy(gRowRot, p->rowRot, 8); memcpy(gRowNote, p->rowNote, 8); }
+		if (c != gUndoIdx) say("UNDO: BACK ON THAT PATTERN"); else say("UNDO (TAP AGAIN TO REDO)");
+		return;
+	}
 	if (y >= PV_Y + 28 && y < PV_Y + 42) {
 		int b = (x - 4) / 63;
 		if (b == 0) {   // copy into the next pattern and go there
 			int to = (gPatCur + 1) % NPAT; patStore(); gPat[to] = gPat[gPatCur]; int from = gPatCur; patSwitch(to); gPatNext = -1;
 			char m[40]; snprintf(m, sizeof(m), "PATTERN %c COPIED TO %c", 'A' + from, 'A' + to); say(m);
 		}
-		if (b == 1) { seqClear(); gSeqLen = 16; gSeqBase = gridNote(0); say("PATTERN CLEARED"); }
+		if (b == 1) { undoMark(); seqClear(); gSeqLen = 16; gSeqBase = gridNote(0); say("PATTERN CLEARED"); }
 		if (b == 2) { gSongOn = !gSongOn; if (gSongOn && !gSongLen) { gSong[0] = gPatCur; gSongLen = 1; } say(gSongOn ? "SONG ON: PLAYS THE CHAIN BELOW" : "SONG OFF: PLAYS ONE PATTERN"); }
 		if (b == 3 && gSongLen < NSONG) gSong[gSongLen++] = gPatCur;
 		if (b == 4 && gSongLen > 0) gSongLen--;
@@ -3926,35 +4021,43 @@ static void patViewTouch(int x, int y) {   // on press
 	}
 }
 // step editor (hold a step): the step's locks, and the rhythm of the row you held
-#define SE_N 10
-static const char* SE_NAMES[SE_N] = {"VEL", "GATE", "PROB", "CUTOFF", "RES", "PITCH", "NUDGE", "ROW LEN", "ROW EUCL", "ROW ROT"};
-static const int SE_MIN[SE_N] = {1, 0, 0, -100, -100, -24, -50, 0, 0, 0}, SE_MAX[SE_N] = {127, 100, 100, 100, 100, 24, 50, 16, 16, 15};
+#define SE_N 14
+static const char* SE_NAMES[SE_N] = {"VEL", "GATE", "PROB", "CUTOFF", "RES", "PITCH", "NUDGE", "ACCENT", "ROW LEN", "ROW EUCL", "ROW ROT", "SLIDE", "RATCHET", "LENGTH"};
+static const int SE_MIN[SE_N] = {1, 0, 0, -100, -100, -24, -50, 0, 0, 0, 0, 0, 1, 1}, SE_MAX[SE_N] = {127, 100, 100, 100, 100, 24, 50, 1, 16, 16, 15, 1, 4, 16};
 static int seGet(int k) {
-	Step* s = &gSeq[gStepEd]; int r = gStepEdRow;
+	Step* s = &gSeq[gStepEd]; int r = rowOfNote(gStepEdRow);   // gStepEdRow: the pitch you held
 	switch (k) { case 0: return (s->vel + 1) / 2; case 1: return s->gate; case 2: return 100 - s->skip; case 3: return s->cut; case 4: return s->res;
-	case 5: return s->pitch; case 6: return s->nudge; case 7: return gRowLen[r]; case 8: return gRowHits[r]; default: return gRowRot[r]; }
+	case 5: return s->pitch; case 6: return s->nudge; case 7: return s->fl & 1; case 11: return (s->fl >> 1) & 1; case 12: return s->rat ? s->rat : 1;
+	case 13: { for (int i = 0; i < s->n; i++) if (s->note[i] == gStepEdRow) return noteLen(s, i); return 1; }
+	case 8: return r < 0 ? 0 : gRowLen[r]; case 9: return r < 0 ? 0 : gRowHits[r]; default: return r < 0 ? 0 : gRowRot[r]; }
 }
+static void stepSetLen(int st, int nt, int L);
 static void seSet(int k, int v) {
-	Step* s = &gSeq[gStepEd]; int r = gStepEdRow;
+	Step* s = &gSeq[gStepEd];
 	v = v < SE_MIN[k] ? SE_MIN[k] : v > SE_MAX[k] ? SE_MAX[k] : v;
-	switch (k) { case 0: s->vel = (u8)(v * 2 > 255 ? 255 : v * 2); break; case 1: s->gate = (u8)(v && v < 5 ? 5 : v); break; case 2: s->skip = (u8)(100 - v); break;
-	case 3: s->cut = (s8)v; break; case 4: s->res = (s8)v; break; case 5: s->pitch = (s8)v; break; case 6: s->nudge = (s8)v; break;
-	case 7: gRowLen[r] = (u8)v; break; case 8: gRowHits[r] = (u8)v; break; default: gRowRot[r] = (u8)v; }
+	switch (k) { case 0: s->vel = (u8)(v * 2 > 255 ? 255 : v * 2); return; case 1: s->gate = (u8)(v && v < 5 ? 5 : v); return; case 2: s->skip = (u8)(100 - v); return;
+	case 3: s->cut = (s8)v; return; case 4: s->res = (s8)v; return; case 5: s->pitch = (s8)v; return; case 6: s->nudge = (s8)v; return;
+	case 7: s->fl = (u8)((s->fl & ~1) | v); return; case 11: s->fl = (u8)((s->fl & ~2) | (v << 1)); return; case 12: s->rat = (u8)v; return;
+	case 13: stepSetLen(gStepEd, gStepEdRow, v); return; }
+	int r = v ? rowSlotFor(gStepEdRow) : rowOfNote(gStepEdRow);   // a rhythm row is made for this pitch when you give it one
+	if (r < 0) { if (v) say("ALL 8 RHYTHM ROWS ARE IN USE"); return; }
+	if (k == 8) gRowLen[r] = (u8)v; else if (k == 9) gRowHits[r] = (u8)v; else gRowRot[r] = (u8)v;
 }
 static void seFmt(int k, int v, char* o, int n) {
-	if (k == 1 && !v) snprintf(o, n, "SEQ"); else if (k == 7 && !v) snprintf(o, n, "PAT"); else if (k == 8 && !v) snprintf(o, n, "OFF");
+	if (k == 7 || k == 11) snprintf(o, n, v ? "ON" : "OFF"); else if (k == 1 && !v) snprintf(o, n, "SEQ"); else if (k == 8 && !v) snprintf(o, n, "PAT"); else if (k == 9 && !v) snprintf(o, n, "OFF");
 	else if (k == 1 || k == 2) snprintf(o, n, "%d%%", v); else if (k >= 3 && k <= 6 && v) snprintf(o, n, "%+d", v); else snprintf(o, n, "%d", v);
 }
 #define SE_Y (XY_Y + 16)
 #define SE_ROW(k) (SE_Y + 11 + ((k) / 2) * 14)   // top of slider k's row
 static void drawStepEd(void) {
-	char t[40]; int nt = gridNote(gStepEdRow);
-	snprintf(t, sizeof(t), "STEP %d   ROW %s%d", gStepEd + 1, NOTE_NAMES[nt % 12], nt / 12 - 1); text(4, SE_Y, t, 1, RGB3(TH->val));
+	char t[40]; int nt = gStepEdRow;
+	snprintf(t, sizeof(t), "STEP %d %s%d", gStepEd + 1, NOTE_NAMES[nt % 12], nt / 12 - 1); text(4, SE_Y, t, 1, RGB3(TH->val));
 	rectP(262, SE_Y - 2, 54, 12, TH->keyOn); text(273, SE_Y, "DONE", 1, RGB3(EGA[0]));
+	rectP(170, SE_Y - 2, 40, 12, TH->tab); text(178, SE_Y, "<ST", 1, RGB3(TH->tabTxt)); rectP(214, SE_Y - 2, 40, 12, TH->tab); text(222, SE_Y, "ST>", 1, RGB3(TH->tabTxt));
 	for (int k = 0; k < SE_N; k++) {
 		int x = 4 + (k & 1) * 158, y = SE_ROW(k), v = seGet(k);
 		char vs[12]; seFmt(k, v, vs, sizeof(vs));
-		const u8* lc = k >= 7 ? TH->keyOn : TH->txt;
+		const u8* lc = k >= 8 && k <= 10 ? TH->keyOn : TH->txt;
 		text(x, y, SE_NAMES[k], 1, lc[0], lc[1], lc[2]); text(x + 152 - (int)strlen(vs) * 8, y, vs, 1, RGB3(TH->val));
 		rectP(x, y + 9, 152, 3, TH->pad);
 		float f = (v - SE_MIN[k]) / (float)(SE_MAX[k] - SE_MIN[k]); int z = SE_MIN[k] < 0 ? 76 : 0, p = (int)(f * 151);
@@ -3966,7 +4069,12 @@ static int gSeDrag = -1;
 static int stepEdTouch(int x, int y, int press, int release) {
 	if (release) { gSeDrag = -1; return 1; }
 	if (press && y < SE_Y + 10 && x >= 262) { gStepEd = -1; return 1; }
-	if (press) { int c = x >= 160, r = (y - SE_Y - 11) / 14; gSeDrag = (y >= SE_Y + 11 && r >= 0 && r < 5) ? r * 2 + c : -1; }
+	if (press && y < SE_Y + 10 && x >= 170 && x < 254) {   // the step before / after (pitch follows the step's first note)
+		int L = gSeqLen < 1 ? 1 : gSeqLen; gStepEd = (gStepEd + (x >= 214 ? 1 : L - 1)) % L;
+		if (gSeq[gStepEd].n) gStepEdRow = gSeq[gStepEd].note[0];
+		return 1;
+	}
+	if (press) { int c = x >= 160, r = (y - SE_Y - 11) / 14; gSeDrag = (y >= SE_Y + 11 && r >= 0 && r < SE_N / 2) ? r * 2 + c : -1; }
 	if (gSeDrag < 0) return 0;
 	int bx = 4 + (gSeDrag & 1) * 158; float f = (x - bx) / 151.0f; f = f < 0 ? 0 : f > 1 ? 1 : f;
 	seSet(gSeDrag, SE_MIN[gSeDrag] + (int)lroundf(f * (SE_MAX[gSeDrag] - SE_MIN[gSeDrag])));
@@ -3999,45 +4107,57 @@ static void gridButtons(int x) {
 	if (b == 1) { gPatView = !gPatView; gStepEd = -1; }
 	if (b == 2 && gSeqLen > 1) gSeqLen--;
 	if (b == 3 && gSeqLen < NSTEP) gSeqLen++;
-	if (b == 4 && gGridOct > -3) gGridOct--;
-	if (b == 5 && gGridOct < 2) gGridOct++;
-	if (b == 4 || b == 5) { char m[32]; int n0 = gridNote(0); snprintf(m, sizeof(m), "GRID BOTTOM ROW: %s%d", NOTE_NAMES[n0 % 12], n0 / 12 - 1); say(m); }
-	if (b == 6) { if (gGridOct > -1) gGridOct = -1; acidGen(); gPatView = 0; gStepEd = -1; say("ACID LINE: TAP ACID AGAIN FOR A NEW ONE"); }
+	if (b == 4 && gRollLow > 12) gRollLow -= 12;
+	if (b == 5 && gRollLow < 96) gRollLow += 12;
+	if (b == 6) { undoMark(); if (gGridOct > -1) gGridOct = -1; acidGen(); gPatView = 0; gStepEd = -1; gRollLow = gridNote(0) - 2; say("ACID LINE: TAP ACID AGAIN FOR A NEW ONE"); }
 }
 static void stepSetNote(int st, int nt, int on) {
 	Step* sp = &gSeq[st];
 	int k = 0; for (; k < sp->n; k++) if (sp->note[k] == nt) break;
-	if (on && k == sp->n && sp->n < 4) { sp->note[sp->n++] = (u8)nt; if (!sp->vel) sp->vel = 190; if (gSeqBase < 0) gSeqBase = gridNote(0); if (st >= gSeqLen) { gSeqLen = (st / 4 + 1) * 4; if (gSeqLen > NSTEP) gSeqLen = NSTEP; } }
-	if (!on && k < sp->n) { for (int j = k; j + 1 < sp->n; j++) sp->note[j] = sp->note[j + 1]; sp->n--; if (!sp->n) sp->fl = 0; }
+	if (on && k == sp->n && sp->n < 4) { sp->len[sp->n] = 1; sp->note[sp->n++] = (u8)nt; if (!sp->vel) sp->vel = 190; if (gSeqBase < 0) gSeqBase = gridNote(0); if (st >= gSeqLen) { gSeqLen = (st / 4 + 1) * 4; if (gSeqLen > NSTEP) gSeqLen = NSTEP; } }
+	if (!on && k < sp->n) { for (int j = k; j + 1 < sp->n; j++) { sp->note[j] = sp->note[j + 1]; sp->len[j] = sp->len[j + 1]; } sp->n--; sp->len[sp->n] = 0; if (!sp->n) sp->fl = 0; }
 }
-static void gridTap(int st, int r) {
-	int nt = gridNote(r); Step* sp = &gSeq[st];
-	if (gRowHits[r]) { say("EUCLID ROW: HOLD A STEP TO CHANGE ITS HITS"); return; }
-	if (stepHasNote(st, nt)) {   // tap a note again: accent, slide, both, then off
-		if (sp->fl < 3) { sp->fl++; return; }
-		stepSetNote(st, nt, 0); return;
-	}
-	if (sp->n >= 4) return;
-	stepSetNote(st, nt, 1);
-	if (!gSeqPlaying) { int n1 = nt; playSet(&n1, 1, 0.8f); gAuditionT = 0.18f; }   // hear it
+static void stepSetLen(int st, int nt, int L) {
+	Step* sp = &gSeq[st]; L = L < 1 ? 1 : L > NSTEP - st ? NSTEP - st : L;
+	for (int k = 0; k < sp->n; k++) if (sp->note[k] == nt) { sp->len[k] = (u8)L; if (st + L > gSeqLen) gSeqLen = st + L; }
 }
-// tap = place / accent / slide / off; drag = draw (or erase, if you started on a note); hold = step editor
-static int gGtSt = -1, gGtR = 0, gGtDrag = 0, gGtPaint = 0, gGtLong = 0; static u64 gGtT0;
+static void audition(int nt) { if (!gSeqPlaying) { playSet(&nt, 1, 0.8f); gAuditionT = 0.18f; } }
+// tap empty = a note, tap a note = gone, drag = length (from a new note or a note's tail), hold = step editor; the keys scroll
+static int gGtSt = -1, gGtNote = 0, gGtHit = -1, gGtDrag = 0, gGtLong = 0, gGtKeys = 0, gGtY0 = 0, gGtLow0 = 0; static u64 gGtT0;
 static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (gStepEd >= 0 && !(press && y < XY_Y + 15)) return stepEdTouch(x, y, press, release);
 	if (press && y < XY_Y + 15) { gridButtons(x); return 1; }
 	if (gPatView) { if (press) patViewTouch(x, y); return press; }
-	int st = (int)(x * NSTEP / 320.0f), r = 7 - (y - GRID_TOP) / GRID_ROWH, ok = st >= 0 && st < NSTEP && r >= 0 && r <= 7 && y >= GRID_TOP;
-	if (press) { gGtSt = ok ? st : -1; gGtR = r; gGtDrag = 0; gGtLong = 0; gGtT0 = svcGetSystemTick(); return 0; }
-	if (gGtSt < 0) return 0;
-	if (release) { int s0 = gGtSt; gGtSt = -1; if (!gGtDrag && !gGtLong) { gridTap(s0, gGtR); return 1; } return gGtDrag; }
-	if (!gGtDrag && !gGtLong && ok && st != gGtSt && !gRowHits[gGtR]) {
-		gGtDrag = 1; gGtPaint = !stepHasNote(gGtSt, gridNote(gGtR)); stepSetNote(gGtSt, gridNote(gGtR), gGtPaint);
+	int st = (int)((x - ROLL_KW) / ROLL_CW), row = ROLL_ROWS - 1 - (y - ROLL_TOP) / ROLL_RH, nt = gRollLow + row;
+	int ok = x >= ROLL_KW && st >= 0 && st < NSTEP && y >= ROLL_TOP && row >= 0 && row < ROLL_ROWS;
+	if (press) {
+		gGtKeys = x < ROLL_KW && y >= ROLL_TOP; gGtY0 = y; gGtLow0 = gRollLow; gGtDrag = 0; gGtLong = 0; gGtT0 = svcGetSystemTick();
+		if (gGtKeys) { if (row >= 0 && row < ROLL_ROWS) audition(nt); gGtSt = -1; return 0; }
+		gGtSt = ok ? st : -1; gGtNote = nt; gGtHit = ok ? noteCover(st, nt, NULL) : -1;
+		return 0;
 	}
-	if (gGtDrag) { if (ok && !gRowHits[r]) stepSetNote(st, gridNote(r), gGtPaint); return 1; }
-	if (!gGtLong && svcGetSystemTick() - gGtT0 > SYSCLOCK_ARM11 * 2 / 5) {
-		gGtLong = 1; gStepEd = gGtSt; gStepEdRow = gGtR; gSeDrag = -1;
-		say("STEP: LOCKS FOR THIS STEP, RHYTHM FOR THIS ROW");
+	if (gGtKeys) {   // drag the keyboard: scroll
+		if (release) { gGtKeys = 0; return 0; }
+		int nl = gGtLow0 + (y - gGtY0) / ROLL_RH; nl = nl < 12 ? 12 : nl > 108 ? 108 : nl;
+		if (nl != gRollLow) { gRollLow = nl; return 1; }
+		return 0;
+	}
+	if (gGtSt < 0) return 0;
+	if (release) {
+		int s0 = gGtSt; gGtSt = -1;
+		if (gGtDrag || gGtLong) return gGtDrag;
+		if (rowOfNote(gGtNote) >= 0) { say("RHYTHM ROW: HOLD A STEP TO CHANGE IT (ROW LEN / EUCL)"); return 0; }
+		if (gGtHit >= 0) { stepSetNote(gGtHit, gGtNote, 0); return 1; }   // tap a note: gone
+		if (gSeq[s0].n >= 4) { say("4 NOTES PER STEP"); return 0; }
+		stepSetNote(s0, gGtNote, 1); audition(gGtNote); return 1;
+	}
+	if (!gGtLong && ok && st != gGtSt) {   // a drag along the row: length
+		if (!gGtDrag) { gGtDrag = 1; if (gGtHit < 0) { if (gSeq[gGtSt].n >= 4 || rowOfNote(gGtNote) >= 0) { gGtSt = -1; return 0; } stepSetNote(gGtSt, gGtNote, 1); gGtHit = gGtSt; } }
+		stepSetLen(gGtHit, gGtNote, st - gGtHit + 1); return 1;
+	}
+	if (!gGtDrag && !gGtLong && svcGetSystemTick() - gGtT0 > SYSCLOCK_ARM11 * 2 / 5) {
+		gGtLong = 1; gStepEd = gGtHit >= 0 ? gGtHit : gGtSt; gStepEdRow = gGtNote; gSeDrag = -1;
+		say("STEP: LOCKS FOR THIS STEP, RHYTHM FOR THIS PITCH");
 		return 1;
 	}
 	return 0;
@@ -4754,7 +4874,8 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	}
 	if (gPads && !gGridOn) { drawPads(base); return; }   // chord pads take the whole screen under the tabs
 	if (gModOn) { drawModView(); return; }               // MOD page: route / drawn LFOs / motion
-	if (gGridOn) drawGrid(); else if (gAddEdit) drawAdd(); else {
+	if (gGridOn) { drawGrid(); return; }   // the piano roll takes the whole screen under the tabs
+	if (gAddEdit) drawAdd(); else {
 	drawXyPad();
 	}
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
@@ -4819,7 +4940,7 @@ static void drawPerfRow(int latch) {
 }
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	drawBottomMain(base, on, helpOn, latch);
-	if ((gPads && !gGridOn) || gModOn) return;
+	if ((gPads && !gGridOn) || gModOn || gGridOn) return;
 	if (gShapeOn && !gGridOn && !gAddEdit) drawShapeEditor();
 	if (gChainOn && !gGridOn && !gAddEdit) drawChainView();
 	if (gVisOnB && !gGridOn && !gAddEdit) drawVisTiles();
@@ -7599,7 +7720,7 @@ int main(void) {
 					if (b == 4) { gPads = 0; page = 10; }
 					topDirty = botDirty = 1;
 				}
-			} else if (t.py >= WORK_B && t.py < KB_Y && !gModOn && !(gPads && !gGridOn)) {
+			} else if (t.py >= WORK_B && t.py < KB_Y && !gModOn && !gGridOn && !(gPads && !gGridOn)) {
 				if (!prevTouch) {
 					int b = t.px * 7 / 320;
 					if (b == 0 && oct > -3) { oct--; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
@@ -7625,7 +7746,7 @@ int main(void) {
 				if (shapeTouch(t.px, t.py, !prevTouch, 0)) { botDirty = 1; topDirty = 1; }
 			} else if (t.py < WORK_B && !gGridOn && gAddEdit) {
 				addTouch(t.px, t.py); botDirty = 1;
-			} else if (t.py < WORK_B && gGridOn) {
+			} else if (gGridOn) {
 				gLastTX = t.px; gLastTY = t.py;
 				if (gridTouch(t.px, t.py, !prevTouch, 0)) topDirty = botDirty = 1;
 			} else if (xyShown() && t.py < WORK_B && t.py >= XY_Y) {
@@ -7669,7 +7790,7 @@ int main(void) {
 			curKey = key;
 		}
 		if (gVoiceMode >= 3 && (gDrumBuilt != gVoiceMode - 3 || gDrumCh[3] < 0)) { kitEnsure(); botDirty = 1; }
-		if (gTapeKeys) gTapeStop = !(curKey >= 0 || gHeldN > 0 || gArpN > 0);   // SLOWDOWN: the loop runs while you hold notes
+		if (gTapeKeys) gTapeStop = !(curKey >= 0 || gHeldN > 0 || gArpN > 0 || gSqNn > 0);   // SLOWDOWN: the loop runs while you hold notes
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; if (!g) { gStepEd = -1; gSeqSaveDue = 1; } } }
 		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }
 		{ int m = page == 4; if (m != gShapeOn) { gShapeOn = m; gShDrag = -1; botDirty = 1; } }
