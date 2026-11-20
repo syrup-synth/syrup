@@ -3367,6 +3367,11 @@ static void drawDrumsPanel(void);
 static void drawMasterPanel(void);
 static void drawHardwarePanel(void);
 static char gMsg[48]; static float gMsgT;
+static int cpuPct(void) {   // second core's load over the last second
+	static u64 lb = 0, lt = 0; static int pct = 0; u64 nt = svcGetSystemTick();
+	if (nt - lt > SYSCLOCK_ARM11) { u64 b = gCore1Busy; pct = lt ? (int)((b - lb) * 100 / (nt - lt)) : 0; lb = b; lt = nt; }
+	return pct;
+}
 static void drawHeader(int page) {
 	text(4, 3, "SYRUP", 1, TXT);
 	rect(0, 13, 400, 1, LINE);
@@ -3391,6 +3396,13 @@ static void drawHeader(int page) {
 		else text(sx, 18, SUB_NAMES[p], 1, DIM);
 		sx += w + 16;
 	}
+	// status, right side of the sub-tab row: tempo, notes playing, CPU, transport
+	char st[40]; int voices = 0;
+	for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho) voices++;
+	snprintf(st, sizeof(st), "%s%d BPM %dV %d%%", gEdited ? "* " : "", gBPM, voices, cpuPct());
+	if (gSeqPlaying) strcat(st, " >");
+	int stx = 396 - (int)strlen(st) * 8;
+	if (stx > sx) text(stx, 18, st, 1, gClockSkips ? WARN : DIM);
 }
 static void drawFooter(int page, int sel) {
 	rect(0, 226, 400, 1, LINE);
@@ -3494,8 +3506,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d%s", dsp, cs, csTot, dr ? " DROP" : gClockSkips ? " SKIP" : ""); text(6, 198, s, 1, (dr || gClockSkips) ? WARN : DIM); }
 		if (gGpuHung) { snprintf(s, sizeof(s), "GPU HUNG AFTER %d FRAMES", gGpuFrames); text(6, 210, s, 1, WARN); }
 		else {
-			static u64 lb = 0, lt = 0; static int pct = 0; u64 nt = svcGetSystemTick();
-			if (nt - lt > SYSCLOCK_ARM11) { u64 b = gCore1Busy; pct = lt ? (int)((b - lb) * 100 / (nt - lt)) : 0; lb = b; lt = nt; }
+			int pct = cpuPct();
 			if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, (!gFxCore2 || (gCore2Lim && gCore2Lim < 50)) ? "CORE 1" : (!(gFxThread || gFxOnWorker) || gFxC2Fail) ? "FELL BACK" : gFxThread ? "CORE 3" : "ON CORE 2");
 			else snprintf(s, sizeof(s), "CORE 2 OFF %s %08lX %08lX L%lu", envIsHomebrew() ? "3DSX" : "CIA", (unsigned long)gCore2Rc, (unsigned long)gCore2ThRc, (unsigned long)gCore2Lim);
 			if (gWorker) text(6, 210, s, 1, DIM); else text(6, 210, s, 1, WARN);
@@ -3532,7 +3543,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		int cur = i == sel, w = strlen(v) * 8;
 		if (cur) rect(206, y - 2, 190, 11, HI);
 		if (cur) text(208, y, P[i].name, 1, HITXT); else text(208, y, P[i].name, 1, DIM);
-		if (P[i].type == PT_F && TH->ega) {   // 8-block meter
+		if (P[i].type == PT_F) {   // 8-block meter
 			float t = (*(float*)P[i].p - P[i].mn) / (P[i].mx - P[i].mn + 1e-9f);
 			int blocks = (int)(t * 8 + 0.5f);
 			for (int b = 0; b < 8; b++) {
@@ -3589,19 +3600,22 @@ static void drawHelp(void) {
 #define TAB_H 20
 #define XY_Y  22
 #define XY_H  94
-#define KB_Y  118
+#define PAD_ROW ((240 - KB_Y) / 2)   // drum pad row height
+#define BLK_H 58                     // black key height
+#define WORK_B 118   // bottom of the work area; the PERF row sits under it, then the keyboard
+#define KB_Y  136
 #define NDRUM 10
 static const char* kitPadName(int d); static int kitPadNote(int d); static int kitPadOrder(int i);
 static int keyAt(int x, int y, int base) {
 	if (gVoiceMode >= 3) {   // drum pads: 2 rows of 5
-		int c = x / 64, r = y < KB_Y + 61 ? 0 : 1; if (c > 4) c = 4; if (c < 0) c = 0;
+		int c = x / 64, r = y < KB_Y + PAD_ROW ? 0 : 1; if (c > 4) c = 4; if (c < 0) c = 0;
 		return kitPadNote(kitPadOrder(r * 5 + c));
 	}
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
 	float ww = 320.0f / 14;
 	if (gScale) { int i = (int)(x / ww); if (i > 13) i = 13; if (i < 0) i = 0; gKeyDeg = i; return scaleNote(base + gRoot, i); }
-	if (y < KB_Y + 70)
+	if (y < KB_Y + BLK_H + 2)
 		for (int i = 0; i < 14; i++) {
 			if (!BL[i % 7]) continue;
 			int bx = (int)((i + 1) * ww - ww * 0.3f);
@@ -3629,7 +3643,7 @@ static int gridNote(int row) {   // row 0 = bottom; follows the scale (major ste
 static void rectP(int x, int y, int w, int h, const u8* c) { rect(x, y, w, h, c[0], c[1], c[2]); }
 #define GRID_BTNS 7
 static void drawGrid(void) {
-	rectP(0, XY_Y, 320, KB_Y - XY_Y, TH->bg);
+	rectP(0, XY_Y, 320, WORK_B - XY_Y, TH->bg);
 	const char* B[GRID_BTNS] = {gSeqMode == 1 ? "STOP" : "PLAY", "CLEAR", "<LEN", "LEN>", "ROW-", "ROW+", "ACID"};
 	for (int i = 0; i < GRID_BTNS; i++) {
 		int x = i * 320 / GRID_BTNS, lit = (i == 0 && gSeqMode == 1) || i == 6;
@@ -4028,7 +4042,7 @@ static void envPoints(const AHDSR* e, int hasHold, float* px, float* py) {   // 
 	x += ENV_SEGW[4] * sqrtf(ts[3] / ENV_MAXT[4]); px[4] = x; py[4] = bot;
 }
 static void drawShapeEditor(void) {
-	rect(0, TAB_H, 320, KB_Y - TAB_H, RGB3(TH->bg));
+	rect(0, TAB_H, 320, WORK_B - TAB_H, RGB3(TH->bg));
 	static const char* ST[3] = {"ENV 1 (AMP)", "ENV 2 (MOD)", "FILTER"};
 	for (int i = 0; i < 3; i++) {
 		int x = 4 + i * 105, lit = i == gShapeView; rect(x, TAB_H + 2, 101, 14, lit ? TH->keyOn[0] : TH->tab[0], lit ? TH->keyOn[1] : TH->tab[1], lit ? TH->keyOn[2] : TH->tab[2]);
@@ -4061,9 +4075,9 @@ static void drawShapeEditor(void) {
 		float hz = baseCutoff(); int cx = ix + (int)(logf(hz / 30) / logf(500.0f) * (iw - 1)), cy = iy + ih - 1 - (int)(gRes * (ih - 6));
 		rect(cx - 3, cy - 3, 7, 7, 255, 255, 255);
 		static const char* FT[5] = {"LP", "HP", "BP", "NOTCH", "PEAK"};
-		for (int i = 0; i < 5; i++) { int x = 6 + i * 46, on = i == gFiltType; rect(x, KB_Y - 15, 42, 12, on ? TH->keyOn[0] : TH->tab[0], on ? TH->keyOn[1] : TH->tab[1], on ? TH->keyOn[2] : TH->tab[2]);
-			const u8* tc = on ? EGA[0] : TH->tabTxt; text(x + 21 - (int)strlen(FT[i]) * 4, KB_Y - 13, FT[i], 1, tc[0], tc[1], tc[2]); }
-		snprintf(t, sizeof(t), "F2 %s", FILT2_NAMES[gFilt2]); rect(240, KB_Y - 15, 76, 12, RGB3(TH->tab)); text(244, KB_Y - 13, t, 1, RGB3(TH->tabTxt));
+		for (int i = 0; i < 5; i++) { int x = 6 + i * 46, on = i == gFiltType; rect(x, WORK_B - 15, 42, 12, on ? TH->keyOn[0] : TH->tab[0], on ? TH->keyOn[1] : TH->tab[1], on ? TH->keyOn[2] : TH->tab[2]);
+			const u8* tc = on ? EGA[0] : TH->tabTxt; text(x + 21 - (int)strlen(FT[i]) * 4, WORK_B - 13, FT[i], 1, tc[0], tc[1], tc[2]); }
+		snprintf(t, sizeof(t), "F2 %s", FILT2_NAMES[gFilt2]); rect(240, WORK_B - 15, 76, 12, RGB3(TH->tab)); text(244, WORK_B - 13, t, 1, RGB3(TH->tabTxt));
 		snprintf(t, sizeof(t), hz >= 1000 ? "%.1fK RES %d%%" : "%.0f RES %d%%", hz >= 1000 ? hz / 1000 : hz, (int)(gRes * 100 + 0.5f)); text(314 - (int)strlen(t) * 8, SH_Y + 2, t, 1, RGB3(TH->val));
 	}
 }
@@ -4071,7 +4085,7 @@ static int shapeTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (release) { int w = gShDrag >= 0; gShDrag = -1; return w; }
 	if (press && y < TAB_H + 18) { int v = (x - 4) / 105; if (v >= 0 && v < 3) gShapeView = v; return 1; }
 	if (gShapeView == 2) {
-		if (press && y >= KB_Y - 16) {
+		if (press && y >= WORK_B - 16) {
 			if (x < 236) { int i = (x - 6) / 46; if (i >= 0 && i < 5) { gFiltType = i; gEdited = 1; } }
 			else { gFilt2 = (gFilt2 + 1) % 3; gEdited = 1; }
 			return 1;
@@ -4176,7 +4190,7 @@ static void drawChainBox(int x, int b, int lift) {
 	else text(x + 23 - (int)strlen(nm) * 4, y + 13, nm, 1, fg[0], fg[1], fg[2]);
 }
 static void drawChainView(void) {
-	rect(0, TAB_H, 320, KB_Y - TAB_H, RGB3(TH->bg));
+	rect(0, TAB_H, 320, WORK_B - TAB_H, RGB3(TH->bg));
 	text(6, TAB_H + 6, "FX ORDER", 1, RGB3(TH->val)); text(78, TAB_H + 6, "DRAG A BLOCK TO MOVE IT", 1, RGB3(TH->txt));
 	rect(258, TAB_H + 22, 56, 12, RGB3(TH->tab)); text(262, TAB_H + 24, "RESET", 1, RGB3(TH->tabTxt));
 	for (int i = 0; i < NFXB; i++) {
@@ -4213,12 +4227,12 @@ static void keyColor(const u8* lo, const u8* hi, float t, u8* out) { t = t < 0 ?
 // shows as uneven widths), notes lit, accents brighter, the playing step brightest
 static void drawSeqStrip(void) {
 	if (!gSeqPlaying || gSeqLen < 1) return;
-	int y = KB_Y - 6; float tot = 0; for (int i = 0; i < gSeqLen; i++) tot += (i & 1) ? 1 - gSwing : 1 + gSwing;
+	int y = WORK_B - 2; float tot = 0; for (int i = 0; i < gSeqLen; i++) tot += (i & 1) ? 1 - gSwing : 1 + gSwing;
 	float x = 4;
 	for (int i = 0; i < gSeqLen; i++) {
 		float w = ((i & 1) ? 1 - gSwing : 1 + gSwing) / tot * 312; int xi = (int)x, wi = (int)(x + w) - xi - 1;
 		const u8* c = i == gSeqPos ? TH->keyOn : gSeq[i].n ? ((gSeq[i].fl & 1) ? TH->val : TH->txt) : TH->grid;
-		rect(xi, y, wi < 1 ? 1 : wi, i == gSeqPos ? 4 : 3, c[0], c[1], c[2]);
+		rect(xi, y, wi < 1 ? 1 : wi, 2, c[0], c[1], c[2]);
 		x += w;
 	}
 }
@@ -4226,16 +4240,17 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	(void)helpOn;
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	rect(0, 0, 320, KB_Y, BG);
-	static const char* TABS[7] = {"PADS", "<PAGE", "PAGE>", "OCT-", "OCT+", "LATCH", "SEQ"};
-	for (int i = 0; i < 7; i++) {
-		int x = i * 320 / 7, lit = (i == 0 && gPads) || (i == 5 && latch) || (i == 6 && gGridOn);
-		int w = strlen(TABS[i]) * 8, bw = 320 / 7 - 4;
+	// WORK chips: jump straight to an editor (PADS and SEQ swap the whole work area)
+	static const char* TABS[6] = {"PADS", "MATRIX", "MOTION", "ENV", "CHAIN", "SEQ"};
+	for (int i = 0; i < 6; i++) {
+		int x = i * 320 / 6, lit = (i == 0 && gPads) || (i == 1 && gModOn && gModView == 0) || (i == 2 && gModOn && gModView == 4) || (i == 3 && gShapeOn) || (i == 4 && gChainOn) || (i == 5 && gGridOn);
+		int w = strlen(TABS[i]) * 8, bw = 320 / 6 - 4, cx = x + 160 / 6;
 		if (TH->ega) {
-			if (lit) { rect(x + 2, 1, bw, TAB_H - 3, HI); text(x + 160 / 7 - w / 2, 6, TABS[i], 1, HITXT); }
-			else { outline(x + 2, 1, bw, TAB_H - 3, LINE); text(x + 160 / 7 - w / 2, 6, TABS[i], 1, TXT); }
+			if (lit) { rect(x + 2, 1, bw, TAB_H - 3, HI); text(cx - w / 2, 6, TABS[i], 1, HITXT); }
+			else { outline(x + 2, 1, bw, TAB_H - 3, LINE); text(cx - w / 2, 6, TABS[i], 1, TXT); }
 		} else {
-			if (lit) { rect(x + 2, 1, bw, TAB_H - 2, HI); text(x + 160 / 7 - w / 2, 7, TABS[i], 1, HITXT); }
-			else { rect(x + 2, 1, bw, TAB_H - 2, RGB3(TH->tab)); text(x + 160 / 7 - w / 2, 7, TABS[i], 1, RGB3(TH->tabTxt)); }
+			if (lit) { rect(x + 2, 1, bw, TAB_H - 2, HI); text(cx - w / 2, 7, TABS[i], 1, HITXT); }
+			else { rect(x + 2, 1, bw, TAB_H - 2, RGB3(TH->tab)); text(cx - w / 2, 7, TABS[i], 1, RGB3(TH->tabTxt)); }
 		}
 	}
 	if (gPads && !gGridOn) { drawPads(base); return; }   // chord pads take the whole screen under the tabs
@@ -4266,11 +4281,11 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	if (TH->ega) rect(0, KB_Y, 320, 1, LINE);
 	if (gVoiceMode >= 3) {   // drum kit pads, lower on a pad = harder
 		for (int i = 0; i < 10; i++) {
-			int d = kitPadOrder(i), x = (i % 5) * 64, y = KB_Y + 2 + (i / 5) * 61, note = kitPadNote(d), lit = note < 128 && on[note];
-			rect(x + 2, y, 60, 57, lit ? TH->keyOn[0] : TH->keyW[0], lit ? TH->keyOn[1] : TH->keyW[1], lit ? TH->keyOn[2] : TH->keyW[2]);
-			if (TH->ega) outline(x + 2, y, 60, 57, RGB3(TH->keyLine));
+			int d = kitPadOrder(i), x = (i % 5) * 64, y = KB_Y + 2 + (i / 5) * PAD_ROW, note = kitPadNote(d), lit = note < 128 && on[note];
+			rect(x + 2, y, 60, PAD_ROW - 4, lit ? TH->keyOn[0] : TH->keyW[0], lit ? TH->keyOn[1] : TH->keyW[1], lit ? TH->keyOn[2] : TH->keyW[2]);
+			if (TH->ega) outline(x + 2, y, 60, PAD_ROW - 4, RGB3(TH->keyLine));
 			const char* nm = kitPadName(d); int tx = x + 32 - (int)strlen(nm) * 4;
-			if (lit) text(tx, y + 25, nm, 1, EC(0)); else text(tx, y + 25, nm, 1, TH->ega ? TH->keyLine[0] : 60, TH->ega ? TH->keyLine[1] : 40, TH->ega ? TH->keyLine[2] : 20);
+			if (lit) text(tx, y + PAD_ROW / 2 - 6, nm, 1, EC(0)); else text(tx, y + PAD_ROW / 2 - 6, nm, 1, TH->ega ? TH->keyLine[0] : 60, TH->ega ? TH->keyLine[1] : 40, TH->ega ? TH->keyLine[2] : 20);
 		}
 		return;
 	}
@@ -4298,12 +4313,26 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 		if (!BL[i % 7]) continue;
 		int n = base + (i / 7) * 12 + WN[i % 7] + 1, bx = (int)((i + 1) * ww - ww * 0.3f);
 		u8 c[3];
-		if (on[n]) { keyColor(TH->keyB, TH->keyOnB, 0.45f + 0.55f * gNoteVel[n], c); rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, c[0], c[1], c[2]); }
-		else if (gKeyFade[n] > 0) { keyColor(TH->keyB, TH->keyOnB, gKeyFade[n] * 0.6f, c); rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, c[0], c[1], c[2]); }
-		else { rect(bx, KB_Y + 2, (int)(ww * 0.6f), 68, RGB3(TH->keyB)); if (TH->ega) outline(bx, KB_Y + 2, (int)(ww * 0.6f), 68, RGB3(TH->keyLine)); }
+		if (on[n]) { keyColor(TH->keyB, TH->keyOnB, 0.45f + 0.55f * gNoteVel[n], c); rect(bx, KB_Y + 2, (int)(ww * 0.6f), BLK_H, c[0], c[1], c[2]); }
+		else if (gKeyFade[n] > 0) { keyColor(TH->keyB, TH->keyOnB, gKeyFade[n] * 0.6f, c); rect(bx, KB_Y + 2, (int)(ww * 0.6f), BLK_H, c[0], c[1], c[2]); }
+		else { rect(bx, KB_Y + 2, (int)(ww * 0.6f), BLK_H, RGB3(TH->keyB)); if (TH->ega) outline(bx, KB_Y + 2, (int)(ww * 0.6f), BLK_H, RGB3(TH->keyLine)); }
 	}
 	char c[8]; snprintf(c, sizeof(c), "C%d", base / 12 - 1);
 	if (on[base] || !TH->ega) text(4, 228, c, 1, TH->ega ? 0 : 120, TH->ega ? 0 : 90, TH->ega ? 0 : 50); else text(4, 228, c, 1, RGB3(TH->keyLine));
+}
+// PERF row, between the work area and the keyboard: the things you reach for while playing
+static int gScaleLast = 2, gChordLast = 1;
+static void drawPerfRow(int latch) {
+	static const char* PB[7] = {"OCT-", "OCT+", "SCALE", "LATCH", "CHORD", "PLAY", "PANIC"};
+	rect(0, WORK_B, 320, KB_Y - WORK_B, BG);
+	for (int i = 0; i < 7; i++) {
+		int x = i * 320 / 7, bw = 320 / 7 - 3, w = (int)strlen(PB[i]) * 8;
+		int lit = (i == 2 && gScale) || (i == 3 && latch) || (i == 4 && gChord) || (i == 5 && gSeqMode == 1);
+		const char* lb = i == 5 && gSeqMode == 1 ? "STOP" : PB[i]; if (i == 5) w = (int)strlen(lb) * 8;
+		if (lit) { rect(x + 2, WORK_B + 1, bw, KB_Y - WORK_B - 3, HI); text(x + 160 / 7 + 1 - w / 2, WORK_B + 5, lb, 1, HITXT); }
+		else if (TH->ega) { outline(x + 2, WORK_B + 1, bw, KB_Y - WORK_B - 3, LINE); text(x + 160 / 7 + 1 - w / 2, WORK_B + 5, lb, 1, TXT); }
+		else { rect(x + 2, WORK_B + 1, bw, KB_Y - WORK_B - 3, RGB3(TH->tab)); text(x + 160 / 7 + 1 - w / 2, WORK_B + 5, lb, 1, RGB3(TH->tabTxt)); }
+	}
 }
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	drawBottomMain(base, on, helpOn, latch);
@@ -4311,10 +4340,11 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	if (gShapeOn && !gGridOn && !gAddEdit) drawShapeEditor();
 	if (gChainOn && !gGridOn && !gAddEdit) drawChainView();   // MASTER FX: the chain, in order   // FILT+ENV: the editor sits where the XY pad was
 	if (!gGridOn && !gAddEdit) drawSeqStrip();
+	drawPerfRow(latch);
 	if (latch) { outline(0, KB_Y, 320, 240 - KB_Y, HI); outline(1, KB_Y + 1, 318, 238 - KB_Y, HI); }   // LATCH: notes hold, and the keyboard says so
-	if (gChordKey >= 0 && gVoiceMode < 3 && !gGridOn && !gAddEdit) {   // chord mode: the chord you're holding, by name
+	if (gChordKey >= 0 && gVoiceMode < 3 && !gGridOn && !gAddEdit && !gShapeOn) {   // chord mode: the chord you're holding, by name
 		char t[24]; snprintf(t, sizeof(t), "%s %s", NOTE_NAMES[gChordKey % 12], CHORD_NAMES[gChord]);
-		int w = (int)strlen(t) * 8 + 8; rect(6, KB_Y - 20, w, 12, RGB3(TH->tab)); text(10, KB_Y - 18, t, 1, RGB3(TH->tabTxt));
+		int w = (int)strlen(t) * 8 + 8; rect(6, WORK_B - 20, w, 12, RGB3(TH->tab)); text(10, WORK_B - 18, t, 1, RGB3(TH->tabTxt));
 	}
 }
 
@@ -5014,17 +5044,17 @@ static void addBuild(void) {
 }
 static void addApply(void) { addBuild(); if (gAddFr) { vidInstallLive(gAddFr); snprintf(gOsc[0].tb.name, sizeof(gOsc[0].tb.name), "ADDITIVE"); } }
 static void drawAdd(void) {
-	rect(0, XY_Y, 320, KB_Y - XY_Y, RGB3(TH->bg));
+	rect(0, XY_Y, 320, WORK_B - XY_Y, RGB3(TH->bg));
 	text(4, XY_Y + 2, "DRAW HARMONICS 1-24  (OSC A, LIVE)", 1, DIM);
 	for (int h = 0; h < 24; h++) {
-		int x = 4 + h * 13, top = XY_Y + 14, hgt = KB_Y - 4 - top, v = (int)(gAddH[h] * hgt);
+		int x = 4 + h * 13, top = XY_Y + 14, hgt = WORK_B - 4 - top, v = (int)(gAddH[h] * hgt);
 		rect(x, top, 11, hgt, RGB3(TH->pad));
 		if (v > 0) rect(x, top + hgt - v, 11, v, (h & 3) == 0 ? TH->val[0] : TH->line[0], (h & 3) == 0 ? TH->val[1] : TH->line[1], (h & 3) == 0 ? TH->val[2] : TH->line[2]);
 	}
 }
 static void addTouch(int x, int y) {
 	int h = (x - 4) / 13; if (h < 0 || h > 23) return;
-	int top = XY_Y + 14, hgt = KB_Y - 4 - top; float v = 1 - (y - top) / (float)hgt; if (v < 0) v = 0; if (v > 1) v = 1;
+	int top = XY_Y + 14, hgt = WORK_B - 4 - top; float v = 1 - (y - top) / (float)hgt; if (v < 0) v = 0; if (v > 1) v = 1;
 	if (v < 0.03f) v = 0;
 	gAddH[h] = v * v;   // squared: finer control of quiet harmonics
 	gAddDirty = 1;
@@ -7039,15 +7069,25 @@ int main(void) {
 			touchPosition t; hidTouchRead(&t);
 			if (t.py < TAB_H) {
 				if (!prevTouch) {
-					int b = t.px * 7 / 320;
+					int b = t.px * 6 / 320;
 					static int seqBack = 0;
-					if (b == 6) { if (page != 7) { seqBack = page; page = 7; } else page = seqBack; if (page == 7) say("SEQUENCER: TAP THE GRID, PLAY / ACID ABOVE IT"); }
+					if (b == 5) { gPads = 0; if (page != 7) { seqBack = page; page = 7; } else page = seqBack; if (page == 7) say("SEQUENCER: TAP THE GRID, PLAY / ACID ABOVE IT"); }
 					if (b == 0) { gPads = !gPads; gPadSel = -1; if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: LOW = TRIAD, MID = 7TH, TOP = 9TH; EDGES = INVERSION / SUS4"); }
-					if (b == 1) page = navStep(page, -1);
-					if (b == 2) page = navStep(page, 1);
-					if (b == 3 && oct > -3) { oct--; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
-					if (b == 4 && oct < 3) { oct++; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
-					if (b == 5) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } }
+					if (b == 1 || b == 2) { gPads = 0; page = 5; gModView = b == 1 ? 0 : 4; gMxDrag = -1; gMxPick = -1; gLfPick = -1; }
+					if (b == 3) { gPads = 0; page = 4; gShapeView = 0; }
+					if (b == 4) { gPads = 0; page = 10; }
+					topDirty = botDirty = 1;
+				}
+			} else if (t.py >= WORK_B && t.py < KB_Y && !gModOn && !(gPads && !gGridOn)) {
+				if (!prevTouch) {
+					int b = t.px * 7 / 320;
+					if (b == 0 && oct > -3) { oct--; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
+					if (b == 1 && oct < 3) { oct++; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
+					if (b == 2) { if (gScale) { gScaleLast = gScale; gScale = 0; } else gScale = gScaleLast; char m[40]; snprintf(m, sizeof(m), "SCALE: %s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); say(m); }
+					if (b == 3) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } }
+					if (b == 4) { if (gChord) { gChordLast = gChord; gChord = 0; } else gChord = gChordLast; char m[32]; snprintf(m, sizeof(m), "CHORD: %s", gChord ? CHORD_NAMES[gChord] : "OFF"); say(m); }
+					if (b == 5) { gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0); if (gSeqMode == 0) seqStop(); }
+					if (b == 6) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; say("PANIC: ALL NOTES OFF"); }
 					topDirty = botDirty = 1;
 				}
 			} else if (gModOn && !gPads) {
@@ -7056,15 +7096,15 @@ int main(void) {
 			} else if (gPads && !gGridOn) {
 				float pv = 0.8f;
 				if (padsTouch(base, t.px, t.py, !prevTouch, &pv)) { botDirty = 1; topDirty = 1; }
-			} else if (gChainOn && t.py < KB_Y && t.py >= TAB_H && !gGridOn && !gAddEdit && !gPads) {
+			} else if (gChainOn && t.py < WORK_B && t.py >= TAB_H && !gGridOn && !gAddEdit && !gPads) {
 				gLastTX = t.px; gLastTY = t.py;
 				if (chainTouch(t.px, t.py, !prevTouch, 0)) { botDirty = 1; topDirty = 1; }
-			} else if (gShapeOn && t.py < KB_Y && t.py >= TAB_H && !gGridOn && !gAddEdit && !gPads) {
+			} else if (gShapeOn && t.py < WORK_B && t.py >= TAB_H && !gGridOn && !gAddEdit && !gPads) {
 				gLastTX = t.px; gLastTY = t.py;
 				if (shapeTouch(t.px, t.py, !prevTouch, 0)) { botDirty = 1; topDirty = 1; }
-			} else if (t.py < KB_Y && !gGridOn && gAddEdit) {
+			} else if (t.py < WORK_B && !gGridOn && gAddEdit) {
 				addTouch(t.px, t.py); botDirty = 1;
-			} else if (t.py < KB_Y && gGridOn) {
+			} else if (t.py < WORK_B && gGridOn) {
 				if (!prevTouch) { gridTouch(t.px, t.py); topDirty = botDirty = 1; }
 			} else if (t.py < XY_Y + XY_H) {
 				float np = (t.px - 4) / 311.0f, nc = 1.0f - (t.py - XY_Y) / (float)(XY_H - 1);
@@ -7079,7 +7119,7 @@ int main(void) {
 			} else if (t.py >= KB_Y) {
 				key = keyAt(t.px, t.py, base);
 				vel = 0.35f + 0.65f * (t.py - KB_Y) / (float)(240 - KB_Y);
-				if (gVoiceMode >= 3) { int py = (t.py - KB_Y) % 61; vel = 0.35f + 0.65f * py / 60.0f; }
+				if (gVoiceMode >= 3) { int py = (t.py - KB_Y) % PAD_ROW; vel = 0.35f + 0.65f * py / (float)(PAD_ROW - 1); }
 			}
 		}
 		if (gModOn && !gPads && prevTouch && !touching && modViewTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }

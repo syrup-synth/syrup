@@ -46,10 +46,17 @@ static void SCRIPT(int fr) {
 	}
 	if (fr == 160 || fr == 161) { TOUCH = 1; TX = 280; TY = TAB_H + 26; }   // RESET
 	if (fr == 164) { for (int i = 0; i < NFXB; i++) if (gFxOrder[i] != i) { fail("FX ORDER: RESET didn't restore the default"); break; } }
+	// WORK chips and the PERF row
+	if (fr == 166 || fr == 167) { TOUCH = 1; TX = 80; TY = 8; }   // MATRIX
+	if (fr == 170 && !(gModOn && gModView == 0)) fail("WORK chips: MATRIX should open the matrix");
+	if (fr == 172 || fr == 173) { TOUCH = 1; TX = 240; TY = 8; }  // CHAIN
+	if (fr == 176) { if (!gChainOn) fail("WORK chips: CHAIN should open FX ORDER"); gSeqMode = 1; }
+	if (fr == 178 || fr == 179) { TOUCH = 1; TX = 300; TY = WORK_B + 8; }   // PANIC
+	if (fr == 182) { shotBot("shots/perf_row.ppm"); if (gSeqMode == 1 || gSeqPlaying) fail("PERF: PANIC should stop the sequencer"); }
 }
 int main(void) {
 	mkdir("shots", 0777);
-	loadFont(); FRMAX = 170; app_main();
+	loadFont(); FRMAX = 186; app_main();
 	printf("screens: filter plot, value HUD, keyboard feedback and seq strip saved\n");
 	return gFails ? 1 : 0;
 }
