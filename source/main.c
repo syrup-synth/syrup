@@ -3732,6 +3732,8 @@ static void drawHelp(void) {
 #define XY_H  94
 #define PAD_ROW ((240 - KB_Y) / 2)   // drum pad row height
 #define BLK_H 58                     // black key height
+#define BLK_GRACE 3                  // extra touch width each side of a black key (more and D / G / A lose their top)
+#define KEY_HOLD 3                   // a held key keeps the stylus until it is this far into another key
 #define WORK_B 118   // bottom of the work area; the PERF row sits under it, then the keyboard
 #define KB_Y  136
 #define NDRUM 10
@@ -3749,7 +3751,8 @@ static int keyAt(int x, int y, int base) {
 		for (int i = 0; i < 14; i++) {
 			if (!BL[i % 7]) continue;
 			int bx = (int)((i + 1) * ww - ww * 0.3f);
-			if (x >= bx && x < bx + (int)(ww * 0.6f)) return base + (i / 7) * 12 + WN[i % 7] + 1;
+			// the touch area is wider than the drawn key (resistive screen + stylus): BLK_GRACE px into the white keys each side
+			if (x >= bx - BLK_GRACE && x < bx + (int)(ww * 0.6f) + BLK_GRACE) return base + (i / 7) * 12 + WN[i % 7] + 1;
 		}
 	int i = (int)(x / ww); if (i > 13) i = 13;
 	return base + (i / 7) * 12 + WN[i % 7];
@@ -7490,7 +7493,13 @@ int main(void) {
 				if (!prevTouch && visTilesTouch(t.px, t.py)) { botDirty = 1; topDirty = 1; }
 			} else if (gHwOnB && t.py < WORK_B && t.py >= TAB_H) {
 			} else if (t.py >= KB_Y) {
+				int deg0 = gKeyDeg;   // (keyAt sets the scale degree; a kept key keeps its own)
 				key = keyAt(t.px, t.py, base);
+				if (prevTouch && curKey >= 0 && key != curKey && gVoiceMode < 3) {   // hysteresis: a small slip off the edge doesn't change the note
+					for (int d = 0; d < 4; d++) { static const int DX[4] = {-KEY_HOLD, KEY_HOLD, 0, 0}, DY[4] = {0, 0, -KEY_HOLD, KEY_HOLD};
+						int yy = t.py + DY[d]; if (yy >= KB_Y && yy < 240 && keyAt(t.px + DX[d], yy, base) == curKey) { key = curKey; break; } }
+					if (key == curKey) gKeyDeg = deg0; else keyAt(t.px, t.py, base);
+				}
 				vel = 0.35f + 0.65f * (t.py - KB_Y) / (float)(240 - KB_Y);
 				if (gVoiceMode >= 3) { int py = (t.py - KB_Y) % PAD_ROW; vel = 0.35f + 0.65f * py / (float)(PAD_ROW - 1); }
 			}

@@ -45,11 +45,23 @@ static void SCRIPT(int fr) {
 	if (fr == 177) { shotBot("shots/vis_tiles.ppm"); if (gVisMode != 6) fail("VIS tiles: tapping should pick the mode (%d)", gVisMode); }
 	press(fr, 180, KEY_X);
 	if (fr == 186) { shotBot("shots/hw_view.ppm"); if (!gHwOnB) fail("HARDWARE page: sensor view should be up"); }
+	// keyboard hit areas: black keys reach BLK_GRACE px past their drawn edge; D keeps a strip at the top
+	if (fr == 187) {
+		int sc = gScale, vm = gVoiceMode; gScale = 0; gVoiceMode = 0; float ww = 320.0f / 14; int bx = (int)(ww - ww * 0.3f), y = KB_Y + 10;
+		if (keyAt(bx - 2, y, 48) != 49) fail("keys: 2 px left of C# should still be C# (%d)", keyAt(bx - 2, y, 48));
+		if (keyAt(bx - BLK_GRACE - 2, y, 48) != 48) fail("keys: further left should be C");
+		int dmid = (int)(1.5f * ww); if (keyAt(dmid, y, 48) != 50) fail("keys: the top middle of D should still be D (%d)", keyAt(dmid, y, 48));
+		if (keyAt(bx - 2, KB_Y + BLK_H + 6, 48) != 48) fail("keys: below the black keys it's the white key");
+		gScale = sc; gVoiceMode = vm;
+	}
+	// a held key survives a small slip: touch C# then drift 2 px out of its area
+	if (fr >= 188 && fr < 194) { TOUCH = 1; TY = KB_Y + 10; TX = (int)(320.0f / 14 * 0.7f) - BLK_GRACE + (fr >= 191 ? -2 : 1); gScale = 0; }
+	if (fr == 193 && !(gHeldN && (gHeld[0] % 12) == 1)) fail("keys: a 2 px slip off C# shouldn't change the note (held %d)", gHeldN ? gHeld[0] : -1);
 }
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	FILE* f = fopen("sd/settings.bin", "wb"); int d[4] = {0x53455431, 1, 0, 0}; fwrite(d, sizeof(d), 1, f); fclose(f);
-	loadFont(); FRMAX = 190; app_main();
+	loadFont(); FRMAX = 197; app_main();
 	remove("sd/settings.bin");
 	printf("adv: last page, XY modes, PERF, circle pad, matrix hold, HUD ghost, vis tiles, hardware view\n");
 	return gFails ? 1 : 0;

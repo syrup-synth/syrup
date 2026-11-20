@@ -129,6 +129,7 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | Bottom PERF row | Above the keys: OCT-, OCT+, SCALE (scale on/off, back to the last one), LATCH, CHORD (on/off, last chord), PLAY/STOP (sequencer), PANIC (all notes off, latch and sequencer stop) |
 | XY pad mode button | Top right of the XY pad steps through WT + CUTOFF, MACRO 1+2, MACRO 3+4, CUTOFF + RES, WT A + WT B, FX MIX + COLOR and PERF (four sliders: CUTOFF, RES, WT POS, FX MIX over a smaller pad that plays macros 1 + 2). When modulation is moving an axis, a ghost square shows where the sound really is, with a line back to your finger |
 | Circle pad | HARDWARE > CIRCLE PAD: BEND + MOD (default), PAGE (pushes two values on the page you're on: OSC = WT POS / CUTOFF, FILT+ENV and most pages = CUTOFF / RES, VOICE+FX = FX MIX / CHORUS, ARP+SEQ = SWING / GATE, MASTER FX = DELAY / REVERB MIX, LFO+MOD = MACRO 1 / 2) or MACROS (M1 / M2). Hold it over to keep moving the value |
+| Keyboard touch | Black keys answer 3 px past their drawn edges (the resistive screen and stylus wander); a key you hold keeps the note until the stylus is 3 px into the next key, so a slip doesn't retrigger |
 | Matrix slot | Tap a box to pick, hold it to clear the slot |
 | VISUALIZER / HARDWARE pages | Bottom screen: a tile per visualizer mode (plus OVERLAY); live sensor meters and the camera picture |
 | D-pad up / down | Pick a parameter |
