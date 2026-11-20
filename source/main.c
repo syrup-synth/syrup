@@ -1512,7 +1512,18 @@ static void ofBlock(s32* L, s32* R, int n) {   // audio thread, inside auxMaster
 		L[i] = (s32)(x[0] * 32768.0f); R[i] = (s32)(x[1] * 32768.0f);
 	}
 }
+// FX ORDER: the master chain's blocks, in the order they run. 0 LOFI, 1 MOD FX, 2 EQ, 3 SPACE (delay + reverb, fed in
+// parallel), 4 OTT. Saved with the patch; SIDECHAIN PUMP and the limiter always come after these.
+#define NFXB 5
+static int gFxOrder[NFXB] = {0, 1, 2, 3, 4};
+static const char* FXB_NAMES[NFXB] = {"LOFI", "MOD FX", "EQ", "SPACE", "OTT"};
+static void fxOrderSet(const u8* o) {   // only a full permutation is taken; anything else = default order
+	int seen = 0, t[NFXB];
+	for (int i = 0; i < NFXB; i++) { if (o[i] >= NFXB || (seen >> o[i] & 1)) { for (int k = 0; k < NFXB; k++) t[k] = k; goto ok; } seen |= 1 << o[i]; t[i] = o[i]; }
+ok:	for (int i = 0; i < NFXB; i++) __atomic_store_n(&gFxOrder[i], t[i], __ATOMIC_RELAXED);
+}
 static void auxMaster(void* data, int n, void* samples[4]) {
+	int fxo[NFXB]; for (int i = 0; i < NFXB; i++) fxo[i] = __atomic_load_n(&gFxOrder[i], __ATOMIC_RELAXED);
 	(void)data;
 	u64 t0 = svcGetSystemTick();
 	s32* L = (s32*)samples[0]; s32* R = (s32*)samples[1];
@@ -1558,133 +1569,146 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 	for (int s = 0; s < n; s++) {
 		if (L[s] | R[s]) seen = 1;
 		float x[2] = {L[s] / 32768.0f, R[s] / 32768.0f};
-		// lofi
-		if (bits || hold > 1) {
-			if (gLofiCnt++ % hold == 0) for (int c = 0; c < 2; c++) gLofiHold[c] = bits ? roundf(x[c] * (1 << (bits - 1))) / (1 << (bits - 1)) : x[c];
-			x[0] = gLofiHold[0]; x[1] = gLofiHold[1];
-		}
-		// modulation FX
-		if (gModFx) {
-			gModPh += gModRate * (0.2f + color) / DSPRATE; if (gModPh >= 1) gModPh -= 1;
-			for (int c = 0; c < 2; c++) gMdl[c][gMdlW] = x[c];
-			for (int c = 0; c < 2; c++) {
-				float lfo = sinf(TWO_PI * (gModPh + c * 0.25f)), y = x[c];
-				if (gModFx == 1) y = rdFrac(gMdl[c], MDL, gMdlW - (0.012f + 0.006f * gModDepth * lfo) * DSPRATE);
-				else if (gModFx == 2) { y = rdFrac(gMdl[c], MDL, gMdlW - (0.0015f + 0.0035f * gModDepth * (lfo * 0.5f + 0.5f)) * DSPRATE); gMdl[c][gMdlW] = x[c] + y * 0.6f; }
-				else if (gModFx == 3) {   // 4 first-order allpass stages
-					float a = 0.2f + 0.7f * gModDepth * (lfo * 0.5f + 0.5f), v = x[c] + gPhFb[c] * 0.5f;
-					for (int k = 0; k < 4; k++) { float o = -a * v + gApZ[c][k]; gApZ[c][k] = v + a * o; v = o; }
-					gPhFb[c] = v; y = v;
-				} else if (gModFx == 4) { y = rdFrac(gMdl[c], MDL, gMdlW - combD); gMdl[c][gMdlW] = x[c] + y * (0.6f + 0.35f * gModDepth); }
-				else if (gModFx == 5) { y = (bq(&gForm[0], c, x[c]) + 0.7f * bq(&gForm[1], c, x[c]) + 0.4f * bq(&gForm[2], c, x[c])) * 1.6f; }
-				else if (gModFx == 6) {   // HYPER: five drifting taps per side, like extra unison voices on the whole mix
-					static const float RT[5] = {0.13f, 0.21f, 0.29f, 0.37f, 0.47f}, BD[5] = {0.007f, 0.011f, 0.016f, 0.021f, 0.027f};
-					static float hp[5]; float a = 0;
-					for (int k = 0; k < 5; k++) {
-						if (c == 0) { hp[k] += RT[k] * (0.5f + gModRate) / DSPRATE; if (hp[k] >= 1) hp[k] -= 1; }
-						float m = sinf(TWO_PI * (hp[k] + c * 0.37f + k * 0.19f));
-						a += rdFrac(gMdl[c], MDL, gMdlW - (BD[k] + 0.004f * gModDepth * m) * DSPRATE);
+		// the movable blocks, in FX ORDER (pump and limiter always come last)
+		for (int fk = 0; fk < NFXB; fk++) switch (fxo[fk]) {
+		case 0: {
+			// lofi
+			if (bits || hold > 1) {
+				if (gLofiCnt++ % hold == 0) for (int c = 0; c < 2; c++) gLofiHold[c] = bits ? roundf(x[c] * (1 << (bits - 1))) / (1 << (bits - 1)) : x[c];
+				x[0] = gLofiHold[0]; x[1] = gLofiHold[1];
+			}
+		} break;
+		case 1: {
+			// modulation FX
+			if (gModFx) {
+				gModPh += gModRate * (0.2f + color) / DSPRATE; if (gModPh >= 1) gModPh -= 1;
+				for (int c = 0; c < 2; c++) gMdl[c][gMdlW] = x[c];
+				for (int c = 0; c < 2; c++) {
+					float lfo = sinf(TWO_PI * (gModPh + c * 0.25f)), y = x[c];
+					if (gModFx == 1) y = rdFrac(gMdl[c], MDL, gMdlW - (0.012f + 0.006f * gModDepth * lfo) * DSPRATE);
+					else if (gModFx == 2) { y = rdFrac(gMdl[c], MDL, gMdlW - (0.0015f + 0.0035f * gModDepth * (lfo * 0.5f + 0.5f)) * DSPRATE); gMdl[c][gMdlW] = x[c] + y * 0.6f; }
+					else if (gModFx == 3) {   // 4 first-order allpass stages
+						float a = 0.2f + 0.7f * gModDepth * (lfo * 0.5f + 0.5f), v = x[c] + gPhFb[c] * 0.5f;
+						for (int k = 0; k < 4; k++) { float o = -a * v + gApZ[c][k]; gApZ[c][k] = v + a * o; v = o; }
+						gPhFb[c] = v; y = v;
+					} else if (gModFx == 4) { y = rdFrac(gMdl[c], MDL, gMdlW - combD); gMdl[c][gMdlW] = x[c] + y * (0.6f + 0.35f * gModDepth); }
+					else if (gModFx == 5) { y = (bq(&gForm[0], c, x[c]) + 0.7f * bq(&gForm[1], c, x[c]) + 0.4f * bq(&gForm[2], c, x[c])) * 1.6f; }
+					else if (gModFx == 6) {   // HYPER: five drifting taps per side, like extra unison voices on the whole mix
+						static const float RT[5] = {0.13f, 0.21f, 0.29f, 0.37f, 0.47f}, BD[5] = {0.007f, 0.011f, 0.016f, 0.021f, 0.027f};
+						static float hp[5]; float a = 0;
+						for (int k = 0; k < 5; k++) {
+							if (c == 0) { hp[k] += RT[k] * (0.5f + gModRate) / DSPRATE; if (hp[k] >= 1) hp[k] -= 1; }
+							float m = sinf(TWO_PI * (hp[k] + c * 0.37f + k * 0.19f));
+							a += rdFrac(gMdl[c], MDL, gMdlW - (BD[k] + 0.004f * gModDepth * m) * DSPRATE);
+						}
+						y = a * 0.42f;
+					} else {   // DIMENSION: two short, slowly moving delays crossed between the sides - wide, not wobbly
+						float m = sinf(TWO_PI * gModPh * 0.5f);
+						float d1 = rdFrac(gMdl[c], MDL, gMdlW - (0.0085f + 0.0012f * gModDepth * m) * DSPRATE);
+						float d2 = rdFrac(gMdl[c ^ 1], MDL, gMdlW - (0.0118f - 0.0012f * gModDepth * m) * DSPRATE);
+						y = (d1 - 0.6f * d2) * 0.9f + x[c] * 0.3f;
 					}
-					y = a * 0.42f;
-				} else {   // DIMENSION: two short, slowly moving delays crossed between the sides - wide, not wobbly
-					float m = sinf(TWO_PI * gModPh * 0.5f);
-					float d1 = rdFrac(gMdl[c], MDL, gMdlW - (0.0085f + 0.0012f * gModDepth * m) * DSPRATE);
-					float d2 = rdFrac(gMdl[c ^ 1], MDL, gMdlW - (0.0118f - 0.0012f * gModDepth * m) * DSPRATE);
-					y = (d1 - 0.6f * d2) * 0.9f + x[c] * 0.3f;
+					x[c] = x[c] * (1 - gModMix) + y * gModMix;
 				}
-				x[c] = x[c] * (1 - gModMix) + y * gModMix;
+				if (++gMdlW >= MDL) gMdlW = 0;
 			}
-			if (++gMdlW >= MDL) gMdlW = 0;
-		}
-		// EQ
-		if (gEqLow != 0 || gEqMid != 0 || gEqHigh != 0) for (int c = 0; c < 2; c++) x[c] = bq(&gEq[2], c, bq(&gEq[1], c, bq(&gEq[0], c, x[c])));
-		// tape delay: wow + flutter on the read head, saturation and darkening in the feedback
-		float mono = (x[0] + x[1]) * 0.5f, wet[2] = {0, 0};
-		static int dlyTail = 0, revTail = 0;
-		if (dMix > 0.001f) dlyTail = 32728 * 6; else if (dlyTail > 0) dlyTail--;
-		if (rMix > 0.001f || gFreeze) revTail = 32728 * 8; else if (revTail > 0) revTail--;
-		if (dlyTail > 0) {
-			gWowPh += 0.6f / DSPRATE; gFlutPh += 7.0f / DSPRATE; if (gWowPh > 1) gWowPh -= 1; if (gFlutPh > 1) gFlutPh -= 1;
-			float mod = gDlyWow * (0.004f * sinf(TWO_PI * gWowPh) + 0.0006f * sinf(TWO_PI * gFlutPh)) * DSPRATE;
-			int dt = gDlyType;
-			if (dt != 0 && dt != 3) mod = 0;   // only TAPE and DUB wobble
-			float yl, yr;
-			if (dt == 5) {   // REVERSE: each slice of DELAY TIME comes back played backwards, windowed so it doesn't click
-				float D = dSmp < 64 ? 64 : dSmp; if (D * 2 > DLMAX - 4) D = (DLMAX - 4) / 2;
-				gRevK += 1; if (gRevK >= D) gRevK -= D;
-				float w = sinf(3.14159f * gRevK / D), w2 = sinf(3.14159f * fmodf(gRevK + D / 2, D) / D);
-				float r1 = gDlW - 2 * gRevK, r2 = gDlW - 2 * fmodf(gRevK + D / 2, D);
-				yl = rdFrac(gDlL, DLMAX, r1) * w + rdFrac(gDlL, DLMAX, r2) * w2;
-				yr = rdFrac(gDlR, DLMAX, r1 - 37) * w + rdFrac(gDlR, DLMAX, r2 - 37) * w2;
-			} else { yl = rdFrac(gDlL, DLMAX, gDlW - dSmp - mod); yr = rdFrac(gDlR, DLMAX, gDlW - dSmp - (dt == 1 ? dSmp * 0.012f : 0) - mod); }
-			float sat = 1 + gDlySat * 3, inL, inR;
-			switch (dt) {
-			case 1:   // DIGITAL: clean stereo repeats, no crossing, full bandwidth
-				inL = mono * dMix + yl * gEchoFb; inR = mono * dMix + yr * gEchoFb; break;
-			case 2:   // PING-PONG: clean, bounces left / right
-				inL = mono * dMix + yr * gEchoFb; inR = yl * gEchoFb; break;
-			case 3: {   // DUB: band-passed, saturated, long and swampy (feedback can push past 100% gently)
-				gDlLp[0] += (yr - gDlLp[0]) * 0.22f; gDlLp[1] += (yl - gDlLp[1]) * 0.22f;
-				gDlHp[0] += (gDlLp[0] - gDlHp[0]) * 0.02f; gDlHp[1] += (gDlLp[1] - gDlHp[1]) * 0.02f;
-				float fb = gEchoFb * 1.15f, s2 = 1 + gDlySat * 4 + 1;
-				inL = tanhf((mono * dMix + (gDlLp[0] - gDlHp[0]) * fb) * s2) / s2 * 1.3f; inR = tanhf((gDlLp[1] - gDlHp[1]) * fb * s2) / s2 * 1.3f; break; }
-			case 4: {   // LO-FI: each repeat goes through a sample-rate and bit crusher, getting grittier
-				static float hold[2]; static int ctr = 0;
-				if (++ctr >= 4) { ctr = 0; hold[0] = yr; hold[1] = yl; }
-				float q = 1.0f / 48;
-				float cl = floorf(hold[0] / q + 0.5f) * q, cr = floorf(hold[1] / q + 0.5f) * q;
-				gDlLp[0] += (cl - gDlLp[0]) * 0.3f; gDlLp[1] += (cr - gDlLp[1]) * 0.3f;
-				inL = mono * dMix + gDlLp[0] * gEchoFb; inR = gDlLp[1] * gEchoFb; break; }
-			case 5:   // REVERSE: the dry signal is recorded, the reversed read is the output; light feedback of the reversed sound
-				inL = mono * dMix + yl * gEchoFb * 0.6f; inR = mono * dMix + yr * gEchoFb * 0.6f; break;
-			default:   // TAPE: ping-pong, darker and more saturated each pass
-				gDlLp[0] += (yr - gDlLp[0]) * 0.45f; gDlLp[1] += (yl - gDlLp[1]) * 0.45f;
-				inL = tanhf((mono * dMix + gDlLp[0] * gEchoFb) * sat) / sat; inR = tanhf(gDlLp[1] * gEchoFb * sat) / sat; break;
+		} break;
+		case 2: {
+			// EQ
+			if (gEqLow != 0 || gEqMid != 0 || gEqHigh != 0) for (int c = 0; c < 2; c++) x[c] = bq(&gEq[2], c, bq(&gEq[1], c, bq(&gEq[0], c, x[c])));
+		} break;
+		case 3: {
+			// tape delay: wow + flutter on the read head, saturation and darkening in the feedback
+			float mono = (x[0] + x[1]) * 0.5f, wet[2] = {0, 0};
+			static int dlyTail = 0, revTail = 0;
+			if (dMix > 0.001f) dlyTail = 32728 * 6; else if (dlyTail > 0) dlyTail--;
+			if (rMix > 0.001f || gFreeze) revTail = 32728 * 8; else if (revTail > 0) revTail--;
+			if (dlyTail > 0) {
+				gWowPh += 0.6f / DSPRATE; gFlutPh += 7.0f / DSPRATE; if (gWowPh > 1) gWowPh -= 1; if (gFlutPh > 1) gFlutPh -= 1;
+				float mod = gDlyWow * (0.004f * sinf(TWO_PI * gWowPh) + 0.0006f * sinf(TWO_PI * gFlutPh)) * DSPRATE;
+				int dt = gDlyType;
+				if (dt != 0 && dt != 3) mod = 0;   // only TAPE and DUB wobble
+				float yl, yr;
+				if (dt == 5) {   // REVERSE: each slice of DELAY TIME comes back played backwards, windowed so it doesn't click
+					float D = dSmp < 64 ? 64 : dSmp; if (D * 2 > DLMAX - 4) D = (DLMAX - 4) / 2;
+					gRevK += 1; if (gRevK >= D) gRevK -= D;
+					float w = sinf(3.14159f * gRevK / D), w2 = sinf(3.14159f * fmodf(gRevK + D / 2, D) / D);
+					float r1 = gDlW - 2 * gRevK, r2 = gDlW - 2 * fmodf(gRevK + D / 2, D);
+					yl = rdFrac(gDlL, DLMAX, r1) * w + rdFrac(gDlL, DLMAX, r2) * w2;
+					yr = rdFrac(gDlR, DLMAX, r1 - 37) * w + rdFrac(gDlR, DLMAX, r2 - 37) * w2;
+				} else { yl = rdFrac(gDlL, DLMAX, gDlW - dSmp - mod); yr = rdFrac(gDlR, DLMAX, gDlW - dSmp - (dt == 1 ? dSmp * 0.012f : 0) - mod); }
+				float sat = 1 + gDlySat * 3, inL, inR;
+				switch (dt) {
+				case 1:   // DIGITAL: clean stereo repeats, no crossing, full bandwidth
+					inL = mono * dMix + yl * gEchoFb; inR = mono * dMix + yr * gEchoFb; break;
+				case 2:   // PING-PONG: clean, bounces left / right
+					inL = mono * dMix + yr * gEchoFb; inR = yl * gEchoFb; break;
+				case 3: {   // DUB: band-passed, saturated, long and swampy (feedback can push past 100% gently)
+					gDlLp[0] += (yr - gDlLp[0]) * 0.22f; gDlLp[1] += (yl - gDlLp[1]) * 0.22f;
+					gDlHp[0] += (gDlLp[0] - gDlHp[0]) * 0.02f; gDlHp[1] += (gDlLp[1] - gDlHp[1]) * 0.02f;
+					float fb = gEchoFb * 1.15f, s2 = 1 + gDlySat * 4 + 1;
+					inL = tanhf((mono * dMix + (gDlLp[0] - gDlHp[0]) * fb) * s2) / s2 * 1.3f; inR = tanhf((gDlLp[1] - gDlHp[1]) * fb * s2) / s2 * 1.3f; break; }
+				case 4: {   // LO-FI: each repeat goes through a sample-rate and bit crusher, getting grittier
+					static float hold[2]; static int ctr = 0;
+					if (++ctr >= 4) { ctr = 0; hold[0] = yr; hold[1] = yl; }
+					float q = 1.0f / 48;
+					float cl = floorf(hold[0] / q + 0.5f) * q, cr = floorf(hold[1] / q + 0.5f) * q;
+					gDlLp[0] += (cl - gDlLp[0]) * 0.3f; gDlLp[1] += (cr - gDlLp[1]) * 0.3f;
+					inL = mono * dMix + gDlLp[0] * gEchoFb; inR = gDlLp[1] * gEchoFb; break; }
+				case 5:   // REVERSE: the dry signal is recorded, the reversed read is the output; light feedback of the reversed sound
+					inL = mono * dMix + yl * gEchoFb * 0.6f; inR = mono * dMix + yr * gEchoFb * 0.6f; break;
+				default:   // TAPE: ping-pong, darker and more saturated each pass
+					gDlLp[0] += (yr - gDlLp[0]) * 0.45f; gDlLp[1] += (yl - gDlLp[1]) * 0.45f;
+					inL = tanhf((mono * dMix + gDlLp[0] * gEchoFb) * sat) / sat; inR = tanhf(gDlLp[1] * gEchoFb * sat) / sat; break;
+				}
+				if (inL > 4) inL = 4;
+				if (inL < -4) inL = -4;
+				if (inR > 4) inR = 4;
+				if (inR < -4) inR = -4;
+				gDlL[gDlW] = inL; gDlR[gDlW] = inR;
+				if (++gDlW >= DLMAX) gDlW = 0;
+				wet[0] += yl * 0.8f; wet[1] += yr * 0.8f;
 			}
-			if (inL > 4) inL = 4;
-			if (inL < -4) inL = -4;
-			if (inR > 4) inR = 4;
-			if (inR < -4) inR = -4;
-			gDlL[gDlW] = inL; gDlR[gDlW] = inR;
-			if (++gDlW >= DLMAX) gDlW = 0;
-			wet[0] += yl * 0.8f; wet[1] += yr * 0.8f;
-		}
-		// reverb (+ shimmer: an octave-up copy of the tail fed back in; freeze: endless tail, no new input)
-		if (revTail > 0) {
-			float in = gFreeze ? 0 : revIn(mono * rMix * 0.025f), ol = 0, orr = 0;
-			if (gShimmer) {
-				float a = rdFrac(gPs, PSN, gPsR), b = rdFrac(gPs, PSN, gPsR + PSN / 2), ph = fmodf(gPsW - gPsR + PSN, PSN) / PSN;
-				float w = 1 - fabsf(ph * 2 - 1);
-				in += tanhf(a * w + b * (1 - w)) * 0.004f;   // loop gain < 1 so the octave tail always dies away
-				gPsR += 2; if (gPsR >= PSN) gPsR -= PSN;
+			// reverb (+ shimmer: an octave-up copy of the tail fed back in; freeze: endless tail, no new input)
+			if (revTail > 0) {
+				float in = gFreeze ? 0 : revIn(mono * rMix * 0.025f), ol = 0, orr = 0;
+				if (gShimmer) {
+					float a = rdFrac(gPs, PSN, gPsR), b = rdFrac(gPs, PSN, gPsR + PSN / 2), ph = fmodf(gPsW - gPsR + PSN, PSN) / PSN;
+					float w = 1 - fabsf(ph * 2 - 1);
+					in += tanhf(a * w + b * (1 - w)) * 0.004f;   // loop gain < 1 so the octave tail always dies away
+					gPsR += 2; if (gPsR >= PSN) gPsR -= PSN;
+				}
+				for (int i = 0; i < NCOMB; i++) { ol += comb(&gCbL[i], in, fb, damp); orr += comb(&gCbR[i], in, fb, damp); }
+				for (int i = 0; i < NAP; i++) { ol = apass(&gApL[i], ol); orr = apass(&gApR[i], orr); }
+				if (!gFreeze) revOut(&ol, &orr);
+				if (gShimmer) { gPs[gPsW] = (ol + orr) * 0.5f; if (++gPsW >= PSN) gPsW = 0; }
+				wet[0] += ol * 1.6f; wet[1] += orr * 1.6f;
 			}
-			for (int i = 0; i < NCOMB; i++) { ol += comb(&gCbL[i], in, fb, damp); orr += comb(&gCbR[i], in, fb, damp); }
-			for (int i = 0; i < NAP; i++) { ol = apass(&gApL[i], ol); orr = apass(&gApR[i], orr); }
-			if (!gFreeze) revOut(&ol, &orr);
-			if (gShimmer) { gPs[gPsW] = (ol + orr) * 0.5f; if (++gPsW >= PSN) gPsW = 0; }
-			wet[0] += ol * 1.6f; wet[1] += orr * 1.6f;
-		}
-		x[0] += wet[0]; x[1] += wet[1];
-		// OTT: three bands, each pushed down above and pulled up below a target level
-		if (gOtt > 0.001f) {
-			float band[3][2];
-			for (int c = 0; c < 2; c++) {
-				gBandLp1[0][c] += (x[c] - gBandLp1[0][c]) * 0.023f; gBandLp1[1][c] += (gBandLp1[0][c] - gBandLp1[1][c]) * 0.023f;   // ~120 Hz
-				gBandLp2[0][c] += (x[c] - gBandLp2[0][c]) * 0.38f; gBandLp2[1][c] += (gBandLp2[0][c] - gBandLp2[1][c]) * 0.38f;     // ~2.5 kHz
-				band[0][c] = gBandLp1[1][c]; band[2][c] = x[c] - gBandLp2[1][c]; band[1][c] = x[c] - band[0][c] - band[2][c];
+			x[0] += wet[0]; x[1] += wet[1];
+		} break;
+		case 4: {
+			// OTT: three bands, each pushed down above and pulled up below a target level
+			if (gOtt > 0.001f) {
+				float band[3][2];
+				for (int c = 0; c < 2; c++) {
+					gBandLp1[0][c] += (x[c] - gBandLp1[0][c]) * 0.023f; gBandLp1[1][c] += (gBandLp1[0][c] - gBandLp1[1][c]) * 0.023f;   // ~120 Hz
+					gBandLp2[0][c] += (x[c] - gBandLp2[0][c]) * 0.38f; gBandLp2[1][c] += (gBandLp2[0][c] - gBandLp2[1][c]) * 0.38f;     // ~2.5 kHz
+					band[0][c] = gBandLp1[1][c]; band[2][c] = x[c] - gBandLp2[1][c]; band[1][c] = x[c] - band[0][c] - band[2][c];
+				}
+				for (int b = 0; b < 3; b++) {
+					float e = fabsf(band[b][0]) + fabsf(band[b][1]);
+					gBandEnv[b] += (e - gBandEnv[b]) * (e > gBandEnv[b] ? 0.02f : 0.0008f);
+				}
+				if ((s & 15) == 0) for (int b = 0; b < 3; b++) {   // gains per 16 samples
+					float env = gBandEnv[b], T = 0.18f, g;
+					if (env < 1e-4f) g = 1;
+					else if (env > T) g = powf(T / env, 0.75f);
+					else { g = powf(T / env, 0.66f); if (g > 6) g = 6; }
+					gBandGain[b] = 1 + gOtt * (g - 1);
+				}
+				for (int c = 0; c < 2; c++) x[c] = (band[0][c] * gBandGain[0] + band[1][c] * gBandGain[1] + band[2][c] * gBandGain[2]) * (1 + gOtt * 0.3f);
 			}
-			for (int b = 0; b < 3; b++) {
-				float e = fabsf(band[b][0]) + fabsf(band[b][1]);
-				gBandEnv[b] += (e - gBandEnv[b]) * (e > gBandEnv[b] ? 0.02f : 0.0008f);
-			}
-			if ((s & 15) == 0) for (int b = 0; b < 3; b++) {   // gains per 16 samples
-				float env = gBandEnv[b], T = 0.18f, g;
-				if (env < 1e-4f) g = 1;
-				else if (env > T) g = powf(T / env, 0.75f);
-				else { g = powf(T / env, 0.66f); if (g > 6) g = 6; }
-				gBandGain[b] = 1 + gOtt * (g - 1);
-			}
-			for (int c = 0; c < 2; c++) x[c] = (band[0][c] * gBandGain[0] + band[1][c] * gBandGain[1] + band[2][c] * gBandGain[2]) * (1 + gOtt * 0.3f);
+		} break;
 		}
 		// sidechain pump: duck on each beat, recover through it
 		if (gPump > 0.001f) {
@@ -1975,8 +1999,11 @@ typedef struct {
 	int hasBeat, drums, kit, kickPat, snarePat, hatPat, euHits[3], euRot[3], euLen, drumRec; float drumLevel, swing;
 	int hasLoop, loopBars; float loopSpeed, loopWow;
 	int thru, xyMode, tapeKeys; float thruCut, thruRes, thruEnv, thruLfo, echoWow;
+	u8 fxOrder[8];   // v13: master FX chain order (first 5 used)
 } SPatch;
-#define PATCH_MAGIC 0x5359523C   // "SYR<" (v12)
+#define PATCH_MAGIC 0x5359523D   // "SYR=" (v13)
+#define PATCH_MAGIC12 0x5359523C // v12 (fixed FX order)
+#define PATCH_V12_SIZE offsetof(SPatch, fxOrder)
 #define PATCH_MAGIC11 0x5359523B // v11 (no beat / loop / CHIP > FX / XY mode)
 #define PATCH_V11_SIZE offsetof(SPatch, hasBeat)
 #define PATCH_MAGIC10 0x5359523A // v10 (no chip quirks)
@@ -2036,6 +2063,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->euHits[0] = 5; p->euHits[1] = 2; p->euHits[2] = 11; p->euRot[0] = 0; p->euRot[1] = 4; p->euRot[2] = 0; p->euLen = 16;
 	p->hasLoop = 0; p->loopBars = 0; p->loopSpeed = 0; p->loopWow = 0;
 	p->thru = 0; p->xyMode = 0; p->tapeKeys = 0; p->thruCut = 1.0f; p->thruRes = 0.1f; p->thruEnv = 0; p->thruLfo = 0; p->echoWow = 0;
+	for (int i = 0; i < 8; i++) p->fxOrder[i] = i;
 }
 
 #define OA p->osc[0]
@@ -2593,12 +2621,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER) || len == (long)(PATCH_V11_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER) || len == (long)(PATCH_V11_SIZE * NUSER) || len == (long)(PATCH_V12_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10 || t.magic == PATCH_MAGIC11)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10 || t.magic == PATCH_MAGIC11 || t.magic == PATCH_MAGIC12)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -2638,6 +2666,7 @@ static void patchCapture(SPatch* p) {
 	for (int r = 0; r < 3; r++) { p->euHits[r] = gEuHits[r]; p->euRot[r] = gEuRot[r]; } p->euLen = gEuLen;
 	p->hasLoop = gLoopMode != 0 || gLoopSpeed != 0 || gLoopWow > 0; p->loopBars = gLoopBars; p->loopSpeed = gLoopSpeed; p->loopWow = gLoopWow;
 	p->thru = gThru; p->xyMode = gXyMode; p->tapeKeys = gTapeKeys; p->thruCut = gThruCut; p->thruRes = gThruRes; p->thruEnv = gThruEnv; p->thruLfo = gThruLfo; p->echoWow = gEchoWow;
+	for (int i = 0; i < 8; i++) p->fxOrder[i] = i < NFXB ? gFxOrder[i] : i;
 	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) p->dl[k][i] = (s8)(gDl[k][i] * 127); p->dlRate[k] = gDlRate[k]; p->dlSync[k] = gDlSync[k]; }
 	memcpy(p->mot, gMot, sizeof(gMot)); memcpy(p->motTgt, gMotTgt, sizeof(gMotTgt)); memcpy(p->motOn, gMotOn, sizeof(gMotOn)); p->motBars = gMotBars;
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
@@ -2670,6 +2699,7 @@ static void patchApply(const SPatch* p) {
 	gQGrit = p->qGrit % 3; gCsEchoPitch = p->csEchoPitch; gQScream = p->qScream; gQMixDrive = p->qMixDrive;
 	// v12. Sound settings always follow the patch; a beat or a loop setup only when the patch carries one
 	gThru = p->thru & 1; gThruCut = p->thruCut; gThruRes = p->thruRes; gThruEnv = p->thruEnv; gThruLfo = p->thruLfo; gEchoWow = p->echoWow;
+	fxOrderSet(p->fxOrder);
 	gXyMode = p->xyMode >= 0 && p->xyMode < 3 ? p->xyMode : 0;
 	if (gTapeKeys && !p->tapeKeys) gTapeStop = 0;
 	gTapeKeys = p->tapeKeys & 1;
@@ -3830,7 +3860,7 @@ static int motionTouch(int x, int y, int press, int release) {
 	if (!gMotOn[l]) gMotOn[l] = 1;   // drawing a lane switches it on
 	return 1;
 }
-static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 matrix, 1 draw LFO 3, 2 draw LFO 4, 3 motion
+static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 matrix, 1 LFO 1+2, 2 draw LFO 3, 3 draw LFO 4, 4 motion
 // MATRIX view: the 8 mod slots as two columns, source on the left, destination on the right, a line between them.
 // Tap a box to pick from a list; drag along the line to set the amount (centre 0, right +100, left -100).
 // The dot on each line rides the source's live value.
@@ -3914,17 +3944,175 @@ static int matrixTouch(int x, int y, int press, int release) {
 	}
 	return 0;
 }
+// ---- picker shared by the shape editors: a grid of named boxes, like the matrix's source list
+static void pickGrid(const char* title, const char* const* names, int n, int cur) {
+	text(6, 40, title, 1, RGB3(TH->val));
+	rect(256, 37, 60, 13, RGB3(TH->tab)); text(262, 40, "CANCEL", 1, RGB3(TH->tabTxt));
+	int rows = (n + 2) / 3, bh = (182 / rows) - 2; if (bh > 30) bh = 30;
+	for (int i = 0; i < n; i++) {
+		int x = 4 + (i % 3) * 105, y = 53 + (i / 3) * (bh + 2), on = i == cur;
+		const u8* bc = on ? TH->keyOn : TH->tab; rect(x, y, 101, bh, bc[0], bc[1], bc[2]);
+		const u8* tc = on ? EGA[0] : TH->tabTxt; text(x + 50 - (int)strlen(names[i]) * 4, y + bh / 2 - 3, names[i], 1, tc[0], tc[1], tc[2]);
+	}
+}
+static int pickHit(int x, int y, int n) {   // -2 cancel, -1 nothing, else the index
+	if (y < 52) return x >= 256 ? -2 : -1;
+	int rows = (n + 2) / 3, bh = (182 / rows) - 2; if (bh > 30) bh = 30;
+	int c = (x - 4) / 105, r = (y - 53) / (bh + 2), i = r * 3 + c;
+	return (c < 0 || c > 2 || i < 0 || i >= n) ? -1 : i;
+}
+// LFO 1+2: shape and sync as tap lists, the wave drawn with its live position, drag across it for the rate
+static int gLfPick = -1, gLfPickSync = 0, gLfDrag = -1;
+static void drawLfo12(void) {
+	char t[32];
+	if (gLfPick >= 0) {
+		snprintf(t, sizeof(t), "LFO %d %s", gLfPick + 1, gLfPickSync ? "SYNC" : "SHAPE");
+		if (gLfPickSync) pickGrid(t, SYNC_NAMES, NSYNC, gLfo[gLfPick].sync); else pickGrid(t, LFO_SHAPES, NLFOSH, gLfo[gLfPick].shape);
+		return;
+	}
+	for (int k = 0; k < 2; k++) {
+		LFO* l = &gLfo[k]; int y0 = 40 + k * 100; const u8* c = EGA[k ? 11 : 13];
+		boxLine(4, y0, 120, 16, c); text(10, y0 + 5, LFO_SHAPES[l->shape], 1, RGB3(TH->txt));
+		boxLine(128, y0, 76, 16, c); snprintf(t, sizeof(t), "%s", l->sync ? SYNC_NAMES[l->sync] : "FREE"); text(134, y0 + 5, t, 1, RGB3(TH->txt));
+		if (!l->sync) { snprintf(t, sizeof(t), "%.2f HZ", l->rate); text(316 - (int)strlen(t) * 8, y0 + 5, t, 1, RGB3(TH->val)); }
+		snprintf(t, sizeof(t), "LFO %d", k + 1); text(212, y0 + 5, t, 1, RGB3(TH->dim));
+		int wx = 4, wy = y0 + 20, ww = 312, wh = 70; boxLine(wx, wy, ww, wh, TH->grid); rect(wx + 1, wy + wh / 2, ww - 2, 1, RGB3(TH->grid));
+		int py = -1;
+		for (int x = 0; x < ww - 4; x++) {
+			float v = lfoShapeAt(l, (float)x / (ww - 4)); if (v > 1) v = 1; if (v < -1) v = -1;
+			int y = wy + wh / 2 - (int)(v * (wh / 2 - 4));
+			if (py >= 0) { int a = py < y ? py : y, b = py < y ? y : py; rect(wx + 2 + x, a, 1, b - a + 1, c[0], c[1], c[2]); } py = y;
+		}
+		float ph = l->ph - floorf(l->ph); int dx = wx + 2 + (int)(ph * (ww - 4)); float v = l->val; if (v > 1) v = 1; if (v < -1) v = -1;
+		int dy = wy + wh / 2 - (int)(v * (wh / 2 - 4)); rect(dx - 2, dy - 2, 5, 5, 255, 255, 255);
+		if (!l->sync) text(wx + 6, wy + wh - 11, "DRAG FOR SPEED", 1, RGB3(TH->dim));
+	}
+}
+static int lfo12Touch(int x, int y, int press, int release) {
+	if (release) { int w = gLfDrag >= 0; gLfDrag = -1; return w; }
+	if (gLfPick >= 0) {
+		if (!press) return 0;
+		int i = pickHit(x, y, gLfPickSync ? NSYNC : NLFOSH); if (i == -1) return 0;
+		if (i >= 0) { if (gLfPickSync) gLfo[gLfPick].sync = i; else gLfo[gLfPick].shape = i; gEdited = 1; }
+		gLfPick = -1; return 1;
+	}
+	int k = y < 140 ? 0 : 1, y0 = 40 + k * 100;
+	if (press && y >= y0 && y < y0 + 16) {
+		if (x < 124) { gLfPick = k; gLfPickSync = 0; return 1; }
+		if (x >= 128 && x < 204) { gLfPick = k; gLfPickSync = 1; return 1; }
+		return 0;
+	}
+	if (press && y >= y0 + 20 && y < y0 + 90 && !gLfo[k].sync) gLfDrag = k;
+	if (gLfDrag >= 0) {   // 0.05 .. 20 Hz across the width, logarithmic
+		float t = (x - 4) / 312.0f; t = t < 0 ? 0 : t > 1 ? 1 : t;
+		gLfo[gLfDrag].rate = roundf(0.05f * powf(400.0f, t) * 100) / 100; if (gLfo[gLfDrag].rate < 0.05f) gLfo[gLfDrag].rate = 0.05f;
+		gEdited = 1; return 1;
+	}
+	return 0;
+}
+
+// FILT+ENV: the area above the keyboard becomes an editor (ENV 1 / ENV 2 / FILTER), so you can play while you shape
+static int gShapeOn = 0, gShapeView = 0, gShDrag = -1;
+#define SH_Y 38
+#define SH_H 76
+static const float ENV_SEGW[5] = {64, 34, 64, 34, 80};   // A, H, D, sustain hold, R: widths at their longest
+static const float ENV_MAXT[5] = {4, 2, 4, 0, 5};
+static AHDSR* shEnv(void) { return gShapeView == 0 ? &gEnv1 : &gEnv2; }
+static void envPoints(const AHDSR* e, int hasHold, float* px, float* py) {   // 5 points after the start
+	float x = 6, top = SH_Y + 4, bot = SH_Y + SH_H - 4, sus = bot - (bot - top) * e->s;
+	float ts[4] = {e->a, hasHold ? e->h : 0, e->d, e->r};
+	x += ENV_SEGW[0] * sqrtf(ts[0] / ENV_MAXT[0]); px[0] = x; py[0] = top;
+	x += hasHold ? ENV_SEGW[1] * sqrtf(ts[1] / ENV_MAXT[1]) : 0; px[1] = x; py[1] = top;
+	x += ENV_SEGW[2] * sqrtf(ts[2] / ENV_MAXT[2]); px[2] = x; py[2] = sus;
+	x += ENV_SEGW[3]; px[3] = x; py[3] = sus;
+	x += ENV_SEGW[4] * sqrtf(ts[3] / ENV_MAXT[4]); px[4] = x; py[4] = bot;
+}
+static void drawShapeEditor(void) {
+	rect(0, TAB_H, 320, KB_Y - TAB_H, RGB3(TH->bg));
+	static const char* ST[3] = {"ENV 1 (AMP)", "ENV 2 (MOD)", "FILTER"};
+	for (int i = 0; i < 3; i++) {
+		int x = 4 + i * 105, lit = i == gShapeView; rect(x, TAB_H + 2, 101, 14, lit ? TH->keyOn[0] : TH->tab[0], lit ? TH->keyOn[1] : TH->tab[1], lit ? TH->keyOn[2] : TH->tab[2]);
+		const u8* c = lit ? EGA[0] : TH->tabTxt; text(x + 50 - (int)strlen(ST[i]) * 4, TAB_H + 5, ST[i], 1, c[0], c[1], c[2]);
+	}
+	char t[48];
+	if (gShapeView < 2) {
+		AHDSR* e = shEnv(); int hold = gShapeView == 0; float px[5], py[5]; envPoints(e, hold, px, py);
+		const u8* c = EGA[gShapeView ? 11 : 13]; float bot = SH_Y + SH_H - 4;
+		float lx = 6, ly = bot;
+		for (int k = 0; k < 5; k++) {   // filled shape, then the line
+			int x0 = (int)lx, x1 = (int)px[k];
+			for (int x = x0; x < x1; x++) { float f = (x - lx) / (px[k] - lx + 1e-6f), y = ly + (py[k] - ly) * f; rect(x, (int)y, 1, (int)(bot - y) + 1, c[0] / 3, c[1] / 3, c[2] / 3); }
+			line((int)lx, (int)ly, (int)px[k], (int)py[k], c[0], c[1], c[2]); line((int)lx, (int)ly + 1, (int)px[k], (int)py[k] + 1, c[0], c[1], c[2]);
+			lx = px[k]; ly = py[k];
+		}
+		static const int HAND[4] = {0, 1, 2, 4};
+		for (int h = 0; h < 4; h++) { if (h == 1 && !hold) continue; int k = HAND[h]; rect((int)px[k] - 3, (int)py[k] - 3, 7, 7, h == gShDrag ? 255 : c[0], h == gShDrag ? 255 : c[1], h == gShDrag ? 255 : c[2]); }
+		if (hold) snprintf(t, sizeof(t), "A %.2f H %.2f D %.2f S %d%% R %.2f", e->a, e->h, e->d, (int)(e->s * 100 + 0.5f), e->r);
+		else snprintf(t, sizeof(t), "A %.2f  D %.2f  S %d%%  R %.2f", e->a, e->d, (int)(e->s * 100 + 0.5f), e->r);
+		text(314 - (int)strlen(t) * 8, SH_Y, t, 1, RGB3(TH->dim));
+	} else {   // filter: the response across the editor, drag the dot (left-right cutoff, up-down resonance)
+		int ix = 6, iw = 308, iy = SH_Y + 2, ih = SH_H - 18; int py = -1;
+		for (int x = 0; x < iw; x++) {
+			float f = 30 * powf(500.0f, (float)x / (iw - 1)), db = 20 * log10f(filterGain(f) + 1e-6f); if (db > 12) db = 12; if (db < -36) db = -36;
+			int y = iy + (int)((12 - db) / 48 * (ih - 1));
+			rect(ix + x, y, 1, iy + ih - y, RGB3(TH->pad));
+			if (py >= 0) { int a = py < y ? py : y, b = py < y ? y : py; rect(ix + x, a, 1, b - a + 1, RGB3(TH->val)); } py = y;
+		}
+		float hz = baseCutoff(); int cx = ix + (int)(logf(hz / 30) / logf(500.0f) * (iw - 1)), cy = iy + ih - 1 - (int)(gRes * (ih - 6));
+		rect(cx - 3, cy - 3, 7, 7, 255, 255, 255);
+		static const char* FT[5] = {"LP", "HP", "BP", "NOTCH", "PEAK"};
+		for (int i = 0; i < 5; i++) { int x = 6 + i * 46, on = i == gFiltType; rect(x, KB_Y - 15, 42, 12, on ? TH->keyOn[0] : TH->tab[0], on ? TH->keyOn[1] : TH->tab[1], on ? TH->keyOn[2] : TH->tab[2]);
+			const u8* tc = on ? EGA[0] : TH->tabTxt; text(x + 21 - (int)strlen(FT[i]) * 4, KB_Y - 13, FT[i], 1, tc[0], tc[1], tc[2]); }
+		snprintf(t, sizeof(t), "F2 %s", FILT2_NAMES[gFilt2]); rect(240, KB_Y - 15, 76, 12, RGB3(TH->tab)); text(244, KB_Y - 13, t, 1, RGB3(TH->tabTxt));
+		snprintf(t, sizeof(t), hz >= 1000 ? "%.1fK RES %d%%" : "%.0f RES %d%%", hz >= 1000 ? hz / 1000 : hz, (int)(gRes * 100 + 0.5f)); text(314 - (int)strlen(t) * 8, SH_Y + 2, t, 1, RGB3(TH->val));
+	}
+}
+static int shapeTouch(int x, int y, int press, int release) {   // 1 = redraw
+	if (release) { int w = gShDrag >= 0; gShDrag = -1; return w; }
+	if (press && y < TAB_H + 18) { int v = (x - 4) / 105; if (v >= 0 && v < 3) gShapeView = v; return 1; }
+	if (gShapeView == 2) {
+		if (press && y >= KB_Y - 16) {
+			if (x < 236) { int i = (x - 6) / 46; if (i >= 0 && i < 5) { gFiltType = i; gEdited = 1; } }
+			else { gFilt2 = (gFilt2 + 1) % 3; gEdited = 1; }
+			return 1;
+		}
+		if (press) gShDrag = 0;
+		if (gShDrag < 0) return 0;
+		int iw = 308, iy = SH_Y + 2, ih = SH_H - 18;
+		float f = 30 * powf(500.0f, (x - 6) / (float)(iw - 1)); if (f < 60) f = 60; if (f > 15000) f = 15000;
+		gCutoff = logf(f / 60.0f) / logf(15000.0f / 60.0f);
+		float r = (iy + ih - 1 - y) / (float)(ih - 6); gRes = r < 0 ? 0 : r > 1 ? 1 : r;
+		gEdited = 1; return 1;
+	}
+	AHDSR* e = shEnv(); int hold = gShapeView == 0; float px[5], py[5]; envPoints(e, hold, px, py);
+	static const int HAND[4] = {0, 1, 2, 4};
+	if (press) {   // grab the nearest handle
+		float best = 1e9f; gShDrag = -1;
+		for (int h = 0; h < 4; h++) { if (h == 1 && !hold) continue; float dx = x - px[HAND[h]], dy = y - py[HAND[h]], d = dx * dx + dy * dy; if (d < best) { best = d; gShDrag = h; } }
+		if (best > 30 * 30) gShDrag = -1;
+	}
+	if (gShDrag < 0) return 0;
+	float start = gShDrag == 0 ? 6 : gShDrag == 1 ? px[0] : gShDrag == 2 ? px[1] : px[3];
+	int seg = gShDrag == 0 ? 0 : gShDrag == 1 ? 1 : gShDrag == 2 ? 2 : 4;
+	float f = (x - start) / ENV_SEGW[seg]; f = f < 0 ? 0 : f > 1 ? 1 : f; float tt = ENV_MAXT[seg] * f * f;
+	if (gShDrag == 0) e->a = roundf(tt * 1000) / 1000;
+	else if (gShDrag == 1) e->h = roundf(tt * 100) / 100;
+	else if (gShDrag == 2) { e->d = tt < 0.01f ? 0.01f : roundf(tt * 100) / 100; float top = SH_Y + 4, bot = SH_Y + SH_H - 4, sv = (bot - y) / (bot - top); e->s = sv < 0 ? 0 : sv > 1 ? 1 : roundf(sv * 100) / 100; }
+	else e->r = tt < 0.01f ? 0.01f : roundf(tt * 100) / 100;
+	gEdited = 1; return 1;
+}
 static void drawModView(void) {
 	rect(0, TAB_H, 320, 240 - TAB_H, RGB3(TH->bg));
-	static const char* VT[4] = {"MATRIX", "LFO 3", "LFO 4", "MOTION"};
-	for (int i = 0; i < 4; i++) {
-		int x = 4 + i * 79, lit = i == gModView; rect(x, TAB_H + 2, 75, 14, lit ? TH->keyOn[0] : TH->tab[0], lit ? TH->keyOn[1] : TH->tab[1], lit ? TH->keyOn[2] : TH->tab[2]);
-		const u8* c = lit ? EGA[0] : TH->tabTxt; text(x + 37 - (int)strlen(VT[i]) * 4, TAB_H + 5, VT[i], 1, c[0], c[1], c[2]);
+	static const char* VT[5] = {"MATRIX", "LFO 1+2", "LFO 3", "LFO 4", "MOTION"};
+	for (int i = 0; i < 5; i++) {
+		int x = 4 + i * 63, lit = i == gModView; rect(x, TAB_H + 2, 59, 14, lit ? TH->keyOn[0] : TH->tab[0], lit ? TH->keyOn[1] : TH->tab[1], lit ? TH->keyOn[2] : TH->tab[2]);
+		const u8* c = lit ? EGA[0] : TH->tabTxt; text(x + 29 - (int)strlen(VT[i]) * 4, TAB_H + 5, VT[i], 1, c[0], c[1], c[2]);
 	}
-	if (gModView == 3) { drawMotion(); return; }
+	if (gModView == 4) { drawMotion(); return; }
 	if (gModView == 0) { drawMatrix(); return; }
+	if (gModView == 1) { drawLfo12(); return; }
 	{
-		int k = gModView - 1, x0 = 8, y0 = 46, w = 304, h = 150;
+		int k = gModView - 2, x0 = 8, y0 = 46, w = 304, h = 150;
 		rect(x0, y0, w, h, RGB3(TH->pad)); rect(x0, y0 + h / 2, w, 1, RGB3(TH->grid));
 		for (int i = 0; i < 64; i++) {
 			int x = x0 + i * w / 64, bw = w / 64, v = (int)(gDl[k][i] * (h / 2 - 2)), mid = y0 + h / 2;
@@ -3937,10 +4125,11 @@ static void drawModView(void) {
 	}
 }
 static int modViewTouch(int x, int y, int press, int release) {   // 1 = redraw
-	if (press && y < TAB_H + 18) { int v = (x - 4) / 79; if (v >= 0 && v < 4) { gModView = v; gMxDrag = -1; gMxPick = -1; } return 1; }
-	if (gModView == 3) return motionTouch(x, y, press, release);
+	if (press && y < TAB_H + 18) { int v = (x - 4) / 63; if (v >= 0 && v < 5) { gModView = v; gMxDrag = -1; gMxPick = -1; gLfPick = -1; } return 1; }
+	if (gModView == 4) return motionTouch(x, y, press, release);
 	if (gModView == 0) return matrixTouch(x, y, press, release);
-	int k = gModView - 1;
+	if (gModView == 1) return lfo12Touch(x, y, press, release);
+	int k = gModView - 2;
 	if (press && y >= 202 && y < 218) {   // shape presets
 		int b = (x - 8) / 61;
 		for (int i = 0; i < 64; i++) {
@@ -3961,6 +4150,62 @@ static int modViewTouch(int x, int y, int press, int release) {   // 1 = redraw
 	}
 	gDl[k][i] = v; gDrawPrevX = i;
 	if (release) gDrawPrevX = -1;
+	return 1;
+}
+// FX ORDER (MASTER FX page): the chain as a row of blocks. Drag one sideways and it moves there while you listen;
+// lit = the block is doing something. PUMP and the limiter stay at the end. RESET puts the default order back.
+static int gChainOn = 0, gChDrag = -1, gChDragX = 0;
+#define CH_Y 56
+#define CH_H 34
+#define CH_X(i) (6 + (i) * 52)
+static int fxbActive(int b) {
+	switch (b) {
+	case 0: return gLofiBits || gLofiRate > 0;
+	case 1: return gModFx != 0;
+	case 2: return gEqLow != 0 || gEqMid != 0 || gEqHigh != 0;
+	case 3: return gDlyMix > 0 || gRevMix > 0 || gFreeze;
+	default: return gOtt > 0;
+	}
+}
+static void drawChainBox(int x, int b, int lift) {
+	int act = fxbActive(b), y = CH_Y - (lift ? 6 : 0);
+	const u8* bg = lift ? TH->keyOn : act ? TH->val : TH->tab; const u8* fg = lift || act ? EGA[0] : TH->tabTxt;
+	rect(x, y, 46, CH_H, bg[0], bg[1], bg[2]); outline(x, y, 46, CH_H, RGB3(TH->txt));
+	const char* nm = FXB_NAMES[b]; const char* sp = strchr(nm, ' ');
+	if (sp) { char a[8]; int l = (int)(sp - nm); memcpy(a, nm, l); a[l] = 0; text(x + 23 - l * 4, y + 8, a, 1, fg[0], fg[1], fg[2]); text(x + 23 - (int)strlen(sp + 1) * 4, y + 19, sp + 1, 1, fg[0], fg[1], fg[2]); }
+	else text(x + 23 - (int)strlen(nm) * 4, y + 13, nm, 1, fg[0], fg[1], fg[2]);
+}
+static void drawChainView(void) {
+	rect(0, TAB_H, 320, KB_Y - TAB_H, RGB3(TH->bg));
+	text(6, TAB_H + 6, "FX ORDER", 1, RGB3(TH->val)); text(78, TAB_H + 6, "DRAG A BLOCK TO MOVE IT", 1, RGB3(TH->txt));
+	rect(258, TAB_H + 22, 56, 12, RGB3(TH->tab)); text(262, TAB_H + 24, "RESET", 1, RGB3(TH->tabTxt));
+	for (int i = 0; i < NFXB; i++) {
+		if (i) { int ax = CH_X(i) - 6; rect(ax, CH_Y + CH_H / 2, 5, 1, RGB3(TH->txt)); px(ax + 3, CH_Y + CH_H / 2 - 1, RGB3(TH->txt)); px(ax + 3, CH_Y + CH_H / 2 + 1, RGB3(TH->txt)); }
+		if (i == gChDrag) { outline(CH_X(i), CH_Y, 46, CH_H, RGB3(TH->grid)); continue; }   // the gap it will drop into
+		drawChainBox(CH_X(i), gFxOrder[i], 0);
+	}
+	int fx = CH_X(NFXB) - 6; rect(fx, CH_Y + CH_H / 2, 5, 1, RGB3(TH->txt));
+	rect(fx + 6, CH_Y, 50, CH_H, RGB3(TH->grid)); text(fx + 15, CH_Y + 8, "PUMP", 1, RGB3(TH->txt)); text(fx + 15, CH_Y + 19, "LIMIT", 1, RGB3(TH->txt));
+	if (!gMasterFX) text(6, CH_Y + CH_H + 8, "MASTER FX IS OFF: THE CHAIN IS BYPASSED", 1, RGB3(TH->warn));
+	if (gChDrag >= 0) { int x = gChDragX - 23; x = x < 0 ? 0 : x > 274 ? 274 : x; drawChainBox(x, gFxOrder[gChDrag], 1); }
+}
+static int chainTouch(int x, int y, int press, int release) {   // 1 = redraw
+	if (release) { int r = gChDrag >= 0; gChDrag = -1; return r; }
+	if (press) {
+		if (x >= 258 && y >= TAB_H + 20 && y < TAB_H + 36) { u8 d[NFXB]; for (int i = 0; i < NFXB; i++) d[i] = i; fxOrderSet(d); say("FX ORDER: DEFAULT"); return 1; }
+		if (y < CH_Y - 8 || y >= CH_Y + CH_H + 8) return 0;
+		for (int i = 0; i < NFXB; i++) if (x >= CH_X(i) && x < CH_X(i) + 46) { gChDrag = i; gChDragX = x; return 1; }
+		return 0;
+	}
+	if (gChDrag < 0) return 0;
+	gChDragX = x;
+	int to = (x - 6 + 26) / 52 - (x - 6 + 26 < 0); to = to < 0 ? 0 : to >= NFXB ? NFXB - 1 : to;
+	if (to != gChDrag) {   // move it now: you hear the new order while still dragging
+		u8 o[NFXB]; for (int i = 0; i < NFXB; i++) o[i] = gFxOrder[i];
+		u8 b = o[gChDrag];
+		if (to > gChDrag) for (int i = gChDrag; i < to; i++) o[i] = o[i + 1]; else for (int i = gChDrag; i > to; i--) o[i] = o[i - 1];
+		o[to] = b; fxOrderSet(o); gChDrag = to;
+	}
 	return 1;
 }
 static void keyColor(const u8* lo, const u8* hi, float t, u8* out) { t = t < 0 ? 0 : t > 1 ? 1 : t; for (int k = 0; k < 3; k++) out[k] = (u8)(lo[k] + (hi[k] - lo[k]) * t); }
@@ -4063,6 +4308,8 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	drawBottomMain(base, on, helpOn, latch);
 	if ((gPads && !gGridOn) || gModOn) return;
+	if (gShapeOn && !gGridOn && !gAddEdit) drawShapeEditor();
+	if (gChainOn && !gGridOn && !gAddEdit) drawChainView();   // MASTER FX: the chain, in order   // FILT+ENV: the editor sits where the XY pad was
 	if (!gGridOn && !gAddEdit) drawSeqStrip();
 	if (latch) { outline(0, KB_Y, 320, 240 - KB_Y, HI); outline(1, KB_Y + 1, 318, 238 - KB_Y, HI); }   // LATCH: notes hold, and the keyboard says so
 	if (gChordKey >= 0 && gVoiceMode < 3 && !gGridOn && !gAddEdit) {   // chord mode: the chord you're holding, by name
@@ -6809,6 +7056,12 @@ int main(void) {
 			} else if (gPads && !gGridOn) {
 				float pv = 0.8f;
 				if (padsTouch(base, t.px, t.py, !prevTouch, &pv)) { botDirty = 1; topDirty = 1; }
+			} else if (gChainOn && t.py < KB_Y && t.py >= TAB_H && !gGridOn && !gAddEdit && !gPads) {
+				gLastTX = t.px; gLastTY = t.py;
+				if (chainTouch(t.px, t.py, !prevTouch, 0)) { botDirty = 1; topDirty = 1; }
+			} else if (gShapeOn && t.py < KB_Y && t.py >= TAB_H && !gGridOn && !gAddEdit && !gPads) {
+				gLastTX = t.px; gLastTY = t.py;
+				if (shapeTouch(t.px, t.py, !prevTouch, 0)) { botDirty = 1; topDirty = 1; }
 			} else if (t.py < KB_Y && !gGridOn && gAddEdit) {
 				addTouch(t.px, t.py); botDirty = 1;
 			} else if (t.py < KB_Y && gGridOn) {
@@ -6830,6 +7083,8 @@ int main(void) {
 			}
 		}
 		if (gModOn && !gPads && prevTouch && !touching && modViewTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
+		if (gShapeOn && prevTouch && !touching && shapeTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
+		if (gChainOn && prevTouch && !touching && chainTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gPads && prevTouch && !touching) { gStrumZone = -1; if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
 		padsTick(dt);
 		prevTouch = touching;
@@ -6846,7 +7101,9 @@ int main(void) {
 		if (gVoiceMode >= 3 && (gDrumBuilt != gVoiceMode - 3 || gDrumCh[3] < 0)) { kitEnsure(); botDirty = 1; }
 		if (gTapeKeys) gTapeStop = !(curKey >= 0 || gHeldN > 0 || gArpN > 0);   // SLOWDOWN: the loop runs while you hold notes
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; } }
-		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }   // live matrix dots, drawn LFO / motion playheads
+		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }
+		{ int m = page == 4; if (m != gShapeOn) { gShapeOn = m; gShDrag = -1; botDirty = 1; } }
+		{ int m = page == 10; if (m != gChainOn) { gChainOn = m; gChDrag = -1; botDirty = 1; } }   // live matrix dots, drawn LFO / motion playheads
 		motTick(dt);
 		if (gAuditionT > 0 && (gAuditionT -= 1.0f / 60) <= 0 && !gSeqPlaying && curKey < 0) playSet(NULL, 0, 0.8f);
 		{ static int lastPos = -2, lastMode = -1; if (gGridOn && (gSeqPos != lastPos || gSeqMode != lastMode)) { lastPos = gSeqPos; lastMode = gSeqMode; botDirty = 1; } }
