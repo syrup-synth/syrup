@@ -3185,6 +3185,18 @@ static Param P_DRUMS[] = {
 static Param* PAGES[NPAGES] = {P_PRESET, P_OSCA, P_OSCB, P_SUBN, P_FILT, P_MOD, P_VOICE, P_PLAY, P_VIS, P_HW, P_MASTER, P_DRUMS};
 static const int NAV[NPAGES] = {0, 1, 2, 3, 4, 5, 6, 10, 7, 11, 8, 9};   // X / Y order: tabs left to right
 static int navStep(int page, int dir) { int i = 0; while (NAV[i] != page) i++; return NAV[(i + dir + NPAGES) % NPAGES]; }
+// L / R: PATCH, OSC A, FILT+ENV, LFO+MOD, VOICE+FX, MASTER FX, SEQ. OSC B, SUB+NOISE, DRUMS, VIS and HW are a chip
+// tap or X / Y away. From one of those, L / R go to the main page next to it.
+#define NCORE 7
+static const int CORE[NCORE] = {0, 1, 4, 5, 6, 10, 7};
+static int coreStep(int page, int dir) {
+	for (int i = 0; i < NCORE; i++) if (CORE[i] == page) return CORE[(i + dir + NCORE) % NCORE];
+	int p = page; for (int k = 0; k < NPAGES; k++) { p = navStep(p, dir); for (int i = 0; i < NCORE; i++) if (CORE[i] == p) return p; }
+	return 0;
+}
+#define NCHIP 7
+static int gCurPage = 0;   // the page on the top screen (the bottom chips light up for it)
+static int chipOfPage(int pg) { switch (pg) { case 1: case 2: case 3: return 0; case 4: return 1; case 5: return 2; case 6: return 3; case 10: case 11: return 4; case 7: return 5; default: return -1; } }
 static const char* PAGE_NAMES[NPAGES] = {"PRESETS", "OSC A", "OSC B", "SUB+NOISE", "FILT+ENV", "LFO+MOD", "VOICE+FX", "ARP+SEQ", "VISUALIZER", "HARDWARE", "MASTER FX", "DRUMS"};
 static int pageLen(int pg) { int n = 0; while (PAGES[pg][n].name) n++; return n; }
 
@@ -4859,11 +4871,13 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	(void)helpOn;
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	rect(0, 0, 320, KB_Y, BG);
-	// WORK chips: jump straight to an editor (PADS and SEQ swap the whole work area)
-	static const char* TABS[6] = {"PADS", "MATRIX", "MOTION", "ENV", "CHAIN", "SEQ"};
-	for (int i = 0; i < 6; i++) {
-		int x = i * 320 / 6, lit = (i == 0 && gPads) || (i == 1 && gModOn && gModView == 0) || (i == 2 && gModOn && gModView == 4) || (i == 3 && gShapeOn) || (i == 4 && gChainOn) || (i == 5 && gGridOn);
-		int w = strlen(TABS[i]) * 8, bw = 320 / 6 - 4, cx = x + 160 / 6;
+	// JUMP chips: one tap to each part of the synth; tap the lit one again for the next view in it (OSC A / B / SUB,
+	// the MOD views). PADS lays chord pads over any page.
+	const char* TABS[NCHIP] = {"OSC", "FILT", "MOD", "VOICE", "FX", "SEQ", "PADS"};
+	if (!gPads && gCurPage >= 1 && gCurPage <= 3) TABS[0] = gCurPage == 1 ? "OSC A" : gCurPage == 2 ? "OSC B" : "SUB";
+	for (int i = 0; i < NCHIP; i++) {
+		int x = i * 320 / NCHIP, lit = i == 6 ? gPads : !gPads && chipOfPage(gCurPage) == i;
+		int w = strlen(TABS[i]) * 8, bw = 320 / NCHIP - 4, cx = x + 160 / NCHIP;
 		if (TH->ega) {
 			if (lit) { rect(x + 2, 1, bw, TAB_H - 3, HI); text(cx - w / 2, 6, TABS[i], 1, HITXT); }
 			else { outline(x + 2, 1, bw, TAB_H - 3, LINE); text(cx - w / 2, 6, TABS[i], 1, TXT); }
@@ -7573,8 +7587,8 @@ int main(void) {
 		if (kDown & KEY_Y) { page = navStep(page, -1); topDirty = 1; }
 		if (kDown & KEY_A) { if (page == 0) browseSave(); else gChord = (gChord + 1) % 5; topDirty = 1; }
 		if (kDown & KEY_B) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
-		if (kDown & KEY_L) { page = navStep(page, -1); topDirty = 1; }   // shoulders step through the pages (octave: the OCT tabs)
-		if (kDown & KEY_R) { page = navStep(page, 1); topDirty = 1; }
+		if (kDown & KEY_L) { page = coreStep(page, -1); topDirty = 1; }   // shoulders: the main pages only (X / Y go through all of them)
+		if (kDown & KEY_R) { page = coreStep(page, 1); topDirty = 1; }
 
 		if (page == 0) {   // preset browser: the D-pad moves through the list itself
 			int ds = 0, dp = 0, fresh = 0;
@@ -7711,13 +7725,17 @@ int main(void) {
 			touchPosition t; hidTouchRead(&t);
 			if (t.py < TAB_H) {
 				if (!prevTouch) {
-					int b = t.px * 6 / 320;
-					static int seqBack = 0;
-					if (b == 5) { gPads = 0; if (page != 7) { seqBack = page; page = 7; } else page = seqBack; if (page == 7) say("SEQUENCER: TAP THE GRID, PLAY / ACID ABOVE IT"); }
-					if (b == 0) { gPads = !gPads; gPadSel = -1; if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: LOW = TRIAD, MID = 7TH, TOP = 9TH; EDGES = INVERSION / SUS4"); }
-					if (b == 1 || b == 2) { gPads = 0; page = 5; gModView = b == 1 ? 0 : 4; gMxDrag = -1; gMxPick = -1; gLfPick = -1; }
-					if (b == 3) { gPads = 0; page = 4; gShapeView = 0; }
-					if (b == 4) { gPads = 0; page = 10; }
+					int b = t.px * NCHIP / 320, again = !gPads && chipOfPage(page) == b;
+					if (b == 6) { gPads = !gPads; gPadSel = -1; if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: LOW = TRIAD, MID = 7TH, TOP = 9TH; EDGES = INVERSION / SUS4"); }
+					else {
+						gPads = 0;
+						if (b == 0) page = again ? (page % 3) + 1 : 1;   // OSC A -> OSC B -> SUB+NOISE
+						if (b == 1) { if (again) gShapeView = (gShapeView + 1) % 3; page = 4; }
+						if (b == 2) { if (again) gModView = (gModView + 1) % 5; page = 5; gMxDrag = -1; gMxPick = -1; gLfPick = -1; }
+						if (b == 3) page = 6;
+						if (b == 4) page = 10;
+						if (b == 5) { page = 7; if (!again) say("PIANO ROLL: TAP A NOTE IN, DRAG FOR LENGTH, HOLD TO EDIT THE STEP"); }
+					}
 					topDirty = botDirty = 1;
 				}
 			} else if (t.py >= WORK_B && t.py < KB_Y && !gModOn && !gGridOn && !(gPads && !gGridOn)) {
@@ -7791,6 +7809,7 @@ int main(void) {
 		}
 		if (gVoiceMode >= 3 && (gDrumBuilt != gVoiceMode - 3 || gDrumCh[3] < 0)) { kitEnsure(); botDirty = 1; }
 		if (gTapeKeys) gTapeStop = !(curKey >= 0 || gHeldN > 0 || gArpN > 0 || gSqNn > 0);   // SLOWDOWN: the loop runs while you hold notes
+		if (page != gCurPage) { gCurPage = page; botDirty = 1; }
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; if (!g) { gStepEd = -1; gSeqSaveDue = 1; } } }
 		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }
 		{ int m = page == 4; if (m != gShapeOn) { gShapeOn = m; gShDrag = -1; botDirty = 1; } }

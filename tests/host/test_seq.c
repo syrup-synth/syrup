@@ -11,7 +11,7 @@ static int sqHas(int nt) { for (int i = 0; i < gSqNn; i++) if (gSqN[i].note == n
 static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0; gFxCore2 = 0;
 	if (fr == 3) { int st, ix; if (findPreset("REESE CRATE", &st, &ix)) presetLoad(st, ix); gBPM = 120; gScale = 0; gGridOct = 0; gArp = 0; }
-	tap(fr, 5, 290, 8);                               // SEQ chip
+	tap(fr, 5, 5 * 320 / 7 + 20, 8);   // SEQ chip
 	if (fr == 8 && !gGridOn) fail("SEQ chip should open the piano roll");
 	tap(fr, 10, BTN_X(1), XY_Y + 5);                  // PAT
 	tap(fr, 13, 4 + 63 + 30, PV_Y + 33);              // CLEAR

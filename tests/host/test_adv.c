@@ -30,14 +30,14 @@ static void SCRIPT(int fr) {
 	if (fr == 70 && fabsf(gOsc[0].pos - pos0) > 0.001f) fail("CIRCLE PAD PAGE: a patch that routes STICK should keep bend + STICK");
 	if (fr == 70) { gStickMode = SM_DATA; gMod[7].src = SRC_OFF; gMod[7].amt = 0; }
 	// matrix: long-press the source box clears the slot, a short tap opens the list
-	if (fr == 70) { TOUCH = 1; TX = 80; TY = 8; }   // MATRIX chip
+	if (fr == 70) { TOUCH = 1; TX = 2 * 320 / 7 + 20; TY = 8; }   // MOD chip
 	if (fr == 74) { gMod[0].src = SRC_LFO1; gMod[0].dst = DST_CUTOFF; gMod[0].amt = 0.5f; gMod[1].src = SRC_ENV2; gMod[1].amt = 0.3f; }
 	if (fr >= 76 && fr < 110) { TOUCH = 1; TX = MX_LX + 20; TY = MX_Y + MX_PITCH + 8; }   // hold slot 2
 	if (fr == 112) { if (gMod[1].src != SRC_OFF) fail("MATRIX: holding a slot should clear it"); if (gMxPick >= 0) fail("MATRIX: a hold shouldn't open the list"); }
 	if (fr == 114) { TOUCH = 1; TX = MX_LX + 20; TY = MX_Y + 8; }   // tap slot 1
 	if (fr == 117) { if (gMxPick != 0) fail("MATRIX: a tap should open the source list (%d)", gMxPick); gMxPick = -1; }
 	// HUD with the modulation ghost: FILT+ENV, CUTOFF row, change it
-	if (fr == 120) { TOUCH = 1; TX = 4 * 320 / 6 - 20; TY = 8; }   // ENV chip -> FILT+ENV
+	if (fr == 120) { TOUCH = 1; TX = 1 * 320 / 7 + 20; TY = 8; }   // FILT chip
 	if (fr == 123) midiPush(0x90, 45, 100);
 	press(fr, 126, KEY_DDOWN); press(fr, 132, KEY_DLEFT);
 	if (fr == 136) shotTop("shots/hud_mod.ppm");
@@ -80,16 +80,23 @@ static void SCRIPT(int fr) {
 	// circle pad DATA (the default): left / right edits the selected value on the page you're on (FILT+ENV here)
 	{ static float snap[64]; static int pg;
 	  if (fr == 220) { pg = 4; gStickMode = SM_DATA; Param* P = PAGES[pg]; for (int i = 0; P[i].name && i < 64; i++) snap[i] = P[i].type == PT_F ? *(float*)P[i].p : (float)*(int*)P[i].p; }
-	  if (fr == 221) { TOUCH = 1; TX = 4 * 320 / 6 - 20; TY = 8; }   // ENV chip -> FILT+ENV
+	  if (fr == 221) { TOUCH = 1; TX = 1 * 320 / 7 + 20; TY = 8; }   // FILT chip
 	  if (fr >= 224 && fr < 250) CX = -150;
 	  if (fr == 252) { int ch = 0; Param* P = PAGES[pg]; for (int i = 0; P[i].name && i < 64; i++) { float v = P[i].type == PT_F ? *(float*)P[i].p : (float)*(int*)P[i].p; if (v != snap[i]) ch++; }
 	    if (ch != 1) fail("circle pad DATA: holding left should change the selected value only (%d changed)", ch); } }
 	// FX CHAIN through the screen: CHAIN chip, tap SPACE, tap a reverb type; the top screen follows
-	if (fr == 256 || fr == 257) { TOUCH = 1; TX = 240; TY = 8; }
+	if (fr == 256 || fr == 257) { TOUCH = 1; TX = 4 * 320 / 7 + 20; TY = 8; }   // FX chip
 	{ static int at; if (fr == 260) { for (int i = 0; i < NFXB; i++) if (gFxOrder[i] == 3) at = i; }
 	  if (fr == 262 || fr == 263) { TOUCH = 1; TX = CH_X(at) + 20; TY = CH_Y + 10; } }
 	if (fr == 267 || fr == 268) { TOUCH = 1; TX = 38 + 2 * 278 / NREVT + 8; TY = CT_Y + 16 + 5; }   // REVERB: PLATE
 	if (fr == 272) { shotBot("shots/fx_chain_sel.ppm"); shotTop("shots/fx_chain_top.ppm"); if (gChSel != 3 || gRevType != 2) fail("FX CHAIN screen: SPACE + PLATE (sel %d, rev %d)", gChSel, gRevType); }
+	// chips: OSC, OSC again = OSC B, again = SUB+NOISE; R from there goes on to FILT+ENV (L / R skip the side pages)
+	{ static int pg[3]; int xo = 0 * 320 / 7 + 20;
+	  if (fr == 276 || fr == 279 || fr == 282) { TOUCH = 1; TX = xo; TY = 8; }
+	  if (fr == 278) pg[0] = gCurPage; if (fr == 281) pg[1] = gCurPage; if (fr == 284) pg[2] = gCurPage;
+	  if (fr == 285) { HD = KEY_R; if (pg[0] != 1 || pg[1] != 2 || pg[2] != 3) fail("OSC chip should step OSC A / OSC B / SUB (%d %d %d)", pg[0], pg[1], pg[2]); }
+	  if (fr == 288 && gCurPage != 4) fail("R from SUB+NOISE should go to FILT+ENV (%d)", gCurPage);
+	  if (fr == 289) HD = KEY_R; if (fr == 292 && gCurPage != 5) fail("R from FILT+ENV should go to LFO+MOD (%d)", gCurPage); }
 	if (fr == 197) {   // the browser: a GROOVE patch's beat and a DRUMS kit stop when you move on, also into USER
 		gStyle = 14; gPreset = 0; presetLoad(14, 0); gEdited = 0; gGuard = 0;
 		if (gVoiceMode < 3) fail("browser: a DRUMS kit should play the kit");
@@ -122,7 +129,7 @@ static void SCRIPT(int fr) {
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	FILE* f = fopen("sd/settings.bin", "wb"); int d[4] = {0x53455431, 1, 0, 0}; fwrite(d, sizeof(d), 1, f); fclose(f);
-	loadFont(); FRMAX = 275; app_main();
+	loadFont(); FRMAX = 295; app_main();
 	remove("sd/settings.bin");
 	printf("adv: last page, XY modes, PERF, circle pad, matrix hold, HUD ghost, vis tiles, hardware view\n");
 	return gFails ? 1 : 0;

@@ -132,8 +132,9 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | Input | Action |
 |---|---|
 | Start | Syrup opens on the page you were on last time (first run: the browser). CIRCLE PAD and SPEAKER EQ are kept with it in settings.bin |
-| X / Y | Next / previous page (OSC A, OSC B, SUB+NOISE, FILT+ENV, LFO+MOD, VOICE+FX) |
-| Bottom top row | WORK chips: PADS, MATRIX, MOTION, ENV (FILT+ENV editor), CHAIN (FX ORDER), SEQ: one tap to each editor |
+| L / R | The main pages: PATCH, OSC A, FILT+ENV, LFO+MOD, VOICE+FX, MASTER FX, SEQ (OSC B, SUB+NOISE, DRUMS, VIS, HW are a chip tap or X / Y away) |
+| X / Y | Next / previous page, all of them (OSC A, OSC B, SUB+NOISE, FILT+ENV, LFO+MOD, VOICE+FX) |
+| Bottom top row | Jump chips: OSC, FILT, MOD, VOICE, FX, SEQ, PADS. One tap goes to that part of the synth; tapping the lit chip again steps inside it (OSC A, OSC B, SUB+NOISE; ENV 1 / ENV 2 / FILTER; the MOD views). PADS lays the chord pads over any page |
 | Bottom PERF row | Above the keys: OCT-, OCT+, SCALE (scale on/off, back to the last one), LATCH, CHORD (on/off, last chord), PLAY/STOP (sequencer), PANIC (all notes off, latch and sequencer stop) |
 | XY pad mode button | Top right of the XY pad steps through WT + CUTOFF, MACRO 1+2, MACRO 3+4, CUTOFF + RES, WT A + WT B, FX MIX + COLOR and PERF (four sliders: CUTOFF, RES, WT POS, FX MIX over a smaller pad that plays macros 1 + 2). When modulation is moving an axis, a ghost square shows where the sound really is, with a line back to your finger |
 | Circle pad | HARDWARE > CIRCLE PAD: DATA (default): left / right edits the value selected on the top screen (push further for faster), up / down stays the STICK mod source. BEND + MOD: pitch bend and STICK. PAGE: pushes two values on the page you're on. MACROS: M1 / M2 |
