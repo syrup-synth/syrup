@@ -93,8 +93,8 @@ static int gCamVid, gMidiNet, gAddEdit, gOfType; static float gOfCut, gOfRes, gO
 static void chipSet(float lv);
 static void grainsChanged(void);
 static const char* KIT_NAMES[4]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[5];
-#define NVISM 11
-static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM", "VOXELS", "VOXEL TABLE", "TUNNEL", "KALEIDO", "SYNTHWAVE", "RIPPLES"};
+#define NVISM 12
+static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM", "VOXELS", "VOXEL TABLE", "TUNNEL", "KALEIDO", "SYNTHWAVE", "RIPPLES", "PLASMA"};
 static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
 static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
 static float gVisBeat = 0;
@@ -1337,7 +1337,11 @@ static int fxCollect(s64 ns) {   // 1 = core 2's last frame is done (or none was
 	if (LightEvent_WaitTimeout(&gFxDone, ns) != 0) return 0;
 	gFxBusy = 0; return 1;
 }
+static volatile float gAudioRms = 0, gAudioPeak = 0;   // the effects bus level, for the visuals
 static void aux0(void* d, int n, void* s[4]) {
+	{ const s32* L = (const s32*)s[0]; const s32* R = (const s32*)s[1]; float sum = 0, pk = 0;
+		for (int i = 0; i < n; i += 4) { float l = L[i] / 32768.0f, r = R[i] / 32768.0f; sum += l * l + r * r; float a = fabsf(l) > fabsf(r) ? fabsf(l) : fabsf(r); if (a > pk) pk = a; }
+		gAudioRms = sqrtf(sum / (n / 2 > 0 ? n / 2 : 1)); gAudioPeak = pk; }
 	if (!gMasterFX) { if (fxCollect(0)) auxReverb(d, n, s); else for (int k = 0; k < 4; k++) memset(s[k], 0, n * 4); return; }
 	if (!gFxCore2) { gFxC2Fail = 0; gFxMiss = 0; gFxRetries = 0; }   // switching it off and on again retries core 2
 	if (gFxC2Fail && gFxRetries < 3 && ++gFxRetry > 2000) { gFxRetry = 0; gFxRetries++; gFxC2Fail = 0; gFxMiss = 0; }
@@ -6116,8 +6120,73 @@ static void visRipples(void) {
 	blendAdd(0);
 }
 
+// PLASMA: the PICA200's procedural-texture unit makes the picture by itself (noise-bent rings looked up in a
+// 128-colour table); the CPU only rotates the colour table and nudges the noise phase each frame (palette cycling).
+// Drawn as one quad with citro2d's own shader (proctex reads texcoord 1, as citro2d's circles do), then the GPU
+// state goes back to citro2d.
+static C3D_ProcTex gPlasPT; static C3D_ProcTexLut gPlasNoise, gPlasMap; static C3D_ProcTexColorLut gPlasCol;
+static int gPlasInit = 0; static float gPlasPh = 0, gPlasNz = 0, gPlasLvl = 0;
+static void plasmaInit(void) {
+	C3D_ProcTexInit(&gPlasPT, 0, 128);
+	C3D_ProcTexClamp(&gPlasPT, GPU_PT_MIRRORED_REPEAT, GPU_PT_MIRRORED_REPEAT);
+	C3D_ProcTexCombiner(&gPlasPT, false, GPU_PT_SQRT2, GPU_PT_SQRT2);
+	C3D_ProcTexFilter(&gPlasPT, GPU_PT_LINEAR);
+	C3D_ProcTexNoiseEnable(&gPlasPT, true);
+	float d[129];
+	for (int i = 0; i <= 128; i++) d[i] = 0.5f - 0.5f * cosf(3.14159f * i / 128.0f);   // smooth noise curve
+	ProcTexLut_FromArray(&gPlasNoise, d);
+	for (int i = 0; i <= 128; i++) { float x = i / 128.0f * 3.0f; d[i] = x - floorf(x); }   // three colour cycles across the rings
+	d[128] = 1.0f; ProcTexLut_FromArray(&gPlasMap, d);
+	gPlasInit = 1;
+}
+static void visPlasma(C3D_RenderTarget* tg, float dt) {
+	C2D_Flush();
+	if (!gPlasInit) plasmaInit();
+	float lvl = gAudioRms * 5.0f; if (lvl > 1) lvl = 1; if (gVisEnv * 0.8f > lvl) lvl = gVisEnv * 0.8f;
+	gPlasLvl += (lvl - gPlasLvl) * (lvl > gPlasLvl ? 0.5f : 0.08f);
+	gPlasPh += dt * (0.08f + gPlasLvl * 0.9f) + gVisBeat * 0.02f; gPlasPh -= floorf(gPlasPh);
+	gPlasNz += dt * (0.25f + gPlasLvl * 1.5f);
+	C3D_ProcTexNoiseCoefs(&gPlasPT, C3D_ProcTex_UV, 0.18f + 0.3f * gPlasLvl, 0.35f, gPlasNz);
+	// palette: the theme's background, line, value and highlight colours, cycled
+	u32 pal[128]; const u8* K[4] = {TH->bg, TH->line, TH->val, TH->keyOn};
+	for (int i = 0; i < 128; i++) {
+		float t = i / 128.0f + gPlasPh; t -= floorf(t); float f = t * 4; int a = (int)f % 4, b = (a + 1) % 4; float u = f - floorf(f); u = u * u * (3 - 2 * u);
+		float glow = 0.55f + 0.45f * gPlasLvl;
+		int r = (int)((K[a][0] + (K[b][0] - K[a][0]) * u) * glow), g = (int)((K[a][1] + (K[b][1] - K[a][1]) * u) * glow), bl = (int)((K[a][2] + (K[b][2] - K[a][2]) * u) * glow);
+		pal[i] = (u32)(r > 255 ? 255 : r) | ((u32)(g > 255 ? 255 : g) << 8) | ((u32)(bl > 255 ? 255 : bl) << 16) | 0xFF000000u;
+	}
+	ProcTexColorLut_Write(&gPlasCol, pal, 0, 128);
+	C3D_ProcTexBind(1, &gPlasPT);
+	C3D_ProcTexLutBind(GPU_LUT_NOISE, &gPlasNoise); C3D_ProcTexLutBind(GPU_LUT_RGBMAP, &gPlasMap); C3D_ProcTexColorLutBind(&gPlasCol);
+	C3D_TexEnv* e = C3D_GetTexEnv(0); C3D_TexEnvInit(e); C3D_TexEnvSrc(e, C3D_Both, GPU_TEXTURE3, 0, 0); C3D_TexEnvFunc(e, C3D_Both, GPU_REPLACE);
+	for (int i = 1; i < 6; i++) C3D_TexEnvInit(C3D_GetTexEnv(i));
+	float W = 400 * VIS_SS, H = 240 * VIS_SS, zoom = 1.6f + 0.25f * sinf(gVisT * 0.13f), ox = 0.15f * sinf(gVisT * 0.21f), oy = 0.12f * cosf(gVisT * 0.17f);
+	static const float QX[4] = {0, 1, 0, 1}, QY[4] = {0, 0, 1, 1};
+	C3D_ImmDrawBegin(GPU_TRIANGLE_STRIP);
+	for (int k = 0; k < 4; k++) {
+		C3D_ImmSendAttrib(QX[k] * W, QY[k] * H, 0.5f, 0);   // position
+		C3D_ImmSendAttrib(0, 0, 0, 0);                        // texcoord 0 (unused)
+		C3D_ImmSendAttrib((QX[k] - 0.5f) * zoom * 1.66f + ox, (QY[k] - 0.5f) * zoom + oy, 0, 0);   // proctex coordinate
+		C3D_ImmSendAttrib(255, 255, 255, 255);                // colour
+	}
+	C3D_ImmDrawEnd();
+	C3D_ProcTexBind(1, NULL);
+	C2D_Prepare();   // citro2d's shader, combiners and its own proctex back
+	C2D_SceneBegin(tg); C2D_SceneSize(240 * VIS_SS, 400 * VIS_SS, true);
+	// the live cycle of the oscillator glowing on top
+	const s16* w = gOsc[gVisOsc].mips.lev[2]; int N = LEVN[2]; float px = 0, py = 0;
+	blendAdd(1);
+	for (int i = 0; i <= 96; i++) {
+		float x = 20 + i * 360.0f / 96, y = 120 - w[(i * N / 96) % N] / 32768.0f * 70 * (0.4f + gPlasLvl);
+		if (i) { vLine(px, py, x, y, rgba(1, 1, 1, 0.18f), 7); vLine(px, py, x, y, rgba(1, 1, 1, 0.8f), 2); }
+		px = x; py = y;
+	}
+	blendAdd(0);
+	static int was = 0; int hit = gAudioPeak > 0.6f; if (hit && !was) gVisBurst += 6; was = hit;   // transients throw sparks
+}
 static void visFull(void) {
 	int mode = gVisMode ? gVisMode : 1 + ((int)(gVisT / 10.0f)) % (NVISM - 1);   // AUTO: change every 10 s
+	if (mode == 11) visPlasma(gFullTgt, 1.0f / 60);
 	if (gVisBeat > 0.01f) { float r, g, b; hue(0.35f, &r, &g, &b); blendAdd(1); vRect(0, 0, 400, 240, rgba(r, g, b, gVisBeat * 0.12f)); blendAdd(0); }
 	if (mode == 1) visWavetable(gVisOsc, 200, 128, 1.6f);
 	else if (mode == 2) visScopes(10, 20, 380, 210);
@@ -6128,7 +6197,7 @@ static void visFull(void) {
 	else if (mode == 7) visTunnel();
 	else if (mode == 8) visKaleido();
 	else if (mode == 9) visSynthwave();
-	else visRipples();
+	else if (mode == 10) visRipples();
 	if (gVisParts) {
 		static unsigned lastId = 0; if (gIdc != lastId) { gVisBurst += 14; lastId = gIdc; }
 		if (gVisBurst > 0) { partSpawn(gVisBurst); gVisBurst = 0; }

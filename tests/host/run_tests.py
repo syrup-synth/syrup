@@ -12,7 +12,7 @@ def sh(cmd, **k): return subprocess.run(cmd, cwd=BUILD, capture_output=True, tex
 os.makedirs(BUILD, exist_ok=True)
 subprocess.run([os.path.join(HERE, 'gen.sh'), BUILD], check=True)
 for f in ('fake3ds.h', 'fakecitro.h', 'harness.h', 'default_font.bin'): shutil.copy(os.path.join(HERE, f), BUILD)
-for t in ('test_patch', 'test_buzz', 'test_timing', 'test_ui', 'test_kit', 'test_chip'):
+for t in ('test_patch', 'test_buzz', 'test_timing', 'test_ui', 'test_kit', 'test_chip', 'test_vis'):
     shutil.copy(os.path.join(HERE, t + '.c'), BUILD)
     r = sh(['gcc', '-O1', '-w', '-I', os.path.join(ROOT, 'source'), t + '.c', '-o', t, '-lm', '-lpthread', '-lcurl'])
     if r.returncode: print(r.stderr[-3000:]); sys.exit('build failed: ' + t)
@@ -29,6 +29,7 @@ run('test_buzz', ['core1', 'wav/buzz_core1.wav']); run('test_buzz', ['core2', 'w
 run('test_ui', [])
 for k in range(5): run('test_kit', [str(k)])
 for k in range(4): run('test_chip', [str(k)])
+run('test_vis', [])
 # every factory patch
 base = {}
 if os.path.exists(BASE):

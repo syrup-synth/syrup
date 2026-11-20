@@ -61,7 +61,7 @@ Four MACRO knobs (mod sources MACRO 1-4); XY PAD can play MACRO 1+2 or 3+4 inste
 
 ## Visualizer page
 
-The last page (VISUALIZER) fills the top screen with GPU visuals while you play on the bottom screen: WAVETABLE (big 3D table), SCOPES, ORBIT (OSC A against OSC B, spirograph trails) and SPECTRUM (harmonic bars), VOXELS (a scrolling 3D block landscape of the notes you play), VOXEL TABLE (the wavetable as blocks, playing frame lit), or AUTO to cycle every 10 s. Arp/sequencer steps pulse the background. D-pad picks VIS MODE / VIS OSC / OVERLAY.
+The last page (VISUALIZER) fills the top screen with GPU visuals while you play on the bottom screen: WAVETABLE (big 3D table), SCOPES, ORBIT (OSC A against OSC B, spirograph trails) and SPECTRUM (harmonic bars), VOXELS (a scrolling 3D block landscape of the notes you play), VOXEL TABLE (the wavetable as blocks, playing frame lit), PLASMA (the GPU's procedural-texture unit draws a flowing plasma by itself; the CPU only cycles its colour table, faster and brighter as the sound gets louder, with the oscillator's live cycle glowing on top and sparks on loud hits), or AUTO to cycle every 10 s. Arp/sequencer steps pulse the background. D-pad picks VIS MODE / VIS OSC / OVERLAY.
 
 ## Graphics chip visuals
 

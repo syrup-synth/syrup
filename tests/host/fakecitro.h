@@ -44,3 +44,48 @@ static void C3D_SyncTextureCopy(u32* in,u32 a,u32* out,u32 b,u32 size,u32 f){(vo
 #define GX_TRANSFER_RAW_COPY(x) ((x)<<3)
 #endif
 static void GSPGPU_FlushDataCache(void* p,u32 n){(void)p;(void)n;}
+
+/* procedural texture + immediate-mode quad, emulated in software (only the parts PLASMA uses: noise-bent
+   sqrt(u^2+v^2) with mirrored repeat, an RGB map table and a colour table). The real noise differs in detail. */
+typedef struct { float amp, freq, phase; int noise; int fn; } C3D_ProcTex;
+typedef u32 C3D_ProcTexLut[128];
+typedef struct { u32 color[256]; u32 diff[256]; } C3D_ProcTexColorLut;
+enum { C3D_ProcTex_U = 1, C3D_ProcTex_V = 2, C3D_ProcTex_UV = 3 };
+enum { GPU_PT_CLAMP_TO_ZERO, GPU_PT_CLAMP_TO_EDGE, GPU_PT_REPEAT, GPU_PT_MIRRORED_REPEAT, GPU_PT_PULSE };
+enum { GPU_PT_U, GPU_PT_U2, GPU_PT_V, GPU_PT_V2, GPU_PT_ADD, GPU_PT_ADD2, GPU_PT_SQRT2, GPU_PT_MIN, GPU_PT_MAX, GPU_PT_RMAX };
+enum { GPU_PT_NEAREST, GPU_PT_LINEAR };
+typedef enum { GPU_LUT_NOISE = 0, GPU_LUT_RGBMAP = 2, GPU_LUT_ALPHAMAP = 3, GPU_LUT_COLOR = 4, GPU_LUT_COLORDIF = 5 } GPU_PROCTEX_LUTID;
+static C3D_ProcTex* FPT; static float FMAP[129]; static u32 FCOL[256]; static int FCOLN = 128;
+static void C3D_ProcTexInit(C3D_ProcTex* p, int off, int len) { memset(p, 0, sizeof *p); (void)off; FCOLN = len; }
+static inline void C3D_ProcTexClamp(C3D_ProcTex* p, int u, int v) { (void)p; (void)u; (void)v; }
+static inline void C3D_ProcTexCombiner(C3D_ProcTex* p, bool s, int rgb, int a) { (void)s; (void)a; p->fn = rgb; }
+static inline void C3D_ProcTexFilter(C3D_ProcTex* p, int f) { (void)p; (void)f; }
+static inline void C3D_ProcTexNoiseEnable(C3D_ProcTex* p, bool e) { p->noise = e; }
+static void C3D_ProcTexNoiseCoefs(C3D_ProcTex* p, int mode, float a, float f, float ph) { (void)mode; p->amp = a; p->freq = f; p->phase = ph; }
+static void C3D_ProcTexBind(int tc, C3D_ProcTex* p) { (void)tc; FPT = p; }
+static float FMAPSRC[129]; static void ProcTexLut_FromArray(C3D_ProcTexLut* l, const float in[129]) { (void)l; memcpy(FMAPSRC, in, sizeof FMAPSRC); }
+static void C3D_ProcTexLutBind(GPU_PROCTEX_LUTID id, C3D_ProcTexLut* l) { (void)l; if (id == GPU_LUT_RGBMAP) memcpy(FMAP, FMAPSRC, sizeof FMAP); }
+static void ProcTexColorLut_Write(C3D_ProcTexColorLut* o, const u32* in, int off, int n) { for (int i = 0; i < n; i++) o->color[off + i] = in[i]; }
+static void C3D_ProcTexColorLutBind(C3D_ProcTexColorLut* l) { memcpy(FCOL, l->color, sizeof FCOL); }
+typedef struct { int x; } C3D_TexEnv; static C3D_TexEnv FENV[6];
+enum { C3D_RGB = 1, C3D_Alpha = 2, C3D_Both = 3 }; enum { GPU_PRIMARY_COLOR = 0, GPU_TEXTURE3 = 13, GPU_PREVIOUS = 15 }; enum { GPU_REPLACE = 0 }; enum { GPU_TRIANGLE_STRIP = 1 };
+static C3D_TexEnv* C3D_GetTexEnv(int i) { return &FENV[i]; }
+static void C3D_TexEnvInit(C3D_TexEnv* e) { (void)e; } static void C3D_TexEnvSrc(C3D_TexEnv* e, int m, int a, int b, int c) { (void)e; (void)m; (void)a; (void)b; (void)c; }
+static void C3D_TexEnvFunc(C3D_TexEnv* e, int m, int f) { (void)e; (void)m; (void)f; }
+static float FIMM[4][4][4]; static int FIMMN = 0;
+static void C3D_ImmDrawBegin(int prim) { (void)prim; FIMMN = 0; }
+static void C3D_ImmSendAttrib(float x, float y, float z, float w) { if (FIMMN < 16) { float* a = FIMM[FIMMN / 4][FIMMN % 4]; a[0] = x; a[1] = y; a[2] = z; a[3] = w; } FIMMN++; }
+static float fnoise(float x, float y) { return sinf(x * 2.1f + sinf(y * 1.7f)) * cosf(y * 2.3f - sinf(x * 1.3f)); }
+static void C3D_ImmDrawEnd(void) {   /* one axis-aligned quad: strip order TL, TR, BL, BR */
+	if (!FPT || FIMMN < 16) return;
+	float x0 = FIMM[0][0][0], y0 = FIMM[0][0][1], x1 = FIMM[3][0][0], y1 = FIMM[3][0][1];
+	float u0 = FIMM[0][2][0], v0 = FIMM[0][2][1], u1 = FIMM[3][2][0], v1 = FIMM[3][2][1];
+	for (int y = (int)y0; y < (int)y1; y++) for (int x = (int)x0; x < (int)x1; x++) {
+		float tx = (x - x0) / (x1 - x0), ty = (y - y0) / (y1 - y0), u = u0 + (u1 - u0) * tx, v = v0 + (v1 - v0) * ty;
+		if (FPT->noise) { float f = FPT->freq * 8; u += FPT->amp * fnoise(u * f + FPT->phase, v * f); v += FPT->amp * fnoise(v * f - FPT->phase, u * f + 3); }
+		u = fabsf(u); v = fabsf(v); u = fmodf(u, 2); if (u > 1) u = 2 - u; v = fmodf(v, 2); if (v > 1) v = 2 - v;   /* mirrored repeat */
+		float g = sqrtf(u * u + v * v); if (g > 1) g = 1;
+		float m = FMAP[(int)(g * 128)]; int ci = (int)(m * (FCOLN - 1)); if (ci < 0) ci = 0; if (ci >= FCOLN) ci = FCOLN - 1;
+		plot(x, y, FCOL[ci] | 0xFF000000u);
+	}
+}
