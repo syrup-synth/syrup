@@ -439,7 +439,7 @@ static float gSpinX, gSpinY, gMicBright, gCamMove;   // gyro pitch/roll speed, v
 static int gHeadphones = 0;
 enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_COUNT };
 static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF"};   // VOLUME: when routed, the source IS the loudness (breath control)
-static const char* VOICE_MODES[3] = {"POLY", "MONO", "LEGATO"};
+static const char* VOICE_MODES[7] = {"POLY", "MONO", "LEGATO", "808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT"};   // KIT: keys play the drum kit
 static const char* FX_NAMES[4] = {"OFF", "ECHO", "SPACE", "REVERB"};
 static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
 static const float ECHO_T[3] = {0.25f, 0.375f, 0.5f};
@@ -845,8 +845,10 @@ static void addTaps(SVoice* v) {
 	}
 }
 
+static void kitNoteOn(int note, float vel);
 static void voiceOn(int note, float vel) {
 	if (!gAudioOK) return;
+	if (gVoiceMode >= 3) { kitNoteOn(note, vel); return; }   // DRUM KIT patch: a key is a drum hit
 	if (gVoiceMode != 0) {   // mono / legato: one voice
 		SVoice* m = NULL;
 		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4) { m = &gV[i]; break; }
@@ -1756,6 +1758,7 @@ static int gKeyDeg = 0;   // degree of the last pad pressed in scale mode
 
 // chord tones: chromatic chords, or chords stacked inside the scale when a scale is on
 static int chordNotes(int key, int* out) {
+	if (gVoiceMode >= 3) { out[0] = key; return 1; }   // drum kit: one hit per key
 	int n = 0;
 	if (!gScale || gChord == 3) { for (int i = 0; i < 4; i++) if (CHORDS[gChord][i] >= 0) out[n++] = key + CHORDS[gChord][i]; return n; }
 	static const s8 DEG[5][4] = {{0, -1, -1, -1}, {0, 2, 4, 6}, {0, 2, 4, -1}, {0, -1, -1, -1}, {0, 3, 4, -1}};
@@ -2386,8 +2389,8 @@ static void q_vowelpad(SPatch* p) {   // no quirks: slow vowel morph, breath ben
 
 typedef struct { const char* name; void (*fn)(SPatch*); } PresetDef;
 #define MAXPRE 15
-#define NSTYLES 15   // last style = USER
-static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "CHIPSET", "MOTION", "QUIRKS", "RAVE", "USER"};
+#define NSTYLES 16   // last style = USER
+static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "CHIPSET", "MOTION", "QUIRKS", "RAVE", "DRUMS", "USER"};
 #define STYLE_SPACE 9
 // ---- RAVE (euro house and rave: pads, stabs, piano, organ bass, hoover)
 static void r_ravestrings(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 4; OA.detune = 20; OA.width = 1; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = 1; OB.uni = 2; OB.detune = 12; OB.level = 0.3f;
@@ -2425,6 +2428,11 @@ static void r_hoover(SPatch* p) { p->master = 0.45f; OA.table = T_PWM; OA.pos = 
 	p->voiceMode = 2; p->glide = 0.12f; ENV1(0.01f, 0, 0.5f, 0.9f, 0.3f); ENV2(0.0f, 0, 0.18f, 0, 0.2f); MOD(2, SRC_ENV2, DST_PITCH, -0.12f);
 	LFO(0, LS_SINE, 0, 0.8f); MOD(3, SRC_LFO1, DST_APOS, 0.3f); OUTF(OF_L12, 0.6f, 0.2f, 0.35f, 0); MFX(FX_CHORUS, 0.9f, 1.0f, 0.7f); REVB(0.25f, RV_HALL); }
 
+// ---- DRUMS: the keys and pads play a drum kit (voice MODE ... KIT); arp, sequencer and MIDI play it too
+static void d_808(SPatch* p) { p->voiceMode = 3; p->master = 0.8f; }
+static void d_909(SPatch* p) { p->voiceMode = 4; p->master = 0.8f; }
+static void d_lofi(SPatch* p) { p->voiceMode = 5; p->master = 0.8f; }
+static void d_chip(SPatch* p) { p->voiceMode = 6; p->master = 0.8f; }
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
 	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}},
@@ -2458,6 +2466,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"RAVE STRINGS", r_ravestrings}, {"DREAM PAD", r_dreampad}, {"HOOVER PAD", r_hooverpad}, {"SUPERSAW PUMP", r_supersaw}, {"EURO CHOIR", r_eurochoir},
 	 {"FLANGE PAD", r_flangepad}, {"HOUSE PIANO", r_housepiano}, {"ORGAN BASS", r_organbass}, {"RAVE STAB", r_ravestab}, {"DEEP CHORD", r_deepchord},
 	 {"EURO BASS", r_eurobass}, {"EURO LEAD", r_eurolead}, {"HOOVER", r_hoover}},
+	{{"808 KIT", d_808}, {"909 KIT", d_909}, {"LOFI KIT", d_lofi}, {"CHIP KIT", d_chip}},
 };
 #define NUSER 8
 static SPatch gUser[NUSER];
@@ -2548,7 +2557,7 @@ static void patchApply(const SPatch* p) {
 	if (p->ofType % NOFT != gOfType) { gOfType = p->ofType % NOFT; ofReset(); } gOfCut = p->ofCut; gOfRes = p->ofRes; gOfDrive = p->ofDrive; gOfEnv = p->ofEnv;
 	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) gDl[k][i] = p->dl[k][i] / 127.0f; gDlRate[k] = p->dlRate[k]; gDlSync[k] = p->dlSync[k] % NSYNC; }
 	memcpy(gMot, p->mot, sizeof(gMot)); for (int l = 0; l < 4; l++) { gMotTgt[l] = p->motTgt[l] % 16; gMotOn[l] = p->motOn[l] & 1; } gMotBars = p->motBars & 3; gMotRec = -1; gMotPh = 0;
-	gVoiceMode = p->voiceMode; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
+	gVoiceMode = (p->voiceMode >= 0 && p->voiceMode < 7) ? p->voiceMode : 0; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
 	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate; if (p->bpm >= 40) gBPM = p->bpm;
 	gArpN = 0; gArpOnN = 0; gHeldN = 0;
@@ -2578,6 +2587,7 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // MOTION
 	{1.73f, 3.00f, 2.80f, 2.50f, 1.60f, 0.70f, 0.69f, 2.50f, 1.86f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // QUIRKS
 	{1.39f, 2.04f, 1.36f, 1.81f, 1.69f, 1.50f, 1.17f, 1.24f, 2.90f, 3.10f, 2.20f, 1.65f, 1.26f, 1.00f, 1.00f},   // RAVE
+	{1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // DRUMS
 };
 static int presetCount(int style) {
 	if (style == NSTYLES - 1) return NUSER;
@@ -2721,7 +2731,7 @@ static Param P_MOD[] = {
 	PEND};
 static const char* BEND_NAMES[13] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"};
 static Param P_VOICE[] = {
-	PE("MODE", &gVoiceMode, 3, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0),
+	PE("MODE", &gVoiceMode, 7, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0),
 	PE("BEND RANGE", &gBendRange, 13, BEND_NAMES, 0), PE("CHORD", &gChord, 5, CHORD_NAMES, 0),
 	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("GPU VISUALS", &gGpuFx, 2, ONOFF, 0), PE("FX", &gFx, 4, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
 	PF("ECHO FDBK", &gEchoFb, 0, 0.9f, 0.03f, "%", 0), PE("OUTPUT", &gOutMode, 3, OUT_NAMES, D_OUT), PE("SURROUND", &gSurDepth, 4, DEPTH_NAMES, D_OUT),
@@ -3355,7 +3365,13 @@ static void drawHelp(void) {
 #define XY_Y  22
 #define XY_H  94
 #define KB_Y  118
+#define NDRUM 10
+static const char* KIT_PAD_NAMES[NDRUM]; static const int KIT_PAD_NOTE[NDRUM]; static const int KIT_PAD_ORDER[10];
 static int keyAt(int x, int y, int base) {
+	if (gVoiceMode >= 3) {   // drum pads: 2 rows of 5
+		int c = x / 64, r = y < KB_Y + 61 ? 0 : 1; if (c > 4) c = 4; if (c < 0) c = 0;
+		return KIT_PAD_NOTE[KIT_PAD_ORDER[r * 5 + c]];
+	}
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
 	float ww = 320.0f / 14;
@@ -3794,6 +3810,16 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	float ww = 320.0f / 14;
 	rect(0, KB_Y, 320, 240 - KB_Y, RGB3(TH->kbBg));
 	if (TH->ega) rect(0, KB_Y, 320, 1, LINE);
+	if (gVoiceMode >= 3) {   // drum kit pads, lower on a pad = harder
+		for (int i = 0; i < 10; i++) {
+			int d = KIT_PAD_ORDER[i], x = (i % 5) * 64, y = KB_Y + 2 + (i / 5) * 61, note = KIT_PAD_NOTE[d], lit = on[note];
+			rect(x + 2, y, 60, 57, lit ? TH->keyOn[0] : TH->keyW[0], lit ? TH->keyOn[1] : TH->keyW[1], lit ? TH->keyOn[2] : TH->keyW[2]);
+			if (TH->ega) outline(x + 2, y, 60, 57, RGB3(TH->keyLine));
+			const char* nm = KIT_PAD_NAMES[d]; int tx = x + 32 - (int)strlen(nm) * 4;
+			if (lit) text(tx, y + 25, nm, 1, EC(0)); else text(tx, y + 25, nm, 1, TH->ega ? TH->keyLine[0] : 60, TH->ega ? TH->keyLine[1] : 40, TH->ega ? TH->keyLine[2] : 20);
+		}
+		return;
+	}
 	if (gScale) {   // scale mode: 14 pads, one per scale degree
 		int n = scaleLen();
 		for (int i = 0; i < 14; i++) {
@@ -5198,9 +5224,11 @@ static void drawHardwarePanel(void) {
 // ================================================================ drums: synthesised kit on 3 CSND channels, pattern presets, tempo-locked
 static int gDrums = 0, gKit = 0, gKickPat = 1, gSnarePat = 1, gHatPat = 1, gDrumBuilt = -1;
 static float gDrumLevel = 0.8f;
-static int gDrumCh[3] = {-1, -1, -1}, gDrumStep = -1;
+// NDRUM 10 (defined at the keyboard): kick snare closed-hat | open-hat clap rim low-tom high-tom cowbell crash (the last 7 for DRUM KIT patches)
+#define NDCH 7
+static int gDrumCh[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, gDrumStep = -1;
 static float gDrumPh = 0;
-static s16* gDrumSmp[3]; static int gDrumLen[3];
+static s16* gDrumSmp[NDRUM]; static int gDrumLen[NDRUM];
 static const char* KIT_NAMES[4] = {"808", "909", "LOFI", "CHIP"};
 static const char* KICKP_NAMES[9] = {"OFF", "FOUR FLOOR", "BREAK", "TRAP", "DNB", "HALFTIME", "BOOM BAP", "MINE", "EUCLID"};
 static const char* SNAREP_NAMES[8] = {"OFF", "BACKBEAT", "BREAK", "TRAP", "DNB", "CLAP 2+4", "MINE", "EUCLID"};
@@ -5230,19 +5258,24 @@ static const char* DREC_NAMES[5] = {"OFF", "TAP KICK", "TAP SNARE", "TAP HAT", "
 static float gTapLevel = 0, gTapHold = 0;
 static const u8 HATVEL[16] = {255, 120, 200, 110, 255, 120, 200, 140, 255, 120, 200, 110, 255, 130, 220, 160};
 static int gNzCh[2] = {-1, -1}; static float gNzVol[2];   // hardware noise drums: retired (they wedged the sound chip); CHIP kit is now sampled LFSR noise
-static int drumReserved(int c) { return gDrums && (c == gDrumCh[0] || c == gDrumCh[1] || c == gDrumCh[2]); }
+static int drumReserved(int c) {
+	if (gVoiceMode >= 3) { for (int k = 0; k < NDCH; k++) if (c == gDrumCh[k]) return 1; return 0; }   // kit patch: all 7
+	return gDrums && (c == gDrumCh[0] || c == gDrumCh[1] || c == gDrumCh[2]);
+}
 static u32 csSend(float l, float r);
 
 static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear memory for CSND
 	const float sr = 32728;
-	int len[3] = {(int)(sr * 0.6f), (int)(sr * 0.3f), (int)(sr * (kit == 1 ? 0.12f : 0.07f))};
+	static const float MAXS[NDRUM] = {0.6f, 0.3f, 0.12f, 0.5f, 0.35f, 0.1f, 0.5f, 0.4f, 0.35f, 1.4f};
+	int len[NDRUM] = {(int)(sr * 0.6f), (int)(sr * 0.3f), (int)(sr * (kit == 1 ? 0.12f : 0.07f)), (int)(sr * (kit == 1 ? 0.5f : 0.4f)), (int)(sr * 0.35f),
+		(int)(sr * 0.08f), (int)(sr * 0.5f), (int)(sr * 0.4f), (int)(sr * 0.3f), (int)(sr * (kit == 2 ? 0.9f : 1.4f))};
 	unsigned seed = 1234;
 	unsigned lfsr = 0x7FFF; float lph = 0;   // CHIP kit: Game Boy style noise register
-	for (int d = 0; d < 3; d++) {
-		if (!gDrumSmp[d]) gDrumSmp[d] = (s16*)linearAlloc(sr * 0.6f * 2 + 64);
+	for (int d = 0; d < NDRUM; d++) {
+		if (!gDrumSmp[d]) gDrumSmp[d] = (s16*)linearAlloc((int)(sr * MAXS[d]) * 2 + 64);
 		if (!gDrumSmp[d]) return;
 		gDrumLen[d] = len[d];
-		float ph = 0, lp = 0, hp = 0, prev = 0;
+		float ph = 0, ph2 = 0, lp = 0, bp1 = 0, bp2 = 0, hp = 0, prev = 0;
 		for (int i = 0; i < len[d]; i++) {
 			float t = i / sr, v = 0;
 			seed = seed * 1664525u + 1013904223u; float nz = ((seed >> 9) & 0xFFFF) / 32768.0f - 1;
@@ -5261,6 +5294,43 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 					lph += 9000.0f / sr; while (lph >= 1) { lph -= 1; unsigned b = (lfsr ^ (lfsr >> 1)) & 1; lfsr = (lfsr >> 1) | (b << 14); }
 					float e = floorf(expf(-t * 15) * 15) / 15; v = ((lfsr & 1) ? 0.6f : -0.6f) * e + (t < 0.03f ? (fmodf(t * 220, 1) < 0.5f ? 0.3f : -0.3f) * e : 0);
 				}
+			} else if (d >= 3) {   // the DRUM KIT extras
+				float e;
+				switch (d) {
+				case 3:   // open hat: the closed hat's noise, long tail
+					hp = nz - prev; prev = nz; v = hp * expf(-t * (kit == 1 ? 6.5f : 8.0f)) * 0.55f;
+					if (kit == 3) { lph += 30000.0f / sr; while (lph >= 1) { lph -= 1; unsigned b = (lfsr ^ (lfsr >> 1)) & 1; lfsr = ((lfsr >> 1) & ~0x40u) | (b << 6) | (b << 14); }
+						v = ((lfsr & 1) ? 0.4f : -0.4f) * (floorf(expf(-t * 8) * 15) / 15); }
+					break;
+				case 4: {   // clap: three quick bursts then a tail of band-passed noise
+					float tt = t < 0.03f ? fmodf(t, 0.01f) : t - 0.02f;
+					bp1 += (nz - bp1) * 0.45f; bp2 += (bp1 - bp2) * 0.45f; float band = bp1 - bp2;
+					e = expf(-tt * (t < 0.03f ? 180 : (kit == 1 ? 22 : 16))); v = band * e * 2.2f;
+					if (kit == 3) v = ((lfsr ^= (lfsr << 3) ^ (lfsr >> 5), lfsr & 1) ? 0.5f : -0.5f) * floorf(e * 15) / 15;
+					break; }
+				case 5:   // rim: short tuned click
+					v = (sinf(TWO_PI * 1650 * t) * 0.7f + sinf(TWO_PI * 520 * t) * 0.5f) * expf(-t * 140) + (t < 0.002f ? nz * 0.5f : 0);
+					if (kit == 3) v = v > 0 ? 0.5f * expf(-t * 120) : -0.5f * expf(-t * 120);
+					break;
+				case 6: case 7: {   // toms: falling sine
+					float f0 = d == 6 ? 95 : 150, f = f0 * (1 + 0.6f * expf(-t * 25));
+					ph += f / sr; v = sinf(TWO_PI * ph) * expf(-t * (d == 6 ? 7 : 9)) + (t < 0.003f ? nz * 0.25f : 0);
+					if (kit == 3) v = (v > 0 ? 0.65f : -0.65f) * floorf(expf(-t * (d == 6 ? 7 : 9)) * 15) / 15 * (d == 7 ? 0.75f : 1);
+					if (kit == 2) v = tanhf(v * 2.0f) * 0.85f;
+					break; }
+				case 8: {   // cowbell: two square tones (540 + 800 Hz, the 808's), band-limited a little
+					ph += 540 / sr; ph2 += 800 / sr;
+					float sq = (fmodf(ph, 1) < 0.5f ? 0.5f : -0.5f) + (fmodf(ph2, 1) < 0.5f ? 0.5f : -0.5f);
+					lp += (sq - lp) * (kit == 3 ? 1.0f : 0.35f); v = lp * (t < 0.01f ? 1.0f : expf(-(t - 0.01f) * 9)) * (kit == 3 ? 0.35f : 0.55f);
+					break; }
+				default: {   // crash: bright noise, slow decay
+					hp = nz - prev; prev = nz; lp += (hp - lp) * 0.6f;
+					v = (hp * 0.6f + lp * 0.4f) * expf(-t * (kit == 2 ? 4.5f : 2.6f)) * 0.5f;
+					if (kit == 3) { lph += 30000.0f / sr; while (lph >= 1) { lph -= 1; unsigned b = (lfsr ^ (lfsr >> 1)) & 1; lfsr = (lfsr >> 1) | (b << 14); }
+						v = ((lfsr & 1) ? 0.3f : -0.3f) * floorf(expf(-t * 2.6f) * 15) / 15; }
+					break; }
+				}
+				if (kit == 2) v = roundf(v * 10) / 10;   // LOFI: coarse steps
 			} else {   // hat: high-passed noise, very short
 				hp = nz - prev; prev = nz;
 				v = hp * expf(-t * (kit == 1 ? 30 : 55)) * 0.7f;
@@ -5281,15 +5351,19 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 static void drumPickChannels(void) {
 	gNzCh[0] = gNzCh[1] = -1;
 	int n = 0;
-	for (int c = 16; c < NCS && n < 3; c++) if (gCsndOK && (csndChannels & BIT(c)) && c != gLoopCh[0] && c != gLoopCh[1]) gDrumCh[n++] = c;
+	for (int k = 0; k < NDCH; k++) gDrumCh[k] = -1;
+	for (int c = 16; c < NCS && n < NDCH; c++) if (gCsndOK && (csndChannels & BIT(c)) && c != gLoopCh[0] && c != gLoopCh[1] && !chipReserved(c) && !echoReserved(c)) gDrumCh[n++] = c;
 }
 static void drumHit(int d, float vel) {   // from the audio thread (voice lock held)
-	int c = gDrumCh[d]; if (c < 0 || !gDrumSmp[d]) return;
+	static const int DCH[NDRUM] = {0, 1, 2, 2, 3, 1, 4, 4, 5, 6};   // open hat chokes the closed hat (same channel), rim cuts the snare
+	int c = gDrumCh[DCH[d]]; if (c < 0) c = gDrumCh[DCH[d] % 3];
+	if (c < 0 || !gDrumSmp[d]) return;
 	u32 flags = SOUND_FORMAT_16BIT | SOUND_ONE_SHOT | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(c) | (CSND_TIMER(32728) << 16);
-	float g = gDrumLevel * vel * (d == 2 ? 0.3f : 0.5f), pan = d == 2 ? 0.62f : 0.5f;
+	static const float DG[NDRUM] = {0.5f, 0.5f, 0.3f, 0.28f, 0.55f, 0.5f, 0.45f, 0.45f, 0.3f, 0.28f}, DP[NDRUM] = {0.5f, 0.5f, 0.62f, 0.62f, 0.45f, 0.42f, 0.36f, 0.62f, 0.55f, 0.42f};
+	float g = gDrumLevel * vel * DG[d], pan = DP[d];
 	u32 l = (u32)(g * sqrtf(1 - pan) * 1.41f * 0x7FFF), r = (u32)(g * sqrtf(pan) * 1.41f * 0x7FFF), vol = l | (r << 16);
 	CSND_SetPlayState(c, 0);
-	if (gKit == 3 && d >= 1 && gNzCh[d - 1] >= 0) {   // CHIP kit: snare and hat straight from the hardware noise generators
+	if (gKit == 3 && d >= 1 && d <= 2 && gNzCh[d - 1] >= 0) {   // CHIP kit: snare and hat straight from the hardware noise generators
 		int nc = gNzCh[d - 1]; gNzVol[d - 1] = g; CSND_SetPlayState(nc, 0);
 		u32 t = CSND_TIMER(d == 2 ? 30000 : 9000); if (t < 0x42) t = 0x42;
 		CSND_SetChnRegsNoise(SOUND_FORMAT_PSG | SOUND_ENABLE | SOUND_CHANNEL(nc) | (t << 16), vol, csSend(l / 32768.0f, r / 32768.0f));
@@ -5341,7 +5415,27 @@ static void drumsChanged(void) {   // main thread
 		if (!gCsndOK) { say("DRUMS NEED THE SECOND SOUND CHIP"); gDrums = 0; return; }
 		if (gDrumBuilt != gKit) drumBuild(gKit);
 		drumPickChannels(); gDrumStep = -1; gEuPos = 0;
-	} else if (gCsndOK) { for (int d = 0; d < 3; d++) if (gDrumCh[d] >= 0) CSND_SetPlayState(gDrumCh[d], 0); for (int k = 0; k < 2; k++) if (gNzCh[k] >= 0) CSND_SetPlayState(gNzCh[k], 0); csndExecCmds(false); }
+	} else if (gCsndOK && gVoiceMode < 3) { for (int d = 0; d < 3; d++) if (gDrumCh[d] >= 0) CSND_SetPlayState(gDrumCh[d], 0); for (int k = 0; k < 2; k++) if (gNzCh[k] >= 0) CSND_SetPlayState(gNzCh[k], 0); csndExecCmds(false); }
+}
+// ---- DRUM KIT patches (voice MODE 808 KIT .. CHIP KIT): every key is a drum. Notes follow General MIDI from C1 (36)
+// up, folded every two octaves, so an FM-1, a DAW or Drambo plays the right drums and the keyboard always has a full kit.
+static const s8 KIT_GM[24] = {0, 5, 1, 4, 1, 6, 2, 6, 2, 6, 3, 7, 7, 9, 7, 9, 9, 8, 2, 9, 8, 9, 5, 9};   // 36..59 -> sound
+static int kitSound(int note) { int k = ((note - 36) % 24 + 24) % 24; return KIT_GM[k]; }
+static const char* KIT_PAD_NAMES[NDRUM] = {"KICK", "SNARE", "CL HAT", "OP HAT", "CLAP", "RIM", "LO TOM", "HI TOM", "BELL", "CRASH"};
+static const int KIT_PAD_NOTE[NDRUM] = {36, 38, 42, 46, 39, 37, 41, 48, 56, 49};
+static const int KIT_PAD_ORDER[10] = {2, 3, 9, 8, 5, 0, 1, 4, 6, 7};   // top row: hats, crash, bell, rim; bottom: kick, snare, clap, toms
+static void kitEnsure(void) {   // main thread: build the patch's kit and claim its channels
+	if (gVoiceMode < 3 || !gCsndOK) return;
+	int kit = gVoiceMode - 3;
+	if (gDrumBuilt != kit || gKit != kit) { gKit = kit; drumBuild(kit); }
+	if (gDrumCh[NDCH - 1] < 0 && gDrumCh[3] < 0) drumPickChannels();
+	for (int k = 0; k < NDCH; k++) if (gDrumCh[k] >= 0 && gCsOwner[gDrumCh[k]] >= 0) { CSND_SetPlayState(gDrumCh[k], 0); gCsOwner[gDrumCh[k]] = -1; }
+}
+static void kitNoteOn(int note, float vel) {
+	if (!gCsndOK || gDrumBuilt != gVoiceMode - 3) return;
+	drumHit(kitSound(note), vel * gMaster * 1.25f);
+	csndExecCmds(false);
+	gBeatFlash = 1;
 }
 // MIC TAP: knock or tap near the mic; each hit plays the drum now and is written into MINE at the nearest 16th,
 // as loud as you hit it. Switching to a row copies its current pattern into MINE first, so you overdub.
@@ -6297,6 +6391,7 @@ int main(void) {
 			} else if (t.py >= KB_Y) {
 				key = keyAt(t.px, t.py, base);
 				vel = 0.35f + 0.65f * (t.py - KB_Y) / (float)(240 - KB_Y);
+				if (gVoiceMode >= 3) { int py = (t.py - KB_Y) % 61; vel = 0.35f + 0.65f * py / 60.0f; }
 			}
 		}
 		if (gModOn && !gPads && prevTouch && !touching && modViewTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
@@ -6313,6 +6408,7 @@ int main(void) {
 			}
 			curKey = key;
 		}
+		if (gVoiceMode >= 3 && (gDrumBuilt != gVoiceMode - 3 || gDrumCh[3] < 0)) { kitEnsure(); botDirty = 1; }
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; } }
 		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }   // live matrix dots, drawn LFO / motion playheads
 		motTick(dt);
