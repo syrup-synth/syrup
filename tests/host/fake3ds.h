@@ -218,3 +218,4 @@ static inline SwkbdButton swkbdInputText(SwkbdState* s, char* o, size_t n) { (vo
 static int FAKE_NEW3DS = 0; static Result APT_CheckNew3DS(bool* o) { *o = FAKE_NEW3DS; return 0; }
 static u32 ndspGetDroppedFrames(void) { return 0; } static u32 ndspGetFrameCount(void) { return 0; }
 #define NDSP_SAMPLE_RATE (16756991u / 512.0)
+int __system_argc = 0; char** __system_argv = NULL;   /* launch arguments (none in the simulator) */

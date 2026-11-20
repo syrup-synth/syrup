@@ -5364,14 +5364,21 @@ static void dlTick(void) {   // progress in the footer; when done, rescan so the
 
 // ---- in-app updater: compare the release's version.txt with this build, then download and install the new CIA
 #define REL_URL "https://github.com/syrup-synth/syrup/releases/latest/download/"
+// where this copy of Syrup was launched from: the Homebrew Launcher passes the .3dsx path as argv[0]
+extern int __system_argc; extern char** __system_argv;
+static const char* selfPath(void) {
+	if (__system_argc > 0 && __system_argv && __system_argv[0] && !strncmp(__system_argv[0], "sdmc:/", 6) && strstr(__system_argv[0], ".3dsx")) return __system_argv[0];
+	return "sdmc:/3ds/syrup.3dsx";
+}
+#define UP_EXPECT "sdmc:/3ds/syrup/update_expected.txt"   // the build an update installed; checked at the next start
 static volatile u32 gUpGot = 0, gUpTotal = 0; static volatile int gUpSd = 0;
 static char gUpVer[12];
 #ifndef SYRUP_NO_NET
-typedef struct { Handle cia; FILE* f; u64 off; Result err; } UpSink;
+typedef struct { Handle cia; FILE* f; FILE* copy; u64 off; Result err; } UpSink;
 static size_t upWrite(void* d, size_t sz, size_t nm, void* u) {
 	UpSink* k = (UpSink*)u; u32 n = sz * nm, w = 0;
 	if (k->f) { w = fwrite(d, 1, n, k->f); }
-	else { Result rr = FSFILE_Write(k->cia, &w, k->off, d, n, FS_WRITE_FLUSH); if (R_FAILED(rr)) { k->err = rr; return 0; } }
+	else { Result rr = FSFILE_Write(k->cia, &w, k->off, d, n, FS_WRITE_FLUSH); if (R_FAILED(rr)) { k->err = rr; return 0; } if (k->copy) fwrite(d, 1, n, k->copy); }   // the CIA also goes to SD, for FBI
 	k->off += w; gUpGot = (u32)k->off; return w;
 }
 static int upProgress(void* c, curl_off_t dlt, curl_off_t dl, curl_off_t ult, curl_off_t ul) { (void)c; (void)dl; (void)ult; (void)ul; if (dlt > 0) gUpTotal = (u32)dlt; return 0; }
@@ -5390,10 +5397,12 @@ static void upMain(void* arg) {
 			for (int attempt = 0; attempt < 2; attempt++) {   // attempt 1 (CIA only): save the CIA to SD for FBI
 				int toSd = hb || attempt == 1;
 				UpSink k = {0}; ok = 1; gUpGot = gUpTotal = 0;
-				const char* tmp = hb ? "sdmc:/3ds/syrup.3dsx.part" : "sdmc:/cias/syrup.cia.part";
+				char hbTmp[300]; snprintf(hbTmp, sizeof(hbTmp), "%s.part", selfPath());
+				const char* tmp = hb ? hbTmp : "sdmc:/cias/syrup.cia.part";
 				if (toSd) { mkdir("sdmc:/cias", 0777); k.f = fopen(tmp, "wb"); if (!k.f) { snprintf(gDlErr, sizeof(gDlErr), "CAN'T WRITE TO SD"); ok = 0; } }
 				else {
 					Result rr = amInit(); if (R_SUCCEEDED(rr)) rr = AM_StartCiaInstall(MEDIATYPE_SD, &k.cia);
+					mkdir("sdmc:/cias", 0777); k.copy = fopen("sdmc:/cias/syrup.cia.part", "wb");
 					if (R_FAILED(rr)) { snprintf(gDlErr, sizeof(gDlErr), "INSTALLER REFUSED %08lX", (unsigned long)rr); ok = 0; }
 				}
 				if (ok) {
@@ -5414,7 +5423,7 @@ static void upMain(void* arg) {
 					}
 				}
 				if (toSd) {
-					const char* fin = hb ? "sdmc:/3ds/syrup.3dsx" : "sdmc:/cias/syrup.cia";
+					const char* fin = hb ? selfPath() : "sdmc:/cias/syrup.cia";
 					if (k.f) fclose(k.f);
 					if (ok) { remove(fin); rename(tmp, fin); } else remove(tmp);
 					if (ok && !hb) gUpSd = 1;
@@ -5422,11 +5431,13 @@ static void upMain(void* arg) {
 					if (ok) { Result rr = AM_FinishCiaInstall(k.cia); if (R_FAILED(rr)) { snprintf(gDlErr, sizeof(gDlErr), "INSTALL FAILED %08lX", (unsigned long)rr); ok = 0; } }
 					else AM_CancelCIAInstall(k.cia);
 				}
+				if (k.copy) { fclose(k.copy); if (ok) { remove("sdmc:/cias/syrup.cia"); rename("sdmc:/cias/syrup.cia.part", "sdmc:/cias/syrup.cia"); } else remove("sdmc:/cias/syrup.cia.part"); }
 				if (!toSd) amExit();
 				if (ok || hb) break;
 				// direct install failed: keep the reason, then fall back to saving the CIA for FBI
 			}
 			gUpState = ok ? 3 : 5;
+			if (ok) { mkdir("sdmc:/3ds/syrup", 0777); FILE* e = fopen(UP_EXPECT, "w"); if (e) { fprintf(e, "%s\n", gUpVer); fclose(e); } }
 		}
 	} else gUpState = 5;
 	free(v.p);
@@ -5476,6 +5487,15 @@ static void netTabTick(void) {
 	if (gNetTab == 2) { gNetTab = 0; wtInstall("NET", gNetFr); }
 	else if (gNetTab == 3) { gNetTab = 0; char m[48]; snprintf(m, sizeof(m), "NET > TABLE FAILED: %.24s", gDlErr); say(m); }
 }
+static void upCheckTook(void) {   // at start: did the last update actually load?
+	FILE* e = fopen(UP_EXPECT, "r"); if (!e) return;
+	char v[16] = ""; if (!fgets(v, sizeof(v), e)) v[0] = 0; fclose(e);
+	if (!strncmp(v, SYRUP_VER, 7)) { remove(UP_EXPECT); return; }   // it did
+	static char m[60];
+	if (envIsHomebrew()) snprintf(m, sizeof(m), "UPDATE %.7s DIDN'T LOAD: OPEN SYRUP FROM HOME MENU?", v);
+	else snprintf(m, sizeof(m), "UPDATE %.7s DIDN'T LOAD: FBI > SD > cias > syrup.cia", v);
+	say(m); gMsgT = 20; remove(UP_EXPECT);
+}
 static void upStart(void) {
 #ifdef SYRUP_NO_NET
 	say("NO NETWORK IN THIS BUILD");
@@ -5492,7 +5512,7 @@ static void upTick(void) {
 	switch (gUpState) {
 	case 1: say("CHECKING FOR AN UPDATE..."); break;
 	case 2: if (gUpTotal) snprintf(m, sizeof(m), "DOWNLOADING %s  %d%%", gUpVer, (int)(gUpGot * 100.0f / gUpTotal)); else snprintf(m, sizeof(m), "DOWNLOADING %s  %dK", gUpVer, (int)(gUpGot / 1024)); say(m); break;
-	case 3: if (gUpSd) snprintf(m, sizeof(m), "%s SAVED: FBI > SD > cias > syrup.cia", gUpVer); else snprintf(m, sizeof(m), "UPDATED TO %s - CLOSE AND REOPEN SYRUP", gUpVer); say(m); gMsgT = 30; gUpState = 0; gUpSd = 0; break;
+	case 3: if (gUpSd) snprintf(m, sizeof(m), "%s SAVED: FBI > SD > cias > syrup.cia", gUpVer); else if (envIsHomebrew()) snprintf(m, sizeof(m), "UPDATED %.20s - CLOSE + REOPEN", strrchr(selfPath(), '/') ? strrchr(selfPath(), '/') + 1 : selfPath()); else snprintf(m, sizeof(m), "UPDATED TO %s - CLOSE AND REOPEN SYRUP", gUpVer); say(m); gMsgT = 30; gUpState = 0; gUpSd = 0; break;
 	case 4: snprintf(m, sizeof(m), "UP TO DATE (BUILD %.7s)", SYRUP_VER); say(m); gUpState = 0; break;
 	case 5: snprintf(m, sizeof(m), "UPDATE FAILED: %.30s", gDlErr[0] ? gDlErr : "?"); say(m); gMsgT = 30; gUpState = 0; break;
 	}
@@ -6568,6 +6588,7 @@ int main(void) {
 	LightLock_Init(&gMipsLock);
 	LightLock_Init(&gVoiceLock); LightLock_Init(&gNetLock);
 	userLoad();
+	upCheckTook();
 	seqDefault();
 	presetLoad(gStyle, gPreset);   // start on PAD / SYRUP PAD
 	LightEvent_Init(&gJobEv, RESET_ONESHOT);
