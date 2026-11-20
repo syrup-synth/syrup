@@ -104,8 +104,8 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | FILTER | Low pass, high pass, band pass, notch, peak; cutoff, resonance, keytrack |
 | ENV 1 | Amp envelope, AHDSR |
 | ENV 2 | Mod envelope, ADSR |
-| LFO 1-2 | Sine, triangle, saw, square, S&H; free or retrigger |
-| MOD MATRIX | 4 slots. Sources: LFO 1, LFO 2, ENV 2, velocity, circle pad, XY pad. Destinations: A/B WT POS, A/B warp, cutoff, resonance, pitch, A/B level, pan |
+| LFO 1-4 | LFO 1-2: 13 shapes including wavetable shapes, free or retrigger, tempo sync. LFO 3-4: drawn shapes |
+| MOD MATRIX | 8 slots with response curves. 27 sources (LFOs, envelope, velocity, note, random, circle pad, XY pad, macros, chaos, tilt, gyro, shake, mic, camera), 13 destinations (A/B WT POS, A/B warp, cutoff, resonance, pitch, A/B level, pan, FX colour, volume, out cutoff) |
 | VOICING | Poly, mono, legato; glide; bend range; chord mode |
 | FX | Chorus, echo (ping-pong), space (early reflections), reverb (size, damp), FX mix, drive (tube, hard, fold, rectify), master |
 
@@ -142,13 +142,14 @@ FBI > Remote Install > Scan QR Code, and scan `install-qr.png`. Sound needs the 
 - FM / AM / RM from the other oscillator use whole-octave ratios.
 - Two sound units are used together: the DSP (24 filtered channels) plays OSC A / OSC B plus one shared noise channel; CSND (the 3DS's second sound unit, ~24 channels, no filter) plays the sub and all effect taps. CSND layers are "filtered" by picking a darker band-limited copy of the waveform to match the cutoff.
 - With full unison on both oscillators a note uses 6 DSP channels, so 4 such notes fit; with 3-voice unison on A alone, 8.
-- Effects are built from extra voices (homebrew can't route the DSP's effect buses back for processing). REVERB is 8 diffuse taps per note: spread, slightly detuned, each darker and with a longer release. Drive is applied to the waveform.
-- Envelopes and LFOs run at about 60 Hz.
+- Effects run on the DSP's aux buses: Syrup's own copy of the sound driver routes every DSP channel to two buses that the ARM11 processes (MASTER FX chain, reverb, echo). The sub, drums, chip layers and looper on the second sound chip stay dry. Drive is applied to the waveform.
+- With MASTER FX on core 2, the DSP mix comes out one frame (~4.9 ms) after the second sound chip's parts.
+- Envelopes and LFOs update once per screen frame (about 60 Hz); the arpeggiator, sequencer and drums run in the audio thread (~4.9 ms).
 
 ## Chip-level extras (no CPU in the audio path)
 
 - **CHIP SQUARE** (SUB+NOISE page): a layer from the second sound chip's own square-wave generators, with CHIP WIDTH (pulse width) and CHIP OCTAVE.
-- **CHIP kit** (DRUMS): snare and hat come from the chip's hardware noise generators.
+- **CHIP kit** (DRUMS): snare and hat are sampled LFSR noise (15-bit and 7-bit), played from the second sound chip.
 - **CHIP ECHO / ECHO TIME / ECHO REPEATS** (DRUMS): a ping-pong echo made by the chip's two capture units recording its own output. It echoes the sub, drums and chip layer.
 - **Looper**: stored as IMA-ADPCM, which the chip decodes itself, so up to 16 bars (about 48 seconds).
 - **GRAINS** (HARDWARE): granular playback of the loop. The DSP plays overlapping slices back to back. Set SIZE, SCAN (50% = frozen), SPRAY, PITCH and LEVEL.
@@ -247,14 +248,14 @@ A touch chord instrument that replaces the keys and XY pad. There is one pad per
 - **STRUM strip:** slide along the bottom strip to strum the last chord across three octaves, autoharp-style. Lower on the strip strums louder.
 - **With other features:** works with LATCH, the arpeggiator and every patch. Help moved to SELECT only.
 
-## MOD page bottom screen: ROUTE and drawn LFOs
+## MOD page bottom screen: MATRIX and drawn LFOs
 
-- **ROUTE** (destination first) replaces CABLES:
-  - The screen shows every destination as a big button, with what's moving it underneath.
-  - Tap the thing you want to move (for example CUTOFF), then tap a source from the grid to add it at +50.
-  - Each source gets a wide bar: drag along it to set the amount (centre is 0, right is +100, left is -100). X removes it.
-  - The grid holds the touch-and-button sources: LFO 1-4, ENV 2, VELOCITY, NOTE, RANDOM, STICK, XY Y, CHAOS X/Y and MACRO 1-4. Mic, tilt and camera are behind the SENSORS tab as optional extras.
-  - Up to 8 routes in total (5 per destination), sharing the 8 mod slots of the MOD page list.
+- **MATRIX** shows all 8 mod slots as two columns joined by a line, one colour per slot:
+  - Tap the left box to pick the source (OFF, LFO 1-4, ENV 2, VELOCITY, NOTE, RANDOM, STICK, XY Y, MACRO 1-4, CHAOS X/Y and every sensor). OFF clears the slot.
+  - Tap the right box to pick the destination.
+  - Drag along the line to set the amount: centre is 0, right is +100, left is -100. The bar under the line shows it.
+  - The white dot rides the source's live value, so you can see what's moving.
+  - It's the same 8 slots as the MOD page list on the top screen.
 - **DRAW LFO 3 / DRAW LFO 4:** paint a 64-point shape with the stylus, or start from SINE, RAMP, STEPS, RANDOM or FLAT. The vertical line is the playhead.
   - Rate and tempo sync are on the MOD page (LFO3 RATE / SYNC, LFO4 RATE / SYNC).
   - LFO 3 and LFO 4 are mod sources, and their shapes save with patches (format v9).
@@ -292,4 +293,4 @@ Elsewhere: **NOISE TYPE CORRUPT** (junk fed to the DSP's ADPCM decoder), **ECHO 
 
 ## New sensor sources
 
-SPIN F/B and SPIN L/R (gyro: how fast you tip or roll it, not where it sits), VOICE BRIGHT (talk into the mic: "ss" is bright, "oo" is dark), CAM MOTION (how much the camera picture changes). They're in the mod matrix and under SENSORS in ROUTE.
+SPIN F/B and SPIN L/R (gyro: how fast you tip or roll it, not where it sits), VOICE BRIGHT (talk into the mic: "ss" is bright, "oo" is dark), CAM MOTION (how much the camera picture changes). They're in the mod matrix.

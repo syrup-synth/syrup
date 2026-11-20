@@ -752,7 +752,12 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 	v->lev[i] = (role == R_TAP || (role == R_SUB && bk == BK_CSND)) ? levelDamped(f, baseCutoff() * v->cutMul + 200) : levelFor(f * 1.03f);
 	Mips* m = roleMips(role);
 	if (!gInAudioTick) LightLock_Lock(&gMipsLock);   // the audio clock already holds it
-	if (!(m->built & (1u << v->lev[i]))) mipsBuildLevel(m, v->lev[i]);
+	if (!(m->built & (1u << v->lev[i]))) {
+		if (gInAudioTick) {   // no FFT in the audio thread: borrow the nearest smoother level that's built
+			int L = v->lev[i] + 1; while (L < NLEV && !(m->built & (1u << L))) L++;
+			if (L < NLEV) v->lev[i] = L; else mipsBuildLevel(m, v->lev[i]);
+		} else mipsBuildLevel(m, v->lev[i]);
+	}
 	if (!gInAudioTick) LightLock_Unlock(&gMipsLock);
 	int N = LEVN[v->lev[i]];
 	if (bk == BK_DSP) {
@@ -1275,8 +1280,8 @@ static int gFxCore2 = 1, gFxC2Fail = 0;
 static Thread gFxThread = NULL;
 static LightEvent gFxGo, gFxDone;
 static volatile int gFxQuit = 0, gFxN = 0;
+static int gFxBusy = 0, gFxMiss = 0, gFxRetry = 0, gFxRetries = 0;   // audio thread only
 static s32 gFxIn[2][160], gFxOut[2][160], gFxZ[2][160];
-static volatile u64 gCore1Busy;
 static void fxMain(void* a) {
 	(void)a;
 	for (;;) {
@@ -1286,35 +1291,52 @@ static void fxMain(void* a) {
 		void* smp[4] = {gFxIn[0], gFxIn[1], gFxZ[0], gFxZ[1]};
 		auxMaster(NULL, gFxN, smp);
 		memcpy(gFxOut[0], gFxIn[0], gFxN * 4); memcpy(gFxOut[1], gFxIn[1], gFxN * 4);
-		gCore1Busy += svcGetSystemTick() - t0;
+		__atomic_fetch_add(&gCore1Busy, svcGetSystemTick() - t0, __ATOMIC_RELAXED);
 		LightEvent_Signal(&gFxDone);
 	}
 }
 static void fxCore2Start(void) {
 	if (gFxThread) return;
 	LightEvent_Init(&gFxGo, RESET_ONESHOT); LightEvent_Init(&gFxDone, RESET_ONESHOT);
-	LightEvent_Signal(&gFxDone);   // "the last frame is done" (silence) so the first hand-over doesn't wait
+	gFxBusy = 0; gFxMiss = 0;
 	memset(gFxOut, 0, sizeof(gFxOut));
 	gFxThread = threadCreate(fxMain, NULL, 0x4000, 0x18, 1, false);
 }
 static void fxCore2Stop(void) {
 	if (!gFxThread) return;
-	gFxQuit = 1; LightEvent_Signal(&gFxGo); threadJoin(gFxThread, 1000000000ULL); threadFree(gFxThread); gFxThread = NULL; gFxQuit = 0;
+	gFxQuit = 1; LightEvent_Signal(&gFxGo); threadJoin(gFxThread, 1000000000ULL); threadFree(gFxThread); gFxThread = NULL; gFxQuit = 0; gFxBusy = 0;
+}
+// One writer at a time: while core 2 still has a frame (gFxBusy), the chain's state is its, and this thread never runs
+// auxMaster. A miss outputs silence for that frame; 3 misses in a row fall back to core 1 once core 2 has finished,
+// and core 2 is tried again every ~10 s (3 times). With only 30% of core 2 (some systems), it stays on core 1.
+#define FX_WAIT_NS 4500000LL   // frame is 160 / 32728 Hz = 4.89 ms
+static int fxCollect(s64 ns) {   // 1 = core 2's last frame is done (or none was out)
+	if (!gFxBusy) return 1;
+	if (LightEvent_WaitTimeout(&gFxDone, ns) != 0) return 0;
+	gFxBusy = 0; return 1;
 }
 static void aux0(void* d, int n, void* s[4]) {
-	if (!gMasterFX) { auxReverb(d, n, s); return; }
-	if (!gFxCore2) gFxC2Fail = 0;   // switching it off and on again retries core 2
-	if (!gFxCore2 || !gFxThread || gFxC2Fail || n > 160) { auxMaster(d, n, s); return; }
-	if (LightEvent_WaitTimeout(&gFxDone, 4000000LL) != 0) {   // core 2 missed the frame: run it here from now on
-		gFxC2Fail = 1; auxMaster(d, n, s); return;
+	if (!gMasterFX) { if (fxCollect(0)) auxReverb(d, n, s); else for (int k = 0; k < 4; k++) memset(s[k], 0, n * 4); return; }
+	if (!gFxCore2) { gFxC2Fail = 0; gFxMiss = 0; gFxRetries = 0; }   // switching it off and on again retries core 2
+	if (gFxC2Fail && gFxRetries < 3 && ++gFxRetry > 2000) { gFxRetry = 0; gFxRetries++; gFxC2Fail = 0; gFxMiss = 0; }
+	int local = !gFxCore2 || !gFxThread || gFxC2Fail || n > 160 || (gCore2Lim && gCore2Lim < 50);
+	if (local) {
+		if (!fxCollect(0)) { for (int k = 0; k < 4; k++) memset(s[k], 0, n * 4); return; }
+		auxMaster(d, n, s); return;
 	}
 	s32* L = (s32*)s[0]; s32* R = (s32*)s[1];
+	if (!fxCollect(FX_WAIT_NS)) {   // core 2 is late: keep its frame, play silence here
+		if (++gFxMiss >= 3) { gFxC2Fail = 1; gFxRetry = 0; }
+		memset(L, 0, n * 4); memset(R, 0, n * 4); memset(s[2], 0, n * 4); memset(s[3], 0, n * 4);
+		return;
+	}
+	gFxMiss = 0;
 	int prevN = gFxN;
 	memcpy(gFxIn[0], L, n * 4); memcpy(gFxIn[1], R, n * 4);
 	if (prevN == n) { memcpy(L, gFxOut[0], n * 4); memcpy(R, gFxOut[1], n * 4); }
 	else { memset(L, 0, n * 4); memset(R, 0, n * 4); }
 	memset(s[2], 0, n * 4); memset(s[3], 0, n * 4);
-	gFxN = n;
+	gFxN = n; gFxBusy = 1;
 	LightEvent_Signal(&gFxGo);
 }
 static void busInit(void) {
@@ -1797,7 +1819,7 @@ static void arpTick(float dt) {
 
 // ---- clock: the arp and sequencer run in the audio thread, once per DSP frame (160 samples, ~4.9 ms)
 static LightLock gVoiceLock;   // voices are touched by the main loop and by the audio thread
-static float gClockDebt = 0;
+static float gClockDebt = 0; static volatile int gClockSkips = 0;   // HARDWARE page shows skips
 static void arpTick(float dt);
 static void seqTick(float dt);
 static void drumTick(float dt);
@@ -1806,6 +1828,7 @@ static void audioTick(void* data) {
 	(void)data;
 	if (!gAudioClock) return;
 	float dt = 160.0f / DSPRATE + gClockDebt;
+	if (dt > 0.06f) { dt = 0.06f; gClockSkips++; }   // a long stall drops time instead of firing a burst of steps
 	if (LightLock_TryLock(&gVoiceLock)) { gClockDebt = dt; return; }   // main loop busy: catch up next frame
 	if (LightLock_TryLock(&gMipsLock)) { LightLock_Unlock(&gVoiceLock); gClockDebt = dt; return; }
 	gClockDebt = 0;
@@ -2554,7 +2577,7 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 0.60f, 1.20f, 1.20f},   // CHIPSET
 	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // MOTION
 	{1.73f, 3.00f, 2.80f, 2.50f, 1.60f, 0.70f, 0.69f, 2.50f, 1.86f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // QUIRKS
-	{1.56f, 1.17f, 1.00f, 1.10f, 1.23f, 1.42f, 0.71f, 1.60f, 2.00f, 2.40f, 1.80f, 1.20f, 1.12f, 1.00f, 1.00f},   // RAVE
+	{1.39f, 2.04f, 1.36f, 1.81f, 1.69f, 1.50f, 1.17f, 1.24f, 2.90f, 3.10f, 2.20f, 1.65f, 1.26f, 1.00f, 1.00f},   // RAVE
 };
 static int presetCount(int style) {
 	if (style == NSTYLES - 1) return NUSER;
@@ -3235,12 +3258,12 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		for (int c = 0; c < NCH; c++) if (gDspOwner[c] >= 0 || (gNoiseOn && c == NOISE_CH)) dsp++;
 		for (int c = 0; c < NCS; c++) if (csUsable(c)) { csTot++; if (gCsOwner[c] >= 0) cs++; }
 		snprintf(s, sizeof(s), "NOTES %d  FX BUS %s", voices, busActive() ? (gBusSeen ? "OK" : "ON") : (gBusFail ? "FALLBK" : "OFF")); text(6, 186, s, 1, DIM);
-		snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d", dsp, cs, csTot); text(6, 198, s, 1, DIM);
+		snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d%s", dsp, cs, csTot, gClockSkips ? " SKIP" : ""); text(6, 198, s, 1, gClockSkips ? WARN : DIM);
 		if (gGpuHung) { snprintf(s, sizeof(s), "GPU HUNG AFTER %d FRAMES", gGpuFrames); text(6, 210, s, 1, WARN); }
 		else {
 			static u64 lb = 0, lt = 0; static int pct = 0; u64 nt = svcGetSystemTick();
 			if (nt - lt > SYSCLOCK_ARM11) { u64 b = gCore1Busy; pct = lt ? (int)((b - lb) * 100 / (nt - lt)) : 0; lb = b; lt = nt; }
-			if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, !gFxCore2 ? "CORE 1" : (!gFxThread || gFxC2Fail) ? "FELL BACK" : "ON CORE 2");
+			if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, (!gFxCore2 || (gCore2Lim && gCore2Lim < 50)) ? "CORE 1" : (!gFxThread || gFxC2Fail) ? "FELL BACK" : "ON CORE 2");
 			else snprintf(s, sizeof(s), "CORE 2 OFF %s %08lX %08lX L%lu", envIsHomebrew() ? "3DSX" : "CIA", (unsigned long)gCore2Rc, (unsigned long)gCore2ThRc, (unsigned long)gCore2Lim);
 			if (gWorker) text(6, 210, s, 1, DIM); else text(6, 210, s, 1, WARN);
 		}
@@ -3596,105 +3619,99 @@ static int motionTouch(int x, int y, int press, int release) {
 	if (!gMotOn[l]) gMotOn[l] = 1;   // drawing a lane switches it on
 	return 1;
 }
-static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 route, 1 draw LFO 3, 2 draw LFO 4, 3 motion
-// ROUTE view, destination first: pick what should move, then add what moves it. Touch + buttons sources are the core
-// grid; mic, tilt and camera live behind the SENSORS tab as extras.
-static const int RT_CORE[16] = {SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_VEL, SRC_NOTE, SRC_RAND, SRC_STICK, SRC_XY, SRC_CHAOSX, SRC_CHAOSY, SRC_M1, SRC_M2, SRC_M3, SRC_M4};
-#define RT_NSENS 11
-static const int RT_SENS[RT_NSENS] = {SRC_TILTX, SRC_TILTY, SRC_TWIST, SRC_SPINX, SRC_SPINY, SRC_SHAKE, SRC_MIC, SRC_MICBRT, SRC_CAML, SRC_CAMC, SRC_CAMMOVE};
-#define RT_ROWY 60
-#define RT_ROWH 18
-#define RT_GRIDY 154
-static int gRtDst = -1, gRtSens = 0, gRtDrag = -1, gDrawPrevX = -1;
-static int rtRows(int dst, int* slots) { int n = 0; for (int m = 0; m < NMOD; m++) if (gMod[m].src != SRC_OFF && gMod[m].dst == dst && n < 5) slots[n++] = m; return n; }
-static int rtSlot(int src, int dst) { for (int m = 0; m < NMOD; m++) if (gMod[m].src == src && gMod[m].dst == dst) return m; return -1; }
-static void drawRoute(void) {
-	char t[40];
-	if (gRtDst < 0) {   // destination grid
-		for (int d = 0; d < DST_COUNT; d++) {
-			int x = 4 + (d % 3) * 105, y = 40 + (d / 3) * 39, n = 0; char srcs[24] = "";
-			for (int m = 0; m < NMOD; m++) if (gMod[m].src != SRC_OFF && gMod[m].dst == d) {
-				if (!n) snprintf(srcs, sizeof(srcs), "%s", SRC_NAMES[gMod[m].src]);
-				n++;
-			}
-			const u8* bc = n ? TH->tab : TH->pad; rect(x, y, 101, 35, bc[0], bc[1], bc[2]);
-			text(x + 50 - (int)strlen(DST_NAMES[d]) * 4, y + 6, DST_NAMES[d], 1, n ? TH->tabTxt[0] : TH->txt[0], n ? TH->tabTxt[1] : TH->txt[1], n ? TH->tabTxt[2] : TH->txt[2]);
-			if (n > 1) snprintf(t, sizeof(t), "%d SOURCES", n); else snprintf(t, sizeof(t), "%s", n ? srcs : "-");
-			text(x + 50 - (int)strlen(t) * 4, y + 21, t, 1, n ? TH->keyOn[0] : TH->dim[0], n ? TH->keyOn[1] : TH->dim[1], n ? TH->keyOn[2] : TH->dim[2]);
+static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 matrix, 1 draw LFO 3, 2 draw LFO 4, 3 motion
+// MATRIX view: the 8 mod slots as two columns, source on the left, destination on the right, a line between them.
+// Tap a box to pick from a list; drag along the line to set the amount (centre 0, right +100, left -100).
+// The dot on each line rides the source's live value.
+static const int MX_SRCS[28] = {SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_VEL, SRC_NOTE, SRC_RAND, SRC_STICK, SRC_XY,
+	SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_TILTX, SRC_TILTY, SRC_TWIST, SRC_SPINX, SRC_SPINY, SRC_SHAKE,
+	SRC_MIC, SRC_MICBRT, SRC_CAML, SRC_CAMC, SRC_CAMMOVE};
+static const u8 MX_COL[8] = {13, 11, 14, 10, 12, 9, 6, 15};   // EGA colours per slot
+#define MX_Y 40
+#define MX_PITCH 25
+#define MX_H 19
+#define MX_LX 4
+#define MX_RX 208
+#define MX_BW 108
+#define MX_MID 160
+#define MX_HALF 44
+static int gMxPick = -1, gMxPickDst = 0, gMxDrag = -1, gDrawPrevX = -1;
+static const SVoice* mxVoice(void) { for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage < 4) return &gV[i]; return NULL; }
+static void boxLine(int x, int y, int w, int h, const u8* c) { rect(x, y, w, 1, c[0], c[1], c[2]); rect(x, y + h - 1, w, 1, c[0], c[1], c[2]); rect(x, y, 1, h, c[0], c[1], c[2]); rect(x + w - 1, y, 1, h, c[0], c[1], c[2]); }
+static void drawMatrix(void) {
+	char t[24];
+	if (gMxPick >= 0) {   // picker: sources in 3 x 10, destinations in 3 x 5
+		snprintf(t, sizeof(t), "SLOT %d %s", gMxPick + 1, gMxPickDst ? "DESTINATION" : "SOURCE"); text(6, 40, t, 1, RGB3(TH->val));
+		rect(256, 37, 60, 13, RGB3(TH->tab)); text(262, 40, "CANCEL", 1, RGB3(TH->tabTxt));
+		int n = gMxPickDst ? DST_COUNT : 28, bh = gMxPickDst ? 30 : 17, pitch = bh + 2, cur = gMxPickDst ? gMod[gMxPick].dst : gMod[gMxPick].src;
+		for (int i = 0; i < n; i++) {
+			int x = 4 + (i % 3) * 105, y = 53 + (i / 3) * pitch, v = gMxPickDst ? i : MX_SRCS[i];
+			const char* nm = gMxPickDst ? DST_NAMES[i] : SRC_NAMES[v]; int on = v == cur;
+			const u8* bc = on ? TH->keyOn : TH->tab; rect(x, y, 101, bh, bc[0], bc[1], bc[2]);
+			const u8* tc = on ? EGA[0] : TH->tabTxt; text(x + 50 - (int)strlen(nm) * 4, y + bh / 2 - 3, nm, 1, tc[0], tc[1], tc[2]);
 		}
-		int used = 0; for (int m = 0; m < NMOD; m++) used += gMod[m].src != SRC_OFF;
-		text(114, 200, "TAP WHAT SHOULD MOVE,", 1, RGB3(TH->dim)); text(114, 212, "THEN ADD WHAT MOVES IT", 1, RGB3(TH->dim));
-		snprintf(t, sizeof(t), "%d/%d ROUTES USED", used, NMOD); text(114, 224, t, 1, RGB3(TH->dim));
 		return;
 	}
-	rect(4, 40, 52, 16, RGB3(TH->tab)); text(10, 44, "< ALL", 1, RGB3(TH->tabTxt));
-	text(62, 44, DST_NAMES[gRtDst], 1, RGB3(TH->val));
-	const u8* sc = gRtSens ? TH->keyOn : TH->tab; rect(236, 40, 80, 16, sc[0], sc[1], sc[2]);
-	text(244, 44, "SENSORS", 1, gRtSens ? EGA[0][0] : TH->tabTxt[0], gRtSens ? EGA[0][1] : TH->tabTxt[1], gRtSens ? EGA[0][2] : TH->tabTxt[2]);
-	int sl[5], n = rtRows(gRtDst, sl);
-	if (!n) text(8, RT_ROWY + 30, "NOTHING MOVES THIS YET - ADD A SOURCE BELOW", 1, RGB3(TH->dim));
-	for (int r = 0; r < n; r++) {
-		int y = RT_ROWY + r * RT_ROWH, m = sl[r]; float a = gMod[m].amt;
-		rect(4, y, 74, RT_ROWH - 2, RGB3(TH->pad)); text(8, y + 5, SRC_NAMES[gMod[m].src], 1, RGB3(TH->val));
-		rect(82, y, 196, RT_ROWH - 2, RGB3(TH->pad)); rect(180, y, 1, RT_ROWH - 2, RGB3(TH->grid));
-		const u8* c = a >= 0 ? TH->keyOn : TH->warn; int w = (int)(a * 98);
-		if (w >= 0) rect(180, y + 3, w + 1, RT_ROWH - 8, c[0], c[1], c[2]); else rect(180 + w, y + 3, -w + 1, RT_ROWH - 8, c[0], c[1], c[2]);
-		snprintf(t, sizeof(t), "%+d", (int)roundf(a * 100)); text(a >= 0 ? 90 : 240, y + 5, t, 1, RGB3(TH->txt));
-		rect(282, y, 34, RT_ROWH - 2, RGB3(TH->tab)); text(295, y + 5, "X", 1, RGB3(TH->tabTxt));
-	}
-	text(8, RT_GRIDY - 12 + 2, gRtSens ? "ADD A SENSOR (EXTRA)" : "ADD A SOURCE", 1, RGB3(TH->dim));
-	int cnt = gRtSens ? RT_NSENS : 16;
-	for (int i = 0; i < cnt; i++) {
-		int src = gRtSens ? RT_SENS[i] : RT_CORE[i], x = 4 + (i % 4) * 79, y = RT_GRIDY + (i / 4) * 21, on = rtSlot(src, gRtDst) >= 0;
-		const u8* bc = on ? TH->keyOn : TH->tab; rect(x, y, 75, 18, bc[0], bc[1], bc[2]);
-		const u8* tc = on ? EGA[0] : TH->tabTxt; text(x + 37 - (int)strlen(SRC_NAMES[src]) * 4, y + 5, SRC_NAMES[src], 1, tc[0], tc[1], tc[2]);
+	const SVoice* v = mxVoice();
+	for (int m = 0; m < NMOD; m++) {
+		int y = MX_Y + m * MX_PITCH, on = gMod[m].src != SRC_OFF; float a = gMod[m].amt;
+		const u8* c = on ? EGA[MX_COL[m]] : TH->grid; const u8* tc = on ? TH->txt : TH->dim;
+		boxLine(MX_LX, y, MX_BW, MX_H, c); boxLine(MX_RX, y, MX_BW, MX_H, c);
+		const char* sn = on ? SRC_NAMES[gMod[m].src] : "+ SOURCE";
+		text(MX_LX + 6, y + 6, sn, 1, tc[0], tc[1], tc[2]);
+		text(MX_RX + 6, y + 6, DST_NAMES[gMod[m].dst], 1, tc[0], tc[1], tc[2]);
+		int ly = y + MX_H / 2, x0 = MX_LX + MX_BW, x1 = MX_RX;
+		rect(x0, ly - (on ? 1 : 0), x1 - x0, on ? 3 : 1, c[0], c[1], c[2]);
+		int w = (int)(a * MX_HALF + (a >= 0 ? 0.5f : -0.5f)); const u8* bc = (a >= 0) ? c : TH->warn;
+		if (w > 0) rect(MX_MID, ly + 4, w, 3, bc[0], bc[1], bc[2]); else if (w < 0) rect(MX_MID + w, ly + 4, -w, 3, bc[0], bc[1], bc[2]);
+		rect(MX_MID, ly + 3, 1, 5, RGB3(TH->dim));
+		if (on) {   // live dot
+			float sv = srcValue(gMod[m].src, v); if (sv > 1) sv = 1; if (sv < -1) sv = -1;
+			int dx = x0 + 3 + (int)((sv + 1) * 0.5f * (x1 - x0 - 7));
+			rect(dx - 2, ly - 2, 5, 5, 255, 255, 255); rect(dx - 3, ly - 1, 7, 3, 255, 255, 255);
+		}
+		if (m == gMxDrag) { snprintf(t, sizeof(t), "%+d", (int)roundf(a * 100)); text(MX_MID - (int)strlen(t) * 4, y, t, 1, RGB3(TH->val)); }
 	}
 }
-static int routeTouch(int x, int y, int press, int release) {
-	if (release) { gRtDrag = -1; return 0; }
-	if (gRtDst < 0) {
-		if (!press || y < 40) return 0;
-		int c = (x - 4) / 105, r = (y - 40) / 39, d = r * 3 + c;
-		if (c >= 0 && c < 3 && d >= 0 && d < DST_COUNT) { gRtDst = d; gRtSens = 0; return 1; }
-		return 0;
+static int matrixTouch(int x, int y, int press, int release) {
+	if (release) { int was = gMxDrag >= 0; gMxDrag = -1; return was; }
+	if (gMxPick >= 0) {
+		if (!press) return 0;
+		if (y < 52) { if (x >= 256) { gMxPick = -1; return 1; } return 0; }
+		int bh = gMxPickDst ? 30 : 17, c = (x - 4) / 105, r = (y - 53) / (bh + 2), i = r * 3 + c, n = gMxPickDst ? DST_COUNT : 28;
+		if (c < 0 || c > 2 || i < 0 || i >= n) return 0;
+		ModSlot* ms = &gMod[gMxPick];
+		if (gMxPickDst) ms->dst = i;
+		else {
+			int was = ms->src; ms->src = MX_SRCS[i];
+			if (ms->src == SRC_OFF) ms->amt = 0;
+			else if (was == SRC_OFF || ms->amt == 0) { ms->amt = 0.5f; gModCurve[gMxPick] = 0; }
+		}
+		gMxPick = -1; gEdited = 1; return 1;
 	}
-	if (press && y >= 40 && y < 56) {
-		if (x < 58) { gRtDst = -1; return 1; }
-		if (x > 234) { gRtSens = !gRtSens; return 1; }
-		return 0;
+	if (y < MX_Y) return 0;
+	int m = (y - MX_Y) / MX_PITCH; if (m >= NMOD) return 0;
+	if (press) {
+		if (x < MX_LX + MX_BW) { gMxPick = m; gMxPickDst = 0; return 1; }
+		if (x >= MX_RX) { gMxPick = m; gMxPickDst = 1; return 1; }
+		if (gMod[m].src == SRC_OFF) { say("PICK A SOURCE FIRST (LEFT BOX)"); return 0; }
+		gMxDrag = m;
 	}
-	int sl[5], n = rtRows(gRtDst, sl);
-	if (y >= RT_ROWY && y < RT_ROWY + 5 * RT_ROWH) {
-		int r = (y - RT_ROWY) / RT_ROWH;
-		if (press) gRtDrag = -1;
-		if (press && r < n && x >= 282) { gMod[sl[r]].src = SRC_OFF; gMod[sl[r]].amt = 0; say("REMOVED"); return 1; }
-		if (press && r < n && x >= 82 && x < 280) gRtDrag = sl[r];
-	}
-	if (gRtDrag >= 0) {   // drag along the bar: centre = 0, right = +100, left = -100
-		float a = (x - 180) / 98.0f; if (a > 1) a = 1; if (a < -1) a = -1;
-		gMod[gRtDrag].amt = roundf(a * 50) / 50; return 1;
-	}
-	if (press && y >= RT_GRIDY) {
-		int c = (x - 4) / 79, r = (y - RT_GRIDY) / 21, i = r * 4 + c, cnt = gRtSens ? RT_NSENS : 16;
-		if (c < 0 || c > 3 || i >= cnt) return 0;
-		int src = gRtSens ? RT_SENS[i] : RT_CORE[i];
-		if (rtSlot(src, gRtDst) >= 0) { say("ALREADY ROUTED - DRAG ITS BAR, OR X TO REMOVE"); return 0; }
-		if (n >= 5) { say("5 SOURCES ON ONE DESTINATION IS THE LIMIT"); return 0; }
-		int m = -1; for (int k = 0; k < NMOD; k++) if (gMod[k].src == SRC_OFF) { m = k; break; }
-		if (m < 0) { say("ALL 8 ROUTES IN USE - REMOVE ONE FIRST"); return 0; }
-		gMod[m].src = src; gMod[m].dst = gRtDst; gMod[m].amt = 0.5f; gModCurve[m] = 0; return 1;
+	if (gMxDrag >= 0) {
+		float a = (x - MX_MID) / (float)MX_HALF; if (a > 1) a = 1; if (a < -1) a = -1;
+		gMod[gMxDrag].amt = roundf(a * 50) / 50; gEdited = 1; return 1;
 	}
 	return 0;
 }
 static void drawModView(void) {
 	rect(0, TAB_H, 320, 240 - TAB_H, RGB3(TH->bg));
-	static const char* VT[4] = {"ROUTE", "LFO 3", "LFO 4", "MOTION"};
+	static const char* VT[4] = {"MATRIX", "LFO 3", "LFO 4", "MOTION"};
 	for (int i = 0; i < 4; i++) {
 		int x = 4 + i * 79, lit = i == gModView; rect(x, TAB_H + 2, 75, 14, lit ? TH->keyOn[0] : TH->tab[0], lit ? TH->keyOn[1] : TH->tab[1], lit ? TH->keyOn[2] : TH->tab[2]);
 		const u8* c = lit ? EGA[0] : TH->tabTxt; text(x + 37 - (int)strlen(VT[i]) * 4, TAB_H + 5, VT[i], 1, c[0], c[1], c[2]);
 	}
 	if (gModView == 3) { drawMotion(); return; }
-	if (gModView == 0) { drawRoute(); return; }
+	if (gModView == 0) { drawMatrix(); return; }
 	{
 		int k = gModView - 1, x0 = 8, y0 = 46, w = 304, h = 150;
 		rect(x0, y0, w, h, RGB3(TH->pad)); rect(x0, y0 + h / 2, w, 1, RGB3(TH->grid));
@@ -3709,9 +3726,9 @@ static void drawModView(void) {
 	}
 }
 static int modViewTouch(int x, int y, int press, int release) {   // 1 = redraw
-	if (press && y < TAB_H + 18) { int v = (x - 4) / 79; if (v >= 0 && v < 4) { gModView = v; gRtDrag = -1; } return 1; }
+	if (press && y < TAB_H + 18) { int v = (x - 4) / 79; if (v >= 0 && v < 4) { gModView = v; gMxDrag = -1; gMxPick = -1; } return 1; }
 	if (gModView == 3) return motionTouch(x, y, press, release);
-	if (gModView == 0) return routeTouch(x, y, press, release);
+	if (gModView == 0) return matrixTouch(x, y, press, release);
 	int k = gModView - 1;
 	if (press && y >= 202 && y < 218) {   // shape presets
 		int b = (x - 8) / 61;
@@ -4602,7 +4619,9 @@ static void midiParse(const u8* p, int n, u8* run) {
 #define TQN 512
 static struct { u64 due; u8 st, a, b; } gTq[TQN];
 static volatile int gTqW = 0, gTqR = 0;
-static inline u64 nowUs(void) { return svcGetSystemTick() / (SYSCLOCK_ARM11 / 1000000); }
+// the system tick runs at SYSCLOCK_ARM11 (268,111,856 Hz) on every model, with or without the New 3DS speedup;
+// convert exactly (the old integer divide by 268 ran 417 ppm fast)
+static inline u64 nowUs(void) { u64 t = svcGetSystemTick(); return t / SYSCLOCK_ARM11 * 1000000ULL + t % SYSCLOCK_ARM11 * 1000000ULL / SYSCLOCK_ARM11; }
 static void timedParse(const u8* p, int n) {
 	static u32 lastStamp; static s64 sTicks; static s64 offset; static u64 lastArr; static int have = 0;
 	u64 now = nowUs(); int i = 3;
@@ -5998,7 +6017,7 @@ static void workerMain(void* arg) {
 		LightLock_Lock(&gMipsLock);
 		doRebuild(&j);
 		LightLock_Unlock(&gMipsLock);
-		gCore1Busy += svcGetSystemTick() - t0;
+		__atomic_fetch_add(&gCore1Busy, svcGetSystemTick() - t0, __ATOMIC_RELAXED);
 		ASET(gJobDone, 1);
 		ASET(gJobBusy, 0);
 	}
@@ -6006,7 +6025,7 @@ static void workerMain(void* arg) {
 
 // ---------------------------------------------------------------- main
 static u32 usedLevels(int o) {
-	u32 m = (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4);   // display + common note ranges
+	u32 m = 0x7Eu;   // levels 1-6 always (5 and 6 are tiny); level 0 only while a low note uses it
 	for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started)
 		for (int k = 0; k < gV[i].nch; k++) {
 			int r = gV[i].role[k], to = gOsc[0].on ? 0 : 1;
@@ -6295,7 +6314,7 @@ int main(void) {
 			curKey = key;
 		}
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; } }
-		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && gModView && !gPads) botDirty = 1; }   // drawn LFO / motion playheads
+		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }   // live matrix dots, drawn LFO / motion playheads
 		motTick(dt);
 		if (gAuditionT > 0 && (gAuditionT -= 1.0f / 60) <= 0 && !gSeqPlaying && curKey < 0) playSet(NULL, 0, 0.8f);
 		{ static int lastPos = -2, lastMode = -1; if (gGridOn && (gSeqPos != lastPos || gSeqMode != lastMode)) { lastPos = gSeqPos; lastMode = gSeqMode; botDirty = 1; } }
