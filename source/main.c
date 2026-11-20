@@ -29,6 +29,7 @@
 #endif
 #include <malloc.h>
 #include <math.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2362,9 +2363,45 @@ static void q_vowelpad(SPatch* p) {   // no quirks: slow vowel morph, breath ben
 
 typedef struct { const char* name; void (*fn)(SPatch*); } PresetDef;
 #define MAXPRE 15
-#define NSTYLES 14   // last style = USER
-static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "CHIPSET", "MOTION", "QUIRKS", "USER"};
+#define NSTYLES 15   // last style = USER
+static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "CHIPSET", "MOTION", "QUIRKS", "RAVE", "USER"};
 #define STYLE_SPACE 9
+// ---- RAVE (euro house and rave: pads, stabs, piano, organ bass, hoover)
+static void r_ravestrings(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 4; OA.detune = 20; OA.width = 1; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = 1; OB.uni = 2; OB.detune = 12; OB.level = 0.3f;
+	ENV1(0.3f, 0, 1.0f, 0.95f, 1.1f); OUTF(OF_L12, 0.58f, 0.12f, 0, 0); LFO(0, LS_SINE, 0, 0.12f); MOD(2, SRC_LFO1, DST_OFCUT, 0.08f);
+	MFX(FX_CHORUS, 0.5f, 0.8f, 0.55f); REVB(0.32f, RV_HALL); p->eqHigh = 1; }
+static void r_dreampad(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 5; OA.detune = 28; OA.width = 1; OB.on = 1; OB.table = T_PWM; OB.pos = 0.5f; OB.oct = -1; OB.level = 0.35f;
+	ENV1(0.5f, 0, 1.0f, 1.0f, 1.8f); OUTF(OF_L24, 0.38f, 0.3f, 0.1f, 0); LFO(0, LS_TRI, 0, 0.5f); p->lfoSync[0] = LY_4; MOD(2, SRC_LFO1, DST_OFCUT, 0.3f);
+	MFX(FX_HYPER, 0.3f, 0.6f, 0.4f); p->ott = 0.25f; REVB(0.4f, RV_HALL); p->shimmer = 1; DLYS(0.15f, S4D, DL_PING); }
+static void r_hooverpad(SPatch* p) { p->master = 0.45f; OA.table = T_PWM; OA.pos = 0.3f; OA.uni = 4; OA.detune = 30; OA.width = 1; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = -1; OB.uni = 2; OB.detune = 24; OB.level = 0.55f;
+	ENV1(0.25f, 0, 1.0f, 0.9f, 1.2f); ENV2(0.25f, 0, 0.5f, 0, 0.4f); MOD(2, SRC_ENV2, DST_PITCH, -0.06f); LFO(0, LS_SINE, 0, 0.3f); MOD(3, SRC_LFO1, DST_APOS, 0.25f);
+	OUTF(OF_L12, 0.55f, 0.2f, 0.25f, 0); MFX(FX_CHORUS, 0.8f, 1.0f, 0.65f); REVB(0.3f, RV_HALL); }
+static void r_supersaw(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 5; OA.detune = 32; OA.width = 1; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = 1; OB.detune = 18; OB.level = 0.25f;
+	ENV1(0.02f, 0, 1.0f, 1.0f, 0.5f); OUTF(OF_L12, 0.7f, 0.15f, 0, 0); p->pump = 0.75f; p->ott = 0.35f; REVB(0.25f, RV_HALL); DLYS(0.15f, S8D, DL_PING); }
+static void r_eurochoir(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA.pos = 0.15f; OA.uni = 4; OA.detune = 14; OA.width = 1; OB.on = 1; OB.table = T_VOWELS; OB.pos = 0.4f; OB.oct = 1; OB.level = 0.2f;
+	ENV1(0.35f, 0, 1.0f, 0.9f, 1.4f); LFO(0, LS_SINE, 0, 0.1f); MOD(2, SRC_LFO1, DST_APOS, 0.12f); LFO(1, LS_SINE, 0, 5.0f); MOD(3, SRC_LFO2, DST_PITCH, 0.004f);
+	MFX(FX_CHORUS, 0.4f, 0.7f, 0.5f); REVB(0.4f, RV_HALL); }
+static void r_flangepad(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 5; OA.detune = 18; OA.width = 1; p->noiseType = 0; p->noiseLevel = 0.04f;
+	ENV1(0.6f, 0, 1.0f, 1.0f, 1.6f); OUTF(OF_FLANGER, 0.5f, 0.65f, 0, 0); LFO(0, LS_TRI, 0, 0.5f); p->lfoSync[0] = LY_8; MOD(2, SRC_LFO1, DST_OFCUT, 0.4f);
+	REVB(0.35f, RV_HALL); }
+static void r_housepiano(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SINE; OA.warp = W_FM; OA.warpAmt = 0.45f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1;
+	ENV2(0.0f, 0, 0.35f, 0.15f, 0.3f); MOD(2, SRC_ENV2, DST_AWARP, 0.4f); MOD(3, SRC_VEL, DST_AWARP, 0.25f); OA.uni = 2; OA.detune = 5;
+	ENV1(0.001f, 0, 1.1f, 0.15f, 0.35f); p->eqHigh = 2; MFX(FX_CHORUS, 0.6f, 0.3f, 0.25f); REVB(0.2f, RV_ROOM); }
+static void r_organbass(SPatch* p) { p->master = 0.65f; OA.table = T_HARMONIX; OA.pos = 0.3f; OA.oct = -1; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = -1; OB.level = 0.6f;
+	p->voiceMode = 1; ENV1(0.002f, 0, 0.28f, 0.25f, 0.08f); p->subLevel = 0.3f; OUTF(OF_L12, 0.5f, 0.15f, 0.2f, 0); p->eqLow = 1.5f; NOSTICK; MOD(1, SRC_STICK, DST_OFCUT, 0.4f); }
+static void r_ravestab(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 3; OA.detune = 18; OA.width = 1; OB.on = 1; OB.table = T_PWM; OB.pos = 0.4f; OB.oct = 1; OB.level = 0.3f; p->chord = 1;
+	ENV1(0.001f, 0, 0.3f, 0.0f, 0.2f); ENV2(0.0f, 0, 0.2f, 0, 0.1f); OUTF(OF_L12, 0.42f, 0.35f, 0.3f, 0.45f); REVB(0.3f, RV_HALL); DLYS(0.2f, S8D, DL_PING); }
+static void r_deepchord(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = 0.4f; OA.uni = 2; OA.detune = 8; p->chord = 1; ENV1(0.002f, 0, 0.35f, 0.0f, 0.25f); ENV2(0.0f, 0, 0.25f, 0, 0.2f);
+	OUTF(OF_L24, 0.32f, 0.35f, 0.2f, 0.35f); NOSTICK; MOD(1, SRC_STICK, DST_OFCUT, 0.4f); DLYS(0.35f, S8D, DL_DUB); REVB(0.2f, RV_ROOM); }
+static void r_eurobass(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SAW; OA.oct = -1; OA.uni = 2; OA.detune = 10; p->voiceMode = 1; ENV1(0.002f, 0, 0.2f, 0.0f, 0.08f);
+	ENV2(0.0f, 0, 0.15f, 0.0f, 0.1f); OUTF(OF_L24, 0.3f, 0.3f, 0.3f, 0.4f); p->subLevel = 0.35f; NOSTICK; MOD(1, SRC_STICK, DST_OFCUT, 0.4f); }
+static void r_eurolead(SPatch* p) { p->master = 0.5f; OA.table = T_PWM; OA.pos = 0.25f; OA.uni = 3; OA.detune = 12; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = 1; OB.level = 0.35f;
+	p->voiceMode = 2; p->glide = 0.03f; ENV1(0.004f, 0, 0.4f, 0.8f, 0.25f); LFO(0, LS_SINE, 0, 5.5f); MOD(2, SRC_LFO1, DST_PITCH, 0.006f);
+	OUTF(OF_L12, 0.65f, 0.2f, 0.1f, 0); MFX(FX_CHORUS, 0.5f, 0.5f, 0.35f); DLYS(0.25f, S8D, DL_PING); REVB(0.25f, RV_HALL); }
+static void r_hoover(SPatch* p) { p->master = 0.45f; OA.table = T_PWM; OA.pos = 0.35f; OA.uni = 6; OA.detune = 32; OA.width = 1; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = -1; OB.uni = 3; OB.detune = 26; OB.level = 0.6f;
+	p->voiceMode = 2; p->glide = 0.12f; ENV1(0.01f, 0, 0.5f, 0.9f, 0.3f); ENV2(0.0f, 0, 0.18f, 0, 0.2f); MOD(2, SRC_ENV2, DST_PITCH, -0.12f);
+	LFO(0, LS_SINE, 0, 0.8f); MOD(3, SRC_LFO1, DST_APOS, 0.3f); OUTF(OF_L12, 0.6f, 0.2f, 0.35f, 0); MFX(FX_CHORUS, 0.9f, 1.0f, 0.7f); REVB(0.25f, RV_HALL); }
+
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
 	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}},
@@ -2395,6 +2432,9 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"TALK BOX", m_talkbox}, {"GYRO VIBE", m_gyrovibe}, {"HAND WAVE", m_handwave}},
 	{{"GLASS PLUCK", q_glasspluck}, {"SCREAM SOLO", q_screamsolo}, {"ACID SCREAM", q_acidscream}, {"GRIT KEYS", q_gritkeys}, {"CORRUPT PERC", q_corruptperc},
 	 {"SUB SCREAM", q_subscream}, {"DRIVE MONO", q_drivemono}, {"TAPE DUB", q_tapedub}, {"VOWEL PAD", q_vowelpad}},
+	{{"RAVE STRINGS", r_ravestrings}, {"DREAM PAD", r_dreampad}, {"HOOVER PAD", r_hooverpad}, {"SUPERSAW PUMP", r_supersaw}, {"EURO CHOIR", r_eurochoir},
+	 {"FLANGE PAD", r_flangepad}, {"HOUSE PIANO", r_housepiano}, {"ORGAN BASS", r_organbass}, {"RAVE STAB", r_ravestab}, {"DEEP CHORD", r_deepchord},
+	 {"EURO BASS", r_eurobass}, {"EURO LEAD", r_eurolead}, {"HOOVER", r_hoover}},
 };
 #define NUSER 8
 static SPatch gUser[NUSER];
@@ -2514,6 +2554,7 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 0.60f, 1.20f, 1.20f},   // CHIPSET
 	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // MOTION
 	{1.73f, 3.00f, 2.80f, 2.50f, 1.60f, 0.70f, 0.69f, 2.50f, 1.86f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // QUIRKS
+	{1.56f, 1.17f, 1.00f, 1.10f, 1.23f, 1.42f, 0.71f, 1.60f, 2.00f, 2.40f, 1.80f, 1.20f, 1.12f, 1.00f, 1.00f},   // RAVE
 };
 static int presetCount(int style) {
 	if (style == NSTYLES - 1) return NUSER;
@@ -2537,6 +2578,49 @@ static void presetLoad(int style, int idx) {
 	else if (gPackMissing) say("GET WAVETABLES (HW PAGE) FOR THE FULL SOUND");
 }
 static const char* presetName(int style, int idx) { return style == NSTYLES - 1 ? gUser[idx].name : PRESETS[style][idx].name; }
+// ---- preset browser (PATCH page): < > style, ^ v patch, A saves to a USER slot
+// USER lists the 8 slots plus INIT PATCH; an empty slot keeps the current sound so you can save into it.
+static int gSaveArm = -1; static u64 gSaveArmT = 0;
+static int askName(const char* cur, char* out, int len) {   // the system keyboard; 1 = a new name was typed
+	allOff();
+	SwkbdState kb; char buf[40] = "";
+	swkbdInit(&kb, SWKBD_TYPE_NORMAL, 2, 13);
+	swkbdSetHintText(&kb, "NAME THIS PATCH");
+	swkbdSetInitialText(&kb, cur);
+	swkbdSetValidation(&kb, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
+	if (swkbdInputText(&kb, buf, sizeof(buf)) != SWKBD_BUTTON_CONFIRM) return 0;
+	int n = 0;
+	for (const unsigned char* c = (const unsigned char*)buf; *c && n < len - 1 && n < 13; c++) {
+		if (*c >= 0x80) { while ((c[1] & 0xC0) == 0x80) c++; out[n++] = '?'; continue; }   // one ? per non-ASCII character
+		out[n++] = (char)toupper(*c);
+	}
+	out[n] = 0; return n > 0;
+}
+static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound changed
+	if (gEdited && !gGuard) { if (!fresh) return 0; gGuard = 1; say("PATCH EDITED: AGAIN TO LEAVE IT, A SAVES IT"); return 0; }
+	int u = NSTYLES - 1;
+	if (ds) { gStyle = (gStyle + NSTYLES + ds) % NSTYLES; gPreset = 0; }
+	else { int n = presetCount(gStyle) + (gStyle == u); gPreset = (gPreset + n + dp) % n; }
+	gSaveArm = -1;
+	if (gStyle == u && gPreset == NUSER) { SPatch ip; patchInit(&ip); patchApply(&ip); gEdited = 0; gGuard = 0; say("INIT PATCH: ONE PLAIN SAW"); return 1; }
+	if (gStyle == u && gUser[gPreset].magic != PATCH_MAGIC) { say("EMPTY SLOT: PRESS A TO SAVE THIS SOUND HERE"); return 0; }
+	presetLoad(gStyle, gPreset); return 1;
+}
+static void browseSave(void) {
+	int slot = (gStyle == NSTYLES - 1 && gPreset < NUSER) ? gPreset : -1;
+	if (slot < 0) { for (int i = 0; i < NUSER; i++) if (gUser[i].magic != PATCH_MAGIC) { slot = i; break; } if (slot < 0) slot = gSaveSlot; }
+	u64 t = osGetTime();
+	if (gSaveArm != slot || t - gSaveArmT > 3000) {
+		gSaveArm = slot; gSaveArmT = t; char m[52];
+		snprintf(m, sizeof(m), "A AGAIN: SAVE TO USER %d%s", slot + 1, gUser[slot].magic == PATCH_MAGIC ? " (REPLACES IT)" : "");
+		say(m); return;
+	}
+	gSaveArm = -1; gSaveSlot = slot;
+	char nm[24]; if (askName(gPatchName, nm, sizeof(nm))) snprintf(gPatchName, sizeof(gPatchName), "%s", nm);
+	patchCapture(&gUser[slot]); userSave();
+	gStyle = NSTYLES - 1; gPreset = slot; gStyleCur = gStyle; gPresetCur = slot; gEdited = 0; gGuard = 0;
+	char m[40]; snprintf(m, sizeof(m), "SAVED TO USER %d", slot + 1); say(m);
+}
 
 // ---------------------------------------------------------------- parameter pages
 enum { PT_F, PT_I, PT_E };
@@ -3060,6 +3144,7 @@ static void drawFooter(int page, int sel) {
 	if (!gAudioOK) { text(4, 230, "NO AUDIO - RUN DSP1 ONCE (DUMPS DSP FIRMWARE)", 1, WARN); return; }
 	if (gSafeMode) { char m[60]; snprintf(m, sizeof(m), "SAFE MODE - LAST RUN CRASHED AT %.24s", gCrashStage); text(4, 230, m, 1, WARN); return; }
 	if (gMsgT > 0) { text(4, 230, gMsg, 1, VAL); return; }
+	if (page == 0) { text(4, 230, "< > STYLE   ^ v PATCH   A TWICE: SAVE + NAME", 1, DIM); return; }
 	const char* h = paramHelp(PAGES[page][sel].name);
 	char m[52]; snprintf(m, sizeof(m), "%.49s", *h ? h : "D-PAD: PICK / CHANGE   X/Y: PAGES");
 	text(4, 230, m, 1, DIM);
@@ -3084,18 +3169,22 @@ static void drawTop(int page, int sel, int oct, int latch) {
 	else if (page == 0) {   // preset browser: styles | patches
 		frame(4, 30, 196, 194);
 		for (int i = 0; i < NSTYLES; i++) {
-			int y = 35 + i * 12;
+			int y = 34 + i * 11;
 			if (i == gStyle) { rect(7, y - 2, 74, 11, HI); text(10, y, STYLE_NAMES[i], 1, HITXT); }
 			else text(10, y, STYLE_NAMES[i], 1, DIM);
 		}
 		rect(84, 33, 1, 186, LINE);
-		for (int i = 0; i < presetCount(gStyle); i++) {
-			int y = 35 + i * 12, cur = i == gPreset;
-			char nm[16]; snprintf(nm, sizeof(nm), "%.13s", presetName(gStyle, i));
+		int user = gStyle == NSTYLES - 1;
+		for (int i = 0; i < presetCount(gStyle) + user; i++) {
+			int y = 34 + i * 11, cur = i == gPreset;
+			char nm[16];
+			if (user && i == NUSER) snprintf(nm, sizeof(nm), "INIT PATCH");
+			else if (user && gUser[i].magic != PATCH_MAGIC) snprintf(nm, sizeof(nm), "%d  - EMPTY -", i + 1);
+			else snprintf(nm, sizeof(nm), "%.13s", presetName(gStyle, i));
 			if (cur) { rect(87, y - 2, 110, 11, HI); text(90, y, nm, 1, HITXT); }
 			else text(90, y, nm, 1, TXT);
 		}
-		char cnt[32]; snprintf(cnt, sizeof(cnt), "%d PATCHES  BUILD " SYRUP_VER, presetCount(gStyle)); text(10, 212, cnt, 1, DIM);
+		char cnt[40]; snprintf(cnt, sizeof(cnt), "%d PATCHES%s", presetCount(gStyle), gEdited ? "  * EDITED" : "  BUILD " SYRUP_VER); text(10, 212, cnt, 1, gEdited ? VAL : DIM);
 	} else if (page == 7) {   // scale / arp / sequencer
 		char s[40];
 		frame(4, 30, 196, 194);
@@ -3155,6 +3244,26 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			else snprintf(s, sizeof(s), "CORE 2 OFF %s %08lX %08lX L%lu", envIsHomebrew() ? "3DSX" : "CIA", (unsigned long)gCore2Rc, (unsigned long)gCore2ThRc, (unsigned long)gCore2Lim);
 			if (gWorker) text(6, 210, s, 1, DIM); else text(6, 210, s, 1, WARN);
 		}
+	}
+	if (page == 0) {   // browser info: what's loaded and how to drive the list
+		frame(204, 30, 194, 194);
+		text(212, 38, "NOW PLAYING", 1, DIM);
+		int sc = strlen(gPatchName) <= 11 ? 2 : 1;
+		text(212, 52, gPatchName, sc, VAL);
+		char s2[40]; snprintf(s2, sizeof(s2), "%s  %d / %d", STYLE_NAMES[gStyleCur], gPresetCur + 1, presetCount(gStyleCur));
+		text(212, 76, s2, 1, TXT);
+		if (gEdited) text(212, 88, "* EDITED - A TO SAVE IT", 1, WARN);
+		rect(208, 104, 186, 1, LINE);
+		text(212, 112, "< >  STYLE", 1, TXT);
+		text(212, 126, "^ v  PATCH", 1, TXT);
+		text(212, 140, "A A  SAVE + NAME", 1, TXT);
+		text(212, 162, "HOLD ^ v TO SCROLL.", 1, DIM);
+		text(212, 176, "USER: PICK A SLOT,", 1, DIM);
+		text(212, 188, "A A SAVES OR RENAMES.", 1, DIM);
+		text(212, 204, "INIT PATCH IS LAST.", 1, DIM);
+		drawFooter(page, sel);
+		if (!visActive(page)) scanlines();
+		return;
 	}
 	// parameter list: inverse bar on the selected row, meters for continuous values, < > on choices
 	Param* P = PAGES[page]; int n = pageLen(page);
@@ -6030,11 +6139,20 @@ int main(void) {
 		if (kDown & KEY_SELECT) { helpOn = !helpOn; topDirty = botDirty = 1; }
 		if (kDown & KEY_X) { page = navStep(page, 1); topDirty = 1; }
 		if (kDown & KEY_Y) { page = navStep(page, -1); topDirty = 1; }
-		if (kDown & KEY_A) { gChord = (gChord + 1) % 5; topDirty = 1; }
+		if (kDown & KEY_A) { if (page == 0) browseSave(); else gChord = (gChord + 1) % 5; topDirty = 1; }
 		if (kDown & KEY_B) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
 		if (kDown & KEY_L) { if (oct > -3) oct--; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = botDirty = 1; }
 		if (kDown & KEY_R) { if (oct < 3) oct++; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = botDirty = 1; }
 
+		if (page == 0) {   // preset browser: the D-pad moves through the list itself
+			int ds = 0, dp = 0, fresh = 0;
+			if (kDown & KEY_DLEFT) ds = -1; else if (kDown & KEY_DRIGHT) ds = 1;
+			if (kDown & (KEY_DUP | KEY_DDOWN)) { dp = (kDown & KEY_DDOWN) ? 1 : -1; repeatT = 0.35f; }
+			else if (kHeld & (KEY_DUP | KEY_DDOWN)) { repeatT -= dt; if (repeatT <= 0) { dp = (kHeld & KEY_DDOWN) ? 1 : -1; repeatT = 0.09f; } }
+			fresh = (kDown & (KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT)) != 0;
+			if (ds || dp) { if (browseStep(ds, dp, fresh)) { curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = 1; }
+			kDown &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT); kHeld &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT);
+		}
 		// parameter editing
 		int n = pageLen(page);
 		if (kDown & KEY_DUP)   { sel[page] = (sel[page] + n - 1) % n; topDirty = 1; }

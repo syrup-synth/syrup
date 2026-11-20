@@ -69,9 +69,9 @@ On the OSC and sound pages the left panel of the top screen is drawn by the 3DS'
 
 ## Presets
 
-Page 1 is a preset browser organised by style. Use the D-pad to pick a style and a patch; the patch loads immediately, so you can play keys to audition it.
+Page 1 is a preset browser organised by style. D-pad left / right changes style, up / down moves through the patches (hold to scroll fast); each patch loads as you land on it, so you can play keys to audition it. The right side shows what's loaded and whether you've edited it.
 
-The factory library was rebuilt from scratch: 123 patches in 12 styles, with no duplicates, and levels matched so switching patches doesn't jump in volume. Every patch plays from the keys, buttons and circle pad alone. Mic, tilt and camera are optional extras, never required.
+The factory library: 154 patches in 14 styles, with no duplicates, and levels matched so switching patches doesn't jump in volume. Every patch plays from the keys, buttons and circle pad alone. Mic, tilt and camera are optional extras, never required.
 
 | Style | Patches |
 |---|---|
@@ -88,9 +88,10 @@ The factory library was rebuilt from scratch: 123 patches in 12 styles, with no 
 | CHIPSET | PSG Stack, Echo Canyon, Crush Bell, 8-Bit Choir, Capture Dub, Two Chips, Quant Grit, GB Orbit, Double Echo, Sub Chip, Scream Lead, Raw Sampler, Hot Organ, Glitch Storm, Pitch Canyon (the 2DS's second sound chip: CHIP SQUARE, CHIP ECHO through its capture units, bit crush, 3D orbit) |
 | MOTION | Busy Boy, Tidal Table, Step Sculpt, Glass Breath, Chaos Garden, Acid Morph, Vowel Walk, Liquid Sync, Drawn Dance, Grain Tide, Talk Box, Gyro Vibe, Hand Wave (motion lanes, drawn LFOs, chaos and grains; Busy Boy uses nearly everything at once; Talk Box needs the mic on, Hand Wave the camera) |
 | QUIRKS | Glass Pluck, Scream Solo, Acid Scream, Grit Keys, Corrupt Perc, Sub Scream, Drive Mono, Tape Dub, Vowel Pad (one patch per hardware trick, in listening-test order; Glass Pluck is the clean reference) |
-| USER | 8 save slots |
+| RAVE | Rave Strings, Dream Pad, Hoover Pad, Supersaw Pump, Euro Choir, Flange Pad, House Piano, Organ Bass, Rave Stab, Deep Chord, Euro Bass, Euro Lead, Hoover (euro house and rave; the stabs play minor 7 chords) |
+| USER | 8 save slots, plus INIT PATCH at the end of the list |
 
-To save, pick a SAVE SLOT and press right on SAVE NOW. User patches are stored in `sdmc:/3ds/syrup/user_presets.bin`. INIT PATCH resets to a single saw.
+To save, press A twice on the PATCH page: the first press shows which USER slot it will use (the first empty one, or the slot you're on in USER), the second opens the 3DS keyboard to name the patch (up to 13 characters). Pressing A twice on a saved USER slot saves over it and lets you rename it. User patches are stored in `sdmc:/3ds/syrup/user_presets.bin`. INIT PATCH (the last entry in USER) resets to a single saw.
 
 ## Engine (laid out like Serum)
 
