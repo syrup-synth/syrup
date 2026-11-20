@@ -3279,6 +3279,30 @@ static void drawChar(int x, int y, char c, int sc, u8 r, u8 g, u8 b) {
 }
 static void text(int x, int y, const char* s, int sc, u8 r, u8 g, u8 b) { for (; *s; s++, x += 8 * sc) drawChar(x, y, *s, sc, r, g, b); }
 
+// splash screen: the ANSI logo on the top screen while Syrup loads
+#include "splash_img.h"
+static int gSplash = 1; static u64 gSplashT0;
+static void splashDraw(void) {
+	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
+	memset(fb, 0, 400 * 240 * 3);
+	int x0 = (400 - SPLASH_W) / 2, y0 = 14, n = 0;
+	for (int i = 0; i < (int)sizeof(SPLASH_RLE); i += 2) {
+		const u8* c = SPLASH_PAL + SPLASH_RLE[i + 1] * 3;
+		for (int k = 0; k < SPLASH_RLE[i]; k++, n++) px(x0 + n % SPLASH_W, y0 + n / SPLASH_W, c[0], c[1], c[2]);
+	}
+	static const char* T = "WAVETABLE SYNTH FOR 2DS";
+	text(200 - (int)strlen(T) * 4, y0 + SPLASH_H + 16, T, 1, 255, 255, 85);
+	text(200 - 13 * 4, y0 + SPLASH_H + 30, "SOUL PROVIDER", 1, 170, 85, 0);
+	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
+	memset(fb, 0, 320 * 240 * 3);
+	text(160 - 10 * 4, 112, "LOADING...", 1, 170, 85, 0);
+}
+static void splashBottomReady(void) {
+	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
+	memset(fb, 0, 320 * 240 * 3);
+	text(160 - 22 * 4, 112, "TAP OR PRESS TO START", 1, 255, 255, 85);
+}
+
 // ---------------------------------------------------------------- look: Pip-Boy layout, EGA 16-colour palette
 static const u8 EGA[16][3] = {
 	{0, 0, 0}, {0, 0, 170}, {0, 170, 0}, {0, 170, 170}, {170, 0, 0}, {170, 0, 170}, {170, 85, 0}, {170, 170, 170},
@@ -7626,6 +7650,8 @@ int main(void) {
 	if (!gSafeMode) { sensorsInit(); extrasBasicInit(); }
 	if (gSafeMode) { gGpuFx = 0; gAudioClock = 0; }
 	fontGfx = consoleGetDefault()->font.gfx;
+	for (int k = 0; k < 2; k++) { splashDraw(); gfxFlushBuffers(); gfxSwapBuffers(); gspWaitForVBlank(); }   // both buffers
+	gSplashT0 = osGetTime();
 	fftInit();
 	for (int o = 0; o < 2; o++) { gOsc[o].tb.frames = (float*)malloc(sizeof(float) * CYC * MAXFR); mipsInit(&gOsc[o].mips); }
 	mipsInit(&gSubMips);
@@ -7685,9 +7711,17 @@ int main(void) {
 	u64 last = osGetTime();
 	aptHook(&gSleepCookie, sleepHook, NULL);
 
+#ifdef SYRUP_HOST
+	gSplash = 0;   // tests start straight on the instrument
+#endif
+	if (gSplash) for (int k = 0; k < 2; k++) { splashBottomReady(); gfxFlushBuffers(); gfxSwapBuffers(); gspWaitForVBlank(); }
 	while (aptMainLoop()) {
 		hidScanInput();
 		u32 kDown = hidKeysDown(), kHeld = hidKeysHeld();
+		if (gSplash) {   // the logo stays up a few seconds after loading, or until a tap / button
+			if (kDown || osGetTime() - gSplashT0 > 4000) { gSplash = 0; kDown = 0; topDirty = botDirty = topAgain = botAgain = 1; }
+			else { gspWaitForVBlank(); continue; }
+		}
 		if (kDown & KEY_START) break;
 		wakeTick();
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing

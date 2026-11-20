@@ -1,3 +1,4 @@
+#define SYRUP_HOST 1
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>

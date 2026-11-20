@@ -1,5 +1,7 @@
 # SYRUP
 
+![SYRUP](art/syrup_logo.png)
+
 A Serum-style wavetable synth for Nintendo 2DS / 3DS (homebrew).
 
 The 3DS's DSP chip plays the oscillators: each voice layer is a DSP channel looping a single-cycle waveform at the note's pitch, through that channel's own biquad filter. The main processor only rebuilds a cycle when something changes or is modulated:
@@ -135,7 +137,7 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 
 | Input | Action |
 |---|---|
-| Start | Syrup opens on the page you were on last time (first run: the browser). CIRCLE PAD and SPEAKER EQ are kept with it in settings.bin |
+| Start | A splash screen shows the logo while Syrup loads (tap or press any button to skip; it moves on by itself after 4 s). Syrup opens on the page you were on last time (first run: the browser). CIRCLE PAD and SPEAKER EQ are kept with it in settings.bin |
 | L / R | The main pages: PATCH, OSC A, FILT+ENV, LFO+MOD, VOICE+FX, MASTER FX, SEQ (OSC B, SUB+NOISE, DRUMS, VIS, HW are a chip tap or X / Y away) |
 | X / Y | Next / previous page, all of them (OSC A, OSC B, SUB+NOISE, FILT+ENV, LFO+MOD, VOICE+FX) |
 | Bottom top row | Jump chips: OSC, FILT, MOD, VOICE, FX, SEQ, PADS. One tap goes to that part of the synth; tapping the lit chip again steps inside it (OSC A, OSC B, SUB+NOISE; ENV 1 / ENV 2 / FILTER; the MOD views). PADS lays the chord pads over any page |

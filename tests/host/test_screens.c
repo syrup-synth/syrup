@@ -52,6 +52,7 @@ static void SCRIPT(int fr) {
 	if (fr == 172 || fr == 173) { TOUCH = 1; TX = 4 * 320 / 7 + 20; TY = 8; }  // FX
 	if (fr == 176) { if (!gChainOn) fail("WORK chips: CHAIN should open FX ORDER"); gSeqMode = 1; }
 	if (fr == 178 || fr == 179) { TOUCH = 1; TX = 300; TY = WORK_B + 8; }   // PANIC
+	if (fr == 184) { splashDraw(); shotTop("shots/splash.ppm"); shotBot("shots/splash_bot.ppm"); int lit = 0; for (int i = 0; i < 400 * 240 * 3; i++) lit += TOPFB[i] > 100; if (lit < 20000) fail("splash: the logo should fill the top screen (%d)", lit); }
 	if (fr == 182) { shotBot("shots/perf_row.ppm"); if (gSeqMode == 1 || gSeqPlaying) fail("PERF: PANIC should stop the sequencer"); }
 }
 int main(void) {
