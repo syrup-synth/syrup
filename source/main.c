@@ -434,12 +434,12 @@ static float gMacro[4] = {0, 0, 0, 0};
 #define NMOD 8
 static int gModCurve[NMOD];
 static const char* CURVE_NAMES[4] = {"LINEAR", "EXP", "LOG", "S-CURVE"};
-static float gTiltX, gTiltY, gMicEnv, gTwist, gShake, gCamLight, gCamColor;
+static float gTiltX, gTiltY, gMicEnv, gTwist, gShake, gShakeD, gCamLight, gCamColor;
 static float gSpinX, gSpinY, gMicBright, gCamMove;   // gyro pitch/roll speed, voice brightness ("ss" vs "oo"), how much the picture changes
 static int gHeadphones = 0;
 enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_COUNT };
 static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF"};   // VOLUME: when routed, the source IS the loudness (breath control)
-static const char* VOICE_MODES[7] = {"POLY", "MONO", "LEGATO", "808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT"};   // KIT: keys play the drum kit
+static const char* VOICE_MODES[8] = {"POLY", "MONO", "LEGATO", "808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT", "PERC KIT"};   // KIT: keys play the drum kit
 static const char* FX_NAMES[4] = {"OFF", "ECHO", "SPACE", "REVERB"};
 static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
 static const float ECHO_T[3] = {0.25f, 0.375f, 0.5f};
@@ -845,7 +845,7 @@ static void addTaps(SVoice* v) {
 	}
 }
 
-static void kitNoteOn(int note, float vel);
+static void kitNoteOn(int note, float vel); static void kitHitSound(int d, float vel);
 static void voiceOn(int note, float vel) {
 	if (!gAudioOK) return;
 	if (gVoiceMode >= 3) { kitNoteOn(note, vel); return; }   // DRUM KIT patch: a key is a drum hit
@@ -2428,11 +2428,40 @@ static void r_hoover(SPatch* p) { p->master = 0.45f; OA.table = T_PWM; OA.pos = 
 	p->voiceMode = 2; p->glide = 0.12f; ENV1(0.01f, 0, 0.5f, 0.9f, 0.3f); ENV2(0.0f, 0, 0.18f, 0, 0.2f); MOD(2, SRC_ENV2, DST_PITCH, -0.12f);
 	LFO(0, LS_SINE, 0, 0.8f); MOD(3, SRC_LFO1, DST_APOS, 0.3f); OUTF(OF_L12, 0.6f, 0.2f, 0.35f, 0); MFX(FX_CHORUS, 0.9f, 1.0f, 0.7f); REVB(0.25f, RV_HALL); }
 
+// ---- added from the patch-ideas review: the controls no patch used yet (FREEZE, NOTE, SHAKE, wide bend) and
+// combinations the library hadn't tried
+static void x_freezeglass(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.uni = 3; OA.detune = 10; ENV1(0.8f, 0, 1.0f, 1.0f, 2.5f);
+	p->freeze = 1; p->shimmer = 1; REVB(0.5f, RV_HALL); p->revSize = 0.9f; LFO(0, LS_SINE, 0, 0.05f); MOD(2, SRC_LFO1, DST_APOS, 0.6f); p->ott = 0.25f; }
+static void x_jetcomb(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 3; OA.detune = 14; OA.width = 1; ENV1(0.6f, 0, 1.0f, 1.0f, 1.8f);
+	OUTF(OF_FLANGER, 0.5f, 0.6f, 0, 0); LFO(0, LS_TRI, 0, 0.15f); MOD(2, SRC_LFO1, DST_OFCUT, 0.35f); MFX(FX_FLANGER, 0.07f, 0.8f, 0.5f); REVB(0.25f, RV_HALL); }
+static void x_wiredrone(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 2; OA.detune = 6; ENV1(1.0f, 0, 1.0f, 1.0f, 2.5f);
+	ENV2(1.5f, 0, 4.0f, 0.3f, 2.0f); OUTF(OF_COMBM, 0.4f, 0.85f, 0.2f, 0); MOD(2, SRC_ENV2, DST_OFCUT, 0.5f); NOSTICK; MOD(1, SRC_STICK, DST_OFCUT, 0.4f); REVB(0.35f, RV_HALL); }
+static void k_reel(SPatch* p) { p->master = 0.65f; OA.table = T_DIGITAL; OA.pos = 0.25f; OB.on = 1; OB.table = T_BASIC; OB.pos = TRI; OB.level = 0.35f; ENV1(0.002f, 0, 1.4f, 0.2f, 0.5f);
+	OUTF(OF_CREAMY, 0.5f, 0.15f, 0, 0); MOD(2, SRC_NOTE, DST_OFCUT, -0.45f); MOD(3, SRC_VEL, DST_OFCUT, 0.2f); DLYS(0.12f, S4, DL_TAPE); p->dlyWow = 0.6f; REVB(0.15f, RV_ROOM); }   // high notes darker, like an old sampler
+static void k_glasstop(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SINE; OB.on = 1; OB.table = T_HARMONIX; OB.oct = 1; OB.level = 0.3f; ENV1(0.002f, 0, 1.6f, 0.15f, 0.7f);
+	OUTF(OF_L12, 0.35f, 0.2f, 0, 0); MOD(2, SRC_NOTE, DST_OFCUT, 0.45f); REVB(0.25f, RV_PLATE); }   // the opposite: glassy top, soft low end
+static void q_turntable(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SAW; p->voiceMode = 1; p->bendRange = 12; p->lofiBits = 2; p->lofiRate = 0.4f;
+	OUTF(OF_L24, 0.45f, 0.15f, 0.2f, 0); ENV1(0.002f, 0, 0.5f, 0.0f, 0.1f); ENV2(0.0f, 0, 0.4f, 0, 0.2f); MOD(2, SRC_ENV2, DST_PITCH, -0.6f);
+	DLYS(0.2f, S8D, DL_REV); p->qMixDrive = 0.3f; }   // a record stop on every note; the circle pad bends a full octave
+static void q_screamdub(SPatch* p) {   // the screaming filter into the chip echo replayed slow: each repeat falls
+	p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 2; OA.detune = 5; p->voiceMode = 2; p->glide = 0.04f;
+	p->cutoff = 0.55f; p->res = 0.6f; p->keytrack = 1.0f; p->qScream = 0.7f; ENV1(0.01f, 0, 0.5f, 0.7f, 0.3f);
+	p->csEcho = 0.6f; p->csEchoFb = 0.4f; p->csEchoT = 3; p->csEchoPitch = -2; }
+static void m_shakegrit(SPatch* p) { p->master = 0.55f; OA.table = T_GROWL; OA.warp = W_ASYMPM; OA.warpAmt = 0.1f; p->voiceMode = 1; ENV1(0.004f, 0, 0.3f, 0.9f, 0.2f);
+	MOD(2, SRC_SHAKE, DST_AWARP, 0.7f); MOD(3, SRC_TWIST, DST_OFCUT, 0.4f); OUTF(OF_DIRTY, 0.5f, 0.3f, 0.3f, 0); REVB(0.12f, RV_ROOM); }   // shake it for grit, turn it for brightness
+static void m_singit(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA.uni = 2; OA.detune = 8; MOD(2, SRC_MICBRT, DST_APOS, 0.8f); MFX(FX_FORMANT, 0.1f, 0.5f, 0.4f);
+	MOD(3, SRC_MICBRT, DST_FXP, 0.6f); ENV1(0.02f, 0, 0.3f, 0.9f, 0.3f); REVB(0.2f, RV_PLATE); }   // the table follows your voice: "ss" bright, "oo" dark (mic on)
+static void p_gate85(SPatch* p) { p->master = 0.55f; OA.table = T_VOWELS; OA.pos = 0.3f; OA.uni = 4; OA.detune = 14; OA.width = 1; OB.on = 1; OB.table = T_HARMONIX; OB.oct = 1; OB.level = 0.25f;
+	ENV1(0.01f, 0, 0.8f, 0.8f, 0.3f); REVB(0.5f, RV_GATED); p->pump = 0.4f; MFX(FX_CHORUS, 0.4f, 0.5f, 0.35f); }
+static void p_spinpad(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.uni = 3; OA.detune = 12; OA.width = 1; ENV1(0.5f, 0, 1.0f, 1.0f, 1.6f);
+	MOD(2, SRC_SPINX, DST_PAN, 0.8f); MOD(3, SRC_SPINY, DST_APOS, 0.5f); OUTF(OF_CREAMY, 0.6f, 0.2f, 0, 0); REVB(0.35f, RV_HALL); }   // rotate the console to swing it around
+static void h_gb4(SPatch* p) { p->master = 0.6f; OA.table = T_PWM; OA.pos = 0.5f; p->lofiBits = 5; p->qGrit = 2; CHIP(0.5f, 0, -1); ENV1(0.002f, 0, 0.3f, 0.7f, 0.1f); p->voiceMode = 2; }   // both crushers at once
 // ---- DRUMS: the keys and pads play a drum kit (voice MODE ... KIT); arp, sequencer and MIDI play it too
 static void d_808(SPatch* p) { p->voiceMode = 3; p->master = 0.8f; }
 static void d_909(SPatch* p) { p->voiceMode = 4; p->master = 0.8f; }
 static void d_lofi(SPatch* p) { p->voiceMode = 5; p->master = 0.8f; }
 static void d_chip(SPatch* p) { p->voiceMode = 6; p->master = 0.8f; }
+static void d_perc(SPatch* p) { p->voiceMode = 7; p->master = 0.8f; }   // shake the console: it plays the shaker
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
 	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}},
@@ -2440,9 +2469,9 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"CHIP HERO", l_chiphero}, {"G-FUNK SINE", l_glidesine}, {"RINGER", l_ringer}, {"ACID SCREAM", l_acidscream}, {"PAD BENDER", l_bender},
 	 {"FLUTE", l_flute}, {"STICK THEREMIN", l_theremin}, {"XY SCULPT", l_xysculpt}, {"BUSY BOY", l_busyboy}},
 	{{"WARM FELT", p_felt}, {"GLASS HOUR", p_glass}, {"VOWEL DUSK", p_vowel}, {"COMB WEATHER", p_combweather}, {"CLOUD BANK", p_cloudbank}, {"STRINGS 77", p_strings77},
-	 {"DRAWN SWELL", p_drawnswell}, {"MOTION HAZE", p_haze}, {"SWELL BACKWARD", p_reverse}, {"DEEP SONAR", p_sonar}, {"GRAIN CHOIR", p_hallchoir}},
+	 {"DRAWN SWELL", p_drawnswell}, {"MOTION HAZE", p_haze}, {"SWELL BACKWARD", p_reverse}, {"DEEP SONAR", p_sonar}, {"GRAIN CHOIR", p_hallchoir}, {"GATE 85", p_gate85}, {"SPIN PAD", p_spinpad}},
 	{{"EP SATURDAY", k_epsat}, {"DRAWBAR", k_drawbar}, {"LOFI UPRIGHT", k_lofiup}, {"CLAV FUNK", k_clav}, {"WURLI BARK", k_wurli}, {"VIBES", k_vibes},
-	 {"TOY KEYS", k_toy}, {"HARPSI", k_harpsi}, {"ROTARY", k_rotary}, {"CUMBIA ORGANO", k_cumbiaorg}},
+	 {"TOY KEYS", k_toy}, {"HARPSI", k_harpsi}, {"ROTARY", k_rotary}, {"CUMBIA ORGANO", k_cumbiaorg}, {"REEL PIANO", k_reel}, {"GLASS TOP", k_glasstop}},
 	{{"NYLON", u_nylon}, {"MARIMBA WOOD", u_marimba}, {"KALIMBA", u_kalimba}, {"DIGI HARP", u_digiharp}, {"STAB 1999", u_stab99}, {"KOTO SPRING", u_koto},
 	 {"CHIP PLINK", u_chipplink}, {"GRAIN PLUCK", u_grain}, {"STEEL PAN", u_steel}, {"RAIN ON TIN", u_raintin}},
 	{{"ORGAN STAB", c_organstab}, {"NEO SOUL 9", c_neosoul}, {"DUB CHORD", c_dub}, {"TECHNO STAB", c_techno}, {"STRUM GUITAR", c_strum}, {"OMNI HARP", c_omni},
@@ -2450,9 +2479,9 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"BERLIN 16", q_berlin}, {"ACID CIRCLE", q_acidcircle}, {"TRANCE GATE", q_gate}, {"PING ARP", q_pingarp}, {"CHAOS ARP", q_chaosarp}, {"MOTION BELLS", q_motionbells},
 	 {"OCTAVE BOUNCE", q_octbounce}, {"DRAWN STEPS", q_drawnsteps}, {"GRAIN RUN", q_grainrun}, {"POLYRHYTHM", q_polyrhythm}},
 	{{"TIDE POOL", x_tidepool}, {"FROZEN TABLE", x_frozen}, {"NET STATIC", x_netstatic}, {"TAPE ROOM", x_taperoom}, {"BROWN SEA", x_sea}, {"GEIGER", x_geiger},
-	 {"DRONE 60", x_drone60}, {"SHIMMER CLOUD", x_shimmercloud}, {"SONAR PING", x_sonarping}, {"STORM FRONT", x_storm}},
+	 {"DRONE 60", x_drone60}, {"SHIMMER CLOUD", x_shimmercloud}, {"SONAR PING", x_sonarping}, {"STORM FRONT", x_storm}, {"FREEZE GLASS", x_freezeglass}, {"JET COMB", x_jetcomb}, {"WIRE DRONE", x_wiredrone}},
 	{{"GB WAVE", h_gbwave}, {"NES PULSE", h_nes}, {"C64 PWM", h_c64}, {"ARCADE ARP", h_arcade}, {"POWER UP", h_powerup}, {"LASER", h_laser},
-	 {"8-BIT BASS", h_bass8}, {"BIT ORGAN", h_bitorgan}, {"SQUARE CHOIR", h_squarechoir}},
+	 {"8-BIT BASS", h_bass8}, {"BIT ORGAN", h_bitorgan}, {"SQUARE CHOIR", h_squarechoir}, {"4-BIT GB", h_gb4}},
 	{{"ORBIT PAD", s_orbitpad}, {"HELICOPTER", s_heli}, {"CIRCLE ARP", s_circlearp}, {"AROUND YOU", s_aroundyou}, {"3D BELLS", s_bells}, {"SPIRAL PLUCK", s_spiral},
 	 {"PASSING CAR", s_passing}, {"STEER ORBIT", s_tilt}},
 	{{"PSG STACK", c_psgstack}, {"ECHO CANYON", c_canyon}, {"CRUSH BELL", c_crushbell}, {"8-BIT CHOIR", c_choir8}, {"CAPTURE DUB", c_capturedub},
@@ -2460,13 +2489,13 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"SCREAM LEAD", c_screamlead}, {"RAW SAMPLER", c_rawsampler}, {"HOT ORGAN", c_hotorgan}, {"GLITCH STORM", c_glitchstorm}, {"PITCH CANYON", c_pitchcanyon}},
 	{{"KITCHEN SINK", m_busyboy}, {"TIDAL TABLE", m_tidal}, {"STEP SCULPT", m_stepsculpt}, {"GLASS BREATH", m_breathglass}, {"CHAOS GARDEN", m_chaosgarden},
 	 {"ACID MORPH", m_acidmorph}, {"VOWEL WALK", m_vowelwalk}, {"LIQUID SYNC", m_liquidsync}, {"DRAWN DANCE", m_drawndance}, {"GRAIN TIDE", m_graintide},
-	 {"TALK BOX", m_talkbox}, {"GYRO VIBE", m_gyrovibe}, {"HAND WAVE", m_handwave}},
+	 {"TALK BOX", m_talkbox}, {"GYRO VIBE", m_gyrovibe}, {"HAND WAVE", m_handwave}, {"SHAKE GRIT", m_shakegrit}, {"SING IT", m_singit}},
 	{{"GLASS PLUCK", q_glasspluck}, {"SCREAM SOLO", q_screamsolo}, {"ACID SCREAM", q_acidscream}, {"GRIT KEYS", q_gritkeys}, {"CORRUPT PERC", q_corruptperc},
-	 {"SUB SCREAM", q_subscream}, {"DRIVE MONO", q_drivemono}, {"TAPE DUB", q_tapedub}, {"VOWEL PAD", q_vowelpad}},
+	 {"SUB SCREAM", q_subscream}, {"DRIVE MONO", q_drivemono}, {"TAPE DUB", q_tapedub}, {"VOWEL PAD", q_vowelpad}, {"TURNTABLE", q_turntable}, {"SCREAM DUB", q_screamdub}},
 	{{"RAVE STRINGS", r_ravestrings}, {"DREAM PAD", r_dreampad}, {"HOOVER PAD", r_hooverpad}, {"SUPERSAW PUMP", r_supersaw}, {"EURO CHOIR", r_eurochoir},
 	 {"FLANGE PAD", r_flangepad}, {"HOUSE PIANO", r_housepiano}, {"ORGAN BASS", r_organbass}, {"RAVE STAB", r_ravestab}, {"DEEP CHORD", r_deepchord},
 	 {"EURO BASS", r_eurobass}, {"EURO LEAD", r_eurolead}, {"HOOVER", r_hoover}},
-	{{"808 KIT", d_808}, {"909 KIT", d_909}, {"LOFI KIT", d_lofi}, {"CHIP KIT", d_chip}},
+	{{"808 KIT", d_808}, {"909 KIT", d_909}, {"LOFI KIT", d_lofi}, {"CHIP KIT", d_chip}, {"PERC KIT", d_perc}},
 };
 #define NUSER 8
 static SPatch gUser[NUSER];
@@ -2557,7 +2586,7 @@ static void patchApply(const SPatch* p) {
 	if (p->ofType % NOFT != gOfType) { gOfType = p->ofType % NOFT; ofReset(); } gOfCut = p->ofCut; gOfRes = p->ofRes; gOfDrive = p->ofDrive; gOfEnv = p->ofEnv;
 	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) gDl[k][i] = p->dl[k][i] / 127.0f; gDlRate[k] = p->dlRate[k]; gDlSync[k] = p->dlSync[k] % NSYNC; }
 	memcpy(gMot, p->mot, sizeof(gMot)); for (int l = 0; l < 4; l++) { gMotTgt[l] = p->motTgt[l] % 16; gMotOn[l] = p->motOn[l] & 1; } gMotBars = p->motBars & 3; gMotRec = -1; gMotPh = 0;
-	gVoiceMode = (p->voiceMode >= 0 && p->voiceMode < 7) ? p->voiceMode : 0; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
+	gVoiceMode = (p->voiceMode >= 0 && p->voiceMode < 8) ? p->voiceMode : 0; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
 	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate; if (p->bpm >= 40) gBPM = p->bpm;
 	gArpN = 0; gArpOnN = 0; gHeldN = 0;
@@ -2575,17 +2604,17 @@ static void patchApply(const SPatch* p) {
 static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every factory patch to a similar loudness
 	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.82f, 1.42f, 1.42f, 1.32f, 1.28f, 0.68f, 1.00f, 1.00f, 1.00f},
 	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f, 1.00f},
-	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.64f, 1.35f, 1.00f, 1.00f},
+	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.11f, 0.95f, 1.00f, 1.00f, 1.00f},
 	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{2.33f, 1.34f, 4.24f, 2.18f, 2.20f, 1.12f, 2.30f, 0.67f, 2.08f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{1.32f, 1.05f, 4.46f, 1.10f, 3.54f, 1.82f, 2.40f, 6.00f, 1.34f, 2.41f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.42f, 1.93f, 1.42f, 1.00f, 1.00f},
+	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 0.76f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{1.30f, 0.81f, 1.34f, 2.99f, 0.90f, 1.37f, 3.46f, 1.10f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 0.60f, 1.20f, 1.20f},   // CHIPSET
-	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // MOTION
-	{1.73f, 3.00f, 2.80f, 2.50f, 1.60f, 0.70f, 0.69f, 2.50f, 1.86f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // QUIRKS
+	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 2.00f, 1.60f},   // MOTION
+	{1.73f, 3.00f, 2.80f, 2.50f, 1.60f, 0.70f, 0.69f, 2.50f, 1.86f, 0.80f, 2.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // QUIRKS
 	{1.39f, 2.04f, 1.36f, 1.81f, 1.69f, 1.50f, 1.17f, 1.24f, 2.90f, 3.10f, 2.20f, 1.65f, 1.26f, 1.00f, 1.00f},   // RAVE
 	{1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // DRUMS
 };
@@ -2731,7 +2760,7 @@ static Param P_MOD[] = {
 	PEND};
 static const char* BEND_NAMES[13] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"};
 static Param P_VOICE[] = {
-	PE("MODE", &gVoiceMode, 7, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0),
+	PE("MODE", &gVoiceMode, 8, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0),
 	PE("BEND RANGE", &gBendRange, 13, BEND_NAMES, 0), PE("CHORD", &gChord, 5, CHORD_NAMES, 0),
 	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("GPU VISUALS", &gGpuFx, 2, ONOFF, 0), PE("FX", &gFx, 4, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
 	PF("ECHO FDBK", &gEchoFb, 0, 0.9f, 0.03f, "%", 0), PE("OUTPUT", &gOutMode, 3, OUT_NAMES, D_OUT), PE("SURROUND", &gSurDepth, 4, DEPTH_NAMES, D_OUT),
@@ -3366,11 +3395,11 @@ static void drawHelp(void) {
 #define XY_H  94
 #define KB_Y  118
 #define NDRUM 10
-static const char* KIT_PAD_NAMES[NDRUM]; static const int KIT_PAD_NOTE[NDRUM]; static const int KIT_PAD_ORDER[10];
+static const char* kitPadName(int d); static int kitPadNote(int d); static int kitPadOrder(int i);
 static int keyAt(int x, int y, int base) {
 	if (gVoiceMode >= 3) {   // drum pads: 2 rows of 5
 		int c = x / 64, r = y < KB_Y + 61 ? 0 : 1; if (c > 4) c = 4; if (c < 0) c = 0;
-		return KIT_PAD_NOTE[KIT_PAD_ORDER[r * 5 + c]];
+		return kitPadNote(kitPadOrder(r * 5 + c));
 	}
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
@@ -3812,10 +3841,10 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	if (TH->ega) rect(0, KB_Y, 320, 1, LINE);
 	if (gVoiceMode >= 3) {   // drum kit pads, lower on a pad = harder
 		for (int i = 0; i < 10; i++) {
-			int d = KIT_PAD_ORDER[i], x = (i % 5) * 64, y = KB_Y + 2 + (i / 5) * 61, note = KIT_PAD_NOTE[d], lit = on[note];
+			int d = kitPadOrder(i), x = (i % 5) * 64, y = KB_Y + 2 + (i / 5) * 61, note = kitPadNote(d), lit = note < 128 && on[note];
 			rect(x + 2, y, 60, 57, lit ? TH->keyOn[0] : TH->keyW[0], lit ? TH->keyOn[1] : TH->keyW[1], lit ? TH->keyOn[2] : TH->keyW[2]);
 			if (TH->ega) outline(x + 2, y, 60, 57, RGB3(TH->keyLine));
-			const char* nm = KIT_PAD_NAMES[d]; int tx = x + 32 - (int)strlen(nm) * 4;
+			const char* nm = kitPadName(d); int tx = x + 32 - (int)strlen(nm) * 4;
 			if (lit) text(tx, y + 25, nm, 1, EC(0)); else text(tx, y + 25, nm, 1, TH->ega ? TH->keyLine[0] : 60, TH->ega ? TH->keyLine[1] : 40, TH->ega ? TH->keyLine[2] : 20);
 		}
 		return;
@@ -3894,6 +3923,7 @@ static void motionTick(float dt) {
 		float d = (fabsf((float)a.x - pa.x) + fabsf((float)a.y - pa.y) + fabsf((float)a.z - pa.z)) / 600.0f;
 		if (d > 1) d = 1;
 		gShake += (d - gShake) * (d > gShake ? 0.7f : 0.05f);
+		gShakeD = d;
 	}
 	pa = a; have = 1;
 	static float hpT = 0;
@@ -5269,6 +5299,8 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 	static const float MAXS[NDRUM] = {0.6f, 0.3f, 0.12f, 0.5f, 0.35f, 0.1f, 0.5f, 0.4f, 0.35f, 1.4f};
 	int len[NDRUM] = {(int)(sr * 0.6f), (int)(sr * 0.3f), (int)(sr * (kit == 1 ? 0.12f : 0.07f)), (int)(sr * (kit == 1 ? 0.5f : 0.4f)), (int)(sr * 0.35f),
 		(int)(sr * 0.08f), (int)(sr * 0.5f), (int)(sr * 0.4f), (int)(sr * 0.3f), (int)(sr * (kit == 2 ? 0.9f : 1.4f))};
+	static const float PERCLEN[NDRUM] = {0.16f, 0.1f, 0.12f, 0.35f, 0.3f, 0.1f, 0.45f, 0.35f, 0.25f, 0.12f};   // PERC kit
+	if (kit == 4) for (int d = 0; d < NDRUM; d++) len[d] = (int)(sr * PERCLEN[d]);
 	unsigned seed = 1234;
 	unsigned lfsr = 0x7FFF; float lph = 0;   // CHIP kit: Game Boy style noise register
 	for (int d = 0; d < NDRUM; d++) {
@@ -5279,7 +5311,23 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 		for (int i = 0; i < len[d]; i++) {
 			float t = i / sr, v = 0;
 			seed = seed * 1664525u + 1013904223u; float nz = ((seed >> 9) & 0xFFFF) / 32768.0f - 1;
-			if (d == 0) {   // kick: falling sine, a click, kit-shaped decay
+			if (kit == 4) {   // PERC kit: shaker, maracas, cabasa, tambourine, guiro, claves, congas, bongo, woodblock
+				hp = nz - prev; prev = nz;
+				switch (d) {
+				case 0: { float e = t < 0.018f ? t / 0.018f : expf(-(t - 0.018f) * 28); lp += (hp - lp) * 0.7f; v = lp * e * 0.9f; break; }   // shaker: a swish
+				case 1: v = hp * expf(-t * 45) * 0.8f; break;   // maracas: a sharp tick of seeds
+				case 2: { float e = t < 0.004f ? t / 0.004f : expf(-(t - 0.004f) * 30); v = hp * e * (0.7f + 0.3f * sinf(TWO_PI * 3100 * t)) * 0.8f; break; }   // cabasa: beads on metal
+				case 3: { float j = sinf(TWO_PI * 5300 * t) + sinf(TWO_PI * 7100 * t) * 0.8f + sinf(TWO_PI * 9400 * t) * 0.6f;   // tambourine: jingles
+					v = (hp * 0.6f + hp * j * 0.35f) * expf(-t * 11) * 0.6f + (t < 0.003f ? nz * 0.3f : 0); break; }
+				case 4: { float ph4 = fmodf(t, 0.022f); v = hp * expf(-ph4 * 220) * (t < 0.26f ? 1 : 0) * (1 - t * 2.5f) * 0.9f; break; }   // guiro: a run of scrapes
+				case 5: v = sinf(TWO_PI * 2500 * t) * expf(-t * 42) * 0.8f; break;   // claves
+				case 6: case 7: {   // congas: tuned skin with a slap on top
+					float f0 = d == 6 ? 190 : 300, f = f0 * (1 + 0.15f * expf(-t * 40)); ph += f / sr;
+					v = sinf(TWO_PI * ph) * expf(-t * (d == 6 ? 8 : 10)) * 0.85f + (t < 0.004f ? hp * 0.45f : 0); break; }
+				case 8: { float f = 420 * (1 + 0.1f * expf(-t * 60)); ph += f / sr; v = sinf(TWO_PI * ph) * expf(-t * 17) * 0.8f + (t < 0.003f ? hp * 0.35f : 0); break; }   // bongo
+				default: v = (sinf(TWO_PI * 1050 * t) * 0.7f + sinf(TWO_PI * 1720 * t) * 0.4f) * expf(-t * 48) * 0.8f; break;   // woodblock
+				}
+			} else if (d == 0) {   // kick: falling sine, a click, kit-shaped decay
 				float f0 = kit == 1 ? 60 : (kit == 2 ? 50 : 45), f1 = kit == 3 ? 400 : 160, dec = kit == 0 ? 2.2f : (kit == 1 ? 5 : 4);
 				float f = f0 + (f1 - f0) * expf(-t * 35);
 				ph += f / sr; v = sinf(TWO_PI * ph) * expf(-t * dec) + (t < 0.004f ? nz * 0.4f : 0);
@@ -5356,11 +5404,14 @@ static void drumPickChannels(void) {
 }
 static void drumHit(int d, float vel) {   // from the audio thread (voice lock held)
 	static const int DCH[NDRUM] = {0, 1, 2, 2, 3, 1, 4, 4, 5, 6};   // open hat chokes the closed hat (same channel), rim cuts the snare
-	int c = gDrumCh[DCH[d]]; if (c < 0) c = gDrumCh[DCH[d] % 3];
+	static const int PCH[NDRUM] = {0, 1, 2, 3, 4, 5, 6, 6, 5, 1};   // PERC: each shaker on its own channel; the drums share
+	int perc = gKit == 4, ch = perc ? PCH[d] : DCH[d];
+	int c = gDrumCh[ch]; if (c < 0) c = gDrumCh[ch % 3];
 	if (c < 0 || !gDrumSmp[d]) return;
 	u32 flags = SOUND_FORMAT_16BIT | SOUND_ONE_SHOT | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(c) | (CSND_TIMER(32728) << 16);
 	static const float DG[NDRUM] = {0.5f, 0.5f, 0.3f, 0.28f, 0.55f, 0.5f, 0.45f, 0.45f, 0.3f, 0.28f}, DP[NDRUM] = {0.5f, 0.5f, 0.62f, 0.62f, 0.45f, 0.42f, 0.36f, 0.62f, 0.55f, 0.42f};
-	float g = gDrumLevel * vel * DG[d], pan = DP[d];
+	static const float PG[NDRUM] = {0.5f, 0.45f, 0.4f, 0.35f, 0.4f, 0.4f, 0.55f, 0.5f, 0.5f, 0.4f}, PP[NDRUM] = {0.4f, 0.6f, 0.56f, 0.62f, 0.45f, 0.4f, 0.38f, 0.55f, 0.62f, 0.5f};
+	float g = gDrumLevel * vel * (perc ? PG[d] : DG[d]), pan = perc ? PP[d] : DP[d];
 	u32 l = (u32)(g * sqrtf(1 - pan) * 1.41f * 0x7FFF), r = (u32)(g * sqrtf(pan) * 1.41f * 0x7FFF), vol = l | (r << 16);
 	CSND_SetPlayState(c, 0);
 	if (gKit == 3 && d >= 1 && d <= 2 && gNzCh[d - 1] >= 0) {   // CHIP kit: snare and hat straight from the hardware noise generators
@@ -5420,10 +5471,20 @@ static void drumsChanged(void) {   // main thread
 // ---- DRUM KIT patches (voice MODE 808 KIT .. CHIP KIT): every key is a drum. Notes follow General MIDI from C1 (36)
 // up, folded every two octaves, so an FM-1, a DAW or Drambo plays the right drums and the keyboard always has a full kit.
 static const s8 KIT_GM[24] = {0, 5, 1, 4, 1, 6, 2, 6, 2, 6, 3, 7, 7, 9, 7, 9, 9, 8, 2, 9, 8, 9, 5, 9};   // 36..59 -> sound
-static int kitSound(int note) { int k = ((note - 36) % 24 + 24) % 24; return KIT_GM[k]; }
-static const char* KIT_PAD_NAMES[NDRUM] = {"KICK", "SNARE", "CL HAT", "OP HAT", "CLAP", "RIM", "LO TOM", "HI TOM", "BELL", "CRASH"};
-static const int KIT_PAD_NOTE[NDRUM] = {36, 38, 42, 46, 39, 37, 41, 48, 56, 49};
-static const int KIT_PAD_ORDER[10] = {2, 3, 9, 8, 5, 0, 1, 4, 6, 7};   // top row: hats, crash, bell, rim; bottom: kick, snare, clap, toms
+static const s8 PERC_GM[24] = {8, 8, 7, 7, 6, 7, 6, 9, 9, 2, 1, 5, 5, 4, 4, 5, 9, 9, 7, 6, 3, 3, 0, 3};   // 60..83 (bongos .. jingle bell)
+static int kitSound(int note) {
+	if (gVoiceMode == 7) { int k = ((note - 60) % 24 + 24) % 24; return PERC_GM[k]; }
+	int k = ((note - 36) % 24 + 24) % 24; return KIT_GM[k];
+}
+static const char* KIT_PAD_NAMES_D[NDRUM] = {"KICK", "SNARE", "CL HAT", "OP HAT", "CLAP", "RIM", "LO TOM", "HI TOM", "BELL", "CRASH"};
+static const char* KIT_PAD_NAMES_P[NDRUM] = {"SHAKER", "MARACA", "CABASA", "TAMB", "GUIRO", "CLAVES", "CONGA L", "CONGA H", "BONGO", "WOOD"};
+static const int KIT_PAD_NOTE_D[NDRUM] = {36, 38, 42, 46, 39, 37, 41, 48, 56, 49};
+static const int KIT_PAD_NOTE_P[NDRUM] = {82, 70, 69, 80, 73, 75, 64, 63, 60, 76};
+static const int KIT_PAD_ORDER_D[10] = {2, 3, 9, 8, 5, 0, 1, 4, 6, 7};   // top row: hats, crash, bell, rim; bottom: kick, snare, clap, toms
+static const int KIT_PAD_ORDER_P[10] = {0, 1, 2, 3, 4, 6, 7, 8, 5, 9};   // top row: the shakers; bottom: skins and wood
+static const char* kitPadName(int d) { return gVoiceMode == 7 ? KIT_PAD_NAMES_P[d] : KIT_PAD_NAMES_D[d]; }
+static int kitPadNote(int d) { return gVoiceMode == 7 ? KIT_PAD_NOTE_P[d] : KIT_PAD_NOTE_D[d]; }
+static int kitPadOrder(int i) { return gVoiceMode == 7 ? KIT_PAD_ORDER_P[i] : KIT_PAD_ORDER_D[i]; }
 static void kitEnsure(void) {   // main thread: build the patch's kit and claim its channels
 	if (gVoiceMode < 3 || !gCsndOK) return;
 	int kit = gVoiceMode - 3;
@@ -5431,12 +5492,13 @@ static void kitEnsure(void) {   // main thread: build the patch's kit and claim 
 	if (gDrumCh[NDCH - 1] < 0 && gDrumCh[3] < 0) drumPickChannels();
 	for (int k = 0; k < NDCH; k++) if (gDrumCh[k] >= 0 && gCsOwner[gDrumCh[k]] >= 0) { CSND_SetPlayState(gDrumCh[k], 0); gCsOwner[gDrumCh[k]] = -1; }
 }
-static void kitNoteOn(int note, float vel) {
+static void kitHitSound(int d, float vel) {   // voice lock held
 	if (!gCsndOK || gDrumBuilt != gVoiceMode - 3) return;
-	drumHit(kitSound(note), vel * gMaster * 1.25f);
+	drumHit(d, vel * gMaster * 1.25f);
 	csndExecCmds(false);
 	gBeatFlash = 1;
 }
+static void kitNoteOn(int note, float vel) { kitHitSound(kitSound(note), vel); }
 // MIC TAP: knock or tap near the mic; each hit plays the drum now and is written into MINE at the nearest 16th,
 // as loud as you hit it. Switching to a row copies its current pattern into MINE first, so you overdub.
 static int gMyDrumLoaded = 0;
@@ -6233,6 +6295,11 @@ int main(void) {
 		wakeTick();
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
+		if (gVoiceMode == 7 && !gSafeMode) {   // PERC KIT: shake the console, it plays the shaker
+			static int armed = 1; static u64 lastHit = 0; u64 tnow = osGetTime();
+			if (armed && gShakeD > 0.35f && tnow - lastHit > 60) { kitHitSound(0, 0.4f + 0.6f * (gShakeD > 1 ? 1 : gShakeD)); armed = 0; lastHit = tnow; }
+			if (gShakeD < 0.2f) armed = 1;
+		}
 		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
 		if (midiTick()) topDirty = botDirty = 1;
 		if (gOfType) {   // OUT FILTER cutoff mod: the mod matrix and ENV 2 of the newest note
