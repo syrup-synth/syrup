@@ -1954,11 +1954,16 @@ static void patSwitch(int i) {   // store the working pattern, load pattern i
 static int patUsed(int i) { const SeqPat* p = i == gPatCur ? NULL : &gPat[i]; for (int k = 0; k < NSTEP; k++) if ((p ? p->st[k].n : gSeq[k].n)) return 1; return 0; }
 static const char* SEQ_PATH = "sdmc:/3ds/syrup/seq.bin";
 #define SEQ_MAGIC 0x53455131   // "SEQ1"
-static void seqSave(void) {
-	patStore(); FILE* f = fopen(SEQ_PATH, "wb"); if (!f) return;
-	u32 m = SEQ_MAGIC; int hdr[4] = {gPatCur, gSongLen, gSongOn, (int)sizeof(SeqPat)};
-	fwrite(&m, 4, 1, f); fwrite(hdr, sizeof(hdr), 1, f); fwrite(gPat, sizeof(gPat), 1, f); fwrite(gSong, sizeof(gSong), 1, f); fclose(f);
+static SeqPat gSnapPat[NPAT]; static u8 gSnapSong[NSONG]; static int gSnapHdr[4];
+static void seqSnap(void) {   // copy what gets saved (hold the voice lock: the audio tick can switch patterns)
+	patStore(); memcpy(gSnapPat, gPat, sizeof(gPat)); memcpy(gSnapSong, gSong, sizeof(gSong));
+	gSnapHdr[0] = gPatCur; gSnapHdr[1] = gSongLen; gSnapHdr[2] = gSongOn; gSnapHdr[3] = (int)sizeof(SeqPat);
 }
+static void seqWriteSnap(void) {   // the slow part, done without the lock
+	FILE* f = fopen(SEQ_PATH, "wb"); if (!f) return;
+	u32 m = SEQ_MAGIC; fwrite(&m, 4, 1, f); fwrite(gSnapHdr, sizeof(gSnapHdr), 1, f); fwrite(gSnapPat, sizeof(gSnapPat), 1, f); fwrite(gSnapSong, sizeof(gSnapSong), 1, f); fclose(f);
+}
+static void seqSave(void) { seqSnap(); seqWriteSnap(); }
 static void seqLoad(void) {
 	FILE* f = fopen(SEQ_PATH, "rb"); if (!f) return;
 	u32 m = 0; int hdr[4]; static SeqPat tmp[NPAT]; u8 song[NSONG];
@@ -3441,7 +3446,7 @@ static const char* paramHelp(const char* n) {
 		{"LINK", "SYNC TEMPO WITH ANOTHER SYRUP"},
 		{"MACRO 1", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"}, {"MACRO 2", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"},
 		{"MACRO 3", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"}, {"MACRO 4", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"},
-		{"XY PAD", "WHAT THE TOUCH PAD CONTROLS"}, {"CIRCLE PAD", "BEND+MOD, PAGE: TWEAKS THIS PAGE, MACROS: M1 / M2"}, {"SPEAKER EQ", "CUTS LOWS + HARSH HIGHS FOR THE SPEAKER (MASTER FX)"},
+		{"XY PAD", "WHAT THE TOUCH PAD CONTROLS"}, {"CIRCLE PAD", "PAGE / MACROS; STICK PATCHES KEEP BEND+MOD"}, {"SPEAKER EQ", "CUTS LOWS + HARSH HIGHS FOR THE SPEAKER (MASTER FX)"},
 		{"5 SOURCE", "MOD SLOT 5: WHAT MOVES IT"}, {"5 DEST", "MOD SLOT 5: WHAT IT MOVES"}, {"5 AMOUNT", "MOD SLOT 5: HOW MUCH"}, {"6 SOURCE", "MOD SLOT 6: WHAT MOVES IT"}, {"6 DEST", "MOD SLOT 6: WHAT IT MOVES"}, {"6 AMOUNT", "MOD SLOT 6: HOW MUCH"}, {"7 SOURCE", "MOD SLOT 7: WHAT MOVES IT"}, {"7 DEST", "MOD SLOT 7: WHAT IT MOVES"}, {"7 AMOUNT", "MOD SLOT 7: HOW MUCH"}, {"8 SOURCE", "MOD SLOT 8: WHAT MOVES IT"}, {"8 DEST", "MOD SLOT 8: WHAT IT MOVES"}, {"8 AMOUNT", "MOD SLOT 8: HOW MUCH"}, {"1 CURVE", "MOD SLOT 1: RESPONSE CURVE"}, {"2 CURVE", "MOD SLOT 2: RESPONSE CURVE"}, {"3 CURVE", "MOD SLOT 3: RESPONSE CURVE"}, {"4 CURVE", "MOD SLOT 4: RESPONSE CURVE"}, {"5 CURVE", "MOD SLOT 5: RESPONSE CURVE"}, {"6 CURVE", "MOD SLOT 6: RESPONSE CURVE"}, {"7 CURVE", "MOD SLOT 7: RESPONSE CURVE"}, {"8 CURVE", "MOD SLOT 8: RESPONSE CURVE"}, 
 		{"MASTER FX", "WHOLE SOUND THROUGH THE EFFECT CHAIN"}, {"MOD FX", "CHORUS, FLANGER, PHASER, COMB, FORMANT"}, {"MOD RATE", "MOD FX SPEED"},
 		{"MOD DEPTH", "MOD FX DEPTH / FEEDBACK"}, {"MOD MIX", "MOD FX AMOUNT"}, {"FX COLOR", "COMB PITCH / FORMANT VOWEL (MOD DEST)"},
@@ -3489,6 +3494,12 @@ static int settingsLoad(void) {   // returns the page you were on last time
 	if (fread(d, sizeof(d), 1, f) == 1 && d[0] == 0x53455431) { if (d[1] >= 0 && d[1] < NPAGES && d[1] != 8) pg = d[1]; gStickMode = d[2] >= 0 && d[2] < 3 ? d[2] : 0; gSpkEq = d[3] & 1; }
 	fclose(f); return pg;
 }
+static int skipRecent(void) {   // a clock skip in the last 3 s (the count itself only ever grows)
+	static int last = 0; static u64 t = 0; u64 now = svcGetSystemTick();
+	if (gClockSkips != last) { last = gClockSkips; t = now ? now : 1; }
+	return t && now - t < SYSCLOCK_ARM11 * 3;
+}
+static int gPageMarkDue = 0, gSeqSaveDue = 0;   // SD writes the main loop makes once it has let go of the voice lock
 static int stickNudge(float* v, float d) {   // move a float param by d of its range, clamped; 1 = changed
 	if (!v || !d) return 0;
 	for (int pg = 0; pg < NPAGES; pg++) for (const Param* p = PAGES[pg]; p->name; p++) if (p->p == v && p->type == PT_F) {
@@ -3529,7 +3540,7 @@ static void drawHeader(int page) {
 	snprintf(st, sizeof(st), "%s%d BPM %dV %d%%", gLatchShow ? "LATCH " : "", gBPM, voices, cpuPct());
 	if (gSeqPlaying) strcat(st, " >");
 	int stx = 396 - (int)strlen(st) * 8;
-	if (stx > sx) text(stx, 18, st, 1, (gClockSkips || gLatchShow) ? WARN : DIM);
+	if (stx > sx) text(stx, 18, st, 1, (skipRecent() || gLatchShow) ? WARN : DIM);
 	if (gEdited) { char pn[16]; snprintf(pn, sizeof(pn), "%.9s", gPatchName); int nx = 396 - (int)strlen(pn) * 8; rect(nx - 2, 1, (int)strlen(pn) * 8 + 4, 11, WARN); text(nx, 3, pn, 1, BG); }   // edited: the name turns to the warning colour
 }
 static void drawFooter(int page, int sel) {
@@ -3633,7 +3644,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		for (int c = 0; c < NCS; c++) if (csUsable(c)) { csTot++; if (gCsOwner[c] >= 0) cs++; }
 		snprintf(s, sizeof(s), "NOTES %d  FX BUS %s", voices, busActive() ? (gBusSeen ? "OK" : "ON") : (gBusFail ? "FALLBK" : "OFF")); text(6, 186, s, 1, DIM);
 		{ u32 dr = gAudioOK ? ndspGetDroppedFrames() : 0;
-			snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d%s", dsp, cs, csTot, dr ? " DROP" : gClockSkips ? " SKIP" : ""); text(6, 198, s, 1, (dr || gClockSkips) ? WARN : DIM); }
+			snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d%s", dsp, cs, csTot, dr ? " DROP" : skipRecent() ? " SKIP" : ""); text(6, 198, s, 1, (dr || skipRecent()) ? WARN : DIM); }
 		if (gGpuHung) { snprintf(s, sizeof(s), "GPU HUNG AFTER %d FRAMES", gGpuFrames); text(6, 210, s, 1, WARN); }
 		else {
 			int pct = cpuPct();
@@ -4112,7 +4123,7 @@ static void drawMotion(void) {
 static int gMotDrawL = -1, gMotPrevI = -1;
 static int motionTouch(int x, int y, int press, int release) {
 	if (release) { gMotDrawL = -1; gMotPrevI = -1; return 0; }
-	if (press && y >= 40 && y < 56 && x < 96) { gMotBars = (gMotBars + 1) % 4; return 1; }
+	if (press && y >= 40 && y < 56 && x < 96) { gMotBars = (gMotBars + 1) % 4; gEdited = 1; return 1; }
 	int l = (y - MOT_Y) / MOT_LH; if (y < MOT_Y || l < 0 || l >= NMOT) { gMotPrevI = -1; return 0; }
 	int ly = y - MOT_Y - l * MOT_LH, h = MOT_LH - 4;
 	if (x < 76) {
@@ -4120,7 +4131,7 @@ static int motionTouch(int x, int y, int press, int release) {
 		if (ly < 16) gMotTgt[l] = (gMotTgt[l] + 1) % NMTGT;
 		else if (x < 38) gMotOn[l] = !gMotOn[l];
 		else { if (gMotRec == l) gMotRec = -1; else { gMotRec = l; gMotRecArmed = 1; say("MOTION: REC STARTS AT THE NEXT LOOP"); } }
-		return 1;
+		gEdited = 1; return 1;
 	}
 	if (press) gMotDrawL = l;
 	if (gMotDrawL != l) return 0;
@@ -4131,7 +4142,7 @@ static int motionTouch(int x, int y, int press, int release) {
 	for (int j = a; j <= b; j++) { float t = b > a ? (float)(j - (gMotPrevI < i ? a : b)) / (b - a) : 1; if (t < 0) t = -t; gMot[l][j] = (u8)((pv + (v - pv) * t) * 255); }
 	gMot[l][i] = (u8)(v * 255); gMotPrevI = i;
 	if (!gMotOn[l]) gMotOn[l] = 1;   // drawing a lane switches it on
-	return 1;
+	gEdited = 1; return 1;
 }
 static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 matrix, 1 LFO 1+2, 2 draw LFO 3, 3 draw LFO 4, 4 motion
 // MATRIX view: the 8 mod slots as two columns, source on the left, destination on the right, a line between them.
@@ -4419,7 +4430,7 @@ static int modViewTouch(int x, int y, int press, int release) {   // 1 = redraw
 			if (b == 3 && i % 4) v = gDl[k][i - 1];
 			gDl[k][i] = v;
 		}
-		return 1;
+		gEdited = 1; return 1;
 	}
 	if (y < 46 || y >= 196) { gDrawPrevX = -1; return 0; }
 	int i = (x - 8) * 64 / 304; if (i < 0) i = 0; if (i > 63) i = 63;
@@ -4432,7 +4443,7 @@ static int modViewTouch(int x, int y, int press, int release) {   // 1 = redraw
 	}
 	gDl[k][i] = v; gDrawPrevX = i;
 	if (release) gDrawPrevX = -1;
-	return 1;
+	gEdited = 1; return 1;
 }
 // FX ORDER (MASTER FX page): the chain as a row of blocks. Drag one sideways and it moves there while you listen;
 // lit = the block is doing something. PUMP and the limiter stay at the end. RESET puts the default order back.
@@ -4474,7 +4485,7 @@ static void drawChainView(void) {
 static int chainTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (release) { int r = gChDrag >= 0; gChDrag = -1; return r; }
 	if (press) {
-		if (x >= 258 && y >= TAB_H + 20 && y < TAB_H + 36) { u8 d[NFXB]; for (int i = 0; i < NFXB; i++) d[i] = i; fxOrderSet(d); say("FX ORDER: DEFAULT"); return 1; }
+		if (x >= 258 && y >= TAB_H + 20 && y < TAB_H + 36) { u8 d[NFXB]; for (int i = 0; i < NFXB; i++) d[i] = i; fxOrderSet(d); gEdited = 1; say("FX ORDER: DEFAULT"); return 1; }
 		if (y < CH_Y - 8 || y >= CH_Y + CH_H + 8) return 0;
 		for (int i = 0; i < NFXB; i++) if (x >= CH_X(i) && x < CH_X(i) + 46) { gChDrag = i; gChDragX = x; return 1; }
 		return 0;
@@ -4486,7 +4497,7 @@ static int chainTouch(int x, int y, int press, int release) {   // 1 = redraw
 		u8 o[NFXB]; for (int i = 0; i < NFXB; i++) o[i] = gFxOrder[i];
 		u8 b = o[gChDrag];
 		if (to > gChDrag) for (int i = gChDrag; i < to; i++) o[i] = o[i + 1]; else for (int i = gChDrag; i > to; i--) o[i] = o[i - 1];
-		o[to] = b; fxOrderSet(o); gChDrag = to;
+		o[to] = b; fxOrderSet(o); gChDrag = to; gEdited = 1;
 	}
 	return 1;
 }
@@ -4563,7 +4574,7 @@ static int xyTouch(int x, int y, int press, int release) {   // 1 = redraw
 	float np = (x - 4) / 311.0f, nc = 1.0f - (y - top) / (float)(h - 1);
 	np = np < 0 ? 0 : np > 1 ? 1 : np; nc = nc < 0 ? 0 : nc > 1 ? 1 : nc;
 	float* xp; float* yp; int xd, yd; xyAxes(&xp, &yp, &xd, &yd); *xp = np; *yp = nc;
-	gXYmod = nc * 2 - 1;
+	gXYmod = nc * 2 - 1; gEdited = 1;
 	return 1;
 }
 static void drawVisTiles(void) {   // VISUALIZER: one tile per mode, plus OVERLAY
@@ -7426,7 +7437,8 @@ int main(void) {
 		if (fabsf(sy) < 0.001f) sy = 0;
 		float cx = sx;
 		gStick = sy;
-		if (gStickMode) {   // PAGE / MACROS: the pad pushes two values up and down (hold it over to keep moving)
+		int stickRouted = 0; for (int m = 0; m < NMOD; m++) if (gMod[m].src == SRC_STICK && gMod[m].amt != 0) stickRouted = 1;
+		if (gStickMode && !stickRouted) {   // PAGE / MACROS (a patch that routes STICK keeps bend + STICK): the pad pushes two values up and down (hold it over to keep moving)
 			float* px_ = NULL; float* py_ = NULL;
 			if (gStickMode == 2) { px_ = &gMacro[0]; py_ = &gMacro[1]; }
 			else switch (page) {
@@ -7525,7 +7537,7 @@ int main(void) {
 		}
 		if (gVoiceMode >= 3 && (gDrumBuilt != gVoiceMode - 3 || gDrumCh[3] < 0)) { kitEnsure(); botDirty = 1; }
 		if (gTapeKeys) gTapeStop = !(curKey >= 0 || gHeldN > 0 || gArpN > 0);   // SLOWDOWN: the loop runs while you hold notes
-		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; if (!g) { gStepEd = -1; seqSave(); } } }
+		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; if (!g) { gStepEd = -1; gSeqSaveDue = 1; } } }
 		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }
 		{ int m = page == 4; if (m != gShapeOn) { gShapeOn = m; gShDrag = -1; botDirty = 1; } }
 		{ int m = page == 10; if (m != gChainOn) { gChainOn = m; gChDrag = -1; botDirty = 1; } }
@@ -7572,7 +7584,7 @@ int main(void) {
 			if (!m3 && (gArpOnN || gSeqPlaying)) { m3 = 1; crashMark("ARP/SEQ RUNNING"); }
 			if (!m4 && visActive(page)) { m4 = 1; crashMark("GPU VISUALS"); }
 			static int lastMarkPage = -1;
-			if (page != lastMarkPage) { lastMarkPage = page; settingsSave(page); char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
+			if (page != lastMarkPage) { lastMarkPage = page; gPageMarkDue = 1; }   // written after the voice lock is released
 		}
 		gFxModVal = modSum(DST_FXP, newestVoice());
 		if (gAudioOK) voicesUpdate(dt, cx + gMidiBend);
@@ -7582,6 +7594,10 @@ int main(void) {
 			if (any) { gBusWait += dt; if (gBusWait > 1.5f) { gBusFail = 1; topDirty = 1; } }
 		}
 		LightLock_Unlock(&gVoiceLock);
+		// SD writes wait until here, so a page press never holds the lock the audio tick needs
+		if (gPageMarkDue) { gPageMarkDue = 0; settingsSave(page); char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
+		if (gSeqSaveDue) { gSeqSaveDue = 0; LightLock_Lock(&gVoiceLock); seqSnap(); LightLock_Unlock(&gVoiceLock); seqWriteSnap(); }
+		{ static int sk = 0; int now = skipRecent(); if (now != sk) { sk = now; topDirty = 1; } }
 
 		memset(on, 0, sizeof(on));
 		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note < 128) on[gV[i].note] = 1;
@@ -7626,7 +7642,8 @@ int main(void) {
 					int w = (int)strlen(gCallTxt) * 16 + 16; if (bar && w < 160) w = 160;
 					int mdst = cp ? paramDst(cp->p) : -1, msl = -1; float mamt = 0;
 					if (mdst >= 0) for (int m = 0; m < NMOD; m++) if (gMod[m].src != SRC_OFF && gMod[m].dst == mdst && fabsf(gMod[m].amt) > fabsf(mamt)) { mamt = gMod[m].amt; msl = m; }
-					char mtx[32] = ""; if (msl >= 0) { snprintf(mtx, sizeof(mtx), "< %s %+d%%", SRC_NAMES[gMod[msl].src], (int)lroundf(mamt * 100)); if ((int)strlen(mtx) * 8 + 20 > w) w = (int)strlen(mtx) * 8 + 20; }
+					int mcount = 0; if (mdst >= 0) for (int m = 0; m < NMOD; m++) if (gMod[m].src != SRC_OFF && gMod[m].dst == mdst && gMod[m].amt != 0) mcount++;
+					char mtx[32] = ""; if (msl >= 0) { if (mcount > 1) snprintf(mtx, sizeof(mtx), "< %s %+d%% +%d MORE", SRC_NAMES[gMod[msl].src], (int)lroundf(mamt * 100), mcount - 1); else snprintf(mtx, sizeof(mtx), "< %s %+d%%", SRC_NAMES[gMod[msl].src], (int)lroundf(mamt * 100)); if ((int)strlen(mtx) * 8 + 20 > w) w = (int)strlen(mtx) * 8 + 20; }
 					int x = 200 - w / 2, h = (bar ? 52 : 40) + (msl >= 0 ? 12 : 0);
 					rect(x, 96, w, h, RGB3(TH->tab)); outline(x, 96, w, h, RGB3(TH->line));
 					if (msl >= 0) text(200 - (int)strlen(mtx) * 4, 96 + h - 12, mtx, 1, RGB3(TH->tabTxt));   // what's moving it

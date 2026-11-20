@@ -22,9 +22,12 @@ static void SCRIPT(int fr) {
 	if (fr == 34) { gXyMode = 0; gMod[2].src = SRC_LFO1; gMod[2].dst = DST_CUTOFF; gMod[2].amt = 0.8f; midiPush(0x90, 50, 100); }
 	if (fr == 60) { shotBot("shots/xy_ghost.ppm"); if (!xyModulated()) fail("XY ghost: an LFO on cutoff should show"); midiPush(0x80, 50, 0); gMod[2].src = SRC_OFF; }
 	// circle pad PAGE mode on OSC A: X pushes WT POS
-	if (fr == 35) { gStickMode = 1; pos0 = gOsc[0].pos; if (pos0 > 0.8f) gOsc[0].pos = pos0 = 0.2f; }
+	if (fr == 35) { gStickMode = 1; for (int m = 0; m < NMOD; m++) if (gMod[m].src == SRC_STICK) gMod[m].src = SRC_OFF; pos0 = gOsc[0].pos; if (pos0 > 0.8f) gOsc[0].pos = pos0 = 0.2f; }
 	if (fr >= 36 && fr < 66) CX = 150;
-	if (fr == 68) { if (gOsc[0].pos < pos0 + 0.1f) fail("CIRCLE PAD PAGE: holding right should move WT POS (%.2f -> %.2f)", pos0, gOsc[0].pos); gStickMode = 0; }
+	if (fr == 68) { if (gOsc[0].pos < pos0 + 0.1f) fail("CIRCLE PAD PAGE: holding right should move WT POS (%.2f -> %.2f)", pos0, gOsc[0].pos); gMod[7].src = SRC_STICK; gMod[7].amt = 0.5f; pos0 = gOsc[0].pos; }
+	if (fr == 69) CX = 150;
+	if (fr == 70 && fabsf(gOsc[0].pos - pos0) > 0.001f) fail("CIRCLE PAD PAGE: a patch that routes STICK should keep bend + STICK");
+	if (fr == 70) { gStickMode = 0; gMod[7].src = SRC_OFF; gMod[7].amt = 0; }
 	// matrix: long-press the source box clears the slot, a short tap opens the list
 	if (fr == 70) { TOUCH = 1; TX = 80; TY = 8; }   // MATRIX chip
 	if (fr == 74) { gMod[0].src = SRC_LFO1; gMod[0].dst = DST_CUTOFF; gMod[0].amt = 0.5f; gMod[1].src = SRC_ENV2; gMod[1].amt = 0.3f; }
@@ -56,12 +59,20 @@ static void SCRIPT(int fr) {
 	}
 	// a held key survives a small slip: touch C# then drift 2 px out of its area
 	if (fr >= 188 && fr < 194) { TOUCH = 1; TY = KB_Y + 10; TX = (int)(320.0f / 14 * 0.7f) - BLK_GRACE + (fr >= 191 ? -2 : 1); gScale = 0; }
+	if (fr == 195) {   // edits that patchCapture saves must mark the patch edited
+		gEdited = 0; gModView = 4; motionTouch(150, MOT_Y + 10, 1, 0); if (!gEdited) fail("edited: drawing a motion lane");
+		gEdited = 0; gModView = 2; modViewTouch(100, 100, 1, 0); if (!gEdited) fail("edited: drawing LFO 3");
+		gEdited = 0; chainTouch(CH_X(0) + 10, CH_Y + 5, 1, 0); chainTouch(CH_X(2) + 20, CH_Y + 5, 0, 0); chainTouch(0, 0, 0, 1); if (!gEdited) fail("edited: moving an FX block");
+		u8 d[NFXB] = {0, 1, 2, 3, 4}; fxOrderSet(d);
+		gEdited = 0; gXyMode = 0; xyTouch(100, XY_Y + 40, 1, 0); xyTouch(0, 0, 0, 1); if (!gEdited) fail("edited: the XY pad");
+		gModView = 0;
+	}
 	if (fr == 193 && !(gHeldN && (gHeld[0] % 12) == 1)) fail("keys: a 2 px slip off C# shouldn't change the note (held %d)", gHeldN ? gHeld[0] : -1);
 }
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	FILE* f = fopen("sd/settings.bin", "wb"); int d[4] = {0x53455431, 1, 0, 0}; fwrite(d, sizeof(d), 1, f); fclose(f);
-	loadFont(); FRMAX = 197; app_main();
+	loadFont(); FRMAX = 198; app_main();
 	remove("sd/settings.bin");
 	printf("adv: last page, XY modes, PERF, circle pad, matrix hold, HUD ghost, vis tiles, hardware view\n");
 	return gFails ? 1 : 0;
