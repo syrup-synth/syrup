@@ -83,6 +83,9 @@ static void fft(cpx* a, int n, int inv) {
 
 static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0, gGpuCopy = 1;
 static int gDrums, gKit, gKickPat, gSnarePat, gHatPat; static float gDrumLevel;
+// v12 patch fields live with the looper, CHIP > FX and the XY pad further down
+static int gLoopMode, gLoopBars, gXyMode, gThru, gTapeStop, gTapeKeys; static float gLoopSpeed, gLoopWow, gThruCut, gThruRes, gThruEnv, gThruLfo, gEchoWow;
+static void drumsChanged(void); static void drumRecChanged(void);
 // chip quirks: DSP GRIT (the DSP's interpolation off), FILTER SCREAM (its biquad pushed past stable), MIX OVERDRIVE (its
 // channel volumes past full, clipped at the 16-bit ceiling), ECHO PITCH (the chip echo replayed at another rate than it records)
 static int gQGrit = 0, gCsEchoPitch = 0; static float gQScream = 0, gQMixDrive = 0; static const char* GRIT_NAMES[3] = {"OFF", "LINEAR", "RAW"};
@@ -92,7 +95,7 @@ static u8 gMot[4][64]; static int gMotTgt[4], gMotOn[4], gMotRec, gMotBars; stat
 static int gCamVid, gMidiNet, gAddEdit, gOfType; static float gOfCut, gOfRes, gOfDrive, gOfEnv; static const char* OFT_NAMES[14]; static float gWtScan; static const char* VID_NAMES[3];
 static void chipSet(float lv);
 static void grainsChanged(void);
-static const char* KIT_NAMES[4]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[5];
+static const char* KIT_NAMES[5]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[5];
 #define NVISM 11
 static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM", "VOXELS", "VOXEL TABLE", "TUNNEL", "KALEIDO", "RIPPLES", "PLASMA"};
 static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
@@ -1963,8 +1966,14 @@ typedef struct {
 	s8 dl[2][64]; float dlRate[2]; int dlSync[2];   // v9: drawn LFO 3 / 4
 	u8 mot[4][64]; int motTgt[4], motOn[4], motBars;   // v10: motion lanes
 	int qGrit, csEchoPitch; float qScream, qMixDrive;   // v11: chip quirks
+	// v12: a patch can bring a beat (hasBeat), a loop setup (hasLoop), CHIP > FX, tape wow and the XY pad mode
+	int hasBeat, drums, kit, kickPat, snarePat, hatPat, euHits[3], euRot[3], euLen, drumRec; float drumLevel, swing;
+	int hasLoop, loopBars; float loopSpeed, loopWow;
+	int thru, xyMode, tapeKeys; float thruCut, thruRes, thruEnv, thruLfo, echoWow;
 } SPatch;
-#define PATCH_MAGIC 0x5359523B   // "SYR;" (v11)
+#define PATCH_MAGIC 0x5359523C   // "SYR<" (v12)
+#define PATCH_MAGIC11 0x5359523B // v11 (no beat / loop / CHIP > FX / XY mode)
+#define PATCH_V11_SIZE offsetof(SPatch, hasBeat)
 #define PATCH_MAGIC10 0x5359523A // v10 (no chip quirks)
 #define PATCH_V10_SIZE offsetof(SPatch, qGrit)
 #define PATCH_MAGIC9 0x53595239  // v9 (no motion lanes)
@@ -2018,6 +2027,10 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	for (int i = 0; i < 64; i++) { p->dl[0][i] = (s8)(sinf(TWO_PI * i / 64) * 127); p->dl[1][i] = (s8)((i < 32 ? i * 4 - 64 : 191 - i * 4) * 127 / 64); }
 	p->dlRate[0] = 1.0f; p->dlRate[1] = 0.5f; p->dlSync[0] = p->dlSync[1] = 0;
 	memset(p->mot, 128, sizeof(p->mot)); p->motTgt[0] = 0; p->motTgt[1] = 2; p->motTgt[2] = 4; p->motTgt[3] = 12; memset(p->motOn, 0, sizeof(p->motOn)); p->motBars = 1;
+	p->hasBeat = 0; p->drums = 0; p->kit = 0; p->kickPat = 1; p->snarePat = 1; p->hatPat = 1; p->drumRec = 0; p->drumLevel = 0.8f; p->swing = 0;
+	p->euHits[0] = 5; p->euHits[1] = 2; p->euHits[2] = 11; p->euRot[0] = 0; p->euRot[1] = 4; p->euRot[2] = 0; p->euLen = 16;
+	p->hasLoop = 0; p->loopBars = 0; p->loopSpeed = 0; p->loopWow = 0;
+	p->thru = 0; p->xyMode = 0; p->tapeKeys = 0; p->thruCut = 1.0f; p->thruRes = 0.1f; p->thruEnv = 0; p->thruLfo = 0; p->echoWow = 0;
 }
 
 #define OA p->osc[0]
@@ -2413,8 +2426,8 @@ static void q_vowelpad(SPatch* p) {   // no quirks: slow vowel morph, breath ben
 
 typedef struct { const char* name; void (*fn)(SPatch*); } PresetDef;
 #define MAXPRE 15
-#define NSTYLES 16   // last style = USER
-static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "CHIPSET", "MOTION", "QUIRKS", "RAVE", "DRUMS", "USER"};
+#define NSTYLES 17   // last style = USER
+static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "CHIPSET", "MOTION", "QUIRKS", "RAVE", "DRUMS", "GROOVE", "USER"};
 #define STYLE_SPACE 9
 // ---- RAVE (euro house and rave: pads, stabs, piano, organ bass, hoover)
 static void r_ravestrings(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 4; OA.detune = 20; OA.width = 1; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = 1; OB.uni = 2; OB.detune = 12; OB.level = 0.3f;
@@ -2480,6 +2493,40 @@ static void p_gate85(SPatch* p) { p->master = 0.55f; OA.table = T_VOWELS; OA.pos
 static void p_spinpad(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.uni = 3; OA.detune = 12; OA.width = 1; ENV1(0.5f, 0, 1.0f, 1.0f, 1.6f);
 	MOD(2, SRC_SPINX, DST_PAN, 0.8f); MOD(3, SRC_SPINY, DST_APOS, 0.5f); OUTF(OF_CREAMY, 0.6f, 0.2f, 0, 0); REVB(0.35f, RV_HALL); }   // rotate the console to swing it around
 static void h_gb4(SPatch* p) { p->master = 0.6f; OA.table = T_PWM; OA.pos = 0.5f; p->lofiBits = 5; p->qGrit = 2; CHIP(0.5f, 0, -1); ENV1(0.002f, 0, 0.3f, 0.7f, 0.1f); p->voiceMode = 2; }   // both crushers at once
+// ---- v12 patches: a beat, a loop setup, CHIP > FX or the XY pad mode come with the sound
+// GROOVE
+static void g_boombap(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.pos = TRI; OA.oct = -1; p->subLevel = 0.45f; p->voiceMode = 1; p->glide = 0.03f;
+	ENV1(0.004f, 0, 0.5f, 0.3f, 0.15f); OUTF(OF_L24, 0.32f, 0.2f, 0.25f, 0); p->eqLow = 1.5f;
+	p->hasBeat = 1; p->drums = 1; p->kit = 1; p->kickPat = 6; p->snarePat = 1; p->hatPat = 5; p->swing = 0.14f; p->bpm = 90; }   // 909: BOOM BAP, BACKBEAT, SHUFFLE
+static void g_trap(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -1; p->voiceMode = 2; p->glide = 0.08f; p->lofiBits = 2; p->lofiRate = 0.35f;
+	ENV1(0.003f, 0, 1.2f, 0.6f, 0.3f); DRV(1, 0.35f); p->eqLow = 2;
+	p->hasBeat = 1; p->drums = 1; p->kit = 0; p->kickPat = 3; p->snarePat = 3; p->hatPat = 4; p->bpm = 140; }   // 808 through 12 bits, gliding
+static void g_euclid(SPatch* p) { p->master = 0.6f; OA.table = T_PWM; OA.pos = 0.25f; CHIP(0.45f, 1, 0); ENV1(0.002f, 0, 0.25f, 0.0f, 0.12f); DLYS(0.2f, S8D, DL_LOFI);
+	p->hasBeat = 1; p->drums = 1; p->kit = 3; p->kickPat = 8; p->snarePat = 7; p->hatPat = 7; p->euLen = 12;
+	p->euHits[0] = 3; p->euHits[1] = 2; p->euHits[2] = 7; p->euRot[0] = 0; p->euRot[1] = 3; p->euRot[2] = 1; p->bpm = 120; }   // 12-step euclid rows on the chip kit
+static void g_beatbox(SPatch* p) { p->master = 0.65f; OA.table = T_BASIC; OA.pos = 0.2f; OB.on = 1; OB.table = T_BASIC; OB.pos = TRI; OB.level = 0.4f; ENV1(0.003f, 0, 1.0f, 0.3f, 0.4f); REVB(0.15f, RV_ROOM);
+	p->hasBeat = 1; p->drums = 1; p->kit = 0; p->kickPat = 7; p->snarePat = 6; p->hatPat = 6; p->drumRec = 1; p->bpm = 95; }   // MIC TAP armed: knock the beat in
+static void g_loopcomp(SPatch* p) { p->master = 0.65f; OA.table = T_HARMONIX; OA.pos = 0.45f; ENV1(0.002f, 0, 0.4f, 0.2f, 0.2f); OUTF(OF_BP, 0.5f, 0.25f, 0, 0); p->eqLow = -2;
+	GRN(0.4f, 0.5f, 0.2f, 0, 0.5f); p->grainSrc = 0; p->hasLoop = 1; p->loopBars = 1; }   // dry and mid-focused to sit over its own 2-bar loop; grains read the loop
+static void g_tapeloop(SPatch* p) { p->master = 0.65f; OA.table = T_BASIC; OA.pos = SINE; OA.warp = W_FM; OA.warpAmt = 0.2f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 2;
+	ENV2(0.0f, 0, 0.6f, 0.1f, 0.4f); MOD(2, SRC_ENV2, DST_AWARP, 0.35f); ENV1(0.002f, 0, 1.4f, 0.3f, 0.5f); DLYS(0.15f, S8D, DL_TAPE); p->dlyWow = 0.6f; REVB(0.15f, RV_ROOM);
+	p->hasLoop = 1; p->loopBars = 1; p->loopWow = 0.6f; }   // record it, and the loop wobbles like an old cassette
+static void g_variecho(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = TRI; OA.level = 0.3f; CHIP(0.6f, 2, 0); ENV1(0.002f, 0, 0.3f, 0.0f, 0.15f);
+	p->csEcho = 0.55f; p->csEchoFb = 0.5f; p->csEchoT = 1; p->echoWow = 0.8f; }   // the chip echo's repeats bend
+static void g_slowdown(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.uni = 3; OA.detune = 12; ENV1(0.3f, 0, 1.0f, 0.9f, 1.2f); REVB(0.3f, RV_HALL);
+	p->hasLoop = 1; p->loopBars = 1; p->tapeKeys = 1; }   // the loop runs while you hold notes and winds down when you let go
+// CHIP
+static void h_chipsweep(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = TRI; OA.level = 0.2f; CHIP(0.8f, 2, 0); p->voiceMode = 2; p->glide = 0.03f;
+	ENV1(0.002f, 0, 0.5f, 0.6f, 0.2f); ENV2(0.0f, 0, 0.35f, 0.1f, 0.2f); p->thru = 1; p->thruCut = 0.2f; p->thruRes = 0.7f; p->thruEnv = 0.7f; }   // the chip square with a real filter envelope
+static void h_filtdrums(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -1; OA.level = 0.7f; p->voiceMode = 1; ENV1(0.003f, 0, 0.4f, 0.6f, 0.15f);
+	LFO(0, LS_SINE, 0, 0.5f); p->lfoSync[0] = LY_1BAR; p->thru = 1; p->thruCut = 0.45f; p->thruRes = 0.5f; p->thruLfo = 0.3f; p->ott = 0.3f;
+	p->hasBeat = 1; p->drums = 1; p->kit = 1; p->kickPat = 1; p->snarePat = 1; p->hatPat = 2; p->drumLevel = 0.55f; p->bpm = 124; }   // the drums open and close once a bar
+static void h_ottbass(SPatch* p) { p->master = 0.65f; OA.table = T_BASIC; OA.pos = SQR; OA.oct = -1; OA.level = 0.3f; CHIP(0.8f, 3, -1); p->subLevel = 0.5f; p->voiceMode = 1;
+	ENV1(0.002f, 0, 0.4f, 0.8f, 0.1f); ENV2(0.0f, 0, 0.2f, 0.0f, 0.1f); p->thru = 1; p->thruCut = 0.45f; p->thruEnv = 0.3f; p->ott = 0.6f; }   // chip square + sub through OTT
+// PAD
+static void p_xymorph(SPatch* p) { p->master = 0.6f; OA.table = T_GROWL; OA.warp = W_BENDPM; OA.uni = 3; OA.detune = 12; OA.width = 1; ENV1(0.4f, 0, 1.0f, 1.0f, 1.4f);
+	p->xyMode = 1; MOD2(0, SRC_M1, DST_APOS, 0.8f); MOD2(1, SRC_M2, DST_AWARP, 0.8f); MOD2(2, SRC_M1, DST_FXP, 0.5f); MOD2(3, SRC_M2, DST_OFCUT, 0.5f);
+	MFX(FX_FORMANT, 0.1f, 0.5f, 0.35f); OUTF(OF_CREAMY, 0.5f, 0.2f, 0, 0); REVB(0.3f, RV_HALL); }   // the XY pad plays MACRO 1 + 2: four moves at once
 // ---- DRUMS: the keys and pads play a drum kit (voice MODE ... KIT); arp, sequencer and MIDI play it too
 static void d_808(SPatch* p) { p->voiceMode = 3; p->master = 0.8f; }
 static void d_909(SPatch* p) { p->voiceMode = 4; p->master = 0.8f; }
@@ -2493,7 +2540,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"CHIP HERO", l_chiphero}, {"G-FUNK SINE", l_glidesine}, {"RINGER", l_ringer}, {"ACID SCREAM", l_acidscream}, {"PAD BENDER", l_bender},
 	 {"FLUTE", l_flute}, {"STICK THEREMIN", l_theremin}, {"XY SCULPT", l_xysculpt}, {"BUSY BOY", l_busyboy}},
 	{{"WARM FELT", p_felt}, {"GLASS HOUR", p_glass}, {"VOWEL DUSK", p_vowel}, {"COMB WEATHER", p_combweather}, {"CLOUD BANK", p_cloudbank}, {"STRINGS 77", p_strings77},
-	 {"DRAWN SWELL", p_drawnswell}, {"MOTION HAZE", p_haze}, {"SWELL BACKWARD", p_reverse}, {"DEEP SONAR", p_sonar}, {"GRAIN CHOIR", p_hallchoir}, {"GATE 85", p_gate85}, {"SPIN PAD", p_spinpad}},
+	 {"DRAWN SWELL", p_drawnswell}, {"MOTION HAZE", p_haze}, {"SWELL BACKWARD", p_reverse}, {"DEEP SONAR", p_sonar}, {"GRAIN CHOIR", p_hallchoir}, {"GATE 85", p_gate85}, {"SPIN PAD", p_spinpad}, {"XY MORPH", p_xymorph}},
 	{{"EP SATURDAY", k_epsat}, {"DRAWBAR", k_drawbar}, {"LOFI UPRIGHT", k_lofiup}, {"CLAV FUNK", k_clav}, {"WURLI BARK", k_wurli}, {"VIBES", k_vibes},
 	 {"TOY KEYS", k_toy}, {"HARPSI", k_harpsi}, {"ROTARY", k_rotary}, {"CUMBIA ORGANO", k_cumbiaorg}, {"REEL PIANO", k_reel}, {"GLASS TOP", k_glasstop}},
 	{{"NYLON", u_nylon}, {"MARIMBA WOOD", u_marimba}, {"KALIMBA", u_kalimba}, {"DIGI HARP", u_digiharp}, {"STAB 1999", u_stab99}, {"KOTO SPRING", u_koto},
@@ -2505,7 +2552,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"TIDE POOL", x_tidepool}, {"FROZEN TABLE", x_frozen}, {"NET STATIC", x_netstatic}, {"TAPE ROOM", x_taperoom}, {"BROWN SEA", x_sea}, {"GEIGER", x_geiger},
 	 {"DRONE 60", x_drone60}, {"SHIMMER CLOUD", x_shimmercloud}, {"SONAR PING", x_sonarping}, {"STORM FRONT", x_storm}, {"FREEZE GLASS", x_freezeglass}, {"JET COMB", x_jetcomb}, {"WIRE DRONE", x_wiredrone}},
 	{{"GB WAVE", h_gbwave}, {"NES PULSE", h_nes}, {"C64 PWM", h_c64}, {"ARCADE ARP", h_arcade}, {"POWER UP", h_powerup}, {"LASER", h_laser},
-	 {"8-BIT BASS", h_bass8}, {"BIT ORGAN", h_bitorgan}, {"SQUARE CHOIR", h_squarechoir}, {"4-BIT GB", h_gb4}},
+	 {"8-BIT BASS", h_bass8}, {"BIT ORGAN", h_bitorgan}, {"SQUARE CHOIR", h_squarechoir}, {"4-BIT GB", h_gb4}, {"CHIP SWEEP", h_chipsweep}, {"FILTER DRUMS", h_filtdrums}, {"OTT CHIP BASS", h_ottbass}},
 	{{"ORBIT PAD", s_orbitpad}, {"HELICOPTER", s_heli}, {"CIRCLE ARP", s_circlearp}, {"AROUND YOU", s_aroundyou}, {"3D BELLS", s_bells}, {"SPIRAL PLUCK", s_spiral},
 	 {"PASSING CAR", s_passing}, {"STEER ORBIT", s_tilt}},
 	{{"PSG STACK", c_psgstack}, {"ECHO CANYON", c_canyon}, {"CRUSH BELL", c_crushbell}, {"8-BIT CHOIR", c_choir8}, {"CAPTURE DUB", c_capturedub},
@@ -2520,6 +2567,8 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"FLANGE PAD", r_flangepad}, {"HOUSE PIANO", r_housepiano}, {"ORGAN BASS", r_organbass}, {"RAVE STAB", r_ravestab}, {"DEEP CHORD", r_deepchord},
 	 {"EURO BASS", r_eurobass}, {"EURO LEAD", r_eurolead}, {"HOOVER", r_hoover}},
 	{{"808 KIT", d_808}, {"909 KIT", d_909}, {"LOFI KIT", d_lofi}, {"CHIP KIT", d_chip}, {"PERC KIT", d_perc}},
+	{{"BOOM BAP BASS", g_boombap}, {"TRAP SP-12", g_trap}, {"EUCLID CHIP", g_euclid}, {"BEATBOX TAP", g_beatbox}, {"LOOP PARTNER", g_loopcomp},
+	 {"TAPE LOOP", g_tapeloop}, {"VARIECHO", g_variecho}, {"SLOWDOWN", g_slowdown}},
 };
 #define NUSER 8
 static SPatch gUser[NUSER];
@@ -2536,12 +2585,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER) || len == (long)(PATCH_V11_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10 || t.magic == PATCH_MAGIC11)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -2577,6 +2626,10 @@ static void patchCapture(SPatch* p) {
 	p->dlyMix = gDlyMix; p->dlyWow = gDlyWow; p->dlySat = gDlySat; p->revMix = gRevMix; p->ott = gOtt; p->pump = gPump; p->lofiRate = gLofiRate;
 	p->chipLevel = gChipLevel; p->chipDuty = gChipDuty; p->chipOct = gChipOct; p->csEcho = gCsEcho; p->csEchoFb = gCsEchoFb; p->csEchoT = gCsEchoT; p->orbit = gOrbit; p->orbitRate = gOrbitRate; p->revType = gRevType; p->dlyType = gDlyType; p->grainMode = gGrains; p->grainSrc = gGrainSrc; p->grainSize = gGrainSize; p->grainScan = gGrainScan; p->grainSpray = gGrainSpray; p->grainPitch = gGrainPitch; p->grainLevel = gGrainLevel; p->ofType = gOfType; p->ofCut = gOfCut; p->ofRes = gOfRes; p->ofDrive = gOfDrive; p->ofEnv = gOfEnv;
 	p->qGrit = gQGrit; p->csEchoPitch = gCsEchoPitch; p->qScream = gQScream; p->qMixDrive = gQMixDrive;
+	p->hasBeat = gDrums; p->drums = gDrums; p->kit = gKit; p->kickPat = gKickPat; p->snarePat = gSnarePat; p->hatPat = gHatPat; p->drumRec = 0; p->drumLevel = gDrumLevel; p->swing = gSwing;
+	for (int r = 0; r < 3; r++) { p->euHits[r] = gEuHits[r]; p->euRot[r] = gEuRot[r]; } p->euLen = gEuLen;
+	p->hasLoop = gLoopMode != 0 || gLoopSpeed != 0 || gLoopWow > 0; p->loopBars = gLoopBars; p->loopSpeed = gLoopSpeed; p->loopWow = gLoopWow;
+	p->thru = gThru; p->xyMode = gXyMode; p->tapeKeys = gTapeKeys; p->thruCut = gThruCut; p->thruRes = gThruRes; p->thruEnv = gThruEnv; p->thruLfo = gThruLfo; p->echoWow = gEchoWow;
 	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) p->dl[k][i] = (s8)(gDl[k][i] * 127); p->dlRate[k] = gDlRate[k]; p->dlSync[k] = gDlSync[k]; }
 	memcpy(p->mot, gMot, sizeof(gMot)); memcpy(p->motTgt, gMotTgt, sizeof(gMotTgt)); memcpy(p->motOn, gMotOn, sizeof(gMotOn)); p->motBars = gMotBars;
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
@@ -2607,6 +2660,19 @@ static void patchApply(const SPatch* p) {
 	gDlyMix = p->dlyMix; gDlyWow = p->dlyWow; gDlySat = p->dlySat; gRevMix = p->revMix; gOtt = p->ott; gPump = p->pump; gLofiRate = p->lofiRate;
 	chipSet(p->chipLevel); gChipDuty = p->chipDuty; gChipOct = p->chipOct; gCsEcho = p->csEcho; gCsEchoFb = p->csEchoFb; gCsEchoT = p->csEchoT; gOrbit = p->orbit; gOrbitRate = p->orbitRate; gRevType = p->revType % NREVT; gDlyType = p->dlyType % NDLYT; dlyTypeChanged();
 	gQGrit = p->qGrit % 3; gCsEchoPitch = p->csEchoPitch; gQScream = p->qScream; gQMixDrive = p->qMixDrive;
+	// v12. Sound settings always follow the patch; a beat or a loop setup only when the patch carries one
+	gThru = p->thru & 1; gThruCut = p->thruCut; gThruRes = p->thruRes; gThruEnv = p->thruEnv; gThruLfo = p->thruLfo; gEchoWow = p->echoWow;
+	gXyMode = p->xyMode >= 0 && p->xyMode < 3 ? p->xyMode : 0;
+	if (gTapeKeys && !p->tapeKeys) gTapeStop = 0;
+	gTapeKeys = p->tapeKeys & 1;
+	if (p->hasLoop) { gLoopBars = p->loopBars >= 0 && p->loopBars < 5 ? p->loopBars : 0; gLoopSpeed = p->loopSpeed; gLoopWow = p->loopWow; }
+	if (p->hasBeat) {
+		gDrums = p->drums & 1; gKit = p->kit >= 0 && p->kit < 5 ? p->kit : 0; gKickPat = p->kickPat % 9; gSnarePat = p->snarePat % 8; gHatPat = p->hatPat % 8;
+		gDrumLevel = p->drumLevel; gSwing = p->swing;
+		for (int r = 0; r < 3; r++) { gEuHits[r] = p->euHits[r] % 17; gEuRot[r] = p->euRot[r] % 16; } gEuLen = p->euLen >= 2 && p->euLen <= 16 ? p->euLen : 16;
+		if (gCsndOK) drumsChanged();
+		if (p->drumRec != gDrumRec) { gDrumRec = p->drumRec % 5; if (gCsndOK) drumRecChanged(); }
+	}
 	if (p->ofType % NOFT != gOfType) { gOfType = p->ofType % NOFT; ofReset(); } gOfCut = p->ofCut; gOfRes = p->ofRes; gOfDrive = p->ofDrive; gOfEnv = p->ofEnv;
 	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) gDl[k][i] = p->dl[k][i] / 127.0f; gDlRate[k] = p->dlRate[k]; gDlSync[k] = p->dlSync[k] % NSYNC; }
 	memcpy(gMot, p->mot, sizeof(gMot)); for (int l = 0; l < 4; l++) { gMotTgt[l] = p->motTgt[l] % 16; gMotOn[l] = p->motOn[l] & 1; } gMotBars = p->motBars & 3; gMotRec = -1; gMotPh = 0;
@@ -2628,19 +2694,20 @@ static void patchApply(const SPatch* p) {
 static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every factory patch to a similar loudness
 	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.82f, 1.42f, 1.42f, 1.32f, 1.28f, 0.68f, 1.00f, 1.00f, 1.00f},
 	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f, 1.00f},
-	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.64f, 1.35f, 1.00f, 1.00f},
+	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.64f, 1.35f, 2.50f, 1.00f},
 	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.11f, 0.95f, 1.00f, 1.00f, 1.00f},
 	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{2.33f, 1.34f, 4.24f, 2.18f, 2.20f, 1.12f, 2.30f, 0.67f, 2.08f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{1.32f, 1.05f, 4.46f, 1.10f, 3.54f, 1.82f, 2.40f, 6.00f, 1.34f, 2.41f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.42f, 1.93f, 1.42f, 1.00f, 1.00f},
-	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 0.76f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 0.76f, 0.76f, 0.70f, 0.80f, 1.00f, 1.00f},
 	{1.30f, 0.81f, 1.34f, 2.99f, 0.90f, 1.37f, 3.46f, 1.10f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 0.60f, 1.20f, 1.20f},   // CHIPSET
 	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 2.00f, 1.60f},   // MOTION
 	{1.73f, 3.00f, 2.80f, 2.50f, 1.60f, 0.70f, 0.69f, 2.50f, 1.86f, 0.80f, 2.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // QUIRKS
 	{1.39f, 2.04f, 1.36f, 1.81f, 1.69f, 1.50f, 1.17f, 1.24f, 2.90f, 3.10f, 2.20f, 1.65f, 1.26f, 1.00f, 1.00f},   // RAVE
 	{1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // DRUMS
+	{0.94f, 0.36f, 1.00f, 0.60f, 2.50f, 0.54f, 1.80f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // GROOVE
 };
 static int presetCount(int style) {
 	if (style == NSTYLES - 1) return NUSER;
@@ -2854,7 +2921,7 @@ static Param P_MASTER[] = {
 	PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
 	PEND};
 static Param P_DRUMS[] = {
-	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 4, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 9, KICKP_NAMES, 0),
+	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 5, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 9, KICKP_NAMES, 0),
 	PE("SNARE", &gSnarePat, 8, SNAREP_NAMES, 0), PE("HAT", &gHatPat, 8, HATP_NAMES, 0), PE("MIC TAP", &gDrumRec, 5, DREC_NAMES, D_DREC), PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0),
 	PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
 	PI_("EUCLID STEPS", &gEuLen, 2, 16, D_EUCLID), PI_("KICK HITS", &gEuHits[0], 0, 16, D_EUCLID), PI_("KICK ROTATE", &gEuRot[0], 0, 15, D_EUCLID),
@@ -3257,8 +3324,8 @@ static void drawTop(int page, int sel, int oct, int latch) {
 	else if (page == 0) {   // preset browser: styles | patches
 		frame(4, 30, 196, 194);
 		for (int i = 0; i < NSTYLES; i++) {
-			int y = 34 + i * 11;
-			if (i == gStyle) { rect(7, y - 2, 74, 11, HI); text(10, y, STYLE_NAMES[i], 1, HITXT); }
+			int y = 34 + i * 10;
+			if (i == gStyle) { rect(7, y - 2, 74, 10, HI); text(10, y, STYLE_NAMES[i], 1, HITXT); }
 			else text(10, y, STYLE_NAMES[i], 1, DIM);
 		}
 		rect(84, 33, 1, 186, LINE);
@@ -4342,10 +4409,11 @@ static void thruMix(void) {
 		ndspChnSetMix(THRU_CH0 + k, mix);
 	}
 }
+static float gThruCutEff = 1.0f;   // CHIP CUTOFF after the patch's envelope / LFO
 static void thruFilter(void) {
-	float hz = 40.0f * powf(2.0f, gThruCut * 9.0f); if (hz > 15000) hz = 15000;
+	float hz = 40.0f * powf(2.0f, gThruCutEff * 9.0f); if (hz > 15000) hz = 15000;
 	for (int k = 0; k < 2; k++) {
-		if (gThruCut >= 0.999f) { ndspChnIirBiquadSetEnable(THRU_CH0 + k, false); continue; }
+		if (gThruCutEff >= 0.999f) { ndspChnIirBiquadSetEnable(THRU_CH0 + k, false); continue; }
 		ndspChnIirBiquadSetParamsLowPassFilter(THRU_CH0 + k, hz, 0.707f + gThruRes * 6.0f); ndspChnIirBiquadSetEnable(THRU_CH0 + k, true);
 	}
 }
@@ -4382,7 +4450,11 @@ static void thruTick(void) {   // main loop, voice lock held
 	if (want && !gThruOn) thruStart();
 	else if (!want && gThruOn) thruStop();
 	if (!gThruOn) return;
-	static float lc = -1, lr = -1; if (lc != gThruCut || lr != gThruRes) { lc = gThruCut; lr = gThruRes; thruFilter(); }
+	float eff = gThruCut;
+	if (gThruEnv != 0) { float e = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].env2 > e) e = gV[i].env2; eff += gThruEnv * e; }   // the newest notes' ENV 2
+	if (gThruLfo != 0) eff += gThruLfo * gLfo[0].val;
+	eff = eff < 0 ? 0 : eff > 1 ? 1 : eff;
+	static float lc = -1, lr = -1; if (fabsf(lc - eff) > 0.004f || lr != gThruRes) { lc = eff; lr = gThruRes; gThruCutEff = eff; thruFilter(); }
 	static int f = 0; if (++f % 15 == 0) thruMix();   // follow the FX sends
 }
 static void loopToTable(void) {
@@ -5382,7 +5454,7 @@ static float gDrumLevel = 0.8f;
 static int gDrumCh[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, gDrumStep = -1;
 static float gDrumPh = 0;
 static s16* gDrumSmp[NDRUM]; static int gDrumLen[NDRUM];
-static const char* KIT_NAMES[4] = {"808", "909", "LOFI", "CHIP"};
+static const char* KIT_NAMES[5] = {"808", "909", "LOFI", "CHIP", "PERC"};
 static const char* KICKP_NAMES[9] = {"OFF", "FOUR FLOOR", "BREAK", "TRAP", "DNB", "HALFTIME", "BOOM BAP", "MINE", "EUCLID"};
 static const char* SNAREP_NAMES[8] = {"OFF", "BACKBEAT", "BREAK", "TRAP", "DNB", "CLAP 2+4", "MINE", "EUCLID"};
 static const char* HATP_NAMES[8] = {"OFF", "8THS", "16THS", "OFFBEAT", "TRAP ROLL", "SHUFFLE", "MINE", "EUCLID"};
@@ -6634,6 +6706,7 @@ int main(void) {
 			curKey = key;
 		}
 		if (gVoiceMode >= 3 && (gDrumBuilt != gVoiceMode - 3 || gDrumCh[3] < 0)) { kitEnsure(); botDirty = 1; }
+		if (gTapeKeys) gTapeStop = !(curKey >= 0 || gHeldN > 0 || gArpN > 0);   // SLOWDOWN: the loop runs while you hold notes
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; } }
 		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }   // live matrix dots, drawn LFO / motion playheads
 		motTick(dt);
