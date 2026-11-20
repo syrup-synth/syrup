@@ -14,7 +14,10 @@ static void checks(void) {
 	load("BOOM BAP BASS");
 	if (!gDrums || gKit != 1 || gKickPat != 6 || gSnarePat != 1 || gHatPat != 5 || gBPM != 90) fail("format: BOOM BAP BASS should bring its beat (drums %d kit %d %d/%d/%d bpm %d)", gDrums, gKit, gKickPat, gSnarePat, gHatPat, gBPM);
 	load("WARM FELT");
-	if (!gDrums || gKickPat != 6) fail("format: a patch without a beat stopped or changed the beat");
+	if (gDrums) fail("format: leaving BOOM BAP BASS should take its beat with it");
+	gDrums = 1; gKickPat = 2; gBeatFromPatch = 0;   // a beat you started yourself
+	load("GLASS HOUR");
+	if (!gDrums || gKickPat != 2) fail("format: a patch without a beat stopped or changed your own beat");
 	load("CHIP SWEEP"); if (!gThru || gThruEnv < 0.5f) fail("format: CHIP SWEEP should turn CHIP > FX on");
 	load("WARM FELT"); if (gThru) fail("format: CHIP > FX stayed on after a patch without it");
 	load("XY MORPH"); if (gXyMode != 1) fail("format: XY MORPH should set the XY pad to MACRO 1+2");

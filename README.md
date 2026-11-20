@@ -16,7 +16,7 @@ Waveform rebuilds run on the 3DS's second CPU core (a worker thread on core 1, w
 - **ROOT / SCALE:** 14 scales (major, minor, modes, pentatonics, blues, whole tone, Japanese, Arabic). With a scale on, the keyboard becomes 14 pads, one per scale note, root pads highlighted, and chords stack inside the scale.
 - **ARP:** up, down, up+down, random, as played, chord repeat; rate 1/4 to 1/32 incl. triplets; 1-4 octaves; gate. Works with latch.
 - **SEQ:** 16 steps. REC: each key (or chord) you play writes the next step; ADD REST inserts a rest; the pattern length follows what you record. PLAY: keys transpose the pattern live. SEQ GATE, SWING and BPM. With ARP on, each step is arpeggiated.
-- **OCT- / OCT+** tabs on the touch screen shift the keyboard (also L / R).
+- **OCT- / OCT+** tabs on the touch screen shift the keyboard. **L / R** step through the pages (as do Y / X).
 
 ## Hardware effects and sensors
 
@@ -93,7 +93,7 @@ The factory library: 154 patches in 14 styles, with no duplicates, and levels ma
 | GROOVE | Boom Bap Bass, Trap SP-12, Euclid Chip, Beatbox Tap, Loop Partner, Tape Loop, Variecho, Slowdown: patches that bring a beat (drums, kit, patterns, euclid rows, swing, tempo), a loop setup (bars, speed, wow) or tape movement with them. Beatbox Tap arms MIC TAP so you knock the beat in; Slowdown runs the loop only while you hold notes |
 | USER | 8 save slots, plus INIT PATCH at the end of the list |
 
-Patches (format v12) also carry the drums (on/off, kit, patterns, euclid rows, level, swing) and the looper's bars, speed and wow, but only when the patch has a beat or a loop setup: an ordinary patch never stops or changes the beat you have running. CHIP > FX, ECHO WOW and the XY PAD mode follow every patch. Older user patches load with these at their defaults.
+Patches (format v12) also carry the drums (on/off, kit, patterns, euclid rows, level, swing) and the looper's bars, speed and wow, but only when the patch has a beat or a loop setup. A beat that came with a patch stops when you move to a patch without one; a beat you started or changed yourself keeps running whatever patch you pick. CHIP > FX, ECHO WOW and the XY PAD mode follow every patch. Older user patches load with these at their defaults.
 
 To save, press A twice on the PATCH page: the first press shows which USER slot it will use (the first empty one, or the slot you're on in USER), the second opens the 3DS keyboard to name the patch (up to 13 characters). Pressing A twice on a saved USER slot saves over it and lets you rename it. User patches are stored in `sdmc:/3ds/syrup/user_presets.bin`. INIT PATCH (the last entry in USER) resets to a single saw.
 
@@ -125,7 +125,7 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | Keyboard | Play; lower on a key = louder; slide to glide |
 | A | Chord mode |
 | B | Latch |
-| L / R | Octave |
+| L / R | Previous / next page |
 | Circle pad | Left/right pitch bend, up/down = STICK mod source |
 | SELECT | Help |
 | START | Quit |

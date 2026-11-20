@@ -86,6 +86,7 @@ static int gDrums, gKit, gKickPat, gSnarePat, gHatPat; static float gDrumLevel;
 // v12 patch fields live with the looper, CHIP > FX and the XY pad further down
 static int gLoopMode, gLoopBars, gXyMode, gThru, gTapeStop, gTapeKeys; static float gLoopSpeed, gLoopWow, gThruCut, gThruRes, gThruEnv, gThruLfo, gEchoWow;
 static void drumsChanged(void); static void drumRecChanged(void);
+static int gBeatFromPatch;   // the running beat came with the current patch (and stops when you leave it); touching a drum control makes it yours
 // chip quirks: DSP GRIT (the DSP's interpolation off), FILTER SCREAM (its biquad pushed past stable), MIX OVERDRIVE (its
 // channel volumes past full, clipped at the 16-bit ceiling), ECHO PITCH (the chip echo replayed at another rate than it records)
 static int gQGrit = 0, gCsEchoPitch = 0; static float gQScream = 0, gQMixDrive = 0; static const char* GRIT_NAMES[3] = {"OFF", "LINEAR", "RAW"};
@@ -1856,7 +1857,7 @@ static float gClockDebt = 0; static volatile int gClockSkips = 0;   // HARDWARE 
 static void arpTick(float dt);
 static void seqTick(float dt);
 static void drumTick(float dt);
-static int tqDrain(int inTick); static volatile int gTqUi;
+static int tqDrain(int inTick); static int mqDrain(int inTick); static volatile int gTickMidi; static volatile int gTqUi;
 static void audioTick(void* data) {
 	(void)data;
 	if (!gAudioClock) return;
@@ -1867,6 +1868,7 @@ static void audioTick(void* data) {
 	gClockDebt = 0;
 	gInAudioTick = 1;
 	if (tqDrain(1)) gTqUi = 1;   // FM-1 LINK's timed notes, on time to the tick
+	gTickMidi = 1; if (mqDrain(1)) gTqUi = 1;   // network, IR and remote MIDI: as soon as it arrives, not at the next screen frame
 	arpTick(dt);
 	seqTick(dt);
 	drumTick(dt);
@@ -2359,6 +2361,9 @@ static void m_busyboy(SPatch* p) { static const s8 M[8] = {0, 12, 7, 3, 10, 7, 1
 	MOD2(0, SRC_CHAOSX, DST_FXP, 0.4f); MOD2(1, SRC_ENV2, DST_OFCUT, 0.3f);
 	OUTF(OF_L12, 0.6f, 0.35f, 0.35f, 0); CHIP(0.3f, 1, 1); p->csEcho = 0.3f; p->csEchoFb = 0.5f; p->csEchoT = 1;
 	GRN(0.25f, 0.5f, 0.4f, 12, 0.35f); ORBIT(0.6f, 0.4f); MFX(FX_PHASER, 0.3f, 0.6f, 0.35f); DLYS(0.22f, S8D, DL_PING); REVB(0.2f, RV_PLATE); p->ott = 0.35f; }
+static void m_sink2(SPatch* p) {   // KITCHEN SINK with every master effect on at once, playing 4-note chords: needs the core-2 chain
+	m_busyboy(p); p->master = 0.42f; p->chord = 1; p->shimmer = 1; REVB(0.3f, RV_HALL); DLYS(0.25f, S8D, DL_TAPE); p->dlyWow = 0.5f; p->pump = 0.5f; p->ott = 0.5f;
+}
 static void m_tidal(SPatch* p) { p->master = 0.65f; OA.table = T_HARMONIX; OA.uni = 3; OA.detune = 12; OB.on = 1; OB.table = T_VOWELS; OB.level = 0.4f; ENV1(0.4f, 0, 1.0f, 0.9f, 1.4f);
 	lane(p, 0, 0, 2, 0.0f, 1.0f, 2); lane(p, 1, 1, 3, 1.0f, 0.0f, 3); lane(p, 2, 4, 5, 0.45f, 0.85f, 2); OUTF(OF_CREAMY, 0.7f, 0.2f, 0, 0); MFX(FX_DIM, 0.3f, 0.6f, 0.5f); REVB(0.35f, RV_HALL); }
 static void m_stepsculpt(SPatch* p) { p->master = 0.6f; OA.table = T_GROWL; OA.pos = 0.3f; OA.warp = W_BENDPM; ENV1(0.002f, 0, 0.4f, 0.7f, 0.2f); p->voiceMode = 2; p->glide = 0.05f;
@@ -2553,7 +2558,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"BERLIN 16", q_berlin}, {"ACID CIRCLE", q_acidcircle}, {"TRANCE GATE", q_gate}, {"PING ARP", q_pingarp}, {"CHAOS ARP", q_chaosarp}, {"MOTION BELLS", q_motionbells},
 	 {"OCTAVE BOUNCE", q_octbounce}, {"DRAWN STEPS", q_drawnsteps}, {"GRAIN RUN", q_grainrun}, {"POLYRHYTHM", q_polyrhythm}},
 	{{"TIDE POOL", x_tidepool}, {"FROZEN TABLE", x_frozen}, {"NET STATIC", x_netstatic}, {"TAPE ROOM", x_taperoom}, {"BROWN SEA", x_sea}, {"GEIGER", x_geiger},
-	 {"DRONE 60", x_drone60}, {"SHIMMER CLOUD", x_shimmercloud}, {"SONAR PING", x_sonarping}, {"STORM FRONT", x_storm}, {"FREEZE GLASS", x_freezeglass}, {"JET COMB", x_jetcomb}, {"WIRE DRONE", x_wiredrone}},
+	 {"DRONE 60", x_drone60}, {"SHIMMER CLOUD", x_shimmercloud}, {"SONAR PING", x_sonarping}, {"STORM FRONT", x_storm}, {"FREEZE GLASS", x_freezeglass}, {"JET COMB", x_jetcomb}, {"WIRE DRONE", x_wiredrone}, {"KITCHEN SINK2", m_sink2}},
 	{{"GB WAVE", h_gbwave}, {"NES PULSE", h_nes}, {"C64 PWM", h_c64}, {"ARCADE ARP", h_arcade}, {"POWER UP", h_powerup}, {"LASER", h_laser},
 	 {"8-BIT BASS", h_bass8}, {"BIT ORGAN", h_bitorgan}, {"SQUARE CHOIR", h_squarechoir}, {"4-BIT GB", h_gb4}, {"CHIP SWEEP", h_chipsweep}, {"FILTER DRUMS", h_filtdrums}, {"OTT CHIP BASS", h_ottbass}},
 	{{"ORBIT PAD", s_orbitpad}, {"HELICOPTER", s_heli}, {"CIRCLE ARP", s_circlearp}, {"AROUND YOU", s_aroundyou}, {"3D BELLS", s_bells}, {"SPIRAL PLUCK", s_spiral},
@@ -2669,7 +2674,12 @@ static void patchApply(const SPatch* p) {
 	if (gTapeKeys && !p->tapeKeys) gTapeStop = 0;
 	gTapeKeys = p->tapeKeys & 1;
 	if (p->hasLoop) { gLoopBars = p->loopBars >= 0 && p->loopBars < 5 ? p->loopBars : 0; gLoopSpeed = p->loopSpeed; gLoopWow = p->loopWow; }
+	if (!p->hasBeat && gBeatFromPatch) {   // leaving a patch that brought its own beat: it goes with the patch
+		gBeatFromPatch = 0; gDrums = 0; if (gCsndOK) drumsChanged();
+		if (gDrumRec) { gDrumRec = 0; if (gCsndOK) drumRecChanged(); }
+	}
 	if (p->hasBeat) {
+		gBeatFromPatch = p->drums & 1;
 		gDrums = p->drums & 1; gKit = p->kit >= 0 && p->kit < 5 ? p->kit : 0; gKickPat = p->kickPat % 9; gSnarePat = p->snarePat % 8; gHatPat = p->hatPat % 8;
 		gDrumLevel = p->drumLevel; gSwing = p->swing;
 		for (int r = 0; r < 3; r++) { gEuHits[r] = p->euHits[r] % 17; gEuRot[r] = p->euRot[r] % 16; } gEuLen = p->euLen >= 2 && p->euLen <= 16 ? p->euLen : 16;
@@ -2702,7 +2712,7 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{2.33f, 1.34f, 4.24f, 2.18f, 2.20f, 1.12f, 2.30f, 0.67f, 2.08f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{1.32f, 1.05f, 4.46f, 1.10f, 3.54f, 1.82f, 2.40f, 6.00f, 1.34f, 2.41f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.42f, 1.93f, 1.42f, 1.00f, 1.00f},
+	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.42f, 1.93f, 1.42f, 3.55f, 1.00f},
 	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 0.76f, 0.76f, 0.70f, 0.80f, 1.00f, 1.00f},
 	{1.30f, 0.81f, 1.34f, 2.99f, 0.90f, 1.37f, 3.46f, 1.10f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 0.60f, 1.20f, 1.20f},   // CHIPSET
@@ -3530,7 +3540,7 @@ static void drawHelp(void) {
 		"BUTTONS",
 		"  A ............ CHORD MODE",
 		"  B ............ LATCH (NOTES KEEP RINGING)",
-		"  L / R ........ OCTAVE",
+		"  L / R ........ PREVIOUS / NEXT PAGE",
 		"  CIRCLE PAD ... L/R BEND, U/D = STICK SOURCE",
 		"  START ........ QUIT",
 		"NOTES",
@@ -4935,6 +4945,10 @@ static void netDown(void) {
 // MIDI from the network lands in a ring (network thread writes, main loop reads)
 #define MQ 256
 static u8 gMq[MQ][3]; static volatile int gMqW = 0, gMqR = 0;
+// The audio tick drains gMq (Wi-Fi MIDI, IR, the phone remote) every ~4.9 ms instead of the main loop's 60 Hz; the
+// few heavy messages (program change, patch prev/next, new acid pattern) go on to gMainQ for the main loop.
+static u8 gMainQ[MQ][3]; static volatile int gMainQW = 0, gMainQR = 0;
+static void mainQPush(u8 a, u8 b, u8 c) { int n = (gMainQW + 1) % MQ; if (n == gMainQR) return; gMainQ[gMainQW][0] = a; gMainQ[gMainQW][1] = b; gMainQ[gMainQW][2] = c; __sync_synchronize(); gMainQW = n; }
 static void midiPush(u8 a, u8 b, u8 c) { int n = (gMqW + 1) % MQ; if (n == gMqR) return; gMq[gMqW][0] = a; gMq[gMqW][1] = b; gMq[gMqW][2] = c; __sync_synchronize(); gMqW = n; }
 static int midiLen(u8 st) {   // data bytes after a status byte
 	if (st >= 0xF8) return 0;
@@ -5209,7 +5223,7 @@ static void acidGen(void);
 // one MIDI message: inTick = from the audio tick (only light work there; patch changes etc. go to the main loop)
 static int midiApply(u8 st, u8 a, u8 b, int inTick) {
 	int ch = 0;
-	if (inTick && ((st & 0xF0) == 0xC0 || ((st & 0xF0) == 0xB0 && a >= 102 && a <= 104))) { midiPush(st, a, b); return 0; }
+	if (inTick && ((st & 0xF0) == 0xC0 || ((st & 0xF0) == 0xB0 && a >= 102 && a <= 104))) { mainQPush(st, a, b); return 0; }
 	switch (st & 0xF0) {
 	case 0x90: if (b) { midiNoteOn(a, 0.25f + 0.75f * b / 127.0f); break; } /* fall through: velocity 0 = off */
 	case 0x80: midiNoteOff(a); break;
@@ -5248,10 +5262,20 @@ static int tqDrain(int inTick) {   // timed messages that are due (voice lock he
 	return ch;
 }
 static volatile int gTqUi = 0;
+static volatile int gTickMidi = 0;   // 1 while the audio tick is draining gMq
+static int mqDrain(int inTick) {
+	int ch = 0;
+	while (gMqR != gMqW) {
+		u8 st = gMq[gMqR][0], a = gMq[gMqR][1], b = gMq[gMqR][2]; __sync_synchronize(); gMqR = (gMqR + 1) % MQ;
+		ch |= midiApply(st, a, b, inTick);
+	}
+	return ch;
+}
 static int midiTick(void) {   // returns 1 when something on screen changed
 	int ch = tqDrain(0) | gTqUi; gTqUi = 0;
-	while (gMqR != gMqW) {
-		u8 st = gMq[gMqR][0], a = gMq[gMqR][1], b = gMq[gMqR][2]; gMqR = (gMqR + 1) % MQ;
+	if (!gTickMidi) ch |= mqDrain(0);   // no audio tick running (audio off): the main loop takes it
+	while (gMainQR != gMainQW) {
+		u8 st = gMainQ[gMainQR][0], a = gMainQ[gMainQR][1], b = gMainQ[gMainQR][2]; gMainQR = (gMainQR + 1) % MQ;
 		ch |= midiApply(st, a, b, 0);
 	}
 	return ch;
@@ -6661,8 +6685,8 @@ int main(void) {
 		if (kDown & KEY_Y) { page = navStep(page, -1); topDirty = 1; }
 		if (kDown & KEY_A) { if (page == 0) browseSave(); else gChord = (gChord + 1) % 5; topDirty = 1; }
 		if (kDown & KEY_B) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
-		if (kDown & KEY_L) { if (oct > -3) oct--; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = botDirty = 1; }
-		if (kDown & KEY_R) { if (oct < 3) oct++; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = botDirty = 1; }
+		if (kDown & KEY_L) { page = navStep(page, -1); topDirty = 1; }   // shoulders step through the pages (octave: the OCT tabs)
+		if (kDown & KEY_R) { page = navStep(page, 1); topDirty = 1; }
 
 		if (page == 0) {   // preset browser: the D-pad moves through the list itself
 			int ds = 0, dp = 0, fresh = 0;
@@ -6711,6 +6735,7 @@ int main(void) {
 				if (p->dirty & D_STYLE) { gPreset = 0; presetLoad(gStyle, 0); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				if (p->dirty & D_OUT) outputApply();
 				if (p->dirty & D_LOOP) loopModeChanged();
+				if ((p->dirty & (D_DRUMS | D_EUCLID | D_DREC)) || p->p == &gKickPat || p->p == &gSnarePat || p->p == &gHatPat || p->p == &gDrumLevel) gBeatFromPatch = 0;   // you changed the beat: it stays when you change patch
 				if ((p->dirty & D_DRUMS) && p->p == &gDrumRec) drumRecChanged();
 				else if (p->dirty & D_DRUMS) drumsChanged();
 				else if (p->dirty & D_EUCLID) {   // touching a row's HITS or ROTATE switches that row to EUCLID and starts the drums
