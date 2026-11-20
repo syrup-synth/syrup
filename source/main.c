@@ -184,8 +184,8 @@ static void mipsSet(Mips* m, const float* cyc, u32 needMask) {
 }
 
 // ---------------------------------------------------------------- wavetables
-enum { T_BASIC, T_PWM, T_HARMONIX, T_VOWELS, T_SYNC, T_GROWL, T_DIGITAL, T_BUILTIN };
-static const char* BUILTIN_NAMES[T_BUILTIN] = {"BASIC SHAPES", "PWM", "HARMONIX", "VOWELS", "SYNC SAW", "FM GROWL", "DIGITAL"};
+enum { T_BASIC, T_PWM, T_HARMONIX, T_VOWELS, T_SYNC, T_GROWL, T_DIGITAL, T_PLUCK, T_BUILTIN };
+static const char* BUILTIN_NAMES[T_BUILTIN] = {"BASIC SHAPES", "PWM", "HARMONIX", "VOWELS", "SYNC SAW", "FM GROWL", "DIGITAL", "KARPLUS"};
 #define MAXFILES 64
 static char gFiles[MAXFILES][64];
 static int gNFiles = 0;
@@ -203,7 +203,7 @@ static void genBuiltin(Table* tb, int t) {
 	for (int f = 0; f < 64; f++) {
 		float* fr = tb->frames + f * CYC;
 		float m = f / 63.0f;
-		if (t == T_HARMONIX || t == T_VOWELS || t == T_DIGITAL) {
+		if (t == T_HARMONIX || t == T_VOWELS || t == T_DIGITAL || t == T_PLUCK) {
 			static float amp[257];
 			memset(amp, 0, sizeof(amp));
 			int nh = 256;
@@ -228,16 +228,26 @@ static void genBuiltin(Table* tb, int t) {
 				}
 				amp[1] = 0.6f; nh = 96;
 			}
+			if (t == T_PLUCK) {   // KARPLUS: a plucked string, frame by frame. A noise burst goes round a delay line whose two-point
+				// average takes cos(pi k / N) off harmonic k every trip (N = 100: a string around 440 Hz). Frame f = 6 f trips in:
+				// frame 0 is the bright burst, frame 63 is nearly the bare fundamental. Sweep WT POS 0 -> 1 for the pluck.
+				for (int k = 1; k <= 511; k++) {
+					float d = cosf(3.14159265f * k / 100.0f); d = d < 0 ? -d : d;
+					amp[k] = (0.45f + 0.55f * hash01(k, 11)) * powf(d, 6.0f * f) / sqrtf((float)k) * 3.0f;
+				}
+				nh = 511;
+			}
 			// sum of sines via one inverse FFT (was ~100k sinf calls per frame)
 			static cpx gb[CYC];
 			memset(gb, 0, sizeof(gb));
 			for (int k = 1; k <= nh && k < CYC / 2; k++) if (amp[k] != 0) {
-				float ph = t == T_DIGITAL ? k * 1.3f : 0, a = amp[k] * 0.5f;
+				float ph = t == T_DIGITAL ? k * 1.3f : t == T_PLUCK ? hash01(k, 5) * TWO_PI : 0, a = amp[k] * 0.5f;
 				gb[k].re = a * sinf(ph); gb[k].im = -a * cosf(ph);
 				gb[CYC - k].re = gb[k].re; gb[CYC - k].im = -gb[k].im;
 			}
 			fft(gb, CYC, 1);
 			for (int n = 0; n < CYC; n++) fr[n] = gb[n].re;
+			if (t == T_PLUCK) { float pk = 1e-6f; for (int n = 0; n < CYC; n++) pk = fabsf(fr[n]) > pk ? fabsf(fr[n]) : pk; for (int n = 0; n < CYC; n++) fr[n] /= pk; }   // each frame full scale: the envelope does the fading
 			continue;
 		}
 		for (int n = 0; n < CYC; n++) {
@@ -444,7 +454,7 @@ static int gModCurve[NMOD];
 static const char* CURVE_NAMES[4] = {"LINEAR", "EXP", "LOG", "S-CURVE"};
 static float gTiltX, gTiltY, gMicEnv, gTwist, gShake, gShakeD, gCamLight, gCamColor;
 static float gSpinX, gSpinY, gMicBright, gCamMove;   // gyro pitch/roll speed, voice brightness ("ss" vs "oo"), how much the picture changes
-static int gHeadphones = 0;
+static int gHeadphones;   // (0 until the first check)
 enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_FXMIX, DST_COUNT };
 static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF", "FX MIX"};   // VOLUME: when routed, the source IS the loudness (breath control)
 static const char* VOICE_MODES[8] = {"POLY", "MONO", "LEGATO", "808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT", "PERC KIT"};   // KIT: keys play the drum kit
@@ -1528,7 +1538,9 @@ static void fxOrderSet(const u8* o) {   // only a full permutation is taken; any
 	for (int i = 0; i < NFXB; i++) { if (o[i] >= NFXB || (seen >> o[i] & 1)) { for (int k = 0; k < NFXB; k++) t[k] = k; goto ok; } seen |= 1 << o[i]; t[i] = o[i]; }
 ok:	for (int i = 0; i < NFXB; i++) __atomic_store_n(&gFxOrder[i], t[i], __ATOMIC_RELAXED);
 }
-static int gSpkEq = 0;   // HARDWARE > SPEAKER EQ (saved in settings.bin)
+static int gSpkEq = 2;   // HARDWARE > SPEAKER EQ: OFF / ON / AUTO (on whenever the headphones are out); saved in settings.bin
+static const char* SPK_NAMES[3] = {"OFF", "ON", "AUTO"};
+static int gHeadphones;
 static void auxMaster(void* data, int n, void* samples[4]) {
 	int fxo[NFXB]; for (int i = 0; i < NFXB; i++) fxo[i] = __atomic_load_n(&gFxOrder[i], __ATOMIC_RELAXED);
 	(void)data;
@@ -1717,7 +1729,7 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 			}
 		} break;
 		}
-		if (gSpkEq) {   // SPEAKER EQ: one-pole high-pass ~120 Hz and low-pass ~12 kHz for the console's small speaker
+		if (gSpkEq == 1 || (gSpkEq == 2 && !gHeadphones)) {   // SPEAKER EQ: one-pole high-pass ~120 Hz and low-pass ~12 kHz for the console's small speaker
 			static float hpS[2], lpS[2];
 			for (int c = 0; c < 2; c++) { hpS[c] += (x[c] - hpS[c]) * 0.0228f; float h = x[c] - hpS[c]; lpS[c] += (h - lpS[c]) * 0.9f; x[c] = lpS[c]; }
 		}
@@ -2224,7 +2236,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->hasBeat = 0; p->drums = 0; p->kit = 0; p->kickPat = 1; p->snarePat = 1; p->hatPat = 1; p->drumRec = 0; p->drumLevel = 0.8f; p->swing = 0;
 	p->euHits[0] = 5; p->euHits[1] = 2; p->euHits[2] = 11; p->euRot[0] = 0; p->euRot[1] = 4; p->euRot[2] = 0; p->euLen = 16;
 	p->hasLoop = 0; p->loopBars = 0; p->loopSpeed = 0; p->loopWow = 0;
-	p->thru = 0; p->xyMode = 0; p->tapeKeys = 0; p->thruCut = 1.0f; p->thruRes = 0.1f; p->thruEnv = 0; p->thruLfo = 0; p->echoWow = 0;
+	p->thru = 0; p->xyMode = 7; p->tapeKeys = 0; p->thruCut = 1.0f; p->thruRes = 0.1f; p->thruEnv = 0; p->thruLfo = 0; p->echoWow = 0;   // xyMode 7 = PAGE: the pad follows the page
 	for (int i = 0; i < 8; i++) p->fxOrder[i] = i;
 }
 
@@ -2767,6 +2779,14 @@ static void initWire(SPatch* p) {
 	MOD2(0, SRC_M1, DST_CUTOFF, 0.5f); MOD2(1, SRC_M2, DST_APOS, 0.5f); MOD2(2, SRC_M3, DST_RES, 0.5f); MOD2(3, SRC_M4, DST_FXMIX, 1.0f); p->xyMode = 1;
 	p->fx = 3; p->fxMix = 0;   // REVERB at 0: M4 brings it in (at 0 the patch is dry)
 }
+// ---- KARPLUS: plucked strings from the KARPLUS table. ENV2 sweeps WT POS from the bright burst (0) to the bare string
+// (1): base WT POS 1, ENV2 -> A WT POS -1. Harder hits start brighter.
+static void u_ksguitar(SPatch* p) { p->master = 0.75f; OA.table = T_PLUCK; OA.pos = 1.0f; ENV2(0.0f, 0, 0.9f, 0.0f, 0.4f); MOD(2, SRC_ENV2, DST_APOS, -1.0f); MOD(3, SRC_VEL, DST_APOS, -0.25f);
+	ENV1(0.001f, 0, 2.2f, 0.0f, 0.35f); OUTF(OF_LP, 0.75f, 0.1f, 0, 0); REVB(0.18f, RV_ROOM); NOSTICK; p->xyMode = 7; }
+static void u_ksbass(SPatch* p) { p->master = 0.8f; OA.table = T_PLUCK; OA.pos = 1.0f; OA.oct = -1; ENV2(0.0f, 0, 0.45f, 0.0f, 0.2f); MOD(2, SRC_ENV2, DST_APOS, -1.0f); MOD(3, SRC_VEL, DST_APOS, -0.2f);
+	ENV1(0.001f, 0, 1.4f, 0.0f, 0.15f); p->subLevel = 0.3f; p->voiceMode = 1; NOSTICK; p->xyMode = 7; }
+static void u_ksharp(SPatch* p) { p->master = 0.7f; OA.table = T_PLUCK; OA.pos = 1.0f; OA.oct = 1; ENV2(0.0f, 0, 1.6f, 0.0f, 0.8f); MOD(2, SRC_ENV2, DST_APOS, -1.0f); MOD(3, SRC_VEL, DST_APOS, -0.3f);
+	ENV1(0.001f, 0, 3.5f, 0.0f, 1.2f); REVB(0.35f, RV_HALL); DLYS(0.15f, S8D, DL_PING); NOSTICK; p->xyMode = 7; }
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
 	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}, {"DARK 808", b_dark808}, {"303 SCREAM", b_303scream}},
@@ -2778,7 +2798,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"EP SATURDAY", k_epsat}, {"DRAWBAR", k_drawbar}, {"LOFI UPRIGHT", k_lofiup}, {"CLAV FUNK", k_clav}, {"WURLI BARK", k_wurli}, {"VIBES", k_vibes},
 	 {"TOY KEYS", k_toy}, {"HARPSI", k_harpsi}, {"ROTARY", k_rotary}, {"CUMBIA ORGANO", k_cumbiaorg}, {"REEL PIANO", k_reel}, {"GLASS TOP", k_glasstop}, {"TAPE RHODES", k_taperhodes}},
 	{{"NYLON", u_nylon}, {"MARIMBA WOOD", u_marimba}, {"KALIMBA", u_kalimba}, {"DIGI HARP", u_digiharp}, {"STAB 1999", u_stab99}, {"KOTO SPRING", u_koto},
-	 {"CHIP PLINK", u_chipplink}, {"GRAIN PLUCK", u_grain}, {"STEEL PAN", u_steel}, {"RAIN ON TIN", u_raintin}, {"SOFT PLUCK", u_softpluck}},
+	 {"CHIP PLINK", u_chipplink}, {"GRAIN PLUCK", u_grain}, {"STEEL PAN", u_steel}, {"RAIN ON TIN", u_raintin}, {"SOFT PLUCK", u_softpluck}, {"KS GUITAR", u_ksguitar}, {"KS BASS", u_ksbass}, {"KS HARP", u_ksharp}},
 	{{"ORGAN STAB", c_organstab}, {"NEO SOUL 9", c_neosoul}, {"DUB CHORD", c_dub}, {"TECHNO STAB", c_techno}, {"STRUM GUITAR", c_strum}, {"OMNI HARP", c_omni},
 	 {"PUMP CHORDS", c_pump}, {"GOSPEL ORGAN", c_gospel}, {"SHOEGAZE WALL", c_shoegaze}},
 	{{"BERLIN 16", q_berlin}, {"ACID CIRCLE", q_acidcircle}, {"TRANCE GATE", q_gate}, {"PING ARP", q_pingarp}, {"CHAOS ARP", q_chaosarp}, {"MOTION BELLS", q_motionbells},
@@ -2898,7 +2918,8 @@ static void patchApply(const SPatch* p) {
 	// v12. Sound settings always follow the patch; a beat or a loop setup only when the patch carries one
 	gThru = p->thru & 1; gThruCut = p->thruCut; gThruRes = p->thruRes; gThruEnv = p->thruEnv; gThruLfo = p->thruLfo; gEchoWow = p->echoWow;
 	fxOrderSet(p->fxOrder);
-	gXyMode = p->xyMode >= 0 && p->xyMode < 7 ? p->xyMode : 0;   // NXY
+	gXyMode = p->xyMode >= 0 && p->xyMode < 8 ? p->xyMode : 0;   // NXY
+	if (gXyMode == 7) for (int m = 0; m < 4; m++) if (p->mod[m].src == SRC_XY || p->mod2[m].src == SRC_XY) gXyMode = 0;   // a patch that plays the XY source keeps WT + CUTOFF
 	if (gTapeKeys && !p->tapeKeys) gTapeStop = 0;
 	gTapeKeys = p->tapeKeys & 1;
 	if (p->hasLoop) { gLoopBars = p->loopBars >= 0 && p->loopBars < 5 ? p->loopBars : 0; gLoopSpeed = p->loopSpeed; gLoopWow = p->loopWow; }
@@ -2937,7 +2958,7 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f, 1.00f},
 	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.64f, 1.35f, 2.50f, 1.31f},
 	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.11f, 0.95f, 1.80f, 1.00f, 1.00f},
-	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.58f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.58f, 1.56f, 1.70f, 1.07f, 1.00f},
 	{2.33f, 1.34f, 4.24f, 2.18f, 2.20f, 1.12f, 2.30f, 0.67f, 2.08f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{1.32f, 1.05f, 4.46f, 1.10f, 3.54f, 1.82f, 2.40f, 6.00f, 1.34f, 2.41f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.42f, 1.93f, 1.42f, 3.55f, 2.18f},
@@ -3079,8 +3100,8 @@ static Param P_FILT[] = {
 	PF("ENV2 SUS", &gEnv2.s, 0, 1, 0.01f, "%", 0), PF("ENV2 REL", &gEnv2.r, 0.01f, 5, 0.02f, "S", 0),
 	PEND};
 static int gXyMode = 0;
-#define NXY 7
-static const char* XY_NAMES[NXY] = {"WT + CUTOFF", "MACRO 1+2", "MACRO 3+4", "CUTOFF + RES", "WT A + WT B", "FX MIX + COLOR", "PERF"};
+#define NXY 8
+static const char* XY_NAMES[NXY] = {"WT + CUTOFF", "MACRO 1+2", "MACRO 3+4", "CUTOFF + RES", "WT A + WT B", "FX MIX + COLOR", "PERF", "PAGE"};   // PAGE: two values of the page you're on
 static int gStickMode = 0;
 enum { SM_DATA, SM_BEND, SM_PAGE, SM_MACROS };
 static const char* STICK_NAMES[4] = {"DATA", "BEND + MOD", "PAGE", "MACROS"};
@@ -3171,7 +3192,7 @@ static Param P_MASTER[] = {
 	PF("OTT", &gOtt, 0, 1, 0.02f, "%", 0), PF("PUMP", &gPump, 0, 1, 0.02f, "%", 0), PE("PUMP RATE", &gPumpRate, 3, PUMP_NAMES, 0),
 	PE("LOFI BITS", &gLofiBits, 6, BITS_NAMES, 0), PF("LOFI RATE", &gLofiRate, 0, 1, 0.02f, "%", 0),
 	PF("3D ORBIT", &gOrbit, 0, 1, 0.02f, "%", 0), PF("ORBIT RATE", &gOrbitRate, 0, 2, 0.02f, "HZ", 0),
-	PE("CIRCLE PAD", &gStickMode, 4, STICK_NAMES, 0), PE("SPEAKER EQ", &gSpkEq, 2, ONOFF2, 0), PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
+	PE("CIRCLE PAD", &gStickMode, 4, STICK_NAMES, 0), PE("SPEAKER EQ", &gSpkEq, 3, SPK_NAMES, 0), PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
 	PEND};
 static Param P_DRUMS[] = {
 	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 5, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 9, KICKP_NAMES, 0),
@@ -3594,7 +3615,7 @@ static const char* paramHelp(const char* n) {
 		{"LINK", "SYNC TEMPO WITH ANOTHER SYRUP"},
 		{"MACRO 1", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"}, {"MACRO 2", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"},
 		{"MACRO 3", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"}, {"MACRO 4", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"},
-		{"XY PAD", "WHAT THE TOUCH PAD CONTROLS"}, {"CIRCLE PAD", "DATA: LEFT/RIGHT EDITS THE SELECTED VALUE"}, {"SPEAKER EQ", "CUTS LOWS + HARSH HIGHS FOR THE SPEAKER (MASTER FX)"},
+		{"XY PAD", "WHAT THE TOUCH PAD CONTROLS"}, {"CIRCLE PAD", "DATA: LEFT/RIGHT EDITS THE SELECTED VALUE"}, {"SPEAKER EQ", "AUTO: ON WHEN THE HEADPHONES ARE OUT"},
 		{"5 SOURCE", "MOD SLOT 5: WHAT MOVES IT"}, {"5 DEST", "MOD SLOT 5: WHAT IT MOVES"}, {"5 AMOUNT", "MOD SLOT 5: HOW MUCH"}, {"6 SOURCE", "MOD SLOT 6: WHAT MOVES IT"}, {"6 DEST", "MOD SLOT 6: WHAT IT MOVES"}, {"6 AMOUNT", "MOD SLOT 6: HOW MUCH"}, {"7 SOURCE", "MOD SLOT 7: WHAT MOVES IT"}, {"7 DEST", "MOD SLOT 7: WHAT IT MOVES"}, {"7 AMOUNT", "MOD SLOT 7: HOW MUCH"}, {"8 SOURCE", "MOD SLOT 8: WHAT MOVES IT"}, {"8 DEST", "MOD SLOT 8: WHAT IT MOVES"}, {"8 AMOUNT", "MOD SLOT 8: HOW MUCH"}, {"1 CURVE", "MOD SLOT 1: RESPONSE CURVE"}, {"2 CURVE", "MOD SLOT 2: RESPONSE CURVE"}, {"3 CURVE", "MOD SLOT 3: RESPONSE CURVE"}, {"4 CURVE", "MOD SLOT 4: RESPONSE CURVE"}, {"5 CURVE", "MOD SLOT 5: RESPONSE CURVE"}, {"6 CURVE", "MOD SLOT 6: RESPONSE CURVE"}, {"7 CURVE", "MOD SLOT 7: RESPONSE CURVE"}, {"8 CURVE", "MOD SLOT 8: RESPONSE CURVE"}, 
 		{"MASTER FX", "WHOLE SOUND THROUGH THE EFFECT CHAIN"}, {"MOD FX", "CHORUS, FLANGER, PHASER, COMB, FORMANT"}, {"MOD RATE", "MOD FX SPEED"},
 		{"MOD DEPTH", "MOD FX DEPTH / FEEDBACK"}, {"MOD MIX", "MOD FX AMOUNT"}, {"FX COLOR", "COMB PITCH / FORMANT VOWEL (MOD DEST)"},
@@ -3641,7 +3662,7 @@ static void settingsSave(int page) { FILE* f = fopen(SET_PATH, "wb"); if (!f) re
 static int settingsLoad(void) {   // returns the page you were on last time
 	FILE* f = fopen(SET_PATH, "rb"); int d[4] = {0}, pg = 0; if (!f) return pg;   // first run: the browser
 	if (fread(d, sizeof(d), 1, f) == 1 && (d[0] == 0x53455431 || d[0] == 0x53455432)) {
-		if (d[1] >= 0 && d[1] < NPAGES && d[1] != 8) pg = d[1]; gSpkEq = d[3] & 1;
+		if (d[1] >= 0 && d[1] < NPAGES && d[1] != 8) pg = d[1]; gSpkEq = d[3] >= 0 && d[3] < 3 ? d[3] : 2;
 		gStickMode = d[0] == 0x53455432 && d[2] >= 0 && d[2] < 4 ? d[2] : SM_DATA;   // older settings: the new default, DATA
 	}
 	fclose(f); return pg;
@@ -3844,7 +3865,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			int blocks = (int)(t * 8 + 0.5f);
 			for (int b = 0; b < 8; b++) {
 				int bx = 300 + b * 4;
-				if (b < blocks) { if (cur) rect(bx, y, 3, 7, HITXT); else rect(bx, y, 3, 7, TXT); }
+				if (b < blocks) { if (cur) rect(bx, y, 3, 7, HITXT); else rect(bx, y, 3, 7, DIM); }   // unselected rows dimmer: the selected one stands out
 				else { if (cur) rect(bx, y + 6, 3, 1, HITXT); else rect(bx, y + 6, 3, 1, DIM); }
 			}
 			if (w > 54) w = 54;
@@ -4796,11 +4817,25 @@ static void xyAxes(float** xp, float** yp, int* xd, int* yd) {
 	case 3: *xp = &gCutoff; *yp = &gRes; *xd = DST_CUTOFF; *yd = DST_RES; break;
 	case 4: *xp = &gOsc[0].pos; *yp = &gOsc[1].pos; *xd = DST_APOS; *yd = DST_BPOS; break;
 	case 5: *xp = &gFxMix; *yp = &gFxColor; *xd = DST_FXMIX; *yd = DST_FXP; break;
+	case 7:   // PAGE: OSC A / B = WT POS + WARP, SUB+NOISE = their levels, VOICE+FX = DRIVE + FX MIX, DRUMS = LEVEL + SWING
+		switch (gCurPage) {
+		case 1: case 2: { int o = gCurPage - 1; *xp = &gOsc[o].pos; *yp = &gOsc[o].warpAmt; *xd = o ? DST_BPOS : DST_APOS; *yd = o ? DST_BWARP : DST_AWARP; return; }
+		case 3: *xp = &gSubLevel; *yp = &gNoiseLevel; *xd = *yd = -1; return;
+		case 6: *xp = &gDriveAmt; *yp = &gFxMix; *xd = -1; *yd = DST_FXMIX; return;
+		case 11: *xp = &gDrumLevel; *yp = &gSwing; *xd = *yd = -1; return;
+		}
+		*xp = &gOsc[0].pos; *yp = &gCutoff; *xd = DST_APOS; *yd = DST_CUTOFF; break;
 	default: *xp = &gOsc[0].pos; *yp = &gCutoff; *xd = DST_APOS; *yd = DST_CUTOFF; break;
 	}
 }
-static const char* XY_XL[NXY] = {"WT POS >", "MACRO 1 >", "MACRO 3 >", "CUTOFF >", "A WT POS >", "FX MIX >", "MACRO 1 >"};
-static const char* XY_YL[NXY] = {"^ CUTOFF", "^ MACRO 2", "^ MACRO 4", "^ RES", "^ B WT POS", "^ FX COLOR", "^ MACRO 2"};
+static const char* XY_XL[NXY] = {"WT POS >", "MACRO 1 >", "MACRO 3 >", "CUTOFF >", "A WT POS >", "FX MIX >", "MACRO 1 >", ""};
+static const char* XY_YL[NXY] = {"^ CUTOFF", "^ MACRO 2", "^ MACRO 4", "^ RES", "^ B WT POS", "^ FX COLOR", "^ MACRO 2", ""};
+static void xyRange(const float* v, float* mn, float* mx, const char** nm) {   // the value's range (and name) from its param
+	*mn = 0; *mx = 1; if (nm) *nm = "";
+	for (int pg = 0; pg < NPAGES; pg++) for (const Param* p = PAGES[pg]; p->name; p++) if (p->p == v && p->type == PT_F) { *mn = p->mn; *mx = p->mx; if (nm) *nm = p->name; return; }
+}
+static float xyNorm(const float* v) { float mn, mx; xyRange(v, &mn, &mx, NULL); float t = (*v - mn) / (mx - mn > 0 ? mx - mn : 1); return t < 0 ? 0 : t > 1 ? 1 : t; }
+static void xySet(float* v, float t) { float mn, mx; xyRange(v, &mn, &mx, NULL); *v = mn + t * (mx - mn); if (v == &gDriveAmt) gForceBuild |= 3; }
 static float xyEff(float v, int d) {   // where modulation has the value right now
 	if (d < 0) return v;
 	float m = modSum(d, newestVoice()); v += d == DST_CUTOFF ? m * 5.0f / 7.97f : m;
@@ -4823,7 +4858,7 @@ static void drawXyPad(void) {
 		float e = xyEff(v, paramDst(SL_P[i])); if (fabsf(e - v) > 0.01f) rect(x + 54 + (int)(e * 95), y - 1, 2, 14, RGB3(TH->warn));
 	}
 	float* xp; float* yp; int xd, yd; xyAxes(&xp, &yp, &xd, &yd);
-	float xv = *xp < 0 ? 0 : *xp > 1 ? 1 : *xp, yv = *yp < 0 ? 0 : *yp > 1 ? 1 : *yp;
+	float xv = xyNorm(xp), yv = xyNorm(yp);
 	int cx = 4 + (int)(xv * 311), cy = top + (int)((1 - yv) * (h - 1));
 	if (TH->ega) {
 		for (int gx = 0; gx <= 8; gx++) for (int y = top; y < top + h; y += 2) px(4 + gx * 39, y, DIM);
@@ -4842,8 +4877,11 @@ static void drawXyPad(void) {
 	}
 	rect(cx, top, 1, h, LINE); rect(4, cy, 312, 1, LINE);
 	rect(cx - 4, cy - 4, 9, 9, TXT); if (TH->ega) rect(cx - 2, cy - 2, 5, 5, BG);
-	text(8, top + 4, XY_XL[gXyMode], 1, DIM); text(312 - (int)strlen(XY_YL[gXyMode]) * 8, top + h - 12, XY_YL[gXyMode], 1, DIM);
-	static const char* M[NXY] = {"WT/CUT", "M1/M2", "M3/M4", "CUT/RES", "A/B", "FX", "PERF"};
+	char xl[24], yl[24];
+	if (gXyMode == 7) { float a, b; const char* nx; const char* ny; xyRange(xp, &a, &b, &nx); xyRange(yp, &a, &b, &ny); snprintf(xl, sizeof(xl), "%s >", nx); snprintf(yl, sizeof(yl), "^ %s", ny); }
+	else { snprintf(xl, sizeof(xl), "%s", XY_XL[gXyMode]); snprintf(yl, sizeof(yl), "%s", XY_YL[gXyMode]); }
+	text(8, top + 4, xl, 1, DIM); text(312 - (int)strlen(yl) * 8, top + h - 12, yl, 1, DIM);
+	static const char* M[NXY] = {"WT/CUT", "M1/M2", "M3/M4", "CUT/RES", "A/B", "FX", "PERF", "PAGE"};
 	char t[12]; snprintf(t, sizeof(t), "%s>", M[gXyMode]);
 	rect(316 - XYB_W, top + 1, XYB_W - 1, 12, RGB3(TH->tab)); text(316 - XYB_W / 2 - (int)strlen(t) * 4, top + 3, t, 1, RGB3(TH->tabTxt));
 }
@@ -4856,7 +4894,7 @@ static int xyTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (y < top) return 0;
 	float np = (x - 4) / 311.0f, nc = 1.0f - (y - top) / (float)(h - 1);
 	np = np < 0 ? 0 : np > 1 ? 1 : np; nc = nc < 0 ? 0 : nc > 1 ? 1 : nc;
-	float* xp; float* yp; int xd, yd; xyAxes(&xp, &yp, &xd, &yd); *xp = np; *yp = nc;
+	float* xp; float* yp; int xd, yd; xyAxes(&xp, &yp, &xd, &yd); xySet(xp, np); xySet(yp, nc);
 	gXYmod = nc * 2 - 1; gEdited = 1;
 	return 1;
 }

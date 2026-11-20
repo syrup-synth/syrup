@@ -132,7 +132,8 @@ static Result gspLcdInit(void){return 0;} static void gspLcdExit(void){} static 
 static Result GSPLCD_GetBrightness(u32 s,u32* b){*b=BRIGHT[s];return 0;} static Result GSPLCD_SetBrightness(u32 s,u32 b){BRIGHT[s]=b;return 0;}
 typedef struct{s16 x,z,y;} angularRate; static Result HIDUSER_EnableGyroscope(void){return 0;} static Result HIDUSER_DisableGyroscope(void){return 0;}
 static float TWISTV=0; static void hidGyroRead(angularRate* r){r->x=0;r->y=0;r->z=(s16)(TWISTV*1800);}
-static Result DSP_GetHeadphoneStatus(bool* h){*h=false;return 0;} static Result DSP_InvalidateDataCache(const void*p,u32 n){(void)p;(void)n;return 0;}
+static bool gFakeHP = true;   /* headphones in: patch levels are measured without SPEAKER EQ AUTO */
+static Result DSP_GetHeadphoneStatus(bool* h){*h=gFakeHP;return 0;} static Result DSP_InvalidateDataCache(const void*p,u32 n){(void)p;(void)n;return 0;}
 static ndspWaveBuf* CAPWB=NULL; static void ndspSetCapture(ndspWaveBuf* w){CAPWB=w;}
 typedef u32 Handle; enum{PORT_CAM1=1,SELECT_OUT1=1,SELECT_NONE=0,SIZE_QQVGA=2,OUTPUT_RGB_565=1,CONTEXT_A=1};
 static Result camInit(void){return 0;} static void camExit(void){} static Result CAMU_StopCapture(u32 p){(void)p;return 0;} static Result CAMU_Activate(u32 s){(void)s;return 0;}

@@ -21,7 +21,7 @@ static void checks(void) {
 	load("CHIP SWEEP"); if (!gThru || gThruEnv < 0.5f) fail("format: CHIP SWEEP should turn CHIP > FX on");
 	load("WARM FELT"); if (gThru) fail("format: CHIP > FX stayed on after a patch without it");
 	load("XY MORPH"); if (gXyMode != 1) fail("format: XY MORPH should set the XY pad to MACRO 1+2");
-	load("WARM FELT"); if (gXyMode != 0) fail("format: the XY mode stayed on MACRO after a normal patch");
+	load("WARM FELT"); if (gXyMode != 7) fail("format: a normal patch should put the XY pad back on PAGE (%d)", gXyMode);
 	load("SLOWDOWN"); if (!gTapeKeys || gLoopBars != 1) fail("format: SLOWDOWN should tie the tape to the keys and set 2 bars");
 	load("WARM FELT"); if (gTapeKeys) fail("format: tape-follows-keys stayed on");
 	// 3. save and reload a patch with a beat

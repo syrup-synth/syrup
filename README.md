@@ -42,7 +42,11 @@ With MASTER FX on, every DSP voice goes through the effect bus to a chain that r
 
 **Cinematic set:** BREATH PAD (SPACE: wavetable and out filter breathing over 8 bars, out of step), TENSION DRONE (TEXTURE: low sine + pink noise, two slow LFOs at unrelated rates for a drift that doesn't repeat, tape delay, swell reverb), SOFT PLUCK (PLUCK).
 
-**SPEAKER EQ** (HARDWARE): a gentle high-pass (~120 Hz) and low-pass (~12 kHz) at the end of the MASTER FX chain for the console speaker. It works when MASTER FX is on and is saved with the console settings, not the patch.
+**SPEAKER EQ** (HARDWARE): a gentle high-pass (~120 Hz) and low-pass (~12 kHz) at the end of the MASTER FX chain for the console speaker. OFF / ON / AUTO; AUTO (the default) turns it on only when headphones are out. It works when MASTER FX is on and is saved with the console settings, not the patch.
+
+**XY PAD PAGE mode** (the new default): the pad follows the page you're on. OSC A / OSC B: X = WT POS, Y = WARP AMT. SUB+NOISE: SUB LEVEL / NOISE LEVEL. VOICE+FX: DRIVE / FX MIX. DRUMS: DRUM LEVEL / SWING. Other pages: WT POS + CUTOFF. Axis labels show what it's moving.
+
+**KARPLUS wavetable** (PLUCK): each frame is a plucked string after more trips round its delay line, bright at frame 0 and dark at the end. KS GUITAR, KS BASS and KS HARP sweep it with ENV2, harder hits stay brighter. The meters on unselected rows are dimmed so the selected one stands out.
 
 **DRY check** (FX ORDER view, next to RESET): switches every effect off for a listen: the master chain, pump, delay/reverb sends and echo taps. The OUT FILTER and limiter stay, since they are part of the sound. If the patch falls apart dry, the fix is in the oscillator, octave or envelope. The header says DRY while it is on; it is not saved.
 
