@@ -3290,9 +3290,8 @@ static void splashDraw(void) {
 		const u8* c = SPLASH_PAL + SPLASH_RLE[i + 1] * 3;
 		for (int k = 0; k < SPLASH_RLE[i]; k++, n++) px(x0 + n % SPLASH_W, y0 + n / SPLASH_W, c[0], c[1], c[2]);
 	}
-	static const char* T = "WAVETABLE SYNTH FOR 2DS";
-	text(200 - (int)strlen(T) * 4, y0 + SPLASH_H + 16, T, 1, 255, 255, 85);
-	text(200 - 13 * 4, y0 + SPLASH_H + 30, "SOUL PROVIDER", 1, 170, 85, 0);
+	static const char* T = "WAVETABLE SYNTH";
+	text(200 - (int)strlen(T) * 4, y0 + SPLASH_H + 22, T, 1, 255, 255, 85);
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	memset(fb, 0, 320 * 240 * 3);
 	text(160 - 10 * 4, 112, "LOADING...", 1, 170, 85, 0);
