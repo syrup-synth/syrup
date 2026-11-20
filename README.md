@@ -147,6 +147,12 @@ FBI > Remote Install > Scan QR Code, and scan `install-qr.png`. Sound needs the 
 - With MASTER FX on core 2, the DSP mix comes out one frame (~4.9 ms) after the second sound chip's parts.
 - Envelopes and LFOs update once per screen frame (about 60 Hz); the arpeggiator, sequencer and drums run in the audio thread (~4.9 ms).
 
+## CHIP > FX and tape speed (HARDWARE page)
+
+- **CHIP > FX:** the second sound chip's parts (sub, CHIP SQUARE, the drums and kits) stop going straight to the speakers. Its two capture units record them instead, and DSP channels 19 and 20 play that recording through a low-pass (CHIP CUTOFF, CHIP RES) and the MASTER FX chain, so the drums get reverb, delay, OTT and pump. Both chips run off the same clock, so it never drifts; it adds about 10 ms. It uses both capture units, so CHIP ECHO is off while it's on (use the master delay instead). The looper stays dry.
+- **LOOP SPEED** (-12 to +12 semitones), **LOOP WOW** and **TAPE STOP:** the looper's playback speed is the chip channel's own clock, so pitch and tempo move together like tape. TAPE STOP runs the loop down over about a second; set it back to RUN and it spins up.
+- **ECHO WOW:** the chip echo's replay speed drifts, so each repeat bends like a tape echo.
+
 ## Chip-level extras (no CPU in the audio path)
 
 - **CHIP SQUARE** (SUB+NOISE page): a layer from the second sound chip's own square-wave generators, with CHIP WIDTH (pulse width) and CHIP OCTAVE.

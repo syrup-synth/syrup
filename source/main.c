@@ -656,7 +656,9 @@ static void freeVoice(SVoice* v) {
 	v->active = 0; v->started = 0;
 }
 
-static int dspUsable(int c) { return !(gNoiseOn && c == NOISE_CH) && !(gGrains && (c == 21 || c == 22)); }
+#define THRU_CH0 19   // CHIP > FX plays the second chip's capture on DSP channels 19 (left) and 20 (right)
+static volatile int gThruOn = 0;
+static int dspUsable(int c) { return !(gNoiseOn && c == NOISE_CH) && !(gGrains && (c == 21 || c == 22)) && !(gThruOn && (c == THRU_CH0 || c == THRU_CH0 + 1)); }
 static int loopReserved(int c);
 static int drumReserved(int c);
 static int chipReserved(int c);
@@ -1115,7 +1117,7 @@ static void voicesUpdate(float dt, float bend) {
 		if (l > 1) l = 1;
 		if (r > 1) r = 1;
 		u32 vol = (u32)(l * 0x8000) | ((u32)(r * 0x8000) << 16);
-		CSND_SetVol(c, vol, csSend(l, r)); any = 1;
+		CSND_SetVol(c, gThruOn ? 0 : vol, csSend(l, r)); any = 1;   // CHIP > FX: heard only through the DSP
 	}
 	if (gCsndOK && any) csndExecCmds(false);
 }
@@ -2815,8 +2817,9 @@ static const char* LINK_NAMES_P[6] = {"OFF", "WIFI HOST", "WIFI JOIN", "IR SEND"
 static int gLoopMode, gLoopBars, gCamOn, gLink, gBeatLight;
 static float gNetLat = 20;   // ms: FM-1 LINK's timing buffer (steady delay instead of wobble)
 static float gLoopLevel;
+static float gLoopSpeed, gLoopWow, gThruCut, gThruRes, gEchoWow; static int gTapeStop, gThru; static const char* TAPESTOP_NAMES[2];   // defined with the looper / CHIP > FX
 static Param P_HW[] = {
-	PE("LOOPER", &gLoopMode, 3, LOOP_NAMES_P, D_LOOP), PE("LOOP BARS", &gLoopBars, 5, BARS_NAMES_P, 0), PF("LOOP LEVEL", &gLoopLevel, 0, 1, 0.05f, "%", 0),
+	PE("LOOPER", &gLoopMode, 3, LOOP_NAMES_P, D_LOOP), PE("LOOP BARS", &gLoopBars, 5, BARS_NAMES_P, 0), PF("LOOP LEVEL", &gLoopLevel, 0, 1, 0.05f, "%", 0), PF("LOOP SPEED", &gLoopSpeed, -12, 12, 0.5f, "ST", 0), PF("LOOP WOW", &gLoopWow, 0, 1, 0.05f, "%", 0), PE("TAPE STOP", &gTapeStop, 2, TAPESTOP_NAMES, 0),
 	PE("GRAINS", &gGrains, 3, GRAIN_MODES, D_GRAIN), PE("GRAIN SOURCE", &gGrainSrc, 3, GRAIN_SRCS, D_GRAIN), PF("GRAIN SIZE", &gGrainSize, 0, 1, 0.02f, "%", 0), PF("GRAIN SCAN", &gGrainScan, 0, 1, 0.02f, "%", 0),
 	PF("GRAIN SPRAY", &gGrainSpray, 0, 1, 0.02f, "%", 0), PF("GRAIN PITCH", &gGrainPitch, -24, 24, 1, "ST", 0), PF("GRAIN LEVEL", &gGrainLevel, 0, 1, 0.05f, "%", 0),
 	{"LOOP > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_LOOPTAB},
@@ -2852,7 +2855,8 @@ static Param P_DRUMS[] = {
 	PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
 	PI_("EUCLID STEPS", &gEuLen, 2, 16, D_EUCLID), PI_("KICK HITS", &gEuHits[0], 0, 16, D_EUCLID), PI_("KICK ROTATE", &gEuRot[0], 0, 15, D_EUCLID),
 	PI_("SNARE HITS", &gEuHits[1], 0, 16, D_EUCLID), PI_("SNARE ROTATE", &gEuRot[1], 0, 15, D_EUCLID), PI_("HAT HITS", &gEuHits[2], 0, 16, D_EUCLID), PI_("HAT ROTATE", &gEuRot[2], 0, 15, D_EUCLID),
-	PF("CHIP ECHO", &gCsEcho, 0, 1, 0.02f, "%", 0), PE("ECHO TIME", &gCsEchoT, 4, CSECHO_T_NAMES, 0), PF("ECHO REPEATS", &gCsEchoFb, 0, 0.85f, 0.03f, "%", 0), PI_("ECHO PITCH", &gCsEchoPitch, -12, 12, 0),
+	PF("CHIP ECHO", &gCsEcho, 0, 1, 0.02f, "%", 0), PE("ECHO TIME", &gCsEchoT, 4, CSECHO_T_NAMES, 0), PF("ECHO REPEATS", &gCsEchoFb, 0, 0.85f, 0.03f, "%", 0), PI_("ECHO PITCH", &gCsEchoPitch, -12, 12, 0), PF("ECHO WOW", &gEchoWow, 0, 1, 0.05f, "%", 0),
+	PE("CHIP > FX", &gThru, 2, ONOFF2, 0), PF("CHIP CUTOFF", &gThruCut, 0, 1, 0.02f, "%", 0), PF("CHIP RES", &gThruRes, 0, 1, 0.02f, "%", 0),
 	PEND};
 #define NPAGES 12
 static Param* PAGES[NPAGES] = {P_PRESET, P_OSCA, P_OSCB, P_SUBN, P_FILT, P_MOD, P_VOICE, P_PLAY, P_VIS, P_HW, P_MASTER, P_DRUMS};
@@ -3159,7 +3163,7 @@ static const char* paramHelp(const char* n) {
 		{"SWING", "SHUFFLE FEEL"}, {"ADD REST", "PRESS > TO RECORD A REST"}, {"CLEAR SEQ", "PRESS > TO ERASE THE PATTERN"},
 		{"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},
 		{"THEME", "COLOUR SCHEME"},
-		{"LOOPER", "REC RECORDS THE SOUND, THEN LOOPS IT"}, {"LOOP BARS", "LOOP LENGTH AT THE CURRENT BPM"}, {"LOOP LEVEL", "LOOP VOLUME"},
+		{"LOOPER", "REC RECORDS THE SOUND, THEN LOOPS IT"}, {"LOOP BARS", "LOOP LENGTH AT THE CURRENT BPM"}, {"LOOP LEVEL", "LOOP VOLUME"}, {"LOOP SPEED", "LOOP PLAYBACK SPEED: PITCH AND TEMPO TOGETHER"}, {"LOOP WOW", "TAPE WOW AND FLUTTER ON THE LOOP"}, {"TAPE STOP", "STOP: THE LOOP RUNS DOWN. RUN: SPINS BACK UP"}, {"ECHO WOW", "CHIP ECHO SPEED DRIFTS: REPEATS BEND"}, {"CHIP > FX", "SUB, CHIP, DRUMS THROUGH THE FILTER + MASTER FX"}, {"CHIP CUTOFF", "LOW PASS ON THE CHIP PARTS (WITH CHIP > FX)"}, {"CHIP RES", "RESONANCE OF THAT FILTER"},
 		{"LOOP > TABLE", "PRESS > TO TURN THE LOOP INTO A WAVETABLE"}, {"MIC > TABLE", "PRESS >, THEN SING 1 SECOND INTO THE MIC"},
 		{"CAMERA", "CAMERA AS MOD SOURCES (CAM LIGHT / COLOR)"}, {"CAM > TABLE", "PRESS > TO TURN A PHOTO INTO A WAVETABLE"},
 		{"LINK", "SYNC TEMPO WITH ANOTHER SYRUP"},
@@ -4089,14 +4093,15 @@ static void chipSet(float lv) {   // main thread: turning the layer off frees ch
 
 // ---- echo for the second sound chip: its two capture units record its own mix into a ring as long as the
 // delay, two channels replay those rings (crossed over for ping-pong), and their capture send is the feedback
-static float gCsEcho = 0, gCsEchoFb = 0.45f; static int gCsEchoT = 2;
+static float gCsEcho = 0, gCsEchoFb = 0.45f, gEchoWow = 0; static int gCsEchoT = 2;
 static const char* CSECHO_T_NAMES[4] = {"1/8", "3/16", "1/4", "3/8"};
 static const float CSECHO_BEATS[4] = {0.5f, 0.75f, 1.0f, 1.5f};
 static int gEchoUnits[2] = {-1, -1}, gEchoCh[2] = {-1, -1}, gEchoOn = 0, gEchoLen = 0, gEchoBpm = 0;
 static s16* gEchoBuf[2];
 static int echoReserved(int c) { return gEchoOn && (c == gEchoCh[0] || c == gEchoCh[1]); }
 static void csWait(void) { csndExecCmds(false); svcSleepThread(6000000); }   // never spin on the chip's done flag: a wedged chip would hang Syrup forever
-static u32 csSend(float l, float r) {   // capture volumes for sounds that feed the chip echo
+static u32 csSend(float l, float r) {   // capture volumes: the chip echo, or CHIP > FX
+	if (gThruOn) return (u32)(l * 0.5f * 0x7FFF) | ((u32)(r * 0.5f * 0x7FFF) << 16);   // half level: the capture sums every part
 	if (!gEchoOn) return 0;
 	return (u32)(l * gCsEcho * 0x7FFF) | ((u32)(r * gCsEcho * 0x7FFF) << 16);
 }
@@ -4138,7 +4143,7 @@ static void echoStart(void) {
 	csWait();
 }
 static void echoTickL(void) {
-	int want = gCsEcho > 0.001f && gCsndOK;
+	int want = gCsEcho > 0.001f && gCsndOK && !gThruOn;   // CHIP > FX needs both capture units
 	static int pitchWas = 0;
 	if (want && (!gEchoOn || gEchoBpm != gBPM || pitchWas != gCsEchoPitch)) { pitchWas = gCsEchoPitch; echoStart(); }
 	else if (!want && gEchoOn) echoStop();
@@ -4146,6 +4151,14 @@ static void echoTickL(void) {
 	if (gEchoOn && lastFb != gCsEchoFb) {
 		lastFb = gCsEchoFb; u32 fb = (u32)(gCsEchoFb * 0x7FFF);
 		CSND_SetVol(gEchoCh[0], 0x5000, fb << 16); CSND_SetVol(gEchoCh[1], 0x5000u << 16, fb); csndExecCmds(false);
+	}
+	static float wph = 0; static int wowWas = 0;   // ECHO WOW: the replay speed drifts, so each repeat bends (tape echo)
+	if (gEchoOn && (gEchoWow > 0.001f || wowWas)) {
+		wph += 1.0f / 60; wowWas = gEchoWow > 0.001f;
+		float w = 1 + gEchoWow * (0.012f * sinf(TWO_PI * 0.45f * wph) + 0.004f * sinf(TWO_PI * 5.5f * wph));
+		float base = 32728.498f * (gCsEchoPitch ? powf(2.0f, gCsEchoPitch / 12.0f) : 1.0f);
+		u32 t = CSND_TIMER(base * w); if (t < 0x42) t = 0x42; if (t > 0xFFFF) t = 0xFFFF;
+		CSND_SetTimer(gEchoCh[0], t); CSND_SetTimer(gEchoCh[1], t); csndExecCmds(false);
 	}
 }
 
@@ -4280,6 +4293,93 @@ static void loopModeChanged(void) {
 	if (gLoopMode == 1) loopRecStart();
 	else if (gLoopMode == 2) { if (gLoopHave) loopStartPlay(); else { say("RECORD A LOOP FIRST"); gLoopMode = 0; } }
 	else { ndspSetCapture(NULL); loopStopPlay(); }
+}
+// ---- LOOP SPEED / LOOP WOW / TAPE STOP: the looper's playback rate is the chip channel's own timer, so speed
+// changes are free: pitch and tempo move together like tape
+static float gLoopSpeed = 0, gLoopWow = 0; static int gTapeStop = 0;
+static const char* TAPESTOP_NAMES[2] = {"RUN", "STOP"};
+static void loopVariTick(void) {   // main loop, voice lock held
+	static float ph = 0, stopMul = 1; static int wasMuted = 0, wasActive = 0;
+	if (!gCsndOK || gLoopMode != 2 || !gLoopHave || gLoopCh[1] < 0) { stopMul = gTapeStop ? 0.03f : 1; return; }
+	float tgt = gTapeStop ? 0.03f : 1.0f;
+	if (stopMul > tgt) { stopMul -= (1.0f / 60) / 1.2f; if (stopMul < tgt) stopMul = tgt; }   // runs down over ~1.2 s
+	else if (stopMul < tgt) { stopMul += (1.0f / 60) / 0.35f; if (stopMul > tgt) stopMul = tgt; }   // spins up faster
+	int active = gLoopSpeed != 0 || gLoopWow > 0.001f || stopMul < 0.999f;
+	if (!active && !wasActive) return;
+	wasActive = active;
+	ph += 1.0f / 60;
+	float w = 1 + gLoopWow * (0.01f * sinf(TWO_PI * 0.6f * ph) + 0.003f * sinf(TWO_PI * 7.0f * ph));
+	float rate = 32728.498f * powf(2.0f, gLoopSpeed / 12.0f) * w * stopMul;
+	u32 t = CSND_TIMER(rate < 1100 ? 1100 : rate); if (t < 0x42) t = 0x42; if (t > 0xFFFF) t = 0xFFFF;
+	CSND_SetTimer(gLoopCh[0], t); CSND_SetTimer(gLoopCh[1], t);
+	int muted = stopMul <= 0.031f;   // fully stopped: silent, like a stopped reel
+	if (muted != wasMuted) { u32 l = muted ? 0 : (u32)(gLoopLevel * 0x8000); CSND_SetVol(gLoopCh[0], l, 0); CSND_SetVol(gLoopCh[1], l << 16, 0); wasMuted = muted; }
+	csndExecCmds(false);
+}
+
+// ---- CHIP > FX: the second sound chip's parts (sub, chip square, drums and kits, chip effects) skip the speakers and
+// go to its two capture units instead; DSP channels 19 / 20 replay that capture through a filter and the master
+// effects. Both chips run off one clock (32728.498 Hz), so the replay never drifts; it lags the capture by ~10 ms.
+static int gThru = 0, gThruUnits[2] = {-1, -1}; static float gThruCut = 1.0f, gThruRes = 0.1f;
+#define THRU_N 2048
+static s16* gThruBuf[2]; static ndspWaveBuf gThruWB[2];
+static void thruStop(void) {
+	if (!gThruOn) return;
+	gThruOn = 0;
+	for (int k = 0; k < 2; k++) { ndspChnWaveBufClear(THRU_CH0 + k); if (gThruUnits[k] >= 0) { CSND_CapEnable(gThruUnits[k], false); } }
+	if (gCsndOK) csWait();
+	for (int k = 0; k < 2; k++) if (gThruUnits[k] >= 0) { CSND_ReleaseCapUnit(gThruUnits[k]); gThruUnits[k] = -1; }
+}
+static void thruMix(void) {
+	for (int k = 0; k < 2; k++) {
+		float mix[12] = {0}; mix[k] = 2.0f;   // back to full level (the capture ran at half)
+		float s0 = busSend(0), s1 = busSend(1);
+		mix[4] = mix[0] * s0; mix[5] = mix[1] * s0; mix[8] = mix[0] * s1; mix[9] = mix[1] * s1;
+		ndspChnSetMix(THRU_CH0 + k, mix);
+	}
+}
+static void thruFilter(void) {
+	float hz = 40.0f * powf(2.0f, gThruCut * 9.0f); if (hz > 15000) hz = 15000;
+	for (int k = 0; k < 2; k++) {
+		if (gThruCut >= 0.999f) { ndspChnIirBiquadSetEnable(THRU_CH0 + k, false); continue; }
+		ndspChnIirBiquadSetParamsLowPassFilter(THRU_CH0 + k, hz, 0.707f + gThruRes * 6.0f); ndspChnIirBiquadSetEnable(THRU_CH0 + k, true);
+	}
+}
+static void thruStart(void) {
+	if (!gCsndOK || !gAudioOK || gThruOn) return;
+	echoStop();
+	for (int k = 0; k < 2; k++) {
+		if (!gThruBuf[k]) gThruBuf[k] = (s16*)linearAlloc(THRU_N * 2);
+		u32 u; if (!gThruBuf[k] || R_FAILED(CSND_AcquireCapUnit(&u))) { if (k && gThruUnits[0] >= 0) { CSND_ReleaseCapUnit(gThruUnits[0]); gThruUnits[0] = -1; } say("CHIP > FX: NO CAPTURE UNIT FREE"); gThru = 0; return; }
+		gThruUnits[k] = u;
+		memset(gThruBuf[k], 0, THRU_N * 2); CSND_FlushDataCache(gThruBuf[k], THRU_N * 2);
+	}
+	for (int k = 0; k < 2; k++) {
+		int c = THRU_CH0 + k;
+		if (gDspOwner[c] >= 0) freeVoice(&gV[gDspOwner[c]]);
+		ndspChnWaveBufClear(c); ndspChnReset(c);
+		ndspChnSetFormat(c, NDSP_FORMAT_MONO_PCM16); ndspChnSetInterp(c, NDSP_INTERP_NONE); ndspChnSetRate(c, NDSP_SAMPLE_RATE);
+		CSND_SetCapRegs(gThruUnits[k], CAPTURE_REPEAT | CAPTURE_FORMAT_16BIT | CAPTURE_ENABLE, osConvertVirtToPhys(gThruBuf[k]), THRU_N * 2);
+		CSND_CapSetTimer(gThruUnits[k], CSND_TIMER(32728));
+	}
+	gThruOn = 1;   // from here the chip parts send to the capture (csSend) and go quiet on the speakers
+	for (int k = 0; k < 2; k++) CSND_CapEnable(gThruUnits[k], true);
+	csndExecCmds(false);
+	svcSleepThread(8000000);   // let the capture get ahead before the DSP starts reading behind it
+	thruMix(); thruFilter();
+	for (int k = 0; k < 2; k++) {
+		memset(&gThruWB[k], 0, sizeof(ndspWaveBuf));
+		gThruWB[k].data_vaddr = gThruBuf[k]; gThruWB[k].nsamples = THRU_N; gThruWB[k].looping = true;
+		ndspChnWaveBufAdd(THRU_CH0 + k, &gThruWB[k]);
+	}
+}
+static void thruTick(void) {   // main loop, voice lock held
+	int want = gThru && gCsndOK && gAudioOK;
+	if (want && !gThruOn) thruStart();
+	else if (!want && gThruOn) thruStop();
+	if (!gThruOn) return;
+	static float lc = -1, lr = -1; if (lc != gThruCut || lr != gThruRes) { lc = gThruCut; lr = gThruRes; thruFilter(); }
+	static int f = 0; if (++f % 15 == 0) thruMix();   // follow the FX sends
 }
 static void loopToTable(void) {
 	if (!gLoopHave) { say("RECORD A LOOP FIRST"); return; }
@@ -5439,7 +5539,7 @@ static void drumHit(int d, float vel) {   // from the audio thread (voice lock h
 		CSND_SetChnRegsNoise(SOUND_FORMAT_PSG | SOUND_ENABLE | SOUND_CHANNEL(nc) | (t << 16), vol, csSend(l / 32768.0f, r / 32768.0f));
 		return;
 	}
-	CSND_SetChnRegs(flags, osConvertVirtToPhys(gDrumSmp[d]), osConvertVirtToPhys(gDrumSmp[d]), gDrumLen[d] * 2, vol, csSend(l / 32768.0f, r / 32768.0f));
+	CSND_SetChnRegs(flags, osConvertVirtToPhys(gDrumSmp[d]), osConvertVirtToPhys(gDrumSmp[d]), gDrumLen[d] * 2, gThruOn ? 0 : vol, csSend(l / 32768.0f, r / 32768.0f));
 }
 static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the sequencer when it plays
 	if (!gDrums || !gCsndOK || gDrumBuilt < 0) { gDrumStep = -1; return; }
@@ -6322,7 +6422,7 @@ int main(void) {
 			if (armed && gShakeD > 0.35f && tnow - lastHit > 60) { kitHitSound(0, 0.4f + 0.6f * (gShakeD > 1 ? 1 : gShakeD)); armed = 0; lastHit = tnow; }
 			if (gShakeD < 0.2f) armed = 1;
 		}
-		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
+		micRecTick(1.0f / 60); loopTick(); loopLevelTick(); loopVariTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
 		if (midiTick()) topDirty = botDirty = 1;
 		if (gOfType) {   // OUT FILTER cutoff mod: the mod matrix and ENV 2 of the newest note
 			const SVoice* nv = newestVoice(); float m = modSum(DST_OFCUT, (SVoice*)nv);

@@ -34,3 +34,8 @@ static double toneDb(int a, int b, double hz) {
 	double tone = p / (n / 2.0), all = tot / n;
 	return 10 * log10((tone + 1e-12) / (all + 1e-12));
 }
+static double hfRmsOf(int a, int b) {   // rms of the sample-to-sample difference: weighted toward the highs
+	double s = 0; long n = 0; if (b > ON) b = ON; if (a < 1) a = 1;
+	for (int i = a; i < b; i++) { double d = (OUT[2 * i] + OUT[2 * i + 1]) - (OUT[2 * i - 2] + OUT[2 * i - 1]); s += d * d; n++; }
+	return n ? sqrt(s / n) : 0;
+}

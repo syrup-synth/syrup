@@ -217,3 +217,4 @@ static inline SwkbdButton swkbdInputText(SwkbdState* s, char* o, size_t n) { (vo
 /* model queries and DSP health */
 static int FAKE_NEW3DS = 0; static Result APT_CheckNew3DS(bool* o) { *o = FAKE_NEW3DS; return 0; }
 static u32 ndspGetDroppedFrames(void) { return 0; } static u32 ndspGetFrameCount(void) { return 0; }
+#define NDSP_SAMPLE_RATE (16756991u / 512.0)
