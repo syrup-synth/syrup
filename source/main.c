@@ -829,7 +829,9 @@ static void initVoice(SVoice* v) {
 static void lfoTrig(void) { for (int i = 0; i < 2; i++) if (gLfo[i].mode == 1) gLfo[i].ph = 0; }
 
 static int busActive(void);
+static int gDry = 0;   // DRY check (FX ORDER view): every effect off for a listen, the OUT FILTER and limiter stay; not saved
 static void addTaps(SVoice* v) {
+	if (gDry) return;
 	if (busActive() && (gFx == 1 || gFx == 3)) return;   // reverb / echo run on the DSP effect buses
 	int ne = 0; float t[8], g[8], p[8], c[8], rm[8], dt[8];
 	float mix = gFxMix * 2.0f;
@@ -1383,7 +1385,7 @@ static void busInit(void) {
 }
 // sends for the current FX choice: REVERB -> bus 0, ECHO -> bus 1 (SPACE stays on taps)
 static float busSend(int bus) {
-	if (!busActive() || (gMasterFX && bus == 1)) return 0;
+	if (gDry || !busActive() || (gMasterFX && bus == 1)) return 0;
 	if (bus == 0 && gFx == 3) return gFxMix * 1.4f;
 	if (bus == 1 && gFx == 1) return gFxMix * 1.2f;
 	return 0;
@@ -1573,7 +1575,7 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 		if (L[s] | R[s]) seen = 1;
 		float x[2] = {L[s] / 32768.0f, R[s] / 32768.0f};
 		// the movable blocks, in FX ORDER (pump and limiter always come last)
-		for (int fk = 0; fk < NFXB; fk++) switch (fxo[fk]) {
+		if (!gDry) for (int fk = 0; fk < NFXB; fk++) switch (fxo[fk]) {
 		case 0: {
 			// lofi
 			if (bits || hold > 1) {
@@ -1718,7 +1720,7 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 			for (int c = 0; c < 2; c++) { hpS[c] += (x[c] - hpS[c]) * 0.0228f; float h = x[c] - hpS[c]; lpS[c] += (h - lpS[c]) * 0.9f; x[c] = lpS[c]; }
 		}
 		// sidechain pump: duck on each beat, recover through it
-		if (gPump > 0.001f) {
+		if (gPump > 0.001f && !gDry) {
 			float ph = (gBeatPh + s * beatInc) * pumpRate; ph -= floorf(ph);
 			float r = ph < 0.45f ? ph / 0.45f : 1; r = r * r * (3 - 2 * r);
 			float g = 1 - gPump * (1 - r);
@@ -2132,6 +2134,7 @@ typedef struct {
 #define PATCH_MAGIC1 0x53595231  // v1 (no arp fields)
 #define PATCH_V1_SIZE offsetof(SPatch, arp)
 
+static void initWire(SPatch* p);
 static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no effects
 	memset(p, 0, sizeof(*p));
 	p->magic = PATCH_MAGIC;
@@ -2704,6 +2707,11 @@ static void x_tensiondrone(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA
 	lane(p, 0, 4, 5, 0.3f, 0.6f, 3); OUTF(OF_L24, 0.35f, 0.4f, 0.2f, 0); DLYS(0.2f, S4, DL_TAPE); p->dlyWow = 0.7f; p->dlySat = 0.3f; REVB(0.5f, RV_SWELL); p->xyMode = 3; }
 static void u_softpluck(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.pos = TRI; OA.uni = 2; OA.detune = 8; ENV1(0.005f, 0, 0.4f, 0.0f, 0.8f); ENV2(0.005f, 0, 0.2f, 0.0f, 0.5f);
 	MOD(0, SRC_ENV2, DST_OFCUT, 0.4f); DRV(5, 0.15f); OUTF(OF_LP, 0.5f, 0.1f, 0, 0); REVB(0.25f, RV_PLATE); DLYS(0.15f, S8, DL_PING); p->xyMode = 3; }
+// INIT PATCH starts with the macros wired (at 0 they do nothing): M1 opens the filter, M2 moves A's wavetable,
+// M3 adds resonance, M4 pans; XY PAD = MACRO 1+2, so the pad plays filter and wavetable from the first note
+static void initWire(SPatch* p) {
+	MOD2(0, SRC_M1, DST_CUTOFF, 0.5f); MOD2(1, SRC_M2, DST_APOS, 0.5f); MOD2(2, SRC_M3, DST_RES, 0.5f); MOD2(3, SRC_M4, DST_PAN, 0.6f); p->xyMode = 1;
+}
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
 	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}, {"DARK 808", b_dark808}, {"303 SCREAM", b_303scream}},
@@ -2933,7 +2941,7 @@ static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound
 	if (ds) { gStyle = (gStyle + NSTYLES + ds) % NSTYLES; gPreset = 0; }
 	else { int n = presetCount(gStyle) + (gStyle == u); gPreset = (gPreset + n + dp) % n; }
 	gSaveArm = -1;
-	if (gStyle == u && gPreset == NUSER) { SPatch ip; patchInit(&ip); patchApply(&ip); gEdited = 0; gGuard = 0; say("INIT PATCH: ONE PLAIN SAW"); return 1; }
+	if (gStyle == u && gPreset == NUSER) { SPatch ip; patchInit(&ip); initWire(&ip); patchApply(&ip); gEdited = 0; gGuard = 0; say("INIT PATCH: ONE PLAIN SAW"); return 1; }
 	if (gStyle == u && gUser[gPreset].magic != PATCH_MAGIC) { say("EMPTY SLOT: PRESS A TO SAVE THIS SOUND HERE"); return 0; }
 	presetLoad(gStyle, gPreset); return 1;
 }
@@ -3570,10 +3578,10 @@ static void drawHeader(int page) {
 	// status, right side of the sub-tab row: tempo, notes playing, CPU, transport
 	char st[40]; int voices = 0;
 	for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho) voices++;
-	snprintf(st, sizeof(st), "%s%d BPM %dV %d%%", gLatchShow ? "LATCH " : "", gBPM, voices, cpuPct());
+	snprintf(st, sizeof(st), "%s%s%d BPM %dV %d%%", gDry ? "DRY " : "", gLatchShow ? "LATCH " : "", gBPM, voices, cpuPct());
 	if (gSeqPlaying) strcat(st, " >");
 	int stx = 396 - (int)strlen(st) * 8;
-	if (stx > sx) text(stx, 18, st, 1, (skipRecent() || gLatchShow) ? WARN : DIM);
+	if (stx > sx) text(stx, 18, st, 1, (skipRecent() || gLatchShow || gDry) ? WARN : DIM);
 	if (gEdited) { char pn[16]; snprintf(pn, sizeof(pn), "%.9s", gPatchName); int nx = 396 - (int)strlen(pn) * 8; rect(nx - 2, 1, (int)strlen(pn) * 8 + 4, 11, WARN); text(nx, 3, pn, 1, BG); }   // edited: the name turns to the warning colour
 }
 static void drawFooter(int page, int sel) {
@@ -4505,6 +4513,7 @@ static void drawChainView(void) {
 	rect(0, TAB_H, 320, WORK_B - TAB_H, RGB3(TH->bg));
 	text(6, TAB_H + 6, "FX ORDER", 1, RGB3(TH->val)); text(78, TAB_H + 6, "DRAG A BLOCK TO MOVE IT", 1, RGB3(TH->txt));
 	rect(258, TAB_H + 22, 56, 12, RGB3(TH->tab)); text(262, TAB_H + 24, "RESET", 1, RGB3(TH->tabTxt));
+	if (gDry) { rect(196, TAB_H + 22, 56, 12, RGB3(TH->warn)); text(212, TAB_H + 24, "DRY", 1, RGB3(TH->bg)); } else { rect(196, TAB_H + 22, 56, 12, RGB3(TH->tab)); text(212, TAB_H + 24, "DRY", 1, RGB3(TH->tabTxt)); }
 	for (int i = 0; i < NFXB; i++) {
 		if (i) { int ax = CH_X(i) - 6; rect(ax, CH_Y + CH_H / 2, 5, 1, RGB3(TH->txt)); px(ax + 3, CH_Y + CH_H / 2 - 1, RGB3(TH->txt)); px(ax + 3, CH_Y + CH_H / 2 + 1, RGB3(TH->txt)); }
 		if (i == gChDrag) { outline(CH_X(i), CH_Y, 46, CH_H, RGB3(TH->grid)); continue; }   // the gap it will drop into
@@ -4512,12 +4521,14 @@ static void drawChainView(void) {
 	}
 	int fx = CH_X(NFXB) - 6; rect(fx, CH_Y + CH_H / 2, 5, 1, RGB3(TH->txt));
 	rect(fx + 6, CH_Y, 50, CH_H, RGB3(TH->grid)); text(fx + 15, CH_Y + 8, "PUMP", 1, RGB3(TH->txt)); text(fx + 15, CH_Y + 19, "LIMIT", 1, RGB3(TH->txt));
-	if (!gMasterFX) text(6, CH_Y + CH_H + 8, "MASTER FX IS OFF: THE CHAIN IS BYPASSED", 1, RGB3(TH->warn));
+	if (gDry) text(6, CH_Y + CH_H + 8, "DRY: ALL FX OFF. STILL GOOD? THE SOUND IS SOLID", 1, RGB3(TH->warn));
+	else if (!gMasterFX) text(6, CH_Y + CH_H + 8, "MASTER FX IS OFF: THE CHAIN IS BYPASSED", 1, RGB3(TH->warn));
 	if (gChDrag >= 0) { int x = gChDragX - 23; x = x < 0 ? 0 : x > 274 ? 274 : x; drawChainBox(x, gFxOrder[gChDrag], 1); }
 }
 static int chainTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (release) { int r = gChDrag >= 0; gChDrag = -1; return r; }
 	if (press) {
+		if (x >= 196 && x < 254 && y >= TAB_H + 20 && y < TAB_H + 36) { gDry = !gDry; say(gDry ? "DRY: EFFECTS OFF. IF IT FALLS APART, FIX OSC / OCTAVE / ENVELOPE" : "DRY OFF: EFFECTS BACK"); return 1; }
 		if (x >= 258 && y >= TAB_H + 20 && y < TAB_H + 36) { u8 d[NFXB]; for (int i = 0; i < NFXB; i++) d[i] = i; fxOrderSet(d); gEdited = 1; say("FX ORDER: DEFAULT"); return 1; }
 		if (y < CH_Y - 8 || y >= CH_Y + CH_H + 8) return 0;
 		for (int i = 0; i < NFXB; i++) if (x >= CH_X(i) && x < CH_X(i) + 46) { gChDrag = i; gChDragX = x; return 1; }
@@ -7408,7 +7419,7 @@ int main(void) {
 				topDirty = 1;
 			} else if ((p->dirty & (D_SAVE | D_INIT)) && dir > 0 && !fast) {
 				if (p->dirty & D_SAVE) { patchCapture(&gUser[gSaveSlot]); userSave(); gStyle = NSTYLES - 1; gPreset = gSaveSlot; }
-				else { SPatch ip; patchInit(&ip); patchApply(&ip); }
+				else { SPatch ip; patchInit(&ip); initWire(&ip); patchApply(&ip); }
 				curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = 1;
 			} else if ((p->dirty & (D_PRESET | D_STYLE)) && gEdited && !gGuard && !fast) {
 				gGuard = 1; say("PATCH EDITED: PRESS AGAIN TO LEAVE IT (SAVE IT IN USER)"); topDirty = 1;

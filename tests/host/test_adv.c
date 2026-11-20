@@ -68,12 +68,19 @@ static void SCRIPT(int fr) {
 		gEdited = 0; gXyMode = 0; xyTouch(100, XY_Y + 40, 1, 0); xyTouch(0, 0, 0, 1); if (!gEdited) fail("edited: the XY pad");
 		gModView = 0;
 	}
+	if (fr == 196) {   // DRY check on the FX ORDER view; INIT PATCH comes with its macros wired
+		chainTouch(220, TAB_H + 26, 1, 0); chainTouch(0, 0, 0, 1); if (!gDry) fail("DRY: the button should switch every effect off");
+		gFx = 3; gFxMix = 0.8f; if (busSend(0) != 0) fail("DRY: no effect sends while it's on");
+		chainTouch(220, TAB_H + 26, 1, 0); chainTouch(0, 0, 0, 1); if (gDry) fail("DRY: a second tap brings the effects back");
+		SPatch ip; patchInit(&ip); initWire(&ip); patchApply(&ip);
+		if (gMod[4].src != SRC_M1 || gMod[4].dst != DST_CUTOFF || gXyMode != 1) fail("INIT PATCH: macro 1 should be wired to the filter, XY on MACRO 1+2");
+	}
 	if (fr == 193 && !(gHeldN && (gHeld[0] % 12) == 1)) fail("keys: a 2 px slip off C# shouldn't change the note (held %d)", gHeldN ? gHeld[0] : -1);
 }
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	FILE* f = fopen("sd/settings.bin", "wb"); int d[4] = {0x53455431, 1, 0, 0}; fwrite(d, sizeof(d), 1, f); fclose(f);
-	loadFont(); FRMAX = 198; app_main();
+	loadFont(); FRMAX = 199; app_main();
 	remove("sd/settings.bin");
 	printf("adv: last page, XY modes, PERF, circle pad, matrix hold, HUD ghost, vis tiles, hardware view\n");
 	return gFails ? 1 : 0;
