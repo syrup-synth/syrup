@@ -1,0 +1,2 @@
+default_font.bin is libctru's console font (https://github.com/devkitPro/libctru, zlib licence), used to draw text
+in the simulated screens.

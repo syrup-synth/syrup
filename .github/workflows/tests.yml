@@ -1,0 +1,39 @@
+name: Syrup tests
+
+# Runs Syrup's own code on a normal computer (tests/host fakes the 2DS hardware): every factory patch plays a note
+# and is checked for silence, clipping, DC and level drift; plus the frame-rate buzz, core-2 FX, LINK timing and the
+# preset browser / save / MATRIX controls. Screens and any failing audio are attached to the run.
+on:
+  push:
+    paths:
+      - 'source/**'
+      - 'tests/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    paths:
+      - 'source/**'
+      - 'tests/**'
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libcurl4-openssl-dev
+          pip install --quiet pillow
+      - name: Run tests
+        run: python3 tests/host/run_tests.py
+      - name: Screens and audio
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: syrup-test-output
+          path: |
+            build/host/shots/
+            build/host/wav/
+          if-no-files-found: ignore

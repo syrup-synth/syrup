@@ -294,3 +294,17 @@ Elsewhere: **NOISE TYPE CORRUPT** (junk fed to the DSP's ADPCM decoder), **ECHO 
 ## New sensor sources
 
 SPIN F/B and SPIN L/R (gyro: how fast you tip or roll it, not where it sits), VOICE BRIGHT (talk into the mic: "ss" is bright, "oo" is dark), CAM MOTION (how much the camera picture changes). They're in the mod matrix.
+
+## Tests
+
+`tests/host` runs Syrup's real code on a normal computer, with the 2DS hardware faked (`fake3ds.h`: the DSP's channels, its fixed-point filter and aux buses, the second sound chip, buttons, touch screen and a simulated clock). GitHub runs it on every push that touches `source/` or `tests/` (workflow "Syrup tests"); it takes under a minute.
+
+- **Every factory patch** plays a held C4: fails if it's silent, clips, carries runaway DC, or is more than 3 dB away from `tests/baseline/levels.txt`.
+- **Buzz:** a sine through MASTER FX, with the chain on core 1 and on core 2, must have no 204.5 Hz frame-rate tone; core 2 must not fall back.
+- **LINK timing:** jittery FM-1 LINK packets must come out evenly spaced and never due before they arrive; the tick clock must convert exactly.
+- **Controls:** the preset browser, saving and naming a patch, and the MATRIX (pick source, pick destination, drag amount).
+- Both screens of every page are saved as PNGs, and failing patches as WAVs, attached to the run.
+
+Run it locally with `python3 tests/host/run_tests.py` (needs gcc, libcurl headers, Python; Pillow for PNGs). After an intended sound change, `python3 tests/host/run_tests.py --update` accepts the new levels; commit `tests/baseline/levels.txt` with it.
+
+It can't check what only the hardware does: real chip quirks, CPU load on a 2DS, Wi-Fi, IR, camera and the system keyboard.
