@@ -40,6 +40,8 @@ With MASTER FX on, every DSP voice goes through the effect bus to a chain that r
 
 **Patches (Nov 2026):** new DARK 808 and 303 SCREAM (BASS), CINE SWELL (PAD), TAPE RHODES (KEYS), NEON PWM (RAVE). BIG UNISON, STRINGS 77, SHOEGAZE WALL and the RAVE supersaw use fewer unison voices per note (5 / 4 / 4 / 4), so chords don't steal notes from the 24 sound channels. REESE CRATE, MOTION HAZE, TIDAL and the supersaw gained motion lanes; these and the new ones open with a fitting XY PAD mode.
 
+**Cinematic set:** BREATH PAD (SPACE: wavetable and out filter breathing over 8 bars, out of step), TENSION DRONE (TEXTURE: low sine + pink noise, two slow LFOs at unrelated rates for a drift that doesn't repeat, tape delay, swell reverb), SOFT PLUCK (PLUCK).
+
 **SPEAKER EQ** (HARDWARE): a gentle high-pass (~120 Hz) and low-pass (~12 kHz) at the end of the MASTER FX chain for the console speaker. It works when MASTER FX is on and is saved with the console settings, not the patch.
 
 **FX ORDER:** the bottom screen of the MASTER FX page (or the CHAIN chip) shows the chain as five blocks: LOFI, MOD FX, EQ, SPACE (delay and reverb, side by side) and OTT. Drag a block left or right and the chain changes while you hear it (lofi after the reverb crushes the tails; OTT first, before the EQ, pumps the dry sound only). A lit block is doing something. PUMP and the limiter always stay last. RESET puts back the default order. The order is saved with the patch (patch format v13; older user patches load with the default order).

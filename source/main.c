@@ -2693,6 +2693,17 @@ static void p_cineswell(SPatch* p) { p->master = 0.75f; OA.table = T_HARMONIX; O
 static void k_taperhodes(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SINE; OA.level = 0.7f; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1; OB.level = 0.4f;
 	OB.warp = W_FM; OB.warpAmt = 0.35f; ENV1(0.002f, 0, 0.5f, 0.0f, 0.6f); MOD(0, SRC_VEL, DST_BWARP, 0.4f); p->noiseType = 2; p->noiseLevel = 0.12f;
 	OUTF(OF_LP, 0.55f, 0.1f, 0, 0); DLYS(0.15f, S4, DL_TAPE); p->dlyWow = 0.65f; p->dlySat = 0.4f; p->lofiBits = 2; p->lofiRate = 0.25f; NOSTICK; p->xyMode = 3; }
+// ---- cinematic set: slow movement over static complexity, restraint over obvious modulation
+static void s_breathpad(SPatch* p) { p->master = 0.65f; OA.table = T_HARMONIX; OA.pos = 0.3f; OA.uni = 3; OA.detune = 12; OA.width = 1;
+	OB.on = 1; OB.table = T_VOWELS; OB.level = 0.4f; OB.oct = 1; ENV1(1.2f, 0, 2.0f, 0.9f, 2.5f);
+	lane(p, 0, 0, 2, 0.2f, 0.8f, 3); lane(p, 1, 4, 3, 0.4f, 0.75f, 3);   // WT POS and OUT CUT breathe over 8 bars, out of step with each other
+	OUTF(OF_CREAMY, 0.6f, 0.15f, 0, 0); MFX(FX_DIM, 0.3f, 0.4f, 0.3f); REVB(0.45f, RV_HALL); p->xyMode = 5; }   // XY: FX MIX + COLOR = width and space
+static void x_tensiondrone(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -2; OA.level = 0.6f; p->noiseType = 1; p->noiseLevel = 0.25f;
+	ENV1(1.5f, 0, 2.0f, 1.0f, 3.0f);
+	LFO(0, LS_SINE, 0, 0.07f); LFO(1, LS_TRI, 0, 0.113f); MOD(2, SRC_LFO1, DST_PITCH, 0.008f); MOD(3, SRC_LFO2, DST_PITCH, 0.006f);   // two slow LFOs at unrelated rates: a drift that doesn't repeat
+	lane(p, 0, 4, 5, 0.3f, 0.6f, 3); OUTF(OF_L24, 0.35f, 0.4f, 0.2f, 0); DLYS(0.2f, S4, DL_TAPE); p->dlyWow = 0.7f; p->dlySat = 0.3f; REVB(0.5f, RV_SWELL); p->xyMode = 3; }
+static void u_softpluck(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.pos = TRI; OA.uni = 2; OA.detune = 8; ENV1(0.005f, 0, 0.4f, 0.0f, 0.8f); ENV2(0.005f, 0, 0.2f, 0.0f, 0.5f);
+	MOD(0, SRC_ENV2, DST_OFCUT, 0.4f); DRV(5, 0.15f); OUTF(OF_LP, 0.5f, 0.1f, 0, 0); REVB(0.25f, RV_PLATE); DLYS(0.15f, S8, DL_PING); p->xyMode = 3; }
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
 	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}, {"DARK 808", b_dark808}, {"303 SCREAM", b_303scream}},
@@ -2704,17 +2715,17 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"EP SATURDAY", k_epsat}, {"DRAWBAR", k_drawbar}, {"LOFI UPRIGHT", k_lofiup}, {"CLAV FUNK", k_clav}, {"WURLI BARK", k_wurli}, {"VIBES", k_vibes},
 	 {"TOY KEYS", k_toy}, {"HARPSI", k_harpsi}, {"ROTARY", k_rotary}, {"CUMBIA ORGANO", k_cumbiaorg}, {"REEL PIANO", k_reel}, {"GLASS TOP", k_glasstop}, {"TAPE RHODES", k_taperhodes}},
 	{{"NYLON", u_nylon}, {"MARIMBA WOOD", u_marimba}, {"KALIMBA", u_kalimba}, {"DIGI HARP", u_digiharp}, {"STAB 1999", u_stab99}, {"KOTO SPRING", u_koto},
-	 {"CHIP PLINK", u_chipplink}, {"GRAIN PLUCK", u_grain}, {"STEEL PAN", u_steel}, {"RAIN ON TIN", u_raintin}},
+	 {"CHIP PLINK", u_chipplink}, {"GRAIN PLUCK", u_grain}, {"STEEL PAN", u_steel}, {"RAIN ON TIN", u_raintin}, {"SOFT PLUCK", u_softpluck}},
 	{{"ORGAN STAB", c_organstab}, {"NEO SOUL 9", c_neosoul}, {"DUB CHORD", c_dub}, {"TECHNO STAB", c_techno}, {"STRUM GUITAR", c_strum}, {"OMNI HARP", c_omni},
 	 {"PUMP CHORDS", c_pump}, {"GOSPEL ORGAN", c_gospel}, {"SHOEGAZE WALL", c_shoegaze}},
 	{{"BERLIN 16", q_berlin}, {"ACID CIRCLE", q_acidcircle}, {"TRANCE GATE", q_gate}, {"PING ARP", q_pingarp}, {"CHAOS ARP", q_chaosarp}, {"MOTION BELLS", q_motionbells},
 	 {"OCTAVE BOUNCE", q_octbounce}, {"DRAWN STEPS", q_drawnsteps}, {"GRAIN RUN", q_grainrun}, {"POLYRHYTHM", q_polyrhythm}},
 	{{"TIDE POOL", x_tidepool}, {"FROZEN TABLE", x_frozen}, {"NET STATIC", x_netstatic}, {"TAPE ROOM", x_taperoom}, {"BROWN SEA", x_sea}, {"GEIGER", x_geiger},
-	 {"DRONE 60", x_drone60}, {"SHIMMER CLOUD", x_shimmercloud}, {"SONAR PING", x_sonarping}, {"STORM FRONT", x_storm}, {"FREEZE GLASS", x_freezeglass}, {"JET COMB", x_jetcomb}, {"WIRE DRONE", x_wiredrone}, {"KITCHEN SINK2", m_sink2}},
+	 {"DRONE 60", x_drone60}, {"SHIMMER CLOUD", x_shimmercloud}, {"SONAR PING", x_sonarping}, {"STORM FRONT", x_storm}, {"FREEZE GLASS", x_freezeglass}, {"JET COMB", x_jetcomb}, {"WIRE DRONE", x_wiredrone}, {"KITCHEN SINK2", m_sink2}, {"TENSION DRONE", x_tensiondrone}},
 	{{"GB WAVE", h_gbwave}, {"NES PULSE", h_nes}, {"C64 PWM", h_c64}, {"ARCADE ARP", h_arcade}, {"POWER UP", h_powerup}, {"LASER", h_laser},
 	 {"8-BIT BASS", h_bass8}, {"BIT ORGAN", h_bitorgan}, {"SQUARE CHOIR", h_squarechoir}, {"4-BIT GB", h_gb4}, {"CHIP SWEEP", h_chipsweep}, {"FILTER DRUMS", h_filtdrums}, {"OTT CHIP BASS", h_ottbass}},
 	{{"ORBIT PAD", s_orbitpad}, {"HELICOPTER", s_heli}, {"CIRCLE ARP", s_circlearp}, {"AROUND YOU", s_aroundyou}, {"3D BELLS", s_bells}, {"SPIRAL PLUCK", s_spiral},
-	 {"PASSING CAR", s_passing}, {"STEER ORBIT", s_tilt}},
+	 {"PASSING CAR", s_passing}, {"STEER ORBIT", s_tilt}, {"BREATH PAD", s_breathpad}},
 	{{"PSG STACK", c_psgstack}, {"ECHO CANYON", c_canyon}, {"CRUSH BELL", c_crushbell}, {"8-BIT CHOIR", c_choir8}, {"CAPTURE DUB", c_capturedub},
 	 {"TWO CHIPS", c_twochips}, {"QUANT GRIT", c_quantgrit}, {"GB ORBIT", c_gborbit}, {"DOUBLE ECHO", c_doubleecho}, {"SUB CHIP", c_subchip},
 	 {"SCREAM LEAD", c_screamlead}, {"RAW SAMPLER", c_rawsampler}, {"HOT ORGAN", c_hotorgan}, {"GLITCH STORM", c_glitchstorm}, {"PITCH CANYON", c_pitchcanyon}},
@@ -2863,12 +2874,12 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f, 1.00f},
 	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.64f, 1.35f, 2.50f, 1.31f},
 	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.11f, 0.95f, 1.80f, 1.00f, 1.00f},
-	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.58f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{2.33f, 1.34f, 4.24f, 2.18f, 2.20f, 1.12f, 2.30f, 0.67f, 2.08f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{1.32f, 1.05f, 4.46f, 1.10f, 3.54f, 1.82f, 2.40f, 6.00f, 1.34f, 2.41f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.42f, 1.93f, 1.42f, 3.55f, 1.00f},
+	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.42f, 1.93f, 1.42f, 3.55f, 2.18f},
 	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 0.76f, 0.76f, 0.70f, 0.80f, 1.00f, 1.00f},
-	{1.30f, 0.81f, 1.34f, 2.99f, 0.90f, 1.37f, 3.46f, 1.10f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{1.30f, 0.81f, 1.34f, 2.99f, 0.90f, 1.37f, 3.46f, 1.10f, 6.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 0.60f, 1.20f, 1.20f},   // CHIPSET
 	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 2.00f, 1.60f},   // MOTION
 	{1.73f, 3.00f, 2.80f, 2.50f, 1.60f, 0.70f, 0.69f, 2.50f, 1.86f, 0.80f, 2.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // QUIRKS
