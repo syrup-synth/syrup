@@ -68,6 +68,18 @@ static void SCRIPT(int fr) {
 		gEdited = 0; gXyMode = 0; xyTouch(100, XY_Y + 40, 1, 0); xyTouch(0, 0, 0, 1); if (!gEdited) fail("edited: the XY pad");
 		gModView = 0;
 	}
+	if (fr == 197) {   // the browser: a GROOVE patch's beat and a DRUMS kit stop when you move on, also into USER
+		gStyle = 14; gPreset = 0; presetLoad(14, 0); gEdited = 0; gGuard = 0;
+		if (gVoiceMode < 3) fail("browser: a DRUMS kit should play the kit");
+		browseStep(1, 0, 1); if (!gDrums || !gBeatFromPatch) fail("browser: a GROOVE patch should bring its beat (%d)", gDrums);
+		browseStep(1, 0, 1); if (gDrums) fail("browser: moving GROOVE -> USER should stop the patch's beat");
+		gStyle = 14; gPreset = 0; presetLoad(14, 0); gEdited = 0; gGuard = 0;
+		gStyle = NSTYLES - 1; gPreset = 0; for (int i = 0; i < NUSER; i++) gUser[i].magic = 0;
+		gStyle = 14; browseStep(1, 0, 1); browseStep(1, 0, 1); if (gVoiceMode >= 3 || gDrums) fail("browser: into USER the kit and beat should go (vm %d, drums %d)", gVoiceMode, gDrums);
+		if (strcmp(gPatchName, "BOOM BAP BASS")) fail("browser: an empty USER slot keeps the sound (%s)", gPatchName);
+		gGuard = 0; gEdited = 0; gStyle = NSTYLES - 1; gPreset = 1; presetLoad(15, 0); gStyle = NSTYLES - 1; gPreset = 1;
+		browseStep(0, -1, 1); if (gDrums) fail("browser: an empty USER slot should stop a patch's beat");
+	}
 	if (fr == 196) {   // DRY check on the FX ORDER view; INIT PATCH comes with its macros wired
 		chainTouch(220, TAB_H + 26, 1, 0); chainTouch(0, 0, 0, 1); if (!gDry) fail("DRY: the button should switch every effect off");
 		gFx = 3; gFxMix = 0.8f; if (busSend(0) != 0) fail("DRY: no effect sends while it's on");
@@ -83,7 +95,7 @@ static void SCRIPT(int fr) {
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	FILE* f = fopen("sd/settings.bin", "wb"); int d[4] = {0x53455431, 1, 0, 0}; fwrite(d, sizeof(d), 1, f); fclose(f);
-	loadFont(); FRMAX = 199; app_main();
+	loadFont(); FRMAX = 200; app_main();
 	remove("sd/settings.bin");
 	printf("adv: last page, XY modes, PERF, circle pad, matrix hold, HUD ghost, vis tiles, hardware view\n");
 	return gFails ? 1 : 0;

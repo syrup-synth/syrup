@@ -2940,11 +2940,18 @@ static int askName(const char* cur, char* out, int len) {   // the system keyboa
 static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound changed
 	if (gEdited && !gGuard) { if (!fresh) return 0; gGuard = 1; say("PATCH EDITED: AGAIN TO LEAVE IT, A SAVES IT"); return 0; }
 	int u = NSTYLES - 1;
-	if (ds) { gStyle = (gStyle + NSTYLES + ds) % NSTYLES; gPreset = 0; }
+	if (ds) {
+		gStyle = (gStyle + NSTYLES + ds) % NSTYLES; gPreset = 0;
+	}
 	else { int n = presetCount(gStyle) + (gStyle == u); gPreset = (gPreset + n + dp) % n; }
 	gSaveArm = -1;
 	if (gStyle == u && gPreset == NUSER) { SPatch ip; patchInit(&ip); initWire(&ip); patchApply(&ip); gEdited = 0; gGuard = 0; say("INIT PATCH: ONE PLAIN SAW"); return 1; }
-	if (gStyle == u && gUser[gPreset].magic != PATCH_MAGIC) { say("EMPTY SLOT: PRESS A TO SAVE THIS SOUND HERE"); return 0; }
+	if (gStyle == u && gUser[gPreset].magic != PATCH_MAGIC) {   // empty slot: the sound stays, but a patch's own beat and drum kit don't follow you here
+		int ch = 0;
+		if (gBeatFromPatch) { gBeatFromPatch = 0; gDrums = 0; if (gCsndOK) drumsChanged(); if (gDrumRec) { gDrumRec = 0; if (gCsndOK) drumRecChanged(); } ch = 1; }
+		if (gVoiceMode >= 3) { allOff(); gVoiceMode = 0; ch = 1; }
+		say("EMPTY SLOT: PRESS A TO SAVE THIS SOUND HERE"); return ch;
+	}
 	presetLoad(gStyle, gPreset); return 1;
 }
 static void browseSave(void) {
