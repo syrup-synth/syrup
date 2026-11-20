@@ -74,6 +74,9 @@ static void SCRIPT(int fr) {
 		chainTouch(220, TAB_H + 26, 1, 0); chainTouch(0, 0, 0, 1); if (gDry) fail("DRY: a second tap brings the effects back");
 		SPatch ip; patchInit(&ip); initWire(&ip); patchApply(&ip);
 		if (gMod[4].src != SRC_M1 || gMod[4].dst != DST_CUTOFF || gXyMode != 1) fail("INIT PATCH: macro 1 should be wired to the filter, XY on MACRO 1+2");
+		gMacro[3] = 0; gFxMixMod = modSum(DST_FXMIX, newestVoice()); if (fxMixEff() > 0.001f || busSend(0) > 0) fail("INIT PATCH: M4 at 0 should be dry");
+		gMacro[3] = 0.6f; gFxMixMod = modSum(DST_FXMIX, newestVoice()); if (fabsf(fxMixEff() - 0.6f) > 0.01f) fail("INIT PATCH: M4 should set the FX MIX (%.2f)", fxMixEff());
+		gMacro[3] = 0; gFxMixMod = 0;
 	}
 	if (fr == 193 && !(gHeldN && (gHeld[0] % 12) == 1)) fail("keys: a 2 px slip off C# shouldn't change the note (held %d)", gHeldN ? gHeld[0] : -1);
 }

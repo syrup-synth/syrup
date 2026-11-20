@@ -444,8 +444,8 @@ static const char* CURVE_NAMES[4] = {"LINEAR", "EXP", "LOG", "S-CURVE"};
 static float gTiltX, gTiltY, gMicEnv, gTwist, gShake, gShakeD, gCamLight, gCamColor;
 static float gSpinX, gSpinY, gMicBright, gCamMove;   // gyro pitch/roll speed, voice brightness ("ss" vs "oo"), how much the picture changes
 static int gHeadphones = 0;
-enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_COUNT };
-static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF"};   // VOLUME: when routed, the source IS the loudness (breath control)
+enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_FXMIX, DST_COUNT };
+static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF", "FX MIX"};   // VOLUME: when routed, the source IS the loudness (breath control)
 static const char* VOICE_MODES[8] = {"POLY", "MONO", "LEGATO", "808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT", "PERC KIT"};   // KIT: keys play the drum kit
 static const char* FX_NAMES[4] = {"OFF", "ECHO", "SPACE", "REVERB"};
 static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
@@ -623,7 +623,8 @@ static ndspWaveBuf gWB[NCH];
 static int gAudioOK = 0, gCsndOK = 0, gNoiseOn = 0;
 static float gStick = 0, gXYmod = 0, gChorusPh = 0;
 static float gAutoGain = 1.0f;
-static float gRevSize = 0.5f, gRevDamp = 0.5f, gFxMix = 0.5f;
+static float gRevSize = 0.5f, gRevDamp = 0.5f, gFxMix = 0.5f, gFxMixMod = 0;   // gFxMixMod: what the matrix adds (FX MIX dest)
+static float fxMixEff(void) { float v = gFxMix + gFxMixMod; return v < 0 ? 0 : v > 1 ? 1 : v; }
 
 static float mtof(float n) { return 440.0f * powf(2.0f, (n - 69) / 12.0f); }
 static int levelFor(float f) { for (int L = 0; L < NLEV; L++) if (f * LEVN[L] <= 2.0f * DSPRATE) return L; return NLEV - 1; }
@@ -831,10 +832,10 @@ static void lfoTrig(void) { for (int i = 0; i < 2; i++) if (gLfo[i].mode == 1) g
 static int busActive(void);
 static int gDry = 0;   // DRY check (FX ORDER view): every effect off for a listen, the OUT FILTER and limiter stay; not saved
 static void addTaps(SVoice* v) {
-	if (gDry) return;
+	if (gDry || fxMixEff() < 0.002f) return;
 	if (busActive() && (gFx == 1 || gFx == 3)) return;   // reverb / echo run on the DSP effect buses
 	int ne = 0; float t[8], g[8], p[8], c[8], rm[8], dt[8];
-	float mix = gFxMix * 2.0f;
+	float mix = fxMixEff() * 2.0f;
 	if (gFx == 1) { float d = ECHO_T[gEchoT]; for (int k = 0; k < 3; k++) { t[k] = d * (k + 1); g[k] = 0.6f * powf(0.55f, (float)k); p[k] = (k & 1) ? 0.45f : -0.45f; c[k] = powf(0.7f, (float)(k + 1)); rm[k] = 1; dt[k] = 0; } ne = 3; }
 	if (gFx == 2) { static const float T[6] = {0.041f, 0.067f, 0.109f, 0.157f, 0.233f, 0.331f};
 		for (int k = 0; k < 6; k++) { t[k] = T[k]; g[k] = 0.5f * powf(0.8f, (float)k); p[k] = (k & 1) ? 0.4f : -0.4f; c[k] = powf(0.82f, (float)(k + 1)); rm[k] = 1; dt[k] = 0; } ne = 6; }
@@ -1386,8 +1387,8 @@ static void busInit(void) {
 // sends for the current FX choice: REVERB -> bus 0, ECHO -> bus 1 (SPACE stays on taps)
 static float busSend(int bus) {
 	if (gDry || !busActive() || (gMasterFX && bus == 1)) return 0;
-	if (bus == 0 && gFx == 3) return gFxMix * 1.4f;
-	if (bus == 1 && gFx == 1) return gFxMix * 1.2f;
+	if (bus == 0 && gFx == 3) return fxMixEff() * 1.4f;
+	if (bus == 1 && gFx == 1) return fxMixEff() * 1.2f;
 	return 0;
 }
 
@@ -1566,7 +1567,7 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 	}
 	float dSec = gDlySync ? DSYNC_BEATS[gDlySync] * 60.0f / gBPM : ECHO_T[gEchoT];
 	if (dSec > 0.78f) dSec = 0.78f;
-	float dSmp = dSec * DSPRATE, dMix = (gDlyMix + (gFx == 1 ? gFxMix : 0)) * 1.2f, rMix = (gRevMix + (gFx == 3 ? gFxMix : 0)) * 1.4f;
+	float dSmp = dSec * DSPRATE, dMix = (gDlyMix + (gFx == 1 ? fxMixEff() : 0)) * 1.2f, rMix = (gRevMix + (gFx == 3 ? fxMixEff() : 0)) * 1.4f;
 	float fb, damp; revParams(&fb, &damp); if (gFreeze) { fb = 1.0f; damp = 0; }
 	int bits = gLofiBits ? 14 - gLofiBits * 2 : 0, hold = 1 + (int)(gLofiRate * 15);
 	float pumpRate = gPumpRate == 0 ? 0.5f : (gPumpRate == 1 ? 1.0f : 2.0f), beatInc = gBPM / 60.0f / DSPRATE;
@@ -2708,9 +2709,10 @@ static void x_tensiondrone(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA
 static void u_softpluck(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.pos = TRI; OA.uni = 2; OA.detune = 8; ENV1(0.005f, 0, 0.4f, 0.0f, 0.8f); ENV2(0.005f, 0, 0.2f, 0.0f, 0.5f);
 	MOD(0, SRC_ENV2, DST_OFCUT, 0.4f); DRV(5, 0.15f); OUTF(OF_LP, 0.5f, 0.1f, 0, 0); REVB(0.25f, RV_PLATE); DLYS(0.15f, S8, DL_PING); p->xyMode = 3; }
 // INIT PATCH starts with the macros wired (at 0 they do nothing): M1 opens the filter, M2 moves A's wavetable,
-// M3 adds resonance, M4 pans; XY PAD = MACRO 1+2, so the pad plays filter and wavetable from the first note
+// M3 adds resonance, M4 is the FX MIX (0 = dry, the reverb comes in as it rises); XY PAD = MACRO 1+2, so the pad plays filter and wavetable from the first note
 static void initWire(SPatch* p) {
-	MOD2(0, SRC_M1, DST_CUTOFF, 0.5f); MOD2(1, SRC_M2, DST_APOS, 0.5f); MOD2(2, SRC_M3, DST_RES, 0.5f); MOD2(3, SRC_M4, DST_PAN, 0.6f); p->xyMode = 1;
+	MOD2(0, SRC_M1, DST_CUTOFF, 0.5f); MOD2(1, SRC_M2, DST_APOS, 0.5f); MOD2(2, SRC_M3, DST_RES, 0.5f); MOD2(3, SRC_M4, DST_FXMIX, 1.0f); p->xyMode = 1;
+	p->fx = 3; p->fxMix = 0;   // REVERB at 0: M4 brings it in (at 0 the patch is dry)
 }
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
@@ -3523,6 +3525,7 @@ static int paramDst(const void* p) {   // the matrix destination that moves this
 	if (p == &gOsc[0].pos) return DST_APOS; if (p == &gOsc[1].pos) return DST_BPOS;
 	if (p == &gOsc[0].warpAmt) return DST_AWARP; if (p == &gOsc[1].warpAmt) return DST_BWARP;
 	if (p == &gOsc[0].level) return DST_ALEV; if (p == &gOsc[1].level) return DST_BLEV;
+	if (p == &gFxMix) return DST_FXMIX;
 	return -1;
 }
 static const char* SET_PATH = "sdmc:/3ds/syrup/settings.bin";
@@ -4556,7 +4559,7 @@ static void xyAxes(float** xp, float** yp, int* xd, int* yd) {
 	case 2: *xp = &gMacro[2]; *yp = &gMacro[3]; *xd = *yd = -1; break;
 	case 3: *xp = &gCutoff; *yp = &gRes; *xd = DST_CUTOFF; *yd = DST_RES; break;
 	case 4: *xp = &gOsc[0].pos; *yp = &gOsc[1].pos; *xd = DST_APOS; *yd = DST_BPOS; break;
-	case 5: *xp = &gFxMix; *yp = &gFxColor; *xd = -1; *yd = DST_FXP; break;
+	case 5: *xp = &gFxMix; *yp = &gFxColor; *xd = DST_FXMIX; *yd = DST_FXP; break;
 	default: *xp = &gOsc[0].pos; *yp = &gCutoff; *xd = DST_APOS; *yd = DST_CUTOFF; break;
 	}
 }
@@ -7639,7 +7642,7 @@ int main(void) {
 			static int lastMarkPage = -1;
 			if (page != lastMarkPage) { lastMarkPage = page; gPageMarkDue = 1; }   // written after the voice lock is released
 		}
-		gFxModVal = modSum(DST_FXP, newestVoice());
+		gFxModVal = modSum(DST_FXP, newestVoice()); gFxMixMod = modSum(DST_FXMIX, newestVoice());
 		if (gAudioOK) voicesUpdate(dt, cx + gMidiBend);
 		// effect-bus self check: if notes are sending but the DSP never delivers aux audio, fall back to taps
 		if (gBusOK && !gBusFail && !gBusSeen && (masterActive() || busSend(0) > 0 || busSend(1) > 0)) {

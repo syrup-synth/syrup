@@ -46,7 +46,7 @@ With MASTER FX on, every DSP voice goes through the effect bus to a chain that r
 
 **DRY check** (FX ORDER view, next to RESET): switches every effect off for a listen: the master chain, pump, delay/reverb sends and echo taps. The OUT FILTER and limiter stay, since they are part of the sound. If the patch falls apart dry, the fix is in the oscillator, octave or envelope. The header says DRY while it is on; it is not saved.
 
-**INIT PATCH** comes with the macros wired (they do nothing at 0): M1 opens the filter, M2 moves A's wavetable, M3 adds resonance, M4 pans; the XY pad starts on MACRO 1+2.
+**INIT PATCH** comes with the macros wired (they do nothing at 0): M1 opens the filter, M2 moves A's wavetable, M3 adds resonance, M4 is the FX MIX (at 0 the patch is dry; raise it and the reverb comes in); the XY pad starts on MACRO 1+2. FX MIX is also a destination in the mod matrix now, for any patch.
 
 **FX ORDER:** the bottom screen of the MASTER FX page (or the CHAIN chip) shows the chain as five blocks: LOFI, MOD FX, EQ, SPACE (delay and reverb, side by side) and OTT. Drag a block left or right and the chain changes while you hear it (lofi after the reverb crushes the tails; OTT first, before the EQ, pumps the dry sound only). A lit block is doing something. PUMP and the limiter always stay last. RESET puts back the default order. The order is saved with the patch (patch format v13; older user patches load with the default order).
 
