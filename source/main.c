@@ -3029,7 +3029,9 @@ static int gXyMode = 0;
 #define NXY 7
 static const char* XY_NAMES[NXY] = {"WT + CUTOFF", "MACRO 1+2", "MACRO 3+4", "CUTOFF + RES", "WT A + WT B", "FX MIX + COLOR", "PERF"};
 static int gStickMode = 0;
-static const char* STICK_NAMES[3] = {"BEND + MOD", "PAGE", "MACROS"};
+enum { SM_DATA, SM_BEND, SM_PAGE, SM_MACROS };
+static const char* STICK_NAMES[4] = {"DATA", "BEND + MOD", "PAGE", "MACROS"};
+static float gStickDX = 0;   // DATA: circle pad left / right, edits the selected value
 static Param P_MOD[] = {
 	PF("MACRO 1", &gMacro[0], 0, 1, 0.02f, "%", 0), PF("MACRO 2", &gMacro[1], 0, 1, 0.02f, "%", 0), PF("MACRO 3", &gMacro[2], 0, 1, 0.02f, "%", 0), PF("MACRO 4", &gMacro[3], 0, 1, 0.02f, "%", 0),
 	PE("XY PAD", &gXyMode, NXY, XY_NAMES, D_THEME), PF("CHAOS RATE", &gChaosRate, 0, 1, 0.02f, "%", 0),
@@ -3116,7 +3118,7 @@ static Param P_MASTER[] = {
 	PF("OTT", &gOtt, 0, 1, 0.02f, "%", 0), PF("PUMP", &gPump, 0, 1, 0.02f, "%", 0), PE("PUMP RATE", &gPumpRate, 3, PUMP_NAMES, 0),
 	PE("LOFI BITS", &gLofiBits, 6, BITS_NAMES, 0), PF("LOFI RATE", &gLofiRate, 0, 1, 0.02f, "%", 0),
 	PF("3D ORBIT", &gOrbit, 0, 1, 0.02f, "%", 0), PF("ORBIT RATE", &gOrbitRate, 0, 2, 0.02f, "HZ", 0),
-	PE("CIRCLE PAD", &gStickMode, 3, STICK_NAMES, 0), PE("SPEAKER EQ", &gSpkEq, 2, ONOFF2, 0), PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
+	PE("CIRCLE PAD", &gStickMode, 4, STICK_NAMES, 0), PE("SPEAKER EQ", &gSpkEq, 2, ONOFF2, 0), PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
 	PEND};
 static Param P_DRUMS[] = {
 	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 5, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 9, KICKP_NAMES, 0),
@@ -3494,7 +3496,7 @@ static const char* paramHelp(const char* n) {
 		{"LINK", "SYNC TEMPO WITH ANOTHER SYRUP"},
 		{"MACRO 1", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"}, {"MACRO 2", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"},
 		{"MACRO 3", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"}, {"MACRO 4", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"},
-		{"XY PAD", "WHAT THE TOUCH PAD CONTROLS"}, {"CIRCLE PAD", "PAGE / MACROS; STICK PATCHES KEEP BEND+MOD"}, {"SPEAKER EQ", "CUTS LOWS + HARSH HIGHS FOR THE SPEAKER (MASTER FX)"},
+		{"XY PAD", "WHAT THE TOUCH PAD CONTROLS"}, {"CIRCLE PAD", "DATA: LEFT/RIGHT EDITS THE SELECTED VALUE"}, {"SPEAKER EQ", "CUTS LOWS + HARSH HIGHS FOR THE SPEAKER (MASTER FX)"},
 		{"5 SOURCE", "MOD SLOT 5: WHAT MOVES IT"}, {"5 DEST", "MOD SLOT 5: WHAT IT MOVES"}, {"5 AMOUNT", "MOD SLOT 5: HOW MUCH"}, {"6 SOURCE", "MOD SLOT 6: WHAT MOVES IT"}, {"6 DEST", "MOD SLOT 6: WHAT IT MOVES"}, {"6 AMOUNT", "MOD SLOT 6: HOW MUCH"}, {"7 SOURCE", "MOD SLOT 7: WHAT MOVES IT"}, {"7 DEST", "MOD SLOT 7: WHAT IT MOVES"}, {"7 AMOUNT", "MOD SLOT 7: HOW MUCH"}, {"8 SOURCE", "MOD SLOT 8: WHAT MOVES IT"}, {"8 DEST", "MOD SLOT 8: WHAT IT MOVES"}, {"8 AMOUNT", "MOD SLOT 8: HOW MUCH"}, {"1 CURVE", "MOD SLOT 1: RESPONSE CURVE"}, {"2 CURVE", "MOD SLOT 2: RESPONSE CURVE"}, {"3 CURVE", "MOD SLOT 3: RESPONSE CURVE"}, {"4 CURVE", "MOD SLOT 4: RESPONSE CURVE"}, {"5 CURVE", "MOD SLOT 5: RESPONSE CURVE"}, {"6 CURVE", "MOD SLOT 6: RESPONSE CURVE"}, {"7 CURVE", "MOD SLOT 7: RESPONSE CURVE"}, {"8 CURVE", "MOD SLOT 8: RESPONSE CURVE"}, 
 		{"MASTER FX", "WHOLE SOUND THROUGH THE EFFECT CHAIN"}, {"MOD FX", "CHORUS, FLANGER, PHASER, COMB, FORMANT"}, {"MOD RATE", "MOD FX SPEED"},
 		{"MOD DEPTH", "MOD FX DEPTH / FEEDBACK"}, {"MOD MIX", "MOD FX AMOUNT"}, {"FX COLOR", "COMB PITCH / FORMANT VOWEL (MOD DEST)"},
@@ -3537,10 +3539,13 @@ static int paramDst(const void* p) {   // the matrix destination that moves this
 	return -1;
 }
 static const char* SET_PATH = "sdmc:/3ds/syrup/settings.bin";
-static void settingsSave(int page) { FILE* f = fopen(SET_PATH, "wb"); if (!f) return; int d[4] = {0x53455431, page, gStickMode, gSpkEq}; fwrite(d, sizeof(d), 1, f); fclose(f); }
+static void settingsSave(int page) { FILE* f = fopen(SET_PATH, "wb"); if (!f) return; int d[4] = {0x53455432, page, gStickMode, gSpkEq}; fwrite(d, sizeof(d), 1, f); fclose(f); }
 static int settingsLoad(void) {   // returns the page you were on last time
 	FILE* f = fopen(SET_PATH, "rb"); int d[4] = {0}, pg = 0; if (!f) return pg;   // first run: the browser
-	if (fread(d, sizeof(d), 1, f) == 1 && d[0] == 0x53455431) { if (d[1] >= 0 && d[1] < NPAGES && d[1] != 8) pg = d[1]; gStickMode = d[2] >= 0 && d[2] < 3 ? d[2] : 0; gSpkEq = d[3] & 1; }
+	if (fread(d, sizeof(d), 1, f) == 1 && (d[0] == 0x53455431 || d[0] == 0x53455432)) {
+		if (d[1] >= 0 && d[1] < NPAGES && d[1] != 8) pg = d[1]; gSpkEq = d[3] & 1;
+		gStickMode = d[0] == 0x53455432 && d[2] >= 0 && d[2] < 4 ? d[2] : SM_DATA;   // older settings: the new default, DATA
+	}
 	fclose(f); return pg;
 }
 static int skipRecent(void) {   // a clock skip in the last 3 s (the count itself only ever grows)
@@ -4497,12 +4502,28 @@ static int modViewTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (release) gDrawPrevX = -1;
 	gEdited = 1; return 1;
 }
-// FX ORDER (MASTER FX page): the chain as a row of blocks. Drag one sideways and it moves there while you listen;
-// lit = the block is doing something. PUMP and the limiter stay at the end. RESET puts the default order back.
-static int gChainOn = 0, gChDrag = -1, gChDragX = 0;
-#define CH_Y 56
-#define CH_H 34
+// FX CHAIN (MASTER FX page): the chain as a row of blocks, in the order they run. Tap a block: its settings come up
+// on the top screen and its types show below the chain (tap one to change the effect). Drag a block sideways and it
+// moves there while you listen. Lit = the block is doing something. PUMP and the limiter stay at the end.
+static int gChainOn = 0, gChDrag = -1, gChDragX = 0, gChPress = -1, gChPressX = 0, gChSel = -1;
+static const char* gSelReq = NULL;   // a param name the top screen should select (the main loop does it)
+static void dlyTypeChanged(void);
+#define CH_Y (TAB_H + 18)
+#define CH_H 28
 #define CH_X(i) (6 + (i) * 52)
+#define CT_Y (CH_Y + CH_H + 6)   // first type row
+static const char* FXB_FIRST[NFXB] = {"LOFI BITS", "MOD FX", "EQ LOW", "DELAY TYPE", "OTT"};
+static const char* FXB_TYPES[NFXB][2] = {{"LOFI BITS", NULL}, {"MOD FX", NULL}, {NULL, NULL}, {"DELAY TYPE", "REVERB TYPE"}, {NULL, NULL}};
+static const char* FXB_TLAB[NFXB][2] = {{"BITS", NULL}, {"TYPE", NULL}, {NULL, NULL}, {"DLY", "REV"}, {NULL, NULL}};
+static int fxbOfParam(const char* n) {   // which chain block a MASTER FX setting belongs to, or -1
+	if (!strncmp(n, "LOFI", 4)) return 0;
+	if (!strncmp(n, "MOD ", 4) || !strcmp(n, "FX COLOR")) return 1;
+	if (!strncmp(n, "EQ ", 3)) return 2;
+	if (!strncmp(n, "DELAY", 5) || !strncmp(n, "TAPE", 4) || !strncmp(n, "REVERB", 6) || !strcmp(n, "SHIMMER") || !strcmp(n, "FREEZE")) return 3;
+	if (!strcmp(n, "OTT")) return 4;
+	return -1;
+}
+static Param* findParamOn(int page, const char* name) { for (Param* p = PAGES[page]; p->name; p++) if (!strcmp(p->name, name)) return p; return NULL; }
 static int fxbActive(int b) {
 	switch (b) {
 	case 0: return gLofiBits || gLofiRate > 0;
@@ -4513,38 +4534,72 @@ static int fxbActive(int b) {
 	}
 }
 static void drawChainBox(int x, int b, int lift) {
-	int act = fxbActive(b) && gMasterFX, y = CH_Y - (lift ? 6 : 0);
+	int act = fxbActive(b) && gMasterFX && !gDry, y = CH_Y - (lift ? 6 : 0);
 	const u8* bg = lift ? TH->keyOn : act ? TH->val : gMasterFX ? TH->tab : TH->bg; const u8* fg = lift || act ? EGA[0] : gMasterFX ? TH->tabTxt : TH->grid;
 	rect(x, y, 46, CH_H, bg[0], bg[1], bg[2]); outline(x, y, 46, CH_H, RGB3(TH->txt));
+	if (b == gChSel && !lift) { outline(x - 2, y - 2, 50, CH_H + 4, RGB3(TH->keyOn)); outline(x - 1, y - 1, 48, CH_H + 2, RGB3(TH->keyOn)); }
 	const char* nm = FXB_NAMES[b]; const char* sp = strchr(nm, ' ');
-	if (sp) { char a[8]; int l = (int)(sp - nm); memcpy(a, nm, l); a[l] = 0; text(x + 23 - l * 4, y + 8, a, 1, fg[0], fg[1], fg[2]); text(x + 23 - (int)strlen(sp + 1) * 4, y + 19, sp + 1, 1, fg[0], fg[1], fg[2]); }
-	else text(x + 23 - (int)strlen(nm) * 4, y + 13, nm, 1, fg[0], fg[1], fg[2]);
+	if (sp) { char a[8]; int l = (int)(sp - nm); memcpy(a, nm, l); a[l] = 0; text(x + 23 - l * 4, y + 5, a, 1, fg[0], fg[1], fg[2]); text(x + 23 - (int)strlen(sp + 1) * 4, y + 16, sp + 1, 1, fg[0], fg[1], fg[2]); }
+	else text(x + 23 - (int)strlen(nm) * 4, y + 10, nm, 1, fg[0], fg[1], fg[2]);
 }
 static void drawChainView(void) {
 	rect(0, TAB_H, 320, WORK_B - TAB_H, RGB3(TH->bg));
-	text(6, TAB_H + 6, "FX ORDER", 1, RGB3(TH->val)); text(78, TAB_H + 6, "DRAG A BLOCK TO MOVE IT", 1, RGB3(TH->txt));
-	rect(258, TAB_H + 22, 56, 12, RGB3(TH->tab)); text(262, TAB_H + 24, "RESET", 1, RGB3(TH->tabTxt));
-	if (gDry) { rect(196, TAB_H + 22, 56, 12, RGB3(TH->warn)); text(212, TAB_H + 24, "DRY", 1, RGB3(TH->bg)); } else { rect(196, TAB_H + 22, 56, 12, RGB3(TH->tab)); text(212, TAB_H + 24, "DRY", 1, RGB3(TH->tabTxt)); }
+	text(6, TAB_H + 3, "FX CHAIN", 1, RGB3(TH->val));
+	rect(258, TAB_H + 1, 56, 12, RGB3(TH->tab)); text(262, TAB_H + 3, "RESET", 1, RGB3(TH->tabTxt));
+	if (gDry) { rect(196, TAB_H + 1, 56, 12, RGB3(TH->warn)); text(212, TAB_H + 3, "DRY", 1, RGB3(TH->bg)); } else { rect(196, TAB_H + 1, 56, 12, RGB3(TH->tab)); text(212, TAB_H + 3, "DRY", 1, RGB3(TH->tabTxt)); }
 	for (int i = 0; i < NFXB; i++) {
 		if (i) { int ax = CH_X(i) - 6; rect(ax, CH_Y + CH_H / 2, 5, 1, RGB3(TH->txt)); px(ax + 3, CH_Y + CH_H / 2 - 1, RGB3(TH->txt)); px(ax + 3, CH_Y + CH_H / 2 + 1, RGB3(TH->txt)); }
 		if (i == gChDrag) { outline(CH_X(i), CH_Y, 46, CH_H, RGB3(TH->grid)); continue; }   // the gap it will drop into
 		drawChainBox(CH_X(i), gFxOrder[i], 0);
 	}
 	int fx = CH_X(NFXB) - 6; rect(fx, CH_Y + CH_H / 2, 5, 1, RGB3(TH->txt));
-	rect(fx + 6, CH_Y, 50, CH_H, RGB3(TH->grid)); text(fx + 15, CH_Y + 8, "PUMP", 1, RGB3(TH->txt)); text(fx + 15, CH_Y + 19, "LIMIT", 1, RGB3(TH->txt));
-	if (gDry) text(6, CH_Y + CH_H + 8, "DRY: ALL FX OFF. STILL GOOD? THE SOUND IS SOLID", 1, RGB3(TH->warn));
-	else if (!gMasterFX) text(6, CH_Y + CH_H + 8, "MASTER FX IS OFF: THE CHAIN IS BYPASSED", 1, RGB3(TH->warn));
+	rect(fx + 6, CH_Y, 50, CH_H, RGB3(TH->grid)); text(fx + 15, CH_Y + 5, "PUMP", 1, RGB3(TH->txt)); text(fx + 15, CH_Y + 16, "LIMIT", 1, RGB3(TH->txt));
+	int rows = 0;
+	if (gChSel >= 0) for (int r = 0; r < 2; r++) {   // the selected block's types: tap one to change the effect
+		Param* p = FXB_TYPES[gChSel][r] ? findParamOn(10, FXB_TYPES[gChSel][r]) : NULL; if (!p) continue;
+		int y = CT_Y + rows * 16, n = (int)p->mx + 1, v = *(int*)p->p; rows++;
+		text(4, y + 3, FXB_TLAB[gChSel][r], 1, RGB3(TH->dim));
+		for (int i = 0; i < n; i++) {
+			int x0 = 38 + i * 278 / n, w = 278 / n - 2, cc = w / 8; char t[12]; snprintf(t, sizeof(t), "%.*s", cc < 11 ? cc : 11, p->names[i]);
+			const u8* bg = i == v ? TH->keyOn : TH->tab; const u8* fg = i == v ? EGA[0] : TH->tabTxt;
+			rect(x0, y, w, 14, bg[0], bg[1], bg[2]); text(x0 + w / 2 - (int)strlen(t) * 4, y + 3, t, 1, fg[0], fg[1], fg[2]);
+		}
+	}
+	int hy = CT_Y + rows * 16 + (rows ? 2 : 4);
+	if (gDry) text(6, hy, "DRY: ALL FX OFF. STILL GOOD? THE SOUND IS SOLID", 1, RGB3(TH->warn));
+	else if (!gMasterFX) text(6, hy, "MASTER FX IS OFF: THE CHAIN IS BYPASSED", 1, RGB3(TH->warn));
+	else if (gChSel < 0) text(6, hy, "TAP A BLOCK TO EDIT IT, DRAG IT TO MOVE IT", 1, RGB3(TH->dim));
+	else if (!rows) text(6, hy, "ITS SETTINGS ARE ON THE TOP SCREEN", 1, RGB3(TH->dim));
 	if (gChDrag >= 0) { int x = gChDragX - 23; x = x < 0 ? 0 : x > 274 ? 274 : x; drawChainBox(x, gFxOrder[gChDrag], 1); }
 }
 static int chainTouch(int x, int y, int press, int release) {   // 1 = redraw
-	if (release) { int r = gChDrag >= 0; gChDrag = -1; return r; }
+	if (release) {
+		int r = gChDrag >= 0;
+		if (gChDrag < 0 && gChPress >= 0) { gChSel = gFxOrder[gChPress]; gSelReq = FXB_FIRST[gChSel]; r = 1; }   // a tap: edit this block
+		gChDrag = -1; gChPress = -1; return r;
+	}
 	if (press) {
-		if (x >= 196 && x < 254 && y >= TAB_H + 20 && y < TAB_H + 36) { gDry = !gDry; say(gDry ? "DRY: EFFECTS OFF. IF IT FALLS APART, FIX OSC / OCTAVE / ENVELOPE" : "DRY OFF: EFFECTS BACK"); return 1; }
-		if (x >= 258 && y >= TAB_H + 20 && y < TAB_H + 36) { u8 d[NFXB]; for (int i = 0; i < NFXB; i++) d[i] = i; fxOrderSet(d); gEdited = 1; say("FX ORDER: DEFAULT"); return 1; }
-		if (y < CH_Y - 8 || y >= CH_Y + CH_H + 8) return 0;
-		for (int i = 0; i < NFXB; i++) if (x >= CH_X(i) && x < CH_X(i) + 46) { gChDrag = i; gChDragX = x; return 1; }
+		if (x >= 196 && x < 254 && y >= TAB_H && y < TAB_H + 16) { gDry = !gDry; say(gDry ? "DRY: EFFECTS OFF. IF IT FALLS APART, FIX OSC / OCTAVE / ENVELOPE" : "DRY OFF: EFFECTS BACK"); return 1; }
+		if (x >= 258 && y >= TAB_H && y < TAB_H + 16) { u8 d[NFXB]; for (int i = 0; i < NFXB; i++) d[i] = i; fxOrderSet(d); gEdited = 1; say("FX ORDER: DEFAULT"); return 1; }
+		if (gChSel >= 0 && y >= CT_Y && y < CT_Y + 32 && x >= 38) {   // a type button
+			int rows = 0;
+			for (int r = 0; r < 2; r++) {
+				Param* p = FXB_TYPES[gChSel][r] ? findParamOn(10, FXB_TYPES[gChSel][r]) : NULL; if (!p) continue;
+				int y0 = CT_Y + rows * 16; rows++;
+				if (y < y0 || y >= y0 + 14) continue;
+				int n = (int)p->mx + 1, i = (x - 38) * n / 278; if (i < 0 || i >= n) return 0;
+				*(int*)p->p = i; gEdited = 1; gSelReq = p->name;
+				if (p->p == &gDlyType) dlyTypeChanged();
+				char m[40]; snprintf(m, sizeof(m), "%s: %s", p->name, p->names[i]); say(m);
+				return 1;
+			}
+			return 0;
+		}
+		if (y < CH_Y - 4 || y >= CH_Y + CH_H + 4) return 0;
+		for (int i = 0; i < NFXB; i++) if (x >= CH_X(i) && x < CH_X(i) + 46) { gChPress = i; gChPressX = x; return 0; }
 		return 0;
 	}
+	if (gChPress >= 0 && gChDrag < 0 && abs(x - gChPressX) > 8) { gChDrag = gChPress; gChSel = gFxOrder[gChPress]; }   // moved: it's a drag
 	if (gChDrag < 0) return 0;
 	gChDragX = x;
 	int to = (x - 6 + 26) / 52 - (x - 6 + 26 < 0); to = to < 0 ? 0 : to >= NFXB ? NFXB - 1 : to;
@@ -4552,7 +4607,7 @@ static int chainTouch(int x, int y, int press, int release) {   // 1 = redraw
 		u8 o[NFXB]; for (int i = 0; i < NFXB; i++) o[i] = gFxOrder[i];
 		u8 b = o[gChDrag];
 		if (to > gChDrag) for (int i = gChDrag; i < to; i++) o[i] = o[i + 1]; else for (int i = gChDrag; i > to; i--) o[i] = o[i - 1];
-		o[to] = b; fxOrderSet(o); gChDrag = to; gEdited = 1;
+		o[to] = b; fxOrderSet(o); gChDrag = to; gChPress = to; gEdited = 1;
 	}
 	return 1;
 }
@@ -6573,11 +6628,15 @@ static void drawMasterPanel(void) {
 	int on[8] = {gLofiBits || gLofiRate > 0, gModFx != 0, gEqLow != 0 || gEqMid != 0 || gEqHigh != 0, gDlyMix > 0 || gFx == 1, gRevMix > 0 || gFx == 3 || gFreeze, gOtt > 0, gPump > 0, 1};
 	int act = masterActive();
 	text(10, 36, act ? "WHOLE SOUND -> CHAIN" : (gMasterFX ? "WAITING FOR FX BUS" : "MASTER FX OFF"), 1, act ? TH->val[0] : TH->warn[0], act ? TH->val[1] : TH->warn[1], act ? TH->val[2] : TH->warn[2]);
-	for (int i = 0; i < 8; i++) {
-		int y = 52 + i * 16;
+	int ord[8], k = 0;   // in FX ORDER (SPACE = delay + reverb), then pump and limiter
+	for (int f = 0; f < NFXB; f++) { int b = gFxOrder[f]; if (b == 3) { ord[k++] = 3; ord[k++] = 4; } else ord[k++] = b == 4 ? 5 : b; }
+	ord[k++] = 6; ord[k++] = 7;
+	for (int j = 0; j < 8; j++) {
+		int i = ord[j], y = 52 + j * 16, bi = i <= 2 ? i : i <= 4 ? 3 : i == 5 ? 4 : -1, sel = gChSel >= 0 && bi == gChSel;
 		if (on[i] && act) { rect(10, y - 2, 92, 12, HI); text(14, y, BL[i], 1, HITXT); }
 		else { rect(10, y - 2, 92, 12, RGB3(TH->pad)); text(14, y, BL[i], 1, DIM); }
-		if (i < 7) rect(55, y + 10, 1, 4, LINE);
+		if (sel) outline(8, y - 4, 96, 16, RGB3(TH->keyOn));   // the block being edited
+		if (j < 7) rect(55, y + 10, 1, 4, LINE);
 	}
 	char s[32];
 	if (gModFx) { snprintf(s, sizeof(s), "%s", MODFX_NAMES[gModFx]); text(110, 68, s, 1, TXT); }
@@ -7412,6 +7471,11 @@ int main(void) {
 		int dir = 0, fast = 0;
 		if (kDown & (KEY_DLEFT | KEY_DRIGHT)) { dir = (kDown & KEY_DRIGHT) ? 1 : -1; repeatT = 0.35f; }
 		else if (kHeld & (KEY_DLEFT | KEY_DRIGHT)) { repeatT -= dt; if (repeatT <= 0) { dir = (kHeld & KEY_DRIGHT) ? 1 : -1; repeatT = 0.05f; fast = 1; } }
+		else if (gStickDX != 0 && page != 0) {   // circle pad DATA: the further it's pushed, the faster the value moves (2 to 30 steps a second)
+			static float acc = 0; acc += gStickDX * fabsf(gStickDX) * dt * 30 + (gStickDX > 0 ? 2 : -2) * dt;
+			if (acc >= 1) { dir = 1; fast = 1; acc -= 1; } else if (acc <= -1) { dir = -1; fast = 1; acc += 1; }
+			if (acc > 1) acc = 1; if (acc < -1) acc = -1;
+		}
 		if (dir) {
 			Param* p = &PAGES[page][sel[page]];
 			if ((p->dirty & (D_LOOPTAB | D_MICTAB | D_CAMTAB | D_DLWT | D_UPDATE)) && dir > 0 && !fast) {
@@ -7493,9 +7557,11 @@ int main(void) {
 		float cx = sx;
 		gStick = sy;
 		int stickRouted = 0; for (int m = 0; m < NMOD; m++) if (gMod[m].src == SRC_STICK && gMod[m].amt != 0) stickRouted = 1;
-		if (gStickMode && !stickRouted) {   // PAGE / MACROS (a patch that routes STICK keeps bend + STICK): the pad pushes two values up and down (hold it over to keep moving)
+		if (gStickMode == SM_DATA) { gStickDX = fabsf(sx) > 0.12f ? sx : 0; cx = 0; }   // DATA: X edits the selected value (no bend), Y stays the STICK source
+		else gStickDX = 0;
+		if ((gStickMode == SM_PAGE || gStickMode == SM_MACROS) && !stickRouted) {   // PAGE / MACROS (a patch that routes STICK keeps bend + STICK): the pad pushes two values up and down (hold it over to keep moving)
 			float* px_ = NULL; float* py_ = NULL;
-			if (gStickMode == 2) { px_ = &gMacro[0]; py_ = &gMacro[1]; }
+			if (gStickMode == SM_MACROS) { px_ = &gMacro[0]; py_ = &gMacro[1]; }
 			else switch (page) {
 				case 1: case 2: px_ = &gOsc[page - 1].pos; py_ = &gCutoff; break;
 				case 5: case 0: px_ = &gMacro[0]; py_ = &gMacro[1]; break;
@@ -7583,6 +7649,8 @@ int main(void) {
 		if (gModOn && !gPads && prevTouch && !touching && modViewTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gShapeOn && prevTouch && !touching && shapeTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gChainOn && prevTouch && !touching && chainTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
+		if (gChainOn && !gSelReq) { int b = fxbOfParam(PAGES[page][sel[page]].name); if (b >= 0 && b != gChSel) { gChSel = b; botDirty = 1; } }   // and the other way: the top selection picks the block
+		if (gSelReq) { int n = pageLen(page); for (int i = 0; i < n; i++) if (!strcmp(PAGES[page][i].name, gSelReq)) { sel[page] = i; break; } gSelReq = NULL; topDirty = 1; }   // a bottom-screen editor asked for this setting up top
 		if (gGridOn && prevTouch && !touching && gridTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gSlDrag >= 0 && prevTouch && !touching && xyTouch(gLastTX, gLastTY, 0, 1)) botDirty = 1;
 		{ static int gT = 0; if (xyShown() && ++gT % 3 == 0 && xyModulated()) botDirty = 1; }   // the ghost follows the modulation

@@ -22,13 +22,13 @@ static void SCRIPT(int fr) {
 	if (fr == 34) { gXyMode = 0; gMod[2].src = SRC_LFO1; gMod[2].dst = DST_CUTOFF; gMod[2].amt = 0.8f; midiPush(0x90, 50, 100); }
 	if (fr == 60) { shotBot("shots/xy_ghost.ppm"); if (!xyModulated()) fail("XY ghost: an LFO on cutoff should show"); midiPush(0x80, 50, 0); gMod[2].src = SRC_OFF; }
 	// circle pad PAGE mode on OSC A: X pushes WT POS
-	if (fr == 35) { gStickMode = 1; for (int m = 0; m < NMOD; m++) if (gMod[m].src == SRC_STICK) gMod[m].src = SRC_OFF; pos0 = gOsc[0].pos; if (pos0 > 0.8f) gOsc[0].pos = pos0 = 0.2f; }
+	if (fr == 35) { gStickMode = SM_PAGE; for (int m = 0; m < NMOD; m++) if (gMod[m].src == SRC_STICK) gMod[m].src = SRC_OFF; pos0 = gOsc[0].pos; if (pos0 > 0.8f) gOsc[0].pos = pos0 = 0.2f; }
 	if (fr >= 36 && fr < 66) CX = 150;
 	if (fr == 50) { shotTop("shots/stick_hud.ppm"); if (gCallT <= 0 || !strstr(gCallTxt, "WT POS")) fail("CIRCLE PAD PAGE: the pop-up should show what it moves (%s)", gCallTxt); }
 	if (fr == 68) { if (gOsc[0].pos < pos0 + 0.1f) fail("CIRCLE PAD PAGE: holding right should move WT POS (%.2f -> %.2f)", pos0, gOsc[0].pos); gMod[7].src = SRC_STICK; gMod[7].amt = 0.5f; pos0 = gOsc[0].pos; }
 	if (fr == 69) CX = 150;
 	if (fr == 70 && fabsf(gOsc[0].pos - pos0) > 0.001f) fail("CIRCLE PAD PAGE: a patch that routes STICK should keep bend + STICK");
-	if (fr == 70) { gStickMode = 0; gMod[7].src = SRC_OFF; gMod[7].amt = 0; }
+	if (fr == 70) { gStickMode = SM_DATA; gMod[7].src = SRC_OFF; gMod[7].amt = 0; }
 	// matrix: long-press the source box clears the slot, a short tap opens the list
 	if (fr == 70) { TOUCH = 1; TX = 80; TY = 8; }   // MATRIX chip
 	if (fr == 74) { gMod[0].src = SRC_LFO1; gMod[0].dst = DST_CUTOFF; gMod[0].amt = 0.5f; gMod[1].src = SRC_ENV2; gMod[1].amt = 0.3f; }
@@ -77,6 +77,19 @@ static void SCRIPT(int fr) {
 		if (fr == 209) rel0 = rel; else if (rel <= rel0) fail("keys: with LATCH, tapping the held key again should restrike it");
 	} }
 	if (fr == 215) HD = KEY_B;
+	// circle pad DATA (the default): left / right edits the selected value on the page you're on (FILT+ENV here)
+	{ static float snap[64]; static int pg;
+	  if (fr == 220) { pg = 4; gStickMode = SM_DATA; Param* P = PAGES[pg]; for (int i = 0; P[i].name && i < 64; i++) snap[i] = P[i].type == PT_F ? *(float*)P[i].p : (float)*(int*)P[i].p; }
+	  if (fr == 221) { TOUCH = 1; TX = 4 * 320 / 6 - 20; TY = 8; }   // ENV chip -> FILT+ENV
+	  if (fr >= 224 && fr < 250) CX = -150;
+	  if (fr == 252) { int ch = 0; Param* P = PAGES[pg]; for (int i = 0; P[i].name && i < 64; i++) { float v = P[i].type == PT_F ? *(float*)P[i].p : (float)*(int*)P[i].p; if (v != snap[i]) ch++; }
+	    if (ch != 1) fail("circle pad DATA: holding left should change the selected value only (%d changed)", ch); } }
+	// FX CHAIN through the screen: CHAIN chip, tap SPACE, tap a reverb type; the top screen follows
+	if (fr == 256 || fr == 257) { TOUCH = 1; TX = 240; TY = 8; }
+	{ static int at; if (fr == 260) { for (int i = 0; i < NFXB; i++) if (gFxOrder[i] == 3) at = i; }
+	  if (fr == 262 || fr == 263) { TOUCH = 1; TX = CH_X(at) + 20; TY = CH_Y + 10; } }
+	if (fr == 267 || fr == 268) { TOUCH = 1; TX = 38 + 2 * 278 / NREVT + 8; TY = CT_Y + 16 + 5; }   // REVERB: PLATE
+	if (fr == 272) { shotBot("shots/fx_chain_sel.ppm"); shotTop("shots/fx_chain_top.ppm"); if (gChSel != 3 || gRevType != 2) fail("FX CHAIN screen: SPACE + PLATE (sel %d, rev %d)", gChSel, gRevType); }
 	if (fr == 197) {   // the browser: a GROOVE patch's beat and a DRUMS kit stop when you move on, also into USER
 		gStyle = 14; gPreset = 0; presetLoad(14, 0); gEdited = 0; gGuard = 0;
 		if (gVoiceMode < 3) fail("browser: a DRUMS kit should play the kit");
@@ -90,9 +103,14 @@ static void SCRIPT(int fr) {
 		browseStep(0, -1, 1); if (gDrums) fail("browser: an empty USER slot should stop a patch's beat");
 	}
 	if (fr == 196) {   // DRY check on the FX ORDER view; INIT PATCH comes with its macros wired
-		chainTouch(220, TAB_H + 26, 1, 0); chainTouch(0, 0, 0, 1); if (!gDry) fail("DRY: the button should switch every effect off");
+		chainTouch(220, TAB_H + 6, 1, 0); chainTouch(0, 0, 0, 1); if (!gDry) fail("DRY: the button should switch every effect off");
 		gFx = 3; gFxMix = 0.8f; if (busSend(0) != 0) fail("DRY: no effect sends while it's on");
-		chainTouch(220, TAB_H + 26, 1, 0); chainTouch(0, 0, 0, 1); if (gDry) fail("DRY: a second tap brings the effects back");
+		chainTouch(220, TAB_H + 6, 1, 0); chainTouch(0, 0, 0, 1); if (gDry) fail("DRY: a second tap brings the effects back");
+		{ int at = 0; for (int i = 0; i < NFXB; i++) if (gFxOrder[i] == 1) at = i;   // tap MOD FX: selected, its settings up top, pick a type
+		  chainTouch(CH_X(at) + 20, CH_Y + 8, 1, 0); chainTouch(CH_X(at) + 22, CH_Y + 8, 0, 0); chainTouch(0, 0, 0, 1);
+		  if (gChSel != 1 || !gSelReq || strcmp(gSelReq, "MOD FX")) fail("FX CHAIN: tapping MOD FX should select it and bring up its settings");
+		  gSelReq = NULL; int n = 8; chainTouch(38 + 3 * 278 / n + 5, CT_Y + 5, 1, 0); chainTouch(0, 0, 0, 1);
+		  if (gModFx != 3) fail("FX CHAIN: tapping a type should change the effect (%d)", gModFx); gSelReq = NULL; gModFx = 0; gChSel = -1; }
 		SPatch ip; patchInit(&ip); initWire(&ip); patchApply(&ip);
 		if (gMod[4].src != SRC_M1 || gMod[4].dst != DST_CUTOFF || gXyMode != 1) fail("INIT PATCH: macro 1 should be wired to the filter, XY on MACRO 1+2");
 		gMacro[3] = 0; gFxMixMod = modSum(DST_FXMIX, newestVoice()); if (fxMixEff() > 0.001f || busSend(0) > 0) fail("INIT PATCH: M4 at 0 should be dry");
@@ -104,7 +122,7 @@ static void SCRIPT(int fr) {
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	FILE* f = fopen("sd/settings.bin", "wb"); int d[4] = {0x53455431, 1, 0, 0}; fwrite(d, sizeof(d), 1, f); fclose(f);
-	loadFont(); FRMAX = 218; app_main();
+	loadFont(); FRMAX = 275; app_main();
 	remove("sd/settings.bin");
 	printf("adv: last page, XY modes, PERF, circle pad, matrix hold, HUD ghost, vis tiles, hardware view\n");
 	return gFails ? 1 : 0;

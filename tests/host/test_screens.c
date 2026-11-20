@@ -44,7 +44,7 @@ static void SCRIPT(int fr) {
 		u8 bad[NFXB] = {0, 0, 1, 2, 3}; fxOrderSet(bad); if (gFxOrder[1] != 1) fail("FX ORDER: a broken order should fall back to default");
 		fxOrderSet(p.fxOrder);
 	}
-	if (fr == 160 || fr == 161) { TOUCH = 1; TX = 280; TY = TAB_H + 26; }   // RESET
+	if (fr == 160 || fr == 161) { TOUCH = 1; TX = 280; TY = TAB_H + 6; }   // RESET
 	if (fr == 164) { for (int i = 0; i < NFXB; i++) if (gFxOrder[i] != i) { fail("FX ORDER: RESET didn't restore the default"); break; } }
 	// WORK chips and the PERF row
 	if (fr == 166 || fr == 167) { TOUCH = 1; TX = 80; TY = 8; }   // MATRIX
