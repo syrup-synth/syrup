@@ -1524,6 +1524,7 @@ static void fxOrderSet(const u8* o) {   // only a full permutation is taken; any
 	for (int i = 0; i < NFXB; i++) { if (o[i] >= NFXB || (seen >> o[i] & 1)) { for (int k = 0; k < NFXB; k++) t[k] = k; goto ok; } seen |= 1 << o[i]; t[i] = o[i]; }
 ok:	for (int i = 0; i < NFXB; i++) __atomic_store_n(&gFxOrder[i], t[i], __ATOMIC_RELAXED);
 }
+static int gSpkEq = 0;   // HARDWARE > SPEAKER EQ (saved in settings.bin)
 static void auxMaster(void* data, int n, void* samples[4]) {
 	int fxo[NFXB]; for (int i = 0; i < NFXB; i++) fxo[i] = __atomic_load_n(&gFxOrder[i], __ATOMIC_RELAXED);
 	(void)data;
@@ -1711,6 +1712,10 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 				for (int c = 0; c < 2; c++) x[c] = (band[0][c] * gBandGain[0] + band[1][c] * gBandGain[1] + band[2][c] * gBandGain[2]) * (1 + gOtt * 0.3f);
 			}
 		} break;
+		}
+		if (gSpkEq) {   // SPEAKER EQ: one-pole high-pass ~120 Hz and low-pass ~12 kHz for the console's small speaker
+			static float hpS[2], lpS[2];
+			for (int c = 0; c < 2; c++) { hpS[c] += (x[c] - hpS[c]) * 0.0228f; float h = x[c] - hpS[c]; lpS[c] += (h - lpS[c]) * 0.9f; x[c] = lpS[c]; }
 		}
 		// sidechain pump: duck on each beat, recover through it
 		if (gPump > 0.001f) {
@@ -2795,7 +2800,7 @@ static void patchApply(const SPatch* p) {
 	// v12. Sound settings always follow the patch; a beat or a loop setup only when the patch carries one
 	gThru = p->thru & 1; gThruCut = p->thruCut; gThruRes = p->thruRes; gThruEnv = p->thruEnv; gThruLfo = p->thruLfo; gEchoWow = p->echoWow;
 	fxOrderSet(p->fxOrder);
-	gXyMode = p->xyMode >= 0 && p->xyMode < 3 ? p->xyMode : 0;
+	gXyMode = p->xyMode >= 0 && p->xyMode < 4 ? p->xyMode : 0;
 	if (gTapeKeys && !p->tapeKeys) gTapeStop = 0;
 	gTapeKeys = p->tapeKeys & 1;
 	if (p->hasLoop) { gLoopBars = p->loopBars >= 0 && p->loopBars < 5 ? p->loopBars : 0; gLoopSpeed = p->loopSpeed; gLoopWow = p->loopWow; }
@@ -2969,10 +2974,12 @@ static Param P_FILT[] = {
 	PF("ENV2 SUS", &gEnv2.s, 0, 1, 0.01f, "%", 0), PF("ENV2 REL", &gEnv2.r, 0.01f, 5, 0.02f, "S", 0),
 	PEND};
 static int gXyMode = 0;
-static const char* XY_NAMES[3] = {"WT + CUTOFF", "MACRO 1+2", "MACRO 3+4"};
+static const char* XY_NAMES[4] = {"WT + CUTOFF", "MACRO 1+2", "MACRO 3+4", "KNOBS"};
+static int gStickMode = 0;
+static const char* STICK_NAMES[3] = {"BEND + MOD", "PAGE", "MACROS"};
 static Param P_MOD[] = {
 	PF("MACRO 1", &gMacro[0], 0, 1, 0.02f, "%", 0), PF("MACRO 2", &gMacro[1], 0, 1, 0.02f, "%", 0), PF("MACRO 3", &gMacro[2], 0, 1, 0.02f, "%", 0), PF("MACRO 4", &gMacro[3], 0, 1, 0.02f, "%", 0),
-	PE("XY PAD", &gXyMode, 3, XY_NAMES, D_THEME), PF("CHAOS RATE", &gChaosRate, 0, 1, 0.02f, "%", 0),
+	PE("XY PAD", &gXyMode, 4, XY_NAMES, D_THEME), PF("CHAOS RATE", &gChaosRate, 0, 1, 0.02f, "%", 0),
 	PF("LFO3 RATE", &gDlRate[0], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO3 SYNC", &gDlSync[0], NSYNC, SYNC_NAMES, 0), PF("LFO4 RATE", &gDlRate[1], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO4 SYNC", &gDlSync[1], NSYNC, SYNC_NAMES, 0),
 	PE("LFO1 SHAPE", &gLfo[0].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO1 RATE", &gLfo[0].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO1 SYNC", &gLfo[0].sync, NSYNC, SYNC_NAMES, 0),
 	PE("LFO1 MODE", &gLfo[0].mode, 2, LFO_MODES, 0), PE("LFO1 TABLE", &gLfo[0].table, T_BUILTIN, BUILTIN_NAMES, 0), PF("LFO1 WT POS", &gLfo[0].pos, 0, 1, 0.02f, "%", 0),
@@ -3056,7 +3063,7 @@ static Param P_MASTER[] = {
 	PF("OTT", &gOtt, 0, 1, 0.02f, "%", 0), PF("PUMP", &gPump, 0, 1, 0.02f, "%", 0), PE("PUMP RATE", &gPumpRate, 3, PUMP_NAMES, 0),
 	PE("LOFI BITS", &gLofiBits, 6, BITS_NAMES, 0), PF("LOFI RATE", &gLofiRate, 0, 1, 0.02f, "%", 0),
 	PF("3D ORBIT", &gOrbit, 0, 1, 0.02f, "%", 0), PF("ORBIT RATE", &gOrbitRate, 0, 2, 0.02f, "HZ", 0),
-	PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
+	PE("CIRCLE PAD", &gStickMode, 3, STICK_NAMES, 0), PE("SPEAKER EQ", &gSpkEq, 2, ONOFF2, 0), PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
 	PEND};
 static Param P_DRUMS[] = {
 	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 5, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 9, KICKP_NAMES, 0),
@@ -3433,7 +3440,7 @@ static const char* paramHelp(const char* n) {
 		{"LINK", "SYNC TEMPO WITH ANOTHER SYRUP"},
 		{"MACRO 1", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"}, {"MACRO 2", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"},
 		{"MACRO 3", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"}, {"MACRO 4", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"},
-		{"XY PAD", "WHAT THE TOUCH PAD CONTROLS"},
+		{"XY PAD", "WHAT THE TOUCH PAD CONTROLS"}, {"CIRCLE PAD", "BEND+MOD, PAGE: TWEAKS THIS PAGE, MACROS: M1 / M2"}, {"SPEAKER EQ", "CUTS LOWS + HARSH HIGHS FOR THE SPEAKER (MASTER FX)"},
 		{"5 SOURCE", "MOD SLOT 5: WHAT MOVES IT"}, {"5 DEST", "MOD SLOT 5: WHAT IT MOVES"}, {"5 AMOUNT", "MOD SLOT 5: HOW MUCH"}, {"6 SOURCE", "MOD SLOT 6: WHAT MOVES IT"}, {"6 DEST", "MOD SLOT 6: WHAT IT MOVES"}, {"6 AMOUNT", "MOD SLOT 6: HOW MUCH"}, {"7 SOURCE", "MOD SLOT 7: WHAT MOVES IT"}, {"7 DEST", "MOD SLOT 7: WHAT IT MOVES"}, {"7 AMOUNT", "MOD SLOT 7: HOW MUCH"}, {"8 SOURCE", "MOD SLOT 8: WHAT MOVES IT"}, {"8 DEST", "MOD SLOT 8: WHAT IT MOVES"}, {"8 AMOUNT", "MOD SLOT 8: HOW MUCH"}, {"1 CURVE", "MOD SLOT 1: RESPONSE CURVE"}, {"2 CURVE", "MOD SLOT 2: RESPONSE CURVE"}, {"3 CURVE", "MOD SLOT 3: RESPONSE CURVE"}, {"4 CURVE", "MOD SLOT 4: RESPONSE CURVE"}, {"5 CURVE", "MOD SLOT 5: RESPONSE CURVE"}, {"6 CURVE", "MOD SLOT 6: RESPONSE CURVE"}, {"7 CURVE", "MOD SLOT 7: RESPONSE CURVE"}, {"8 CURVE", "MOD SLOT 8: RESPONSE CURVE"}, 
 		{"MASTER FX", "WHOLE SOUND THROUGH THE EFFECT CHAIN"}, {"MOD FX", "CHORUS, FLANGER, PHASER, COMB, FORMANT"}, {"MOD RATE", "MOD FX SPEED"},
 		{"MOD DEPTH", "MOD FX DEPTH / FEEDBACK"}, {"MOD MIX", "MOD FX AMOUNT"}, {"FX COLOR", "COMB PITCH / FORMANT VOWEL (MOD DEST)"},
@@ -3467,6 +3474,30 @@ static int cpuPct(void) {   // second core's load over the last second
 	if (nt - lt > SYSCLOCK_ARM11) { u64 b = gCore1Busy; pct = lt ? (int)((b - lb) * 100 / (nt - lt)) : 0; lb = b; lt = nt; }
 	return pct;
 }
+static int paramDst(const void* p) {   // the matrix destination that moves this param, or -1
+	if (p == &gCutoff) return DST_CUTOFF; if (p == &gRes) return DST_RES;
+	if (p == &gOsc[0].pos) return DST_APOS; if (p == &gOsc[1].pos) return DST_BPOS;
+	if (p == &gOsc[0].warpAmt) return DST_AWARP; if (p == &gOsc[1].warpAmt) return DST_BWARP;
+	if (p == &gOsc[0].level) return DST_ALEV; if (p == &gOsc[1].level) return DST_BLEV;
+	return -1;
+}
+static const char* SET_PATH = "sdmc:/3ds/syrup/settings.bin";
+static void settingsSave(int page) { FILE* f = fopen(SET_PATH, "wb"); if (!f) return; int d[4] = {0x53455431, page, gStickMode, gSpkEq}; fwrite(d, sizeof(d), 1, f); fclose(f); }
+static int settingsLoad(void) {   // returns the page you were on last time
+	FILE* f = fopen(SET_PATH, "rb"); int d[4] = {0}, pg = 0; if (!f) return pg;   // first run: the browser
+	if (fread(d, sizeof(d), 1, f) == 1 && d[0] == 0x53455431) { if (d[1] >= 0 && d[1] < NPAGES && d[1] != 8) pg = d[1]; gStickMode = d[2] >= 0 && d[2] < 3 ? d[2] : 0; gSpkEq = d[3] & 1; }
+	fclose(f); return pg;
+}
+static int stickNudge(float* v, float d) {   // move a float param by d of its range, clamped; 1 = changed
+	if (!v || !d) return 0;
+	for (int pg = 0; pg < NPAGES; pg++) for (const Param* p = PAGES[pg]; p->name; p++) if (p->p == v && p->type == PT_F) {
+		float r = p->mx - p->mn, n = *v + d * r; n = n < p->mn ? p->mn : n > p->mx ? p->mx : n;
+		if (n != *v) { *v = n; gEdited = 1; return 1; }
+		return 0;
+	}
+	float n = *v + d; n = n < 0 ? 0 : n > 1 ? 1 : n; if (n != *v) { *v = n; return 1; } return 0;
+}
+static int gLatchShow = 0;
 static void drawHeader(int page) {
 	text(4, 3, "SYRUP", 1, TXT);
 	rect(0, 13, 400, 1, LINE);
@@ -3494,10 +3525,11 @@ static void drawHeader(int page) {
 	// status, right side of the sub-tab row: tempo, notes playing, CPU, transport
 	char st[40]; int voices = 0;
 	for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho) voices++;
-	snprintf(st, sizeof(st), "%s%d BPM %dV %d%%", gEdited ? "* " : "", gBPM, voices, cpuPct());
+	snprintf(st, sizeof(st), "%s%d BPM %dV %d%%", gLatchShow ? "LATCH " : "", gBPM, voices, cpuPct());
 	if (gSeqPlaying) strcat(st, " >");
 	int stx = 396 - (int)strlen(st) * 8;
-	if (stx > sx) text(stx, 18, st, 1, gClockSkips ? WARN : DIM);
+	if (stx > sx) text(stx, 18, st, 1, (gClockSkips || gLatchShow) ? WARN : DIM);
+	if (gEdited) { char pn[16]; snprintf(pn, sizeof(pn), "%.9s", gPatchName); int nx = 396 - (int)strlen(pn) * 8; rect(nx - 2, 1, (int)strlen(pn) * 8 + 4, 11, WARN); text(nx, 3, pn, 1, BG); }   // edited: the name turns to the warning colour
 }
 static void drawFooter(int page, int sel) {
 	rect(0, 226, 400, 1, LINE);
@@ -3511,6 +3543,7 @@ static void drawFooter(int page, int sel) {
 }
 
 static void drawTop(int page, int sel, int oct, int latch) {
+	gLatchShow = latch;
 	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
 	if (page == 8 && visActive(8)) return;   // the GPU frame covers the whole screen; overlay is drawn after the copy
 	rect(0, 0, 400, 240, BG);
@@ -4150,7 +4183,17 @@ static void drawMatrix(void) {
 		if (m == gMxDrag) { snprintf(t, sizeof(t), "%+d", (int)roundf(a * 100)); text(MX_MID - (int)strlen(t) * 4, y, t, 1, RGB3(TH->val)); }
 	}
 }
+static int gMxHold = -1, gMxHoldDst = 0; static u64 gMxHoldT;   // a press on a slot's box: short = pick, long = clear
 static int matrixTouch(int x, int y, int press, int release) {
+	if (gMxHold >= 0 && !press) {
+		if (release) { gMxPick = gMxHold; gMxPickDst = gMxHoldDst; gMxHold = -1; return 1; }
+		if (svcGetSystemTick() - gMxHoldT > SYSCLOCK_ARM11 * 2 / 5) {
+			ModSlot* ms = &gMod[gMxHold]; ms->src = SRC_OFF; ms->amt = 0; gModCurve[gMxHold] = 0; gEdited = 1;
+			char t[32]; snprintf(t, sizeof(t), "SLOT %d CLEARED", gMxHold + 1); say(t); gMxHold = -2; return 1;
+		}
+		return 0;
+	}
+	if (gMxHold == -2) { if (release) gMxHold = -1; return 0; }   // cleared: wait for the finger to lift
 	if (release) { int was = gMxDrag >= 0; gMxDrag = -1; return was; }
 	if (gMxPick >= 0) {
 		if (!press) return 0;
@@ -4169,8 +4212,7 @@ static int matrixTouch(int x, int y, int press, int release) {
 	if (y < MX_Y) return 0;
 	int m = (y - MX_Y) / MX_PITCH; if (m >= NMOD) return 0;
 	if (press) {
-		if (x < MX_LX + MX_BW) { gMxPick = m; gMxPickDst = 0; return 1; }
-		if (x >= MX_RX) { gMxPick = m; gMxPickDst = 1; return 1; }
+		if (x < MX_LX + MX_BW || x >= MX_RX) { gMxHold = m; gMxHoldDst = x >= MX_RX; gMxHoldT = svcGetSystemTick(); return 0; }
 		if (gMod[m].src == SRC_OFF) { say("PICK A SOURCE FIRST (LEFT BOX)"); return 0; }
 		gMxDrag = m;
 	}
@@ -4404,8 +4446,8 @@ static int fxbActive(int b) {
 	}
 }
 static void drawChainBox(int x, int b, int lift) {
-	int act = fxbActive(b), y = CH_Y - (lift ? 6 : 0);
-	const u8* bg = lift ? TH->keyOn : act ? TH->val : TH->tab; const u8* fg = lift || act ? EGA[0] : TH->tabTxt;
+	int act = fxbActive(b) && gMasterFX, y = CH_Y - (lift ? 6 : 0);
+	const u8* bg = lift ? TH->keyOn : act ? TH->val : gMasterFX ? TH->tab : TH->bg; const u8* fg = lift || act ? EGA[0] : gMasterFX ? TH->tabTxt : TH->grid;
 	rect(x, y, 46, CH_H, bg[0], bg[1], bg[2]); outline(x, y, 46, CH_H, RGB3(TH->txt));
 	const char* nm = FXB_NAMES[b]; const char* sp = strchr(nm, ' ');
 	if (sp) { char a[8]; int l = (int)(sp - nm); memcpy(a, nm, l); a[l] = 0; text(x + 23 - l * 4, y + 8, a, 1, fg[0], fg[1], fg[2]); text(x + 23 - (int)strlen(sp + 1) * 4, y + 19, sp + 1, 1, fg[0], fg[1], fg[2]); }
@@ -4444,6 +4486,86 @@ static int chainTouch(int x, int y, int press, int release) {   // 1 = redraw
 	}
 	return 1;
 }
+static u16* gCamImg; static int gCamOn;   // (camera, further down)
+// ---- bottom views for pages that only had the XY pad: KNOBS (XY PAD mode), VISUALIZER tiles, HARDWARE sensors
+static int gVisOnB = 0, gHwOnB = 0, gKnDrag = -1, gKnLastY = 0;
+static int xyShown(void) { return !gPads && !gModOn && !gGridOn && !gAddEdit && !gShapeOn && !gChainOn && !gVisOnB && !gHwOnB; }
+#define XYB_X 262   // the XY PAD mode button, top right of the pad
+static void drawXyModeBtn(void) {
+	static const char* M[4] = {"WT", "M1+2", "M3+4", "KNOBS"};
+	char t[12]; snprintf(t, sizeof(t), "%s >", M[gXyMode]);
+	rect(XYB_X, XY_Y + 1, 52, 12, RGB3(TH->tab)); text(XYB_X + 26 - (int)strlen(t) * 4, XY_Y + 3, t, 1, RGB3(TH->tabTxt));
+}
+static float* const KN_P[4] = {&gCutoff, &gRes, &gOsc[0].pos, &gFxMix};
+static const char* KN_N[4] = {"CUTOFF", "RES", "WT POS", "FX MIX"};
+#define KN_Y (XY_Y + 34)
+static void drawKnob(int cx, int cy, int r, float v) {
+	for (int k = 0; k <= 40; k++) {   // 270 degree track, lit up to the value
+		float a = (-135 + 270 * k / 40.0f) * 3.14159f / 180, on = k / 40.0f <= v + 0.001f;
+		int x = cx + (int)lroundf(sinf(a) * r), y = cy - (int)lroundf(cosf(a) * r);
+		if (on) { rect(x - 1, y - 1, 3, 3, RGB3(TH->keyOn)); } else px(x, y, RGB3(TH->grid));
+	}
+	float a = (-135 + 270 * v) * 3.14159f / 180;
+	line(cx, cy, cx + (int)(sinf(a) * (r - 4)), cy - (int)(cosf(a) * (r - 4)), RGB3(TH->txt));
+}
+static void drawKnobs(void) {
+	rect(0, XY_Y, 320, WORK_B - XY_Y, RGB3(TH->bg));
+	for (int i = 0; i < 4; i++) {
+		int cx = 40 + i * 80; drawKnob(cx, KN_Y - 4, 17, *KN_P[i] < 0 ? 0 : *KN_P[i] > 1 ? 1 : *KN_P[i]);
+		const u8* c = gKnDrag == i ? TH->keyOn : TH->txt; text(cx - (int)strlen(KN_N[i]) * 4, KN_Y + 18, KN_N[i], 1, c[0], c[1], c[2]);
+	}
+	for (int m = 0; m < 4; m++) {   // macro sliders, 2 x 2
+		int x = 4 + (m & 1) * 158, y = XY_Y + 74 + (m / 2) * 11; char t[4]; snprintf(t, sizeof(t), "M%d", m + 1);
+		text(x, y, t, 1, RGB3(TH->dim)); rect(x + 24, y + 2, 126, 5, RGB3(TH->pad)); rect(x + 24, y + 2, (int)(gMacro[m] * 126), 5, RGB3(TH->val));
+	}
+	drawXyModeBtn();
+}
+static int knobsTouch(int x, int y, int press, int release) {
+	if (release) { int r = gKnDrag >= 0; gKnDrag = -1; return r; }
+	if (press) {
+		if (y >= XY_Y + 72) gKnDrag = 4 + (x >= 160) + ((y >= XY_Y + 83) ? 2 : 0);
+		else { gKnDrag = x / 80; if (gKnDrag > 3) gKnDrag = 3; }
+		gKnLastY = y;
+	}
+	if (gKnDrag < 0) return 0;
+	if (gKnDrag >= 4) { int m = gKnDrag - 4, bx = 4 + (m & 1) * 158 + 24; float v = (x - bx) / 126.0f; gMacro[m] = v < 0 ? 0 : v > 1 ? 1 : v; }
+	else { float* p = KN_P[gKnDrag]; float v = *p + (gKnLastY - y) / 90.0f; *p = v < 0 ? 0 : v > 1 ? 1 : v; gKnLastY = y; }
+	gEdited = 1; return 1;
+}
+static void drawVisTiles(void) {   // VISUALIZER: one tile per mode, plus OVERLAY
+	rect(0, TAB_H, 320, WORK_B - TAB_H, RGB3(TH->bg));
+	for (int i = 0; i < 12; i++) {
+		int x = 4 + (i % 4) * 79, y = XY_Y + (i / 4) * 32, on = i < NVISM ? i == gVisMode : gVisOverlay;
+		const char* nm = i < NVISM ? VISM_NAMES[i] : (gVisOverlay ? "OVERLAY ON" : "OVERLAY OFF");
+		rect(x, y, 75, 28, on ? TH->keyOn[0] : TH->tab[0], on ? TH->keyOn[1] : TH->tab[1], on ? TH->keyOn[2] : TH->tab[2]);
+		const u8* c = on ? EGA[0] : TH->tabTxt; const char* sp = strlen(nm) > 9 ? strchr(nm, ' ') : NULL;
+		if (sp) { char a[12]; int l = (int)(sp - nm); memcpy(a, nm, l); a[l] = 0; text(x + 38 - l * 4, y + 5, a, 1, c[0], c[1], c[2]); text(x + 38 - (int)strlen(sp + 1) * 4, y + 15, sp + 1, 1, c[0], c[1], c[2]); }
+		else text(x + 38 - (int)strlen(nm) * 4, y + 10, nm, 1, c[0], c[1], c[2]);
+	}
+}
+static int visTilesTouch(int x, int y) {   // press
+	int c = (x - 4) / 79, r = (y - XY_Y) / 32, i = r * 4 + c;
+	if (y < XY_Y || c < 0 || c > 3 || r < 0 || r > 2) return 0;
+	if (i < NVISM) gVisMode = i; else gVisOverlay = !gVisOverlay;
+	return 1;
+}
+static void hwMeter(int x, int y, const char* nm, float v, int bip) {
+	text(x, y, nm, 1, RGB3(TH->dim)); rect(x + 56, y + 1, 100, 6, RGB3(TH->pad));
+	v = v < -1 ? -1 : v > 1 ? 1 : v;
+	if (bip) { int z = x + 106, e = z + (int)(v * 50); rect(z, y, 1, 8, RGB3(TH->txt)); rect(e < z ? e : z, y + 1, abs(e - z) + 1, 6, RGB3(TH->val)); }
+	else rect(x + 56, y + 1, (int)((v < 0 ? 0 : v) * 100), 6, RGB3(TH->val));
+}
+static void drawHwView(void) {   // HARDWARE: what the sensors read right now, and the camera
+	rect(0, TAB_H, 320, WORK_B - TAB_H, RGB3(TH->bg));
+	text(4, XY_Y, "SENSORS", 1, RGB3(TH->val));
+	hwMeter(4, XY_Y + 14, "TILT X", gTiltX, 1); hwMeter(4, XY_Y + 26, "TILT Y", gTiltY, 1); hwMeter(4, XY_Y + 38, "TWIST", gTwist, 1);
+	hwMeter(4, XY_Y + 50, "SHAKE", gShake, 0); hwMeter(4, XY_Y + 62, "MIC", gMicEnv * 4, 0); hwMeter(4, XY_Y + 74, "LIGHT", gCamLight, 0);
+	int cx = 172, cy = XY_Y + 6;
+	if (gCamOn && gCamImg) {
+		for (int y = 0; y < 60; y++) for (int x = 0; x < 80; x++) { u16 p = gCamImg[(y * 2) * 160 + x * 2]; px(cx + 32 + x, cy + y, (u8)((p >> 11) << 3), (u8)(((p >> 5) & 63) << 2), (u8)((p & 31) << 3)); }
+		outline(cx + 31, cy - 1, 82, 62, RGB3(TH->line));
+	} else { outline(cx + 31, cy - 1, 82, 62, RGB3(TH->grid)); text(cx + 40, cy + 26, "CAMERA OFF", 1, RGB3(TH->dim)); }
+}
 static void keyColor(const u8* lo, const u8* hi, float t, u8* out) { t = t < 0 ? 0 : t > 1 ? 1 : t; for (int k = 0; k < 3; k++) out[k] = (u8)(lo[k] + (hi[k] - lo[k]) * t); }
 // SEQ STRIP: while the sequencer plays, a thin bar over the keyboard on every page: one segment per step (swing
 // shows as uneven widths), notes lit, accents brighter, the playing step brightest
@@ -4479,7 +4601,8 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	if (gModOn) { drawModView(); return; }               // MOD page: route / drawn LFOs / motion
 	if (gGridOn) drawGrid(); else if (gAddEdit) drawAdd(); else {
 	// XY pad: dotted EGA grid, crosshair
-	float xv = gXyMode ? gMacro[gXyMode * 2 - 2] : gOsc[0].pos, yv = gXyMode ? gMacro[gXyMode * 2 - 1] : gCutoff;
+	int xm = gXyMode > 2 ? 0 : gXyMode;   // (KNOBS draws over this)
+	float xv = xm ? gMacro[xm * 2 - 2] : gOsc[0].pos, yv = xm ? gMacro[xm * 2 - 1] : gCutoff;
 	int cx = 4 + (int)(xv * 311), cy = XY_Y + (int)((1 - yv) * (XY_H - 1));
 	if (TH->ega) {
 		for (int gx = 0; gx <= 8; gx++) for (int y = XY_Y; y < XY_Y + XY_H; y += 2) px(4 + gx * 39, y, DIM);
@@ -4494,7 +4617,7 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 		frame(4, XY_Y, 312, XY_H);
 	}
 	static const char* XL[3] = {"WT POS >", "MACRO 1 >", "MACRO 3 >"}; static const char* YL[3] = {"^ CUTOFF", "^ MACRO 2", "^ MACRO 4"};
-	text(8, XY_Y + 4, XL[gXyMode], 1, DIM); text(312 - (int)strlen(YL[gXyMode]) * 8, XY_Y + XY_H - 12, YL[gXyMode], 1, DIM);
+	text(8, XY_Y + 4, XL[xm], 1, DIM); text(312 - (int)strlen(YL[xm]) * 8, XY_Y + XY_H - 12, YL[xm], 1, DIM);
 	}
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
@@ -4560,7 +4683,10 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	drawBottomMain(base, on, helpOn, latch);
 	if ((gPads && !gGridOn) || gModOn) return;
 	if (gShapeOn && !gGridOn && !gAddEdit) drawShapeEditor();
-	if (gChainOn && !gGridOn && !gAddEdit) drawChainView();   // MASTER FX: the chain, in order   // FILT+ENV: the editor sits where the XY pad was
+	if (gChainOn && !gGridOn && !gAddEdit) drawChainView();
+	if (gVisOnB && !gGridOn && !gAddEdit) drawVisTiles();
+	if (gHwOnB && !gGridOn && !gAddEdit) drawHwView();
+	if (xyShown()) { if (gXyMode == 3) drawKnobs(); else drawXyModeBtn(); }
 	if (!gGridOn && !gAddEdit) drawSeqStrip();
 	drawPerfRow(latch);
 	if (latch) { outline(0, KB_Y, 320, 240 - KB_Y, HI); outline(1, KB_Y + 1, 318, 238 - KB_Y, HI); }   // LATCH: notes hold, and the keyboard says so
@@ -7144,7 +7270,7 @@ int main(void) {
 		ndspSetCallback(audioTick, NULL);   // arp + sequencer clock, every 160 samples
 	}
 
-	int page = 0, sel[NPAGES] = {0}, oct = 0, helpOn = 0, latch = 0, prevTouch = 0;
+	int page = settingsLoad(), sel[NPAGES] = {0}, oct = 0, helpOn = 0, latch = 0, prevTouch = 0;
 	int curKey = -1;
 	int topDirty = 1, botDirty = 1, topAgain = 0, botAgain = 0;   // *Again: also refresh the other buffer next frame
 	float repeatT = 0, lastPos[2] = {-1, -1}, lastWarp[2] = {-1, -1};
@@ -7284,6 +7410,20 @@ int main(void) {
 		if (fabsf(sy) < 0.001f) sy = 0;
 		float cx = sx;
 		gStick = sy;
+		if (gStickMode) {   // PAGE / MACROS: the pad pushes two values up and down (hold it over to keep moving)
+			float* px_ = NULL; float* py_ = NULL;
+			if (gStickMode == 2) { px_ = &gMacro[0]; py_ = &gMacro[1]; }
+			else switch (page) {
+				case 1: case 2: px_ = &gOsc[page - 1].pos; py_ = &gCutoff; break;
+				case 5: case 0: px_ = &gMacro[0]; py_ = &gMacro[1]; break;
+				case 6: px_ = &gFxMix; py_ = &gChorus; break;
+				case 7: px_ = &gSwing; py_ = &gSeqGate; break;
+				case 10: px_ = &gDlyMix; py_ = &gRevMix; break;
+				default: px_ = &gCutoff; py_ = &gRes; break;
+			}
+			if ((sx || sy) && stickNudge(px_, sx * dt * 0.7f) + stickNudge(py_, sy * dt * 0.7f)) { topDirty = 1; botDirty = 1; }
+			cx = 0; gStick = 0;
+		}
 
 		// touch
 		int base = 48 + 12 * oct, key = -1, touching = !!(kHeld & KEY_TOUCH);
@@ -7330,6 +7470,14 @@ int main(void) {
 			} else if (t.py < WORK_B && gGridOn) {
 				gLastTX = t.px; gLastTY = t.py;
 				if (gridTouch(t.px, t.py, !prevTouch, 0)) topDirty = botDirty = 1;
+			} else if (xyShown() && !prevTouch && t.px >= XYB_X && t.py >= XY_Y && t.py < XY_Y + 14) {
+				gXyMode = (gXyMode + 1) % 4; gKnDrag = -1; say(XY_NAMES[gXyMode]); botDirty = 1;
+			} else if (xyShown() && gXyMode == 3 && t.py < WORK_B && t.py >= XY_Y) {
+				gLastTX = t.px; gLastTY = t.py;
+				if (knobsTouch(t.px, t.py, !prevTouch, 0)) { botDirty = 1; topDirty = 1; }
+			} else if (gVisOnB && t.py < WORK_B && t.py >= TAB_H && !gGridOn && !gAddEdit) {
+				if (!prevTouch && visTilesTouch(t.px, t.py)) { botDirty = 1; topDirty = 1; }
+			} else if (gHwOnB && t.py < WORK_B && t.py >= TAB_H) {
 			} else if (t.py < XY_Y + XY_H) {
 				float np = (t.px - 4) / 311.0f, nc = 1.0f - (t.py - XY_Y) / (float)(XY_H - 1);
 				if (np < 0) np = 0;
@@ -7337,7 +7485,7 @@ int main(void) {
 				if (nc < 0) nc = 0;
 				if (nc > 1) nc = 1;
 				if (gXyMode == 0) { A->pos = np; gCutoff = nc; }
-				else { gMacro[gXyMode * 2 - 2] = np; gMacro[gXyMode * 2 - 1] = nc; }
+				else if (gXyMode < 3) { gMacro[gXyMode * 2 - 2] = np; gMacro[gXyMode * 2 - 1] = nc; }
 				gXYmod = nc * 2 - 1;
 				topDirty = botDirty = 1;
 			} else if (t.py >= KB_Y) {
@@ -7350,6 +7498,7 @@ int main(void) {
 		if (gShapeOn && prevTouch && !touching && shapeTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gChainOn && prevTouch && !touching && chainTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gGridOn && prevTouch && !touching && gridTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
+		if (gKnDrag >= 0 && prevTouch && !touching && knobsTouch(gLastTX, gLastTY, 0, 1)) botDirty = 1;
 		if (gPads && prevTouch && !touching) { gStrumZone = -1; if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
 		padsTick(dt);
 		prevTouch = touching;
@@ -7368,7 +7517,9 @@ int main(void) {
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; if (!g) { gStepEd = -1; seqSave(); } } }
 		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }
 		{ int m = page == 4; if (m != gShapeOn) { gShapeOn = m; gShDrag = -1; botDirty = 1; } }
-		{ int m = page == 10; if (m != gChainOn) { gChainOn = m; gChDrag = -1; botDirty = 1; } }   // live matrix dots, drawn LFO / motion playheads
+		{ int m = page == 10; if (m != gChainOn) { gChainOn = m; gChDrag = -1; botDirty = 1; } }
+		{ int m = page == 8; if (m != gVisOnB) { gVisOnB = m; botDirty = 1; } m = page == 9; if (m != gHwOnB) { gHwOnB = m; botDirty = 1; } }
+		{ static int hwT = 0; if (gHwOnB && ++hwT % 6 == 0) botDirty = 1; }   // live sensor meters   // live matrix dots, drawn LFO / motion playheads
 		motTick(dt);
 		if (gAuditionT > 0 && (gAuditionT -= 1.0f / 60) <= 0 && !gSeqPlaying && curKey < 0) playSet(NULL, 0, 0.8f);
 		{ static int lastPos = -2, lastMode = -1; if (gGridOn && (gSeqPos != lastPos || gSeqMode != lastMode)) { lastPos = gSeqPos; lastMode = gSeqMode; botDirty = 1; } }
@@ -7410,7 +7561,7 @@ int main(void) {
 			if (!m3 && (gArpOnN || gSeqPlaying)) { m3 = 1; crashMark("ARP/SEQ RUNNING"); }
 			if (!m4 && visActive(page)) { m4 = 1; crashMark("GPU VISUALS"); }
 			static int lastMarkPage = -1;
-			if (page != lastMarkPage) { lastMarkPage = page; char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
+			if (page != lastMarkPage) { lastMarkPage = page; settingsSave(page); char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
 		}
 		gFxModVal = modSum(DST_FXP, newestVoice());
 		if (gAudioOK) voicesUpdate(dt, cx + gMidiBend);
@@ -7462,8 +7613,12 @@ int main(void) {
 					fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
 					const Param* cp = (const Param*)gCallP; int bar = cp && cp->type != PT_E && cp->mx > cp->mn;
 					int w = (int)strlen(gCallTxt) * 16 + 16; if (bar && w < 160) w = 160;
-					int x = 200 - w / 2, h = bar ? 52 : 40;
+					int mdst = cp ? paramDst(cp->p) : -1, msl = -1; float mamt = 0;
+					if (mdst >= 0) for (int m = 0; m < NMOD; m++) if (gMod[m].src != SRC_OFF && gMod[m].dst == mdst && fabsf(gMod[m].amt) > fabsf(mamt)) { mamt = gMod[m].amt; msl = m; }
+					char mtx[32] = ""; if (msl >= 0) { snprintf(mtx, sizeof(mtx), "< %s %+d%%", SRC_NAMES[gMod[msl].src], (int)lroundf(mamt * 100)); if ((int)strlen(mtx) * 8 + 20 > w) w = (int)strlen(mtx) * 8 + 20; }
+					int x = 200 - w / 2, h = (bar ? 52 : 40) + (msl >= 0 ? 12 : 0);
 					rect(x, 96, w, h, RGB3(TH->tab)); outline(x, 96, w, h, RGB3(TH->line));
+					if (msl >= 0) text(200 - (int)strlen(mtx) * 4, 96 + h - 12, mtx, 1, RGB3(TH->tabTxt));   // what's moving it
 					text(200 - (int)strlen(gCallTxt) * 8, 106, gCallTxt, 2, RGB3(TH->tabTxt));
 					if (bar) {   // where it sits in its range; bipolar values grow from the centre so the sign shows
 						float v = cp->type == PT_F ? *(float*)cp->p : (float)*(int*)cp->p, t = (v - cp->mn) / (cp->mx - cp->mn);
@@ -7474,6 +7629,11 @@ int main(void) {
 							rect(z, by - 2, 1, 12, RGB3(TH->tabTxt));
 							if (e > z) rect(z + 1, by + 2, e - z, 4, RGB3(TH->keyOn)); else if (e < z) rect(e, by + 2, z - e, 4, RGB3(TH->warn));
 						} else rect(bx + 2, by + 2, (int)(t * (bw - 4)), 4, RGB3(TH->keyOn));
+						if (msl >= 0) {   // the modulation ghost: where the sound actually is right now
+							float mv = modSum(mdst, newestVoice()), r = cp->mx - cp->mn, et = t + (mdst == DST_CUTOFF ? mv * 5.0f / 7.97f : mv) / (r > 0 ? r : 1) * (cp->mx - cp->mn);
+							et = et < 0 ? 0 : et > 1 ? 1 : et; int gx = bx + 2 + (int)(et * (bw - 4));
+							rect(gx - 1, by - 3, 3, 14, RGB3(TH->warn));
+						}
 					}
 				}
 			}
@@ -7513,6 +7673,7 @@ int main(void) {
 	if (!gSafeMode) { extrasExit(); sensorsExit(); }
 	myDrumSave();
 	seqSave();
+	settingsSave(page);
 	gpuExit();
 	remove(CRASH_PATH);   // clean exit
 	gfxExit();

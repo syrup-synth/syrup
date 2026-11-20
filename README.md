@@ -38,6 +38,8 @@ Two LFOs with 13 shapes: sine, triangle, saw, square, S&H, steps, bounce, exp ri
 
 With MASTER FX on, every DSP voice goes through the effect bus to a chain that runs in the audio thread: LOFI (bits, rate) -> MOD FX (chorus, flanger, phaser, comb, formant; FX COLOR is a mod destination) -> 3-band EQ -> tape delay (tempo sync, wow/flutter, saturation) -> reverb (shimmer, freeze) -> OTT multiband compression -> sidechain PUMP (locked to the beat / kick) -> limiter. DELAY MIX / REVERB MIX add to the FX ECHO / REVERB amounts, so older patches sound the same. The page shows the chain and its CPU use. The sub, drums and looper (second sound chip) stay dry. Every factory patch is tuned for the chain (tempo-synced tape delays on leads, plucks and arps; chorus and shimmer on pads; OTT on basses; pump on house chords; lo-fi on retro sounds). Showcase patches: OTT GROWL, FLANGE LEAD, SHIMMER HALL, TAPE KEYS, PUMP CHORDS, TALK BOX, COMB DRONE.
 
+**SPEAKER EQ** (HARDWARE): a gentle high-pass (~120 Hz) and low-pass (~12 kHz) at the end of the MASTER FX chain for the console speaker. It works when MASTER FX is on and is saved with the console settings, not the patch.
+
 **FX ORDER:** the bottom screen of the MASTER FX page (or the CHAIN chip) shows the chain as five blocks: LOFI, MOD FX, EQ, SPACE (delay and reverb, side by side) and OTT. Drag a block left or right and the chain changes while you hear it (lofi after the reverb crushes the tails; OTT first, before the EQ, pumps the dry sound only). A lit block is doing something. PUMP and the limiter always stay last. RESET puts back the default order. The order is saved with the patch (patch format v13; older user patches load with the default order).
 
 **Shape editors:** FILT+ENV's bottom screen has touch editors for ENV 1, ENV 2 (drag the handles: attack, hold, decay, sustain, release) and FILTER (drag the dot: left/right = cutoff, up/down = resonance; LP...PEAK buttons and F2). LFO+MOD has MATRIX, LFO 1+2 (tap the shape or sync box for a list, drag the wave for the rate), LFO 3, LFO 4 and MOTION tabs.
@@ -121,9 +123,14 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 
 | Input | Action |
 |---|---|
+| Start | Syrup opens on the page you were on last time (first run: the browser). CIRCLE PAD and SPEAKER EQ are kept with it in settings.bin |
 | X / Y | Next / previous page (OSC A, OSC B, SUB+NOISE, FILT+ENV, LFO+MOD, VOICE+FX) |
 | Bottom top row | WORK chips: PADS, MATRIX, MOTION, ENV (FILT+ENV editor), CHAIN (FX ORDER), SEQ: one tap to each editor |
 | Bottom PERF row | Above the keys: OCT-, OCT+, SCALE (scale on/off, back to the last one), LATCH, CHORD (on/off, last chord), PLAY/STOP (sequencer), PANIC (all notes off, latch and sequencer stop) |
+| XY pad mode button | Top right of the XY pad: WT / M1+2 / M3+4 / KNOBS. KNOBS shows four knobs (CUTOFF, RES, WT POS, FX MIX; drag up / down) and the four macro sliders |
+| Circle pad | HARDWARE > CIRCLE PAD: BEND + MOD (default), PAGE (pushes two values on the page you're on: OSC = WT POS / CUTOFF, FILT+ENV and most pages = CUTOFF / RES, VOICE+FX = FX MIX / CHORUS, ARP+SEQ = SWING / GATE, MASTER FX = DELAY / REVERB MIX, LFO+MOD = MACRO 1 / 2) or MACROS (M1 / M2). Hold it over to keep moving the value |
+| Matrix slot | Tap a box to pick, hold it to clear the slot |
+| VISUALIZER / HARDWARE pages | Bottom screen: a tile per visualizer mode (plus OVERLAY); live sensor meters and the camera picture |
 | D-pad up / down | Pick a parameter |
 | D-pad left / right | Change it (hold to repeat) |
 | Bottom tabs | HELP, < PAGE, PAGE >, LATCH |

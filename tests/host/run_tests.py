@@ -12,13 +12,14 @@ def sh(cmd, **k): return subprocess.run(cmd, cwd=BUILD, capture_output=True, tex
 os.makedirs(BUILD, exist_ok=True)
 subprocess.run([os.path.join(HERE, 'gen.sh'), BUILD], check=True)
 for f in ('fake3ds.h', 'fakecitro.h', 'harness.h', 'default_font.bin'): shutil.copy(os.path.join(HERE, f), BUILD)
-for t in ('test_patch', 'test_buzz', 'test_timing', 'test_ui', 'test_kit', 'test_chip', 'test_vis', 'test_format', 'test_screens', 'test_seq'):
+for t in ('test_patch', 'test_buzz', 'test_timing', 'test_ui', 'test_kit', 'test_chip', 'test_vis', 'test_format', 'test_screens', 'test_seq', 'test_adv'):
     shutil.copy(os.path.join(HERE, t + '.c'), BUILD)
     r = sh(['gcc', '-O1', '-w', '-I', os.path.join(ROOT, 'source'), t + '.c', '-o', t, '-lm', '-lpthread', '-lcurl'])
     if r.returncode: print(r.stderr[-3000:]); sys.exit('build failed: ' + t)
 def run(name, args, timeout=120):
-    try: os.remove(os.path.join(BUILD, 'sd', 'seq.bin'))   # every test starts from the default pattern
-    except OSError: pass
+    for f in ('seq.bin', 'settings.bin'):   # every test starts from defaults: first page, default pattern
+        try: os.remove(os.path.join(BUILD, 'sd', f))
+        except OSError: pass
     try: r = sh(['./' + name] + args, timeout=timeout)
     except subprocess.TimeoutExpired: fails.append(f'{name} {args}: timed out'); return None
     if r.returncode not in (0, 1): fails.append(f'{name} {args}: crashed (exit {r.returncode})'); print(r.stdout, r.stderr[-2000:]); return None
@@ -35,6 +36,7 @@ run('test_vis', [])
 run('test_format', [])
 run('test_screens', [])
 run('test_seq', [])
+run('test_adv', [])
 # every factory patch
 base = {}
 if os.path.exists(BASE):
@@ -43,6 +45,9 @@ if os.path.exists(BASE):
         p = l.split(None, 2)
         if len(p) == 3: base[p[2].strip()] = float(p[1])   # key: 'style/index NAME'
 rows = []
+for f in ('seq.bin', 'settings.bin'):
+    try: os.remove(os.path.join(BUILD, 'sd', f))
+    except OSError: pass
 for st in range(32):
     for ix in range(16):
         r = sh(['./test_patch', str(st), str(ix)], timeout=60)
