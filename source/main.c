@@ -4048,11 +4048,39 @@ static void drawPatView(void) {
 		rectP(x, y, 59, 14, lit ? TH->keyOn : TH->tab); const u8* tc = lit ? EGA[0] : TH->tabTxt;
 		text(x + 30 - (int)strlen(PB[i]) * 4, y + 3, PB[i], 1, tc[0], tc[1], tc[2]);
 	}
+	{ static const char* PTB[3] = {"REV", "ROT", "HUM"};
+		for (int i = 0; i < 3; i++) { int x = 130 + i * 62; rectP(x, PV_Y + 84, 58, 14, TH->tab); text(x + 29 - (int)strlen(PTB[i]) * 4, PV_Y + 87, PTB[i], 1, RGB3(TH->tabTxt)); } }
 	if (gUndoOk) { rectP(4, PV_Y + 84, 122, 14, TH->tab); char u[20]; snprintf(u, sizeof(u), "UNDO (PAT %c)", 'A' + gUndoIdx); text(65 - (int)strlen(u) * 4, PV_Y + 87, u, 1, RGB3(TH->tabTxt)); }   // takes back the last ACID / CLEAR
 	for (int i = 0; i < NSONG; i++) {
 		int x = 4 + (i % 16) * 19, y = PV_Y + 46 + (i / 16) * 16, has = i < gSongLen, cur = has && gSongOn && gSeqPlaying && i == gSongPos;
 		rectP(x, y, 17, 14, cur ? TH->keyOn : has ? TH->pad : TH->bg); outline(x, y, 17, 14, RGB3(TH->grid));
 		if (has) { char c[2] = {(char)('A' + gSong[i]), 0}; const u8* tc = cur ? EGA[0] : TH->txt; text(x + 5, y + 3, c, 1, tc[0], tc[1], tc[2]); }
+	}
+}
+// pattern tools: REV (back to front, long notes end where they started), ROT (one step later, wraps), HUM (velocity +-20 %, nudge +-10 %)
+static void patReverse(void) {
+	int L = gSeqLen < 1 ? 1 : gSeqLen; static Step o[NSTEP]; memcpy(o, gSeq, sizeof(o));
+	for (int i = 0; i < L; i++) { Step* d = &gSeq[i]; const Step* sr = &o[L - 1 - i]; *d = *sr; d->n = 0; memset(d->note, 0, 4); memset(d->len, 0, 4); }   // locks follow the step
+	for (int i = 0; i < L; i++) for (int k = 0; k < o[i].n; k++) {
+		int ln = o[i].len[k] ? o[i].len[k] : 1; if (i + ln > L) ln = L - i;
+		int t = L - i - ln; Step* d = &gSeq[t];
+		if (d->n >= 4) continue;
+		if (!d->n && !d->vel) d->vel = o[i].vel ? o[i].vel : 190;
+		d->note[d->n] = o[i].note[k]; d->len[d->n++] = (u8)ln;
+	}
+	for (int i = 0; i < L; i++) if (!gSeq[i].n) gSeq[i].fl = 0;
+}
+static void patRotate(void) {
+	int L = gSeqLen < 1 ? 1 : gSeqLen; Step last = gSeq[L - 1];
+	memmove(&gSeq[1], &gSeq[0], sizeof(Step) * (L - 1)); gSeq[0] = last;
+	for (int i = 0; i < L; i++) for (int k = 0; k < gSeq[i].n; k++) { int ln = gSeq[i].len[k]; if (ln > L - i) gSeq[i].len[k] = (u8)(L - i); }   // a note can't run past the end
+}
+static void patHumanize(void) {
+	int L = gSeqLen < 1 ? 1 : gSeqLen;
+	for (int i = 0; i < L; i++) {
+		Step* s = &gSeq[i]; if (!s->n) continue;
+		int v = s->vel ? s->vel : 190; v = (int)lroundf(v * (1.0f + (rand() % 41 - 20) * 0.01f)); s->vel = (u8)(v < 30 ? 30 : v > 255 ? 255 : v);
+		int nd = s->nudge + rand() % 21 - 10; s->nudge = (s8)(nd < -50 ? -50 : nd > 50 ? 50 : nd);
 	}
 }
 static void patViewTouch(int x, int y) {   // on press
@@ -4062,6 +4090,14 @@ static void patViewTouch(int x, int y) {   // on press
 		else if (!gSongOn) { patSwitch(i); gPatNext = -1; }
 		else say("SONG IS ON: IT PICKS THE PATTERNS");
 		return;
+	}
+	if (y >= PV_Y + 84 && y < PV_Y + 98 && x >= 130) {
+		int b = (x - 130) / 62; if (b > 2) b = 2;
+		undoMark();
+		if (b == 0) { patReverse(); say("REVERSED (UNDO TAKES IT BACK)"); }
+		if (b == 1) { patRotate(); say("ROTATED ONE STEP LATER"); }
+		if (b == 2) { patHumanize(); say("HUMANIZED: VELOCITY AND TIMING LOOSENED"); }
+		patStore(); return;
 	}
 	if (gUndoOk && y >= PV_Y + 84 && y < PV_Y + 98 && x < 126) {
 		patStore(); SeqPat cur = gPat[gUndoIdx]; gPat[gUndoIdx] = gUndoPat; gUndoPat = cur;   // swap: UNDO again redoes
@@ -4116,12 +4152,16 @@ static void seFmt(int k, int v, char* o, int n) {
 }
 #define SE_Y (XY_Y + 16)
 #define SE_ROW(k) (SE_Y + 11 + ((k) / 2) * 14)   // top of slider k's row
+static int gClipOk = 0; static Step gClip;
+#define SE_CP_Y (SE_ROW(SE_N - 1) + 18)
 static void drawStepEd(void) {
 	char t[40]; int nt = gStepEdRow;
 	snprintf(t, sizeof(t), "STEP %d %s%d", gStepEd + 1, NOTE_NAMES[nt % 12], nt / 12 - 1); text(4, SE_Y, t, 1, RGB3(TH->val));
 	rectP(262, SE_Y - 2, 54, 12, TH->keyOn); text(273, SE_Y, "DONE", 1, RGB3(EGA[0]));
 	rectP(126, SE_Y - 2, 40, 12, TH->tab); text(134, SE_Y, "RND", 1, RGB3(TH->tabTxt));
 	rectP(170, SE_Y - 2, 40, 12, TH->tab); text(178, SE_Y, "<ST", 1, RGB3(TH->tabTxt)); rectP(214, SE_Y - 2, 40, 12, TH->tab); text(222, SE_Y, "ST>", 1, RGB3(TH->tabTxt));
+	rectP(4, SE_CP_Y, 152, 16, TH->tab); text(64, SE_CP_Y + 4, "COPY", 1, RGB3(TH->tabTxt));
+	rectP(162, SE_CP_Y, 152, 16, gClipOk ? TH->tab : TH->pad); text(218, SE_CP_Y + 4, "PASTE", 1, RGB3(gClipOk ? TH->tabTxt : TH->grid));
 	for (int k = 0; k < SE_N; k++) {
 		int x = 4 + (k & 1) * 158, y = SE_ROW(k), v = seGet(k);
 		char vs[12]; seFmt(k, v, vs, sizeof(vs));
@@ -4146,6 +4186,17 @@ static int stepEdTouch(int x, int y, int press, int release) {
 	if (press && y < SE_Y + 10 && x >= 170 && x < 254) {   // the step before / after (pitch follows the step's first note)
 		int L = gSeqLen < 1 ? 1 : gSeqLen; gStepEd = (gStepEd + (x >= 214 ? 1 : L - 1)) % L;
 		if (gSeq[gStepEd].n) gStepEdRow = gSeq[gStepEd].note[0];
+		return 1;
+	}
+	if (press && y >= SE_CP_Y && y < SE_CP_Y + 16) {   // COPY / PASTE the whole step (notes, lengths, locks)
+		if (x < 160) { gClip = gSeq[gStepEd]; gClipOk = 1; say(gClip.n ? "STEP COPIED" : "EMPTY STEP COPIED"); }
+		else if (gClipOk) {
+			undoMark(); Step c = gClip; int L = NSTEP - gStepEd;
+			for (int k = 0; k < c.n; k++) if (c.len[k] > L) c.len[k] = (u8)L;
+			gSeq[gStepEd] = c; for (int k = 0; k < c.n; k++) if (gStepEd + (c.len[k] ? c.len[k] : 1) > gSeqLen) gSeqLen = gStepEd + (c.len[k] ? c.len[k] : 1);
+			if (c.n) { gStepEdRow = c.note[0]; if (gSeqBase < 0) gSeqBase = gridNote(0); if (gStepEd >= gSeqLen) gSeqLen = gStepEd + 1; }
+			patStore(); say("STEP PASTED (UNDO IN PAT)");
+		} else say("COPY A STEP FIRST");
 		return 1;
 	}
 	if (press) { int c = x >= 160, r = (y - SE_Y - 11) / 14; gSeDrag = (y >= SE_Y + 11 && r >= 0 && r < SE_N / 2) ? r * 2 + c : -1; }

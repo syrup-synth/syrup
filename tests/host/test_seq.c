@@ -98,12 +98,27 @@ static void SCRIPT(int fr) {
 		{ Step b = gSeq[4]; int ch = 0; for (int k = 0; k < 8; k++) { stepEdTouch(140, SE_Y + 2, 1, 0); stepEdTouch(0, 0, 0, 1); if (gSeq[4].vel != b.vel || gSeq[4].nudge != b.nudge || gSeq[4].skip != b.skip) ch = 1; }
 		  if (!ch) fail("step editor RND should change the step"); if (gSeq[4].skip > 30 || gSeq[4].nudge < -10 || gSeq[4].nudge > 10) fail("RND went too far"); }
 		gStepEd = -1;
+		// COPY / PASTE a step; REV / ROT / HUM in PAT, each undoable
+		memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 8; stepSetNote(0, 60, 1); stepSetLen(0, 60, 2); gSeq[0].cut = 40; stepSetNote(3, 64, 1);
+		gStepEd = 0; gStepEdRow = 60; stepEdTouch(40, SE_CP_Y + 4, 1, 0); stepEdTouch(0, 0, 0, 1);
+		gStepEd = 5; stepEdTouch(200, SE_CP_Y + 4, 1, 0); stepEdTouch(0, 0, 0, 1); gStepEd = -1;
+		if (!stepHasNote(5, 60) || gSeq[5].cut != 40 || gSeq[5].len[0] != 2) fail("PASTE should copy the note, length and locks to step 6");
+		memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 8; stepSetNote(0, 60, 1); stepSetLen(0, 60, 2); stepSetNote(3, 64, 1); patStore();
+		gPatView = 1; patViewTouch(150, PV_Y + 90);
+		if (!stepHasNote(6, 60) || !stepHasNote(4, 64) || gSeq[6].len[0] != 2) fail("REV: the long note should end where it started (step 7), step 4 -> 5");
+		patViewTouch(20, PV_Y + 90); if (!stepHasNote(0, 60) || !stepHasNote(3, 64)) fail("UNDO after REV should restore");
+		patViewTouch(20, PV_Y + 90); patViewTouch(20, PV_Y + 90);   // redo, undo again
+		patViewTouch(212, PV_Y + 90); if (!stepHasNote(1, 60) || !stepHasNote(4, 64) || gSeq[0].n) fail("ROT: everything one step later");
+		gSeq[7] = gSeq[4]; memset(&gSeq[4], 0, sizeof(Step)); patViewTouch(212, PV_Y + 90); if (!stepHasNote(0, 64)) fail("ROT should wrap the last step to step 1");
+		{ int v0 = gSeq[0].vel; int ch = 0; for (int k = 0; k < 6; k++) { patViewTouch(274, PV_Y + 90); if (gSeq[0].vel != v0) ch = 1; if (gSeq[0].nudge < -50 || gSeq[0].nudge > 50) fail("HUM nudge out of range"); }
+		  if (!ch) fail("HUM should change velocities"); if (gSeq[1].n || gSeq[1].vel) fail("HUM should leave empty steps alone"); }
+		gPatView = 0;
 	}
 }
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	remove("sd/seq.bin");
 	loadFont(); FRMAX = 292; app_main();
-	printf("seq: piano roll tap/drag/delete/hold, step locks, accent, euclid pitch row, patterns, song, save, note lengths, nudge\n");
+	printf("seq: piano roll tap/drag/delete/hold, step locks, accent, euclid pitch row, patterns, song, save, note lengths, nudge, copy/paste, rev/rot/hum\n");
 	return gFails ? 1 : 0;
 }
