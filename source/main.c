@@ -3519,13 +3519,16 @@ static int skipRecent(void) {   // a clock skip in the last 3 s (the count itsel
 	return t && now - t < SYSCLOCK_ARM11 * 3;
 }
 static int gPageMarkDue = 0, gSeqSaveDue = 0;   // SD writes the main loop makes once it has let go of the voice lock
+static const Param* gStickP = NULL;   // the param stickNudge last moved (for the value pop-up)
 static int stickNudge(float* v, float d) {   // move a float param by d of its range, clamped; 1 = changed
 	if (!v || !d) return 0;
 	for (int pg = 0; pg < NPAGES; pg++) for (const Param* p = PAGES[pg]; p->name; p++) if (p->p == v && p->type == PT_F) {
 		float r = p->mx - p->mn, n = *v + d * r; n = n < p->mn ? p->mn : n > p->mx ? p->mx : n;
+		gStickP = p;
 		if (n != *v) { *v = n; gEdited = 1; return 1; }
 		return 0;
 	}
+	gStickP = NULL;
 	float n = *v + d; n = n < 0 ? 0 : n > 1 ? 1 : n; if (n != *v) { *v = n; return 1; } return 0;
 }
 static int gLatchShow = 0;
@@ -7468,7 +7471,16 @@ int main(void) {
 				case 10: px_ = &gDlyMix; py_ = &gRevMix; break;
 				default: px_ = &gCutoff; py_ = &gRes; break;
 			}
-			if ((sx || sy) && stickNudge(px_, sx * dt * 0.7f) + stickNudge(py_, sy * dt * 0.7f)) { topDirty = 1; botDirty = 1; }
+			// speed grows with how far the pad is pushed: a nudge is fine control, all the way over sweeps the range in under a second
+			float rx = sx * fabsf(sx) * 1.2f * dt, ry = sy * fabsf(sy) * 1.2f * dt;
+			int mx = stickNudge(px_, rx); const Param* qx = gStickP; int my = stickNudge(py_, ry); const Param* qy = gStickP;
+			if (mx || my) {
+				topDirty = 1; botDirty = 1;
+				int useX = mx && (!my || fabsf(sx) >= fabsf(sy)); const Param* q = useX ? qx : qy; float* pv = useX ? px_ : py_;
+				if (q) { char v[16]; paramFmt(q, v, sizeof(v)); snprintf(gCallTxt, sizeof(gCallTxt), "%.10s %s", q->name, v); gCallP = q; }   // show what the pad is moving
+				else { int k = pv == &gMacro[0] ? 1 : pv == &gMacro[1] ? 2 : 0; snprintf(gCallTxt, sizeof(gCallTxt), "MACRO %d %d%%", k, (int)lroundf(*pv * 100)); gCallP = NULL; }
+				gCallT = 0.6f;
+			}
 			cx = 0; gStick = 0;
 		}
 

@@ -24,6 +24,7 @@ static void SCRIPT(int fr) {
 	// circle pad PAGE mode on OSC A: X pushes WT POS
 	if (fr == 35) { gStickMode = 1; for (int m = 0; m < NMOD; m++) if (gMod[m].src == SRC_STICK) gMod[m].src = SRC_OFF; pos0 = gOsc[0].pos; if (pos0 > 0.8f) gOsc[0].pos = pos0 = 0.2f; }
 	if (fr >= 36 && fr < 66) CX = 150;
+	if (fr == 50) { shotTop("shots/stick_hud.ppm"); if (gCallT <= 0 || !strstr(gCallTxt, "WT POS")) fail("CIRCLE PAD PAGE: the pop-up should show what it moves (%s)", gCallTxt); }
 	if (fr == 68) { if (gOsc[0].pos < pos0 + 0.1f) fail("CIRCLE PAD PAGE: holding right should move WT POS (%.2f -> %.2f)", pos0, gOsc[0].pos); gMod[7].src = SRC_STICK; gMod[7].amt = 0.5f; pos0 = gOsc[0].pos; }
 	if (fr == 69) CX = 150;
 	if (fr == 70 && fabsf(gOsc[0].pos - pos0) > 0.001f) fail("CIRCLE PAD PAGE: a patch that routes STICK should keep bend + STICK");
