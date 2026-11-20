@@ -95,6 +95,8 @@ static void SCRIPT(int fr) {
 		if (!stepHasNote(5, 66) || gSeq[0].n) fail("UNDO should bring back the pattern from before ACID");
 		gStepEd = 5; gStepEdRow = 66; stepEdTouch(230, SE_Y + 2, 1, 0); stepEdTouch(0, 0, 0, 1); if (gStepEd != 6) fail("step editor ST> should go to step 7 (%d)", gStepEd);
 		stepEdTouch(190, SE_Y + 2, 1, 0); stepEdTouch(190, SE_Y + 2, 1, 0); stepEdTouch(0, 0, 0, 1); if (gStepEd != 4) fail("step editor <ST twice should go to step 5 (%d)", gStepEd);
+		{ Step b = gSeq[4]; int ch = 0; for (int k = 0; k < 8; k++) { stepEdTouch(140, SE_Y + 2, 1, 0); stepEdTouch(0, 0, 0, 1); if (gSeq[4].vel != b.vel || gSeq[4].nudge != b.nudge || gSeq[4].skip != b.skip) ch = 1; }
+		  if (!ch) fail("step editor RND should change the step"); if (gSeq[4].skip > 30 || gSeq[4].nudge < -10 || gSeq[4].nudge > 10) fail("RND went too far"); }
 		gStepEd = -1;
 	}
 }

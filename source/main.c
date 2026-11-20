@@ -4065,6 +4065,7 @@ static void drawStepEd(void) {
 	char t[40]; int nt = gStepEdRow;
 	snprintf(t, sizeof(t), "STEP %d %s%d", gStepEd + 1, NOTE_NAMES[nt % 12], nt / 12 - 1); text(4, SE_Y, t, 1, RGB3(TH->val));
 	rectP(262, SE_Y - 2, 54, 12, TH->keyOn); text(273, SE_Y, "DONE", 1, RGB3(EGA[0]));
+	rectP(126, SE_Y - 2, 40, 12, TH->tab); text(134, SE_Y, "RND", 1, RGB3(TH->tabTxt));
 	rectP(170, SE_Y - 2, 40, 12, TH->tab); text(178, SE_Y, "<ST", 1, RGB3(TH->tabTxt)); rectP(214, SE_Y - 2, 40, 12, TH->tab); text(222, SE_Y, "ST>", 1, RGB3(TH->tabTxt));
 	for (int k = 0; k < SE_N; k++) {
 		int x = 4 + (k & 1) * 158, y = SE_ROW(k), v = seGet(k);
@@ -4081,6 +4082,12 @@ static int gSeDrag = -1;
 static int stepEdTouch(int x, int y, int press, int release) {
 	if (release) { gSeDrag = -1; return 1; }
 	if (press && y < SE_Y + 10 && x >= 262) { gStepEd = -1; return 1; }
+	if (press && y < SE_Y + 10 && x >= 126 && x < 166) {   // RND: a looser take on this step (velocity, timing, chance)
+		Step* s = &gSeq[gStepEd]; int v = s->vel ? s->vel : 190;
+		v += rand() % 81 - 40; s->vel = (u8)(v < 60 ? 60 : v > 255 ? 255 : v);
+		s->nudge = (s8)(rand() % 21 - 10); s->skip = (u8)(rand() % 3 ? 0 : rand() % 31);
+		say("STEP LOOSENED: VEL, NUDGE, CHANCE"); return 1;
+	}
 	if (press && y < SE_Y + 10 && x >= 170 && x < 254) {   // the step before / after (pitch follows the step's first note)
 		int L = gSeqLen < 1 ? 1 : gSeqLen; gStepEd = (gStepEd + (x >= 214 ? 1 : L - 1)) % L;
 		if (gSeq[gStepEd].n) gStepEdRow = gSeq[gStepEd].note[0];
@@ -4862,7 +4869,8 @@ static void drawSeqStrip(void) {
 	float x = 4;
 	for (int i = 0; i < gSeqLen; i++) {
 		float w = ((i & 1) ? 1 - gSwing : 1 + gSwing) / tot * 312; int xi = (int)x, wi = (int)(x + w) - xi - 1;
-		const u8* c = i == gSeqPos ? TH->keyOn : gSeq[i].n ? ((gSeq[i].fl & 1) ? TH->val : TH->txt) : TH->grid;
+		const Step* sp = &gSeq[i]; int lk = sp->gate || sp->skip || sp->cut || sp->res || sp->pitch || sp->nudge || sp->rat > 1;
+		const u8* c = i == gSeqPos ? TH->keyOn : sp->n ? ((sp->fl & 1) ? TH->val : lk ? TH->warn : TH->txt) : TH->grid;   // accent / locks show in the strip too
 		rect(xi, y, wi < 1 ? 1 : wi, 2, c[0], c[1], c[2]);
 		x += w;
 	}
