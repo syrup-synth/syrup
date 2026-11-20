@@ -144,6 +144,7 @@ static void mipsInit(Mips* m) {
 	m->norm = 1; m->normInit = 0; m->built = 0;
 }
 
+static volatile int gInWorker; static void fxService(void);   // the core-1 worker serves effects frames between steps
 static void mipsBuildLevel(Mips* m, int L) {
 	int N = LEVN[L], H = N / 4;
 	memset(gTmp, 0, sizeof(cpx) * N);
@@ -158,12 +159,14 @@ static void mipsBuildLevel(Mips* m, int L) {
 	}
 	DSP_FlushDataCache(m->lev[L], N * sizeof(s16));
 	m->built |= 1u << L;
+	if (gInWorker) fxService();   // a waiting effects frame goes between mip levels
 }
 
 // new cycle -> spectrum, normalise (from the 512-harmonic peak), rebuild the levels in use
 static void mipsSet(Mips* m, const float* cyc, u32 needMask) {
 	for (int n = 0; n < CYC; n++) { m->spec[n].re = cyc[n]; m->spec[n].im = 0; }
 	fft(m->spec, CYC, 0);
+	if (gInWorker) fxService();
 	m->spec[0].re = m->spec[0].im = 0;
 	memset(gTmp, 0, sizeof(cpx) * CYC);
 	for (int k = 1; k <= 512; k++) { gTmp[k] = m->spec[k]; gTmp[CYC - k].re = m->spec[k].re; gTmp[CYC - k].im = -m->spec[k].im; }
@@ -1283,28 +1286,43 @@ static Thread gFxThread = NULL;
 static LightEvent gFxGo, gFxDone;
 static volatile int gFxQuit = 0, gFxN = 0;
 static int gFxBusy = 0, gFxMiss = 0, gFxRetry = 0, gFxRetries = 0;   // audio thread only
+// Where the chain runs off the DSP thread: on a New 3DS / New 2DS its third core (gFxThread, core id 2); otherwise inside
+// the wavetable worker on core 1 (gFxOnWorker). libctru allows only ONE thread on core 1, so a separate effects thread
+// there never started on an old 2DS. The worker serves a waiting effects frame before, between and after rebuild steps.
+static volatile int gFxOnWorker = 0, gFxPending = 0, gInWorker = 0;
+static LightEvent gJobEv;
+static void fxRunFrame(void);
 static s32 gFxIn[2][160], gFxOut[2][160], gFxZ[2][160];
+static void fxRunFrame(void) {
+	u64 t0 = svcGetSystemTick();
+	void* smp[4] = {gFxIn[0], gFxIn[1], gFxZ[0], gFxZ[1]};
+	auxMaster(NULL, gFxN, smp);
+	memcpy(gFxOut[0], gFxIn[0], gFxN * 4); memcpy(gFxOut[1], gFxIn[1], gFxN * 4);
+	__atomic_fetch_add(&gCore1Busy, svcGetSystemTick() - t0, __ATOMIC_RELAXED);
+	LightEvent_Signal(&gFxDone);
+}
+static void fxService(void) {   // worker: run a waiting effects frame now
+	if (__atomic_exchange_n(&gFxPending, 0, __ATOMIC_ACQ_REL)) fxRunFrame();
+}
 static void fxMain(void* a) {
 	(void)a;
 	for (;;) {
 		LightEvent_Wait(&gFxGo);
 		if (gFxQuit) break;
-		u64 t0 = svcGetSystemTick();
-		void* smp[4] = {gFxIn[0], gFxIn[1], gFxZ[0], gFxZ[1]};
-		auxMaster(NULL, gFxN, smp);
-		memcpy(gFxOut[0], gFxIn[0], gFxN * 4); memcpy(gFxOut[1], gFxIn[1], gFxN * 4);
-		__atomic_fetch_add(&gCore1Busy, svcGetSystemTick() - t0, __ATOMIC_RELAXED);
-		LightEvent_Signal(&gFxDone);
+		fxRunFrame();
 	}
 }
 static void fxCore2Start(void) {
-	if (gFxThread) return;
+	if (gFxThread || gFxOnWorker) return;
 	LightEvent_Init(&gFxGo, RESET_ONESHOT); LightEvent_Init(&gFxDone, RESET_ONESHOT);
-	gFxBusy = 0; gFxMiss = 0;
+	gFxBusy = 0; gFxMiss = 0; gFxPending = 0;
 	memset(gFxOut, 0, sizeof(gFxOut));
-	gFxThread = threadCreate(fxMain, NULL, 0x4000, 0x18, 1, false);
+	bool n3 = false; APT_CheckNew3DS(&n3);
+	if (n3) gFxThread = threadCreate(fxMain, NULL, 0x4000, 0x18, 2, false);   // New 3DS / New 2DS: a core of its own
+	if (!gFxThread) gFxOnWorker = 1;   // otherwise share core 1's one thread with the wavetable worker
 }
 static void fxCore2Stop(void) {
+	if (gFxOnWorker) { gFxOnWorker = 0; gFxPending = 0; gFxBusy = 0; return; }
 	if (!gFxThread) return;
 	gFxQuit = 1; LightEvent_Signal(&gFxGo); threadJoin(gFxThread, 1000000000ULL); threadFree(gFxThread); gFxThread = NULL; gFxQuit = 0; gFxBusy = 0;
 }
@@ -1321,7 +1339,7 @@ static void aux0(void* d, int n, void* s[4]) {
 	if (!gMasterFX) { if (fxCollect(0)) auxReverb(d, n, s); else for (int k = 0; k < 4; k++) memset(s[k], 0, n * 4); return; }
 	if (!gFxCore2) { gFxC2Fail = 0; gFxMiss = 0; gFxRetries = 0; }   // switching it off and on again retries core 2
 	if (gFxC2Fail && gFxRetries < 3 && ++gFxRetry > 2000) { gFxRetry = 0; gFxRetries++; gFxC2Fail = 0; gFxMiss = 0; }
-	int local = !gFxCore2 || !gFxThread || gFxC2Fail || n > 160 || (gCore2Lim && gCore2Lim < 50);
+	int local = !gFxCore2 || !(gFxThread || gFxOnWorker) || gFxC2Fail || n > 160 || (gCore2Lim && gCore2Lim < 50);
 	if (local) {
 		if (!fxCollect(0)) { for (int k = 0; k < 4; k++) memset(s[k], 0, n * 4); return; }
 		auxMaster(d, n, s); return;
@@ -1339,7 +1357,7 @@ static void aux0(void* d, int n, void* s[4]) {
 	else { memset(L, 0, n * 4); memset(R, 0, n * 4); }
 	memset(s[2], 0, n * 4); memset(s[3], 0, n * 4);
 	gFxN = n; gFxBusy = 1;
-	LightEvent_Signal(&gFxGo);
+	if (gFxOnWorker) { __atomic_store_n(&gFxPending, 1, __ATOMIC_RELEASE); LightEvent_Signal(&gJobEv); } else LightEvent_Signal(&gFxGo);
 }
 static void busInit(void) {
 	if (!busFxInit()) return;
@@ -3297,12 +3315,13 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		for (int c = 0; c < NCH; c++) if (gDspOwner[c] >= 0 || (gNoiseOn && c == NOISE_CH)) dsp++;
 		for (int c = 0; c < NCS; c++) if (csUsable(c)) { csTot++; if (gCsOwner[c] >= 0) cs++; }
 		snprintf(s, sizeof(s), "NOTES %d  FX BUS %s", voices, busActive() ? (gBusSeen ? "OK" : "ON") : (gBusFail ? "FALLBK" : "OFF")); text(6, 186, s, 1, DIM);
-		snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d%s", dsp, cs, csTot, gClockSkips ? " SKIP" : ""); text(6, 198, s, 1, gClockSkips ? WARN : DIM);
+		{ u32 dr = gAudioOK ? ndspGetDroppedFrames() : 0;
+			snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d%s", dsp, cs, csTot, dr ? " DROP" : gClockSkips ? " SKIP" : ""); text(6, 198, s, 1, (dr || gClockSkips) ? WARN : DIM); }
 		if (gGpuHung) { snprintf(s, sizeof(s), "GPU HUNG AFTER %d FRAMES", gGpuFrames); text(6, 210, s, 1, WARN); }
 		else {
 			static u64 lb = 0, lt = 0; static int pct = 0; u64 nt = svcGetSystemTick();
 			if (nt - lt > SYSCLOCK_ARM11) { u64 b = gCore1Busy; pct = lt ? (int)((b - lb) * 100 / (nt - lt)) : 0; lb = b; lt = nt; }
-			if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, (!gFxCore2 || (gCore2Lim && gCore2Lim < 50)) ? "CORE 1" : (!gFxThread || gFxC2Fail) ? "FELL BACK" : "ON CORE 2");
+			if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, (!gFxCore2 || (gCore2Lim && gCore2Lim < 50)) ? "CORE 1" : (!(gFxThread || gFxOnWorker) || gFxC2Fail) ? "FELL BACK" : gFxThread ? "CORE 3" : "ON CORE 2");
 			else snprintf(s, sizeof(s), "CORE 2 OFF %s %08lX %08lX L%lu", envIsHomebrew() ? "3DSX" : "CIA", (unsigned long)gCore2Rc, (unsigned long)gCore2ThRc, (unsigned long)gCore2Lim);
 			if (gWorker) text(6, 210, s, 1, DIM); else text(6, 210, s, 1, WARN);
 		}
@@ -6145,8 +6164,7 @@ static void visFrame(int page, float dt) {
 // Morph + warp + FFT band-limiting run on core 1 (the system core; the app gets up to 80% of it via
 // APT_SetAppCpuTimeLimit). The main core only posts jobs. gMipsLock guards the shared FFT buffers.
 typedef struct { float pe[2], we[2]; int chg[2]; u32 used[2]; } RebuildJob;
-static LightEvent gJobEv;
-static RebuildJob gJob;
+static RebuildJob gJob; static volatile int gJobTaken = 1;
 static int gJobBusy = 0, gWorkerQuit = 0, gJobDone = 0;   // accessed with __atomic ops (cross-core)
 #define AGET(x) __atomic_load_n(&(x), __ATOMIC_ACQUIRE)
 #define ASET(x, v) __atomic_store_n(&(x), (v), __ATOMIC_RELEASE)
@@ -6168,14 +6186,18 @@ static void workerMain(void* arg) {
 	for (;;) {
 		LightEvent_Wait(&gJobEv);
 		if (AGET(gWorkerQuit)) break;
+		fxService();   // effects frames first: they have a deadline
+		if (AGET(gJobTaken)) continue;   // woken only for effects
+		ASET(gJobTaken, 1);
 		RebuildJob j = gJob;
 		u64 t0 = svcGetSystemTick();
 		LightLock_Lock(&gMipsLock);
-		doRebuild(&j);
+		gInWorker = 1; doRebuild(&j); gInWorker = 0;
 		LightLock_Unlock(&gMipsLock);
 		__atomic_fetch_add(&gCore1Busy, svcGetSystemTick() - t0, __ATOMIC_RELAXED);
 		ASET(gJobDone, 1);
 		ASET(gJobBusy, 0);
+		fxService();
 	}
 }
 
@@ -6505,7 +6527,7 @@ int main(void) {
 				j.pe[o] = pe[o]; j.we[o] = we[o]; j.chg[o] = chg[o]; j.used[o] = usedLevels(o);
 				if (chg[o]) { lastPos[o] = pe[o]; lastWarp[o] = we[o]; gPosEff[o] = pe[o]; }
 			}
-			if (gWorker) { gJob = j; ASET(gJobBusy, 1); LightEvent_Signal(&gJobEv); }   // core 1
+			if (gWorker) { gJob = j; ASET(gJobTaken, 0); ASET(gJobBusy, 1); LightEvent_Signal(&gJobEv); }   // core 1
 			else { LightLock_Lock(&gMipsLock); doRebuild(&j); LightLock_Unlock(&gMipsLock); ASET(gJobDone, 1); }
 			gForceBuild = 0;
 		}

@@ -25,7 +25,7 @@ def run(name, args, timeout=120):
     return r
 os.makedirs(os.path.join(BUILD, 'wav'), exist_ok=True)
 run('test_timing', [])
-run('test_buzz', ['core1', 'wav/buzz_core1.wav']); run('test_buzz', ['core2', 'wav/buzz_core2.wav'])
+run('test_buzz', ['core1', 'wav/buzz_core1.wav']); run('test_buzz', ['core2', 'wav/buzz_core2.wav']); run('test_buzz', ['core3', 'wav/buzz_core3.wav'])
 run('test_ui', [])
 for k in range(5): run('test_kit', [str(k)])
 # every factory patch

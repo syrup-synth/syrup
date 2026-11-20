@@ -214,3 +214,6 @@ static inline void swkbdSetHintText(SwkbdState* s, const char* t) { (void)s; (vo
 static inline void swkbdSetInitialText(SwkbdState* s, const char* t) { (void)s; (void)t; }
 static inline void swkbdSetValidation(SwkbdState* s, int a, int b, int c) { (void)s; (void)a; (void)b; (void)c; }
 static inline SwkbdButton swkbdInputText(SwkbdState* s, char* o, size_t n) { (void)s; snprintf(o, n, "test name \xc3\xa9"); return SWKBD_BUTTON_CONFIRM; }
+/* model queries and DSP health */
+static int FAKE_NEW3DS = 0; static Result APT_CheckNew3DS(bool* o) { *o = FAKE_NEW3DS; return 0; }
+static u32 ndspGetDroppedFrames(void) { return 0; } static u32 ndspGetFrameCount(void) { return 0; }
