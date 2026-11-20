@@ -2217,7 +2217,7 @@ static void lane(SPatch* p, int l, int tgt, int kind, float lo, float hi, int ba
 		float x = lo + (hi - lo) * v; if (x < 0) x = 0; if (x > 1) x = 1;
 		p->mot[l][i] = (u8)(x * 255);
 	}
-	p->motTgt[l] = tgt; p->motOn[l] = 1; p->motBars = bars;
+	p->motTgt[l] = tgt; p->motOn[l] = 1; p->motBars = bars < 0 ? 0 : bars > 3 ? 3 : bars;   // bars: 0..3 = 1 / 2 / 4 / 8 bars, shared by all lanes
 }
 // drawn LFO 3 / 4 shapes: 0 sine, 1 ramp down, 2 melody steps (values are semitones/12), 3 gate, 4 rise-hold
 static void dshape(SPatch* p, int k, int kind, const s8* steps8) {
@@ -2246,7 +2246,8 @@ static void b_subfloor(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.po
 static void b_303(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SAW; OA.oct = -1; p->voiceMode = 2; p->glide = 0.06f; ENV1(0.002f, 0, 0.3f, 0.7f, 0.08f);
 	ENV2(0.001f, 0, 0.22f, 0.05f, 0.15f); OUTF(OF_ACID, 0.18f, 0.82f, 0.45f, 0.5f); MOD(2, SRC_VEL, DST_OFCUT, 0.2f); NOSTICK; MOD(1, SRC_STICK, DST_OFCUT, 0.5f); DLYS(0.15f, S8D, DL_DUB); }
 static void b_reese(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SAW; OA.oct = -1; OA.uni = 4; OA.detune = 22; OA.width = 0.5f; p->voiceMode = 1;
-	ENV1(0.01f, 0, 0.5f, 0.9f, 0.2f); OUTF(OF_L24, 0.42f, 0.2f, 0.35f, 0); MFX(FX_PHASER, 0.12f, 0.6f, 0.4f); p->ott = 0.35f; LFO(0, LS_SINE, 0, 0.1f); MOD(2, SRC_LFO1, DST_OFCUT, 0.15f); }
+	ENV1(0.01f, 0, 0.5f, 0.9f, 0.2f); OUTF(OF_L24, 0.42f, 0.2f, 0.35f, 0); MFX(FX_PHASER, 0.12f, 0.6f, 0.4f); p->ott = 0.35f; LFO(0, LS_SINE, 0, 0.1f); MOD(2, SRC_LFO1, DST_OFCUT, 0.15f);
+	lane(p, 0, 4, 2, 0.3f, 0.7f, 2); lane(p, 1, 5, 3, 0.1f, 0.4f, 2); p->xyMode = 3; }
 static void b_wobble(SPatch* p) { p->master = 0.55f; OA.table = T_GROWL; OA.oct = -1; p->voiceMode = 1; ENV1(0.003f, 0, 0.3f, 0.9f, 0.1f); LFO(0, LS_SINE, 0, 2); p->lfoSync[0] = LY_8;
 	MOD(2, SRC_LFO1, DST_APOS, 0.6f); MOD(3, SRC_LFO1, DST_OFCUT, 0.35f); OUTF(OF_L12, 0.4f, 0.45f, 0.5f, 0); p->ott = 0.5f; p->subLevel = 0.35f; NOSTICK; MOD(1, SRC_STICK, DST_AWARP, 0.6f); OA.warp = W_BENDPM; }
 static void b_fmknock(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -1; OA.warp = W_FM; OA.warpAmt = 0.25f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 0;
@@ -2270,8 +2271,8 @@ static void l_gulfsync(SPatch* p) { p->master = 0.55f; OA.table = T_SYNC; OA.war
 	p->voiceMode = 2; p->glide = 0.04f; ENV1(0.004f, 0, 0.3f, 0.85f, 0.25f); DLYS(0.22f, S8D, DL_TAPE); REVB(0.15f, RV_PLATE); }
 static void l_talkbox(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA.uni = 2; OA.detune = 8; MFX(FX_FORMANT, 0.1f, 0.5f, 0.5f); p->voiceMode = 2; p->glide = 0.05f;
 	MOD(2, SRC_STICK, DST_FXP, 0.8f); ENV1(0.01f, 0, 0.3f, 0.9f, 0.2f); REVB(0.12f, RV_ROOM); }
-static void l_bigunison(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 7; OA.detune = 26; OA.width = 1; ENV1(0.01f, 0, 0.4f, 0.85f, 0.4f);
-	MFX(FX_HYPER, 0.4f, 0.5f, 0.35f); DLYS(0.2f, S8D, DL_PING); REVB(0.2f, RV_HALL); OUTF(OF_LP, 0.75f, 0.1f, 0, 0); }
+static void l_bigunison(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 5; OA.detune = 26; OA.width = 1; ENV1(0.01f, 0, 0.4f, 0.85f, 0.4f);   // 5 voices a note: 4 notes before stealing
+	MFX(FX_HYPER, 0.4f, 0.5f, 0.35f); DLYS(0.2f, S8D, DL_PING); REVB(0.2f, RV_HALL); OUTF(OF_LP, 0.75f, 0.1f, 0, 0); p->xyMode = 3; }
 // BUSY BOY: the Korg cumbia lead (M1 / N364 / X5D), matched to a recording: its own waveform (the BUSY BOY table, the 3rd
 // harmonic on top), two slightly detuned layers (the original's harmonics drift in phase), and a pitch scoop of about 25
 // cents up into every note over ~60 ms. No glide and no vibrato: the original has neither.
@@ -2306,12 +2307,13 @@ static void p_combweather(SPatch* p) { p->master = 0.7f; OA.table = T_HARMONIX; 
 	OUTF(OF_COMBP, 0.45f, 0.6f, 0, 0); MOD(2, SRC_CHAOSX, DST_OFCUT, 0.35f); MOD(3, SRC_CHAOSY, DST_APOS, 0.4f); REVB(0.35f, RV_HALL); }
 static void p_cloudbank(SPatch* p) { p->master = 0.75f; OA.table = T_HARMONIX; OA.level = 0.2f; LFO(0, LS_SH, 0, 0.35f); MOD(2, SRC_LFO1, DST_APOS, 0.6f); GRN(0.8f, 0.5f, 0.7f, 0, 1.0f);
 	ENV1(0.9f, 0, 1.0f, 1.0f, 2.5f); REVB(0.45f, RV_HALL); }
-static void p_strings77(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 5; OA.detune = 18; OA.width = 1; ENV1(0.35f, 0, 1.0f, 0.9f, 0.9f);
-	OUTF(OF_L12, 0.5f, 0.1f, 0, 0); MFX(FX_CHORUS, 0.6f, 0.8f, 0.6f); REVB(0.25f, RV_HALL); p->eqHigh = -1; }
+static void p_strings77(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 4; OA.detune = 18; OA.width = 1; ENV1(0.35f, 0, 1.0f, 0.9f, 0.9f);
+	OUTF(OF_L12, 0.5f, 0.1f, 0, 0); MFX(FX_CHORUS, 0.6f, 0.8f, 0.6f); REVB(0.25f, RV_HALL); p->eqHigh = -1; p->xyMode = 3; }
 static void p_drawnswell(SPatch* p) { p->master = 0.65f; OA.table = T_SYNC; OA.uni = 3; OA.detune = 12; dshape(p, 0, 4, NULL); p->dlSync[0] = LY_1BAR - 1; p->dlRate[0] = 0.25f;
 	MOD(2, SRC_LFO3, DST_OFCUT, 0.4f); OUTF(OF_L24, 0.35f, 0.35f, 0.2f, 0); ENV1(0.5f, 0, 1.0f, 1.0f, 1.5f); REVB(0.35f, RV_HALL); }
 static void p_haze(SPatch* p) { p->master = 0.7f; OA.table = T_VOWELS; OA.uni = 3; OA.detune = 14; OB.on = 1; OB.table = T_HARMONIX; OB.oct = 1; OB.level = 0.25f; ENV1(0.6f, 0, 1.0f, 0.9f, 1.8f);
-	lane(p, 0, 0, 2, 0.1f, 0.9f, 3); lane(p, 1, 4, 3, 0.5f, 0.85f, 2); OUTF(OF_CREAMY, 0.65f, 0.25f, 0, 0); REVB(0.35f, RV_HALL); }
+	lane(p, 0, 0, 2, 0.1f, 0.9f, 3); lane(p, 1, 4, 3, 0.5f, 0.85f, 2); OUTF(OF_CREAMY, 0.65f, 0.25f, 0, 0); REVB(0.35f, RV_HALL);
+	lane(p, 2, 9, 5, 0.1f, 0.4f, 2); lane(p, 3, 10, 2, 0.2f, 0.5f, 2); p->xyMode = 5; }
 static void p_reverse(SPatch* p) { p->master = 0.7f; OA.table = T_HARMONIX; OA.uni = 4; OA.detune = 14; ENV1(0.4f, 0, 1.0f, 0.9f, 1.2f); REVB(0.45f, RV_SWELL); DLYS(0.3f, S4, DL_REV); }
 static void p_sonar(SPatch* p) { p->master = 0.75f; OA.table = T_HARMONIX; OA.oct = -1; OA.uni = 3; OA.detune = 8; ENV1(1.0f, 0, 1.0f, 1.0f, 2.5f); OUTF(OF_PHASER, 0.4f, 0.6f, 0, 0);
 	LFO(0, LS_SINE, 0, 0.05f); MOD(2, SRC_LFO1, DST_OFCUT, 0.4f); ORBIT(0.5f, 0.06f); REVB(0.4f, RV_HALL); }
@@ -2370,8 +2372,8 @@ static void c_omni(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = T
 static void c_pump(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 4; OA.detune = 16; ENV1(0.01f, 0, 0.6f, 0.8f, 0.3f); OUTF(OF_L12, 0.5f, 0.2f, 0, 0); p->pump = 0.7f; REVB(0.2f, RV_HALL); }
 static void c_gospel(SPatch* p) { p->master = 0.5f; OA.table = T_HARMONIX; OA.pos = 0.6f; OB.on = 1; OB.table = T_HARMONIX; OB.pos = 0.3f; OB.oct = -1; OB.level = 0.3f; ENV1(0.01f, 0, 0.1f, 1.0f, 0.15f);
 	MFX(FX_CHORUS, 5.0f, 0.5f, 0.5f); DRV(1, 0.3f); REVB(0.25f, RV_HALL); }
-static void c_shoegaze(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 6; OA.detune = 30; OA.width = 1; DRV(14, 0.5f); ENV1(0.15f, 0, 1.0f, 0.9f, 1.5f);
-	MFX(FX_HYPER, 0.3f, 0.7f, 0.5f); REVB(0.5f, RV_HALL); p->shimmer = 1; OUTF(OF_LP, 0.6f, 0.1f, 0, 0); }
+static void c_shoegaze(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 4; OA.detune = 30; OA.width = 1; DRV(14, 0.5f); ENV1(0.15f, 0, 1.0f, 0.9f, 1.5f);
+	MFX(FX_HYPER, 0.3f, 0.7f, 0.5f); REVB(0.5f, RV_HALL); p->shimmer = 1; OUTF(OF_LP, 0.6f, 0.1f, 0, 0); p->xyMode = 5; }
 
 // ---- SEQUENCE (arps and movement)
 static void q_berlin(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; ARP(1, 3, 2, 0.45f); ENV1(0.002f, 0, 0.2f, 0.3f, 0.1f); ENV2(0.0f, 0, 0.15f, 0, 0.1f);
@@ -2498,7 +2500,8 @@ static void m_sink2(SPatch* p) {   // KITCHEN SINK with every master effect on a
 	m_busyboy(p); p->master = 0.42f; p->chord = 1; p->shimmer = 1; REVB(0.3f, RV_HALL); DLYS(0.25f, S8D, DL_TAPE); p->dlyWow = 0.5f; p->pump = 0.5f; p->ott = 0.5f;
 }
 static void m_tidal(SPatch* p) { p->master = 0.65f; OA.table = T_HARMONIX; OA.uni = 3; OA.detune = 12; OB.on = 1; OB.table = T_VOWELS; OB.level = 0.4f; ENV1(0.4f, 0, 1.0f, 0.9f, 1.4f);
-	lane(p, 0, 0, 2, 0.0f, 1.0f, 2); lane(p, 1, 1, 3, 1.0f, 0.0f, 3); lane(p, 2, 4, 5, 0.45f, 0.85f, 2); OUTF(OF_CREAMY, 0.7f, 0.2f, 0, 0); MFX(FX_DIM, 0.3f, 0.6f, 0.5f); REVB(0.35f, RV_HALL); }
+	lane(p, 3, 8, 2, 0.2f, 0.6f, 2); lane(p, 0, 0, 2, 0.0f, 1.0f, 2); lane(p, 1, 1, 3, 1.0f, 0.0f, 3); lane(p, 2, 4, 5, 0.45f, 0.85f, 2); OUTF(OF_CREAMY, 0.7f, 0.2f, 0, 0); MFX(FX_DIM, 0.3f, 0.6f, 0.5f); REVB(0.35f, RV_HALL);
+	p->xyMode = 1; MOD2(0, SRC_M1, DST_APOS, 0.5f); MOD2(1, SRC_M2, DST_OFCUT, 0.5f); }
 static void m_stepsculpt(SPatch* p) { p->master = 0.6f; OA.table = T_GROWL; OA.pos = 0.3f; OA.warp = W_BENDPM; ENV1(0.002f, 0, 0.4f, 0.7f, 0.2f); p->voiceMode = 2; p->glide = 0.05f;
 	lane(p, 0, 2, 4, 0.25f, 0.9f, 0); lane(p, 1, 6, 4, 0.0f, 0.9f, 1); lane(p, 2, 0, 3, 0.1f, 0.8f, 1); OUTF(OF_L24, 0.6f, 0.45f, 0.4f, 0); DLYS(0.2f, S8, DL_DIGI); }
 static void m_breathglass(SPatch* p) { p->master = 0.65f; OA.table = T_DIGITAL; OA.pos = 0.6f; OA.uni = 3; OA.detune = 8; ENV1(0.6f, 0, 1.0f, 0.9f, 2.0f);
@@ -2580,8 +2583,9 @@ static void r_dreampad(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.po
 static void r_hooverpad(SPatch* p) { p->master = 0.45f; OA.table = T_PWM; OA.pos = 0.3f; OA.uni = 4; OA.detune = 30; OA.width = 1; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = -1; OB.uni = 2; OB.detune = 24; OB.level = 0.55f;
 	ENV1(0.25f, 0, 1.0f, 0.9f, 1.2f); ENV2(0.25f, 0, 0.5f, 0, 0.4f); MOD(2, SRC_ENV2, DST_PITCH, -0.06f); LFO(0, LS_SINE, 0, 0.3f); MOD(3, SRC_LFO1, DST_APOS, 0.25f);
 	OUTF(OF_L12, 0.55f, 0.2f, 0.25f, 0); MFX(FX_CHORUS, 0.8f, 1.0f, 0.65f); REVB(0.3f, RV_HALL); }
-static void r_supersaw(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 5; OA.detune = 32; OA.width = 1; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = 1; OB.detune = 18; OB.level = 0.25f;
-	ENV1(0.02f, 0, 1.0f, 1.0f, 0.5f); OUTF(OF_L12, 0.7f, 0.15f, 0, 0); p->pump = 0.75f; p->ott = 0.35f; REVB(0.25f, RV_HALL); DLYS(0.15f, S8D, DL_PING); }
+static void r_supersaw(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 4; OA.detune = 32; OA.width = 1; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = 1; OB.detune = 18; OB.level = 0.25f;
+	ENV1(0.02f, 0, 1.0f, 1.0f, 0.5f); OUTF(OF_L12, 0.7f, 0.15f, 0, 0); p->pump = 0.75f; p->ott = 0.35f; REVB(0.25f, RV_HALL); DLYS(0.15f, S8D, DL_PING);
+	lane(p, 0, 4, 0, 0.45f, 0.9f, 3); p->xyMode = 3; }   // OUT CUT opens over 8 bars
 static void r_eurochoir(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA.pos = 0.15f; OA.uni = 4; OA.detune = 14; OA.width = 1; OB.on = 1; OB.table = T_VOWELS; OB.pos = 0.4f; OB.oct = 1; OB.level = 0.2f;
 	ENV1(0.35f, 0, 1.0f, 0.9f, 1.4f); LFO(0, LS_SINE, 0, 0.1f); MOD(2, SRC_LFO1, DST_APOS, 0.12f); LFO(1, LS_SINE, 0, 5.0f); MOD(3, SRC_LFO2, DST_PITCH, 0.004f);
 	MFX(FX_CHORUS, 0.4f, 0.7f, 0.5f); REVB(0.4f, RV_HALL); }
@@ -2674,16 +2678,31 @@ static void d_909(SPatch* p) { p->voiceMode = 4; p->master = 0.8f; }
 static void d_lofi(SPatch* p) { p->voiceMode = 5; p->master = 0.8f; }
 static void d_chip(SPatch* p) { p->voiceMode = 6; p->master = 0.8f; }
 static void d_perc(SPatch* p) { p->voiceMode = 7; p->master = 0.8f; }   // shake the console: it plays the shaker
+// ---- added patches (with XY PAD modes set for playing)
+static void b_dark808(SPatch* p) { p->master = 0.85f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -1; OA.level = 0.9f; p->subShape = 0; p->subOct = -1; p->subLevel = 0.8f;
+	ENV1(0.002f, 0, 0.45f, 0.0f, 0.35f); ENV2(0.0f, 0, 0.08f, 0.0f, 0.05f); MOD(0, SRC_ENV2, DST_PITCH, 0.2f);   // starts a little over 2 semitones high, drops in
+	DRV(5, 0.25f); p->voiceMode = 1; p->glide = 0.04f; NOSTICK; p->xyMode = 3; }
+static void b_303scream(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SAW; OA.oct = -1; OA.level = 0.8f; p->noiseType = 0; p->noiseLevel = 0.15f;
+	ENV1(0.002f, 0, 0.2f, 0.3f, 0.1f); ENV2(0.0f, 0, 0.15f, 0.0f, 0.1f); MOD(0, SRC_ENV2, DST_OFCUT, 0.6f); OUTF(OF_ACID, 0.35f, 0.75f, 0.5f, 0.4f); p->qScream = 0.55f;
+	p->ott = 0.45f; p->lofiBits = 2; p->lofiRate = 0.15f; p->voiceMode = 1; p->glide = 0.06f; NOSTICK; lane(p, 0, 4, 4, 0.2f, 0.9f, 1); p->xyMode = 3; }
+static void r_neonpwm(SPatch* p) { p->master = 0.65f; OA.table = T_PWM; OA.pos = 0.5f; OA.uni = 3; OA.detune = 12; OA.width = 0.6f; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = 1; OB.level = 0.3f;
+	ENV1(0.002f, 0, 0.1f, 1.0f, 0.4f); LFO(0, LS_TRI, 0, 0.25f); MOD(0, SRC_LFO1, DST_APOS, 0.25f);   // slow pulse-width sweep
+	OUTF(OF_CREAMY, 0.65f, 0.2f, 0.1f, 0); MFX(FX_DIM, 0.4f, 0.5f, 0.45f); DLYS(0.25f, S8, DL_PING); p->voiceMode = 2; p->glide = 0.05f; NOSTICK; p->xyMode = 5; }
+static void p_cineswell(SPatch* p) { p->master = 0.75f; OA.table = T_HARMONIX; OA.pos = 0.3f; OA.uni = 2; OA.detune = 8; GRN(0.65f, 0.4f, 0.3f, 12, 0.7f); ENV1(0.8f, 0, 1.0f, 0.9f, 2.5f);
+	LFO(0, LS_SH, 0, 0.15f); MOD(0, SRC_LFO1, DST_APOS, 0.5f); OUTF(OF_CREAMY, 0.6f, 0.15f, 0, 0); REVB(0.55f, RV_SWELL); MFX(FX_DIM, 0.3f, 0.4f, 0.4f); p->xyMode = 5; }
+static void k_taperhodes(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SINE; OA.level = 0.7f; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1; OB.level = 0.4f;
+	OB.warp = W_FM; OB.warpAmt = 0.35f; ENV1(0.002f, 0, 0.5f, 0.0f, 0.6f); MOD(0, SRC_VEL, DST_BWARP, 0.4f); p->noiseType = 2; p->noiseLevel = 0.12f;
+	OUTF(OF_LP, 0.55f, 0.1f, 0, 0); DLYS(0.15f, S4, DL_TAPE); p->dlyWow = 0.65f; p->dlySat = 0.4f; p->lofiBits = 2; p->lofiRate = 0.25f; NOSTICK; p->xyMode = 3; }
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
-	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}},
+	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}, {"DARK 808", b_dark808}, {"303 SCREAM", b_303scream}},
 	{{"GULF SYNC", l_gulfsync}, {"TALK BOX", l_talkbox}, {"WIDE UNISON", l_bigunison}, {"WHISTLE", l_whistle}, {"FOLD SCREAM", l_scream}, {"LADDER TAPE", l_moogtape},
 	 {"CHIP HERO", l_chiphero}, {"G-FUNK SINE", l_glidesine}, {"RINGER", l_ringer}, {"ACID SCREAM", l_acidscream}, {"PAD BENDER", l_bender},
 	 {"FLUTE", l_flute}, {"STICK THEREMIN", l_theremin}, {"XY SCULPT", l_xysculpt}, {"BUSY BOY", l_busyboy}},
 	{{"WARM FELT", p_felt}, {"GLASS HOUR", p_glass}, {"VOWEL DUSK", p_vowel}, {"COMB WEATHER", p_combweather}, {"CLOUD BANK", p_cloudbank}, {"STRINGS 77", p_strings77},
-	 {"DRAWN SWELL", p_drawnswell}, {"MOTION HAZE", p_haze}, {"SWELL BACKWARD", p_reverse}, {"DEEP SONAR", p_sonar}, {"GRAIN CHOIR", p_hallchoir}, {"GATE 85", p_gate85}, {"SPIN PAD", p_spinpad}, {"XY MORPH", p_xymorph}},
+	 {"DRAWN SWELL", p_drawnswell}, {"MOTION HAZE", p_haze}, {"SWELL BACKWARD", p_reverse}, {"DEEP SONAR", p_sonar}, {"GRAIN CHOIR", p_hallchoir}, {"GATE 85", p_gate85}, {"SPIN PAD", p_spinpad}, {"XY MORPH", p_xymorph}, {"CINE SWELL", p_cineswell}},
 	{{"EP SATURDAY", k_epsat}, {"DRAWBAR", k_drawbar}, {"LOFI UPRIGHT", k_lofiup}, {"CLAV FUNK", k_clav}, {"WURLI BARK", k_wurli}, {"VIBES", k_vibes},
-	 {"TOY KEYS", k_toy}, {"HARPSI", k_harpsi}, {"ROTARY", k_rotary}, {"CUMBIA ORGANO", k_cumbiaorg}, {"REEL PIANO", k_reel}, {"GLASS TOP", k_glasstop}},
+	 {"TOY KEYS", k_toy}, {"HARPSI", k_harpsi}, {"ROTARY", k_rotary}, {"CUMBIA ORGANO", k_cumbiaorg}, {"REEL PIANO", k_reel}, {"GLASS TOP", k_glasstop}, {"TAPE RHODES", k_taperhodes}},
 	{{"NYLON", u_nylon}, {"MARIMBA WOOD", u_marimba}, {"KALIMBA", u_kalimba}, {"DIGI HARP", u_digiharp}, {"STAB 1999", u_stab99}, {"KOTO SPRING", u_koto},
 	 {"CHIP PLINK", u_chipplink}, {"GRAIN PLUCK", u_grain}, {"STEEL PAN", u_steel}, {"RAIN ON TIN", u_raintin}},
 	{{"ORGAN STAB", c_organstab}, {"NEO SOUL 9", c_neosoul}, {"DUB CHORD", c_dub}, {"TECHNO STAB", c_techno}, {"STRUM GUITAR", c_strum}, {"OMNI HARP", c_omni},
@@ -2706,7 +2725,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"SUB SCREAM", q_subscream}, {"DRIVE MONO", q_drivemono}, {"TAPE DUB", q_tapedub}, {"VOWEL PAD", q_vowelpad}, {"TURNTABLE", q_turntable}, {"SCREAM DUB", q_screamdub}},
 	{{"RAVE STRINGS", r_ravestrings}, {"DREAM PAD", r_dreampad}, {"HOOVER PAD", r_hooverpad}, {"SUPERSAW PUMP", r_supersaw}, {"EURO CHOIR", r_eurochoir},
 	 {"FLANGE PAD", r_flangepad}, {"HOUSE PIANO", r_housepiano}, {"ORGAN BASS", r_organbass}, {"RAVE STAB", r_ravestab}, {"DEEP CHORD", r_deepchord},
-	 {"EURO BASS", r_eurobass}, {"EURO LEAD", r_eurolead}, {"HOOVER", r_hoover}},
+	 {"EURO BASS", r_eurobass}, {"EURO LEAD", r_eurolead}, {"HOOVER", r_hoover}, {"NEON PWM", r_neonpwm}},
 	{{"808 KIT", d_808}, {"909 KIT", d_909}, {"LOFI KIT", d_lofi}, {"CHIP KIT", d_chip}, {"PERC KIT", d_perc}},
 	{{"BOOM BAP BASS", g_boombap}, {"TRAP SP-12", g_trap}, {"EUCLID CHIP", g_euclid}, {"BEATBOX TAP", g_beatbox}, {"LOOP PARTNER", g_loopcomp},
 	 {"TAPE LOOP", g_tapeloop}, {"VARIECHO", g_variecho}, {"SLOWDOWN", g_slowdown}},
@@ -2840,10 +2859,10 @@ static void patchApply(const SPatch* p) {
 
 
 static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every factory patch to a similar loudness
-	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.82f, 1.42f, 1.42f, 1.32f, 1.28f, 0.68f, 1.00f, 1.00f, 1.00f},
+	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.82f, 1.42f, 1.42f, 1.32f, 1.28f, 0.68f, 0.97f, 1.19f, 1.00f},
 	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f, 1.00f},
-	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.64f, 1.35f, 2.50f, 1.00f},
-	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.11f, 0.95f, 1.00f, 1.00f, 1.00f},
+	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.64f, 1.35f, 2.50f, 1.31f},
+	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.11f, 0.95f, 1.80f, 1.00f, 1.00f},
 	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{2.33f, 1.34f, 4.24f, 2.18f, 2.20f, 1.12f, 2.30f, 0.67f, 2.08f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{1.32f, 1.05f, 4.46f, 1.10f, 3.54f, 1.82f, 2.40f, 6.00f, 1.34f, 2.41f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
@@ -2853,7 +2872,7 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 0.60f, 1.20f, 1.20f},   // CHIPSET
 	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 2.00f, 1.60f},   // MOTION
 	{1.73f, 3.00f, 2.80f, 2.50f, 1.60f, 0.70f, 0.69f, 2.50f, 1.86f, 0.80f, 2.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // QUIRKS
-	{1.39f, 2.04f, 1.36f, 1.81f, 1.69f, 1.50f, 1.17f, 1.24f, 2.90f, 3.10f, 2.20f, 1.65f, 1.26f, 1.00f, 1.00f},   // RAVE
+	{1.39f, 2.04f, 1.36f, 1.81f, 1.69f, 1.50f, 1.17f, 1.24f, 2.90f, 3.10f, 2.20f, 1.65f, 1.26f, 1.52f, 1.00f},   // RAVE
 	{1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // DRUMS
 	{0.94f, 0.36f, 1.00f, 0.60f, 2.50f, 0.54f, 1.80f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // GROOVE
 };
