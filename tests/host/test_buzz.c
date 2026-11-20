@@ -14,7 +14,7 @@ static void SCRIPT(int fr) {
 }
 int main(int c, char** v) {
 	USE_CORE2 = c > 1 && (!strcmp(v[1], "core2") || !strcmp(v[1], "core3"));
-	if (USE_CORE2) FAKE_CPU_LIMIT = 80;
+	if (USE_CORE2) { FAKE_CPU_LIMIT = 80; FAKE_SYNC_WORKER = 0; }
 	if (c > 1 && !strcmp(v[1], "core3")) FAKE_NEW3DS = 1;   // New 3DS: the chain gets the third core
 	loadFont(); FRMAX = 10 + 180; app_main();
 	int a = SEC(1.0), b = SEC(3.0);

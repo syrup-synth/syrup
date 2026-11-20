@@ -19,7 +19,10 @@ static void LightEvent_Signal(LightEvent* e){pthread_mutex_lock(&e->m);e->sig=1;
 static void LightEvent_Wait(LightEvent* e){pthread_mutex_lock(&e->m);while(!e->sig)pthread_cond_wait(&e->c,&e->m);e->sig=0;pthread_mutex_unlock(&e->m);}
 static int APT_SetAppCpuTimeLimit(int p){(void)p;return 0;} static int svcGetThreadPriority(s32* p,int h){(void)h;*p=0x30;return 0;}
 typedef struct{ThreadFunc f;void*a;}TA; static void* tramp(void* x){TA* t=x; t->f(t->a); return NULL;}
-static Thread threadCreate(ThreadFunc f,void*a,size_t st,int pr,int core,bool det){(void)st;(void)pr;(void)core;(void)det; pthread_t* t=malloc(sizeof(pthread_t)); TA* ta=malloc(sizeof(TA)); ta->f=f;ta->a=a; pthread_create(t,NULL,tramp,ta); return t;}
+/* FAKE_SYNC_WORKER (default): no thread on core 1, so Syrup rebuilds wavetables inline on the main loop and every
+   run renders the same audio whatever the machine's speed. Tests of the core-1 worker / effects hand-over turn it off. */
+static int FAKE_SYNC_WORKER = 1;
+static Thread threadCreate(ThreadFunc f,void*a,size_t st,int pr,int core,bool det){(void)st;(void)pr;(void)det; if(core==1&&FAKE_SYNC_WORKER) return NULL; pthread_t* t=malloc(sizeof(pthread_t)); TA* ta=malloc(sizeof(TA)); ta->f=f;ta->a=a; pthread_create(t,NULL,tramp,ta); return t;}
 static int threadJoin(Thread t,unsigned long long to){(void)to;pthread_join(*t,NULL);return 0;} static void threadFree(Thread t){free(t);}
 
 typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32; typedef uint64_t u64; typedef int16_t s16; typedef int32_t Result;
