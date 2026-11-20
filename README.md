@@ -161,7 +161,7 @@ FBI > Remote Install > Scan QR Code, and scan `install-qr.png`. Sound needs the 
 - **Looper**: stored as IMA-ADPCM, which the chip decodes itself, so up to 16 bars (about 48 seconds).
 - **GRAINS** (HARDWARE): granular playback of the loop. The DSP plays overlapping slices back to back. Set SIZE, SCAN (50% = frozen), SPRAY, PITCH and LEVEL.
 - **3D ORBIT / ORBIT RATE** (MASTER FX): with OUTPUT set to SURROUND, the sound circles around you.
-- **New visualizer modes**: TUNNEL, KALEIDO, SYNTHWAVE and RIPPLES.
+- **New visualizer modes**: TUNNEL, KALEIDO and RIPPLES.
 
 ## Step grid and ACID lines (PLAY page)
 

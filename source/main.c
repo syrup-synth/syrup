@@ -93,8 +93,8 @@ static int gCamVid, gMidiNet, gAddEdit, gOfType; static float gOfCut, gOfRes, gO
 static void chipSet(float lv);
 static void grainsChanged(void);
 static const char* KIT_NAMES[4]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[5];
-#define NVISM 12
-static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM", "VOXELS", "VOXEL TABLE", "TUNNEL", "KALEIDO", "SYNTHWAVE", "RIPPLES", "PLASMA"};
+#define NVISM 11
+static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM", "VOXELS", "VOXEL TABLE", "TUNNEL", "KALEIDO", "RIPPLES", "PLASMA"};
 static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
 static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
 static float gVisBeat = 0;
@@ -6052,38 +6052,6 @@ static void visKaleido(void) {
 	float r, g, bb; hue(gVisEnv, &r, &g, &bb);
 	blendAdd(1); vRect(196, 116, 8, 8, rgba(r, g, bb, 0.5f + gVisEnv * 0.5f)); blendAdd(0);
 }
-// SYNTHWAVE: striped sun, wavetable mountains, and a floor grid that scrolls in time with the BPM
-static void visSynthwave(void) {
-	float hz = 138;
-	for (int i = 0; i < 12; i++) { float r, g, b; hue(0.55f + i * 0.04f, &r, &g, &b); vRect(0, i * hz / 12, 400, hz / 12 + 1, rgba(r * 0.18f, g * 0.1f, b * 0.3f, 1)); }
-	float sr, sg, sb; hue(0.15f + gVisEnv * 0.1f, &sr, &sg, &sb);   // sun: horizontal bands cut out toward the bottom
-	float R = 62 + gVisBeat * 6;
-	for (int y = -62; y < 0; y += 2) {
-		float yy = y / 62.0f; int cut = y > -30 && ((y / 2) & 3) == 0; if (cut) continue;
-		float w = sqrtf(1 - yy * yy) * R;
-		vRect(200 - w, hz + y * (R / 62), w * 2, 2.2f, rgba(sr, sg * (0.5f - yy * 0.6f), sb, 1));
-	}
-	float s[TPTS]; sampleCycle(gOsc[gVisOsc].cyc, s, NULL);   // mountains: the current waveform, mirrored
-	for (int i = 0; i + 1 < TPTS; i += 2) {
-		float x0 = i * 400.0f / (TPTS - 1), x1 = (i + 2 > TPTS - 1 ? TPTS - 1 : i + 2) * 400.0f / (TPTS - 1);
-		float h0 = 18 + fabsf(s[i]) * 34 * (0.7f + 0.3f * gVisEnv), h1 = 18 + fabsf(s[i + 2 < TPTS ? i + 2 : TPTS - 1]) * 34 * (0.7f + 0.3f * gVisEnv);
-		u32 m = rgba(0.06f, 0.02f, 0.14f, 1);
-		vTri(x0, hz, x1, hz, x0, hz - h0, m); vTri(x1, hz, x1, hz - h1, x0, hz - h0, m);
-		float r, g, b; hue(0.6f, &r, &g, &b); vLine(x0, hz - h0, x1, hz - h1, rgba(r, g, b, 0.9f), 1.2f);
-	}
-	vRect(0, hz, 400, 240 - hz, rgba(0.03f, 0.0f, 0.07f, 1));
-	float gr, gg, gb; hue(0.55f + gVisEnv * 0.3f, &gr, &gg, &gb);
-	u32 gc = rgba(gr, gg, gb, 0.8f);
-	blendAdd(1);
-	float scroll = fmodf(gVisT * gBPM / 60.0f, 1.0f);   // one grid row per beat
-	for (int k = 0; k < 12; k++) {
-		float z = (k + 1 - scroll) / 12.0f, y = hz + (240 - hz) * (1 - z) * (1 - z) * (1 - z) + 1;
-		vLine(0, y, 400, y, rgba(gr, gg, gb, 0.25f + 0.6f * (1 - z)), 0.6f + 1.4f * (1 - z));
-	}
-	for (int k = -10; k <= 10; k++) vLine(200 + k * 8, hz, 200 + k * 70, 240, gc, 0.9f);
-	vRect(0, hz - 1, 400, 2, rgba(gr, gg, gb, 0.7f + gVisBeat * 0.3f));
-	blendAdd(0);
-}
 // RIPPLES: every note drops a ring shaped by the waveform, coloured by its pitch, spreading and fading
 #define NRIP 24
 typedef struct { float x, y, r, life, hue; } Rip;
@@ -6186,7 +6154,7 @@ static void visPlasma(C3D_RenderTarget* tg, float dt) {
 }
 static void visFull(void) {
 	int mode = gVisMode ? gVisMode : 1 + ((int)(gVisT / 10.0f)) % (NVISM - 1);   // AUTO: change every 10 s
-	if (mode == 11) visPlasma(gFullTgt, 1.0f / 60);
+	if (mode == 10) visPlasma(gFullTgt, 1.0f / 60);
 	if (gVisBeat > 0.01f) { float r, g, b; hue(0.35f, &r, &g, &b); blendAdd(1); vRect(0, 0, 400, 240, rgba(r, g, b, gVisBeat * 0.12f)); blendAdd(0); }
 	if (mode == 1) visWavetable(gVisOsc, 200, 128, 1.6f);
 	else if (mode == 2) visScopes(10, 20, 380, 210);
@@ -6196,8 +6164,7 @@ static void visFull(void) {
 	else if (mode == 6) visVoxTable(gVisOsc);
 	else if (mode == 7) visTunnel();
 	else if (mode == 8) visKaleido();
-	else if (mode == 9) visSynthwave();
-	else if (mode == 10) visRipples();
+	else if (mode == 9) visRipples();
 	if (gVisParts) {
 		static unsigned lastId = 0; if (gIdc != lastId) { gVisBurst += 14; lastId = gIdc; }
 		if (gVisBurst > 0) { partSpawn(gVisBurst); gVisBurst = 0; }
