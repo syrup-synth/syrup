@@ -223,7 +223,7 @@ static void genBuiltin(Table* tb, int t) {
 		float* fr = tb->frames + f * CYC;
 		float m = f / 63.0f;
 		if (t == T_HARMONIX || t == T_VOWELS || t == T_DIGITAL || t == T_PLUCK) {
-			static float amp[257];
+			static float amp[512];   // KARPLUS uses 511 harmonics
 			memset(amp, 0, sizeof(amp));
 			int nh = 256;
 			if (t == T_HARMONIX) { int cnt = 1 + f; for (int k = 1; k <= cnt; k++) amp[k] = 1.0f / k; nh = cnt; }
@@ -8662,7 +8662,7 @@ int main(void) {
 		{ static int sk = 0; int now = skipRecent(); if (now != sk) { sk = now; topDirty = 1; } }
 
 		memset(on, 0, sizeof(on));
-		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note < 128) on[gV[i].note] = 1;
+		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note >= 0 && gV[i].note < 128) on[gV[i].note] = 1;
 		{ int fading = 0;   // a key let go keeps a short glow: slides leave a trail
 			for (int n = 0; n < 128; n++) { if (onPrev[n] && !on[n]) gKeyFade[n] = 1; if (on[n]) gKeyFade[n] = 0; if (gKeyFade[n] > 0) { gKeyFade[n] -= 1.0f / 60 * 3.5f; if (gKeyFade[n] < 0) gKeyFade[n] = 0; fading = 1; } }
 			if (fading) botDirty = 1; }

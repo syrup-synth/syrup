@@ -7,9 +7,10 @@ static unsigned rnd(void) { rs = rs * 1103515245u + 12345u; return rs >> 8; }
 static int holdT = 0, tx, ty;
 static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0; CX = 0; CY = 0; gFxCore2 = 0;
-	static const u32 K[] = {KEY_DUP, KEY_DDOWN, KEY_DLEFT, KEY_DRIGHT, KEY_A, KEY_B, KEY_X, KEY_Y, KEY_L, KEY_R};
+	static const u32 K[] = {KEY_DUP, KEY_DDOWN, KEY_DLEFT, KEY_DRIGHT, KEY_A, KEY_B, KEY_X, KEY_Y, KEY_L, KEY_R, KEY_START, KEY_SELECT};
 	unsigned r = rnd() % 100;
-	if (r < 25) HD = K[rnd() % 10];
+	if (r < 25) HD = K[rnd() % 12];
+	if (gStartMenu && gStartSel == 5 && (HD & KEY_A)) HD = KEY_B;   // never QUIT
 	if (holdT > 0) { holdT--; TOUCH = 1; TX = tx; TY = ty; if (rnd() % 4 == 0) { tx += (int)(rnd() % 21) - 10; ty += (int)(rnd() % 21) - 10; if (tx < 0) tx = 0; if (tx > 319) tx = 319; if (ty < 0) ty = 0; if (ty > 239) ty = 239; } }
 	else if (r >= 25 && r < 60) { holdT = 1 + rnd() % 30; tx = rnd() % 320; ty = rnd() % 240; }
 	if (r >= 95) { CX = (int)(rnd() % 311) - 155; CY = (int)(rnd() % 311) - 155; }
