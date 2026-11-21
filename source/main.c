@@ -1943,7 +1943,7 @@ static LightLock gVoiceLock;   // voices are touched by the main loop and by the
 static float gClockDebt = 0; static volatile int gClockSkips = 0;   // HARDWARE page shows skips
 static void arpTick(float dt);
 static void seqTick(float dt); static void tapeSeqStarted(void);
-static void drumTick(float dt);
+static void drumTick(float dt); static void shakeQTick(void);
 static int tqDrain(int inTick); static int mqDrain(int inTick); static volatile int gTickMidi; static volatile int gTqUi;
 static void audioTick(void* data) {
 	(void)data;
@@ -1959,6 +1959,7 @@ static void audioTick(void* data) {
 	arpTick(dt);
 	seqTick(dt);
 	drumTick(dt);
+	shakeQTick();
 	gInAudioTick = 0;
 	LightLock_Unlock(&gMipsLock);
 	LightLock_Unlock(&gVoiceLock);
@@ -2002,6 +2003,9 @@ static int gPreroll = 1, gClick = 1, gPreFor = 0, gLiveRec = 0; static float gPr
 // REC QUANT: where live notes land (16TH, 8TH, or OFF = your exact timing kept as the step's NUDGE); TAP REC: knocks on the table (mic) while live REC
 static const char* RQ_NAMES[3] = {"16TH", "8TH", "OFF (NUDGE)"}; static const char* TAPR_NAMES[3] = {"OFF", "NOTES", "VELOCITY"};
 static int gRecQ = 0, gTapRec = 0, gTapNote = -1;
+// SHAKE QUANT (PERC KIT's shaker): OFF plays as you shake; 16TH / 8TH holds the hit for the next step while the
+// sequencer or the drums are running (with nothing running it plays at once)
+static int gShakeQ = 1; static volatile float gShakePend = 0; static const char* SHQ_NAMES[3] = {"OFF", "16TH", "8TH"};
 static float gLockCut = 0, gLockRes = 0, gStepGate = 0.6f, gFireOff = 0;   // the playing step's locks
 static int gPendFire = -1, gEarlyDone = 0;
 static void patStore(void) {
@@ -3208,7 +3212,7 @@ static Param P_PLAY[] = {
 	PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ), PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0),
 	PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0), PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PI_("BPM", &gBPM, 40, 240, 0),
 	PE("SEQ", &gSeqMode, 3, SEQ_NAMES, D_SEQ), PI_("SEQ LENGTH", &gSeqLen, 1, NSTEP, 0), PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0),
-	PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("REC CLICK", &gClick, 3, CLICK_NAMES, 0), PE("REC QUANT", &gRecQ, 3, RQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
+	PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("REC CLICK", &gClick, 3, CLICK_NAMES, 0), PE("REC QUANT", &gRecQ, 3, RQ_NAMES, 0), PE("SHAKE QUANT", &gShakeQ, 3, SHQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
 	{"ADD REST", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_REST},
 	{"CLEAR SEQ", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CLEAR},
 	PEND};
@@ -7391,6 +7395,15 @@ static void kitEnsure(void) {   // main thread: build the patch's kit and claim 
 	if (gDrumCh[NDCH - 1] < 0 && gDrumCh[3] < 0) drumPickChannels();
 	for (int k = 0; k < NDCH; k++) if (gDrumCh[k] >= 0 && gCsOwner[gDrumCh[k]] >= 0) { CSND_SetPlayState(gDrumCh[k], 0); gCsOwner[gDrumCh[k]] = -1; }
 }
+static void kitHitSound(int d, float vel);
+static void shakeQTick(void) {   // audio thread, after the clocks: a held shake lands on the next 16th / 8th
+	static int last = -1;
+	int pos = gSeqPlaying ? gSeqPos : (gDrums && gDrumStep >= 0 ? gDrumStep : -1);
+	if (pos < 0) { last = -1; if (gShakePend > 0) { kitHitSound(0, gShakePend); gShakePend = 0; } return; }   // the clock stopped: play it now
+	if (pos == last) return;
+	last = pos;
+	if (gShakePend > 0 && (gShakeQ != 2 || !(pos & 1))) { kitHitSound(0, gShakePend); gShakePend = 0; }
+}
 static void kitHitSound(int d, float vel) {   // voice lock held
 	if (!gCsndOK || gDrumBuilt != gVoiceMode - 3) return;
 	drumHit(d, vel * gMaster * 1.25f);
@@ -8257,7 +8270,11 @@ int main(void) {
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
 		if (gVoiceMode == 7 && !gSafeMode) {   // PERC KIT: shake the console, it plays the shaker
 			static int armed = 1; static u64 lastHit = 0; u64 tnow = osGetTime();
-			if (armed && gShakeD > 0.35f && tnow - lastHit > 60) { kitHitSound(0, 0.4f + 0.6f * (gShakeD > 1 ? 1 : gShakeD)); armed = 0; lastHit = tnow; }
+			if (armed && gShakeD > 0.35f && tnow - lastHit > 60) {
+				float v = 0.4f + 0.6f * (gShakeD > 1 ? 1 : gShakeD);
+				if (gShakeQ && (gSeqPlaying || (gDrums && gDrumStep >= 0))) { if (v > gShakePend) gShakePend = v; }   // the audio clock plays it on the step
+				else kitHitSound(0, v);
+				armed = 0; lastHit = tnow; }
 			if (gShakeD < 0.2f) armed = 1;
 		}
 		micRecTick(1.0f / 60); loopTick(); prerollTick(1.0f / 60); seqTapTick(1.0f / 60); tapeTick(); loopLevelTick(); loopVariTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);

@@ -9,6 +9,16 @@ static void tap(int fr, int at, int x, int y) { if (fr == at) { TOUCH = 1; TX = 
 static int songA = -1, songB = -1;
 static int sqHas(int nt) { for (int i = 0; i < gSqNn; i++) if (gSqN[i].note == nt && !gSqN[i].rel) return 1; return 0; }
 static void SCRIPT(int fr) {
+	if (fr == 2) {   // SHAKE QUANT: a held shake plays on the next 16th / 8th, not before
+		int sp = gSeqPlaying, ps = gSeqPos, q = gShakeQ;
+		gSeqPlaying = 1; gSeqPos = 4; shakeQTick();
+		gShakeQ = 2; gShakePend = 0.7f; shakeQTick(); if (gShakePend == 0) fail("shake quant: played before the next step");
+		gSeqPos = 5; shakeQTick(); if (gShakePend == 0) fail("shake quant 8TH: an odd 16th isn't an 8th");
+		gSeqPos = 6; shakeQTick(); if (gShakePend != 0) fail("shake quant 8TH: should play on the 8th");
+		gShakeQ = 1; gShakePend = 0.7f; gSeqPos = 7; shakeQTick(); if (gShakePend != 0) fail("shake quant 16TH: should play on the next 16th");
+		gShakePend = 0.7f; gSeqPlaying = 0; gSeqPos = -1; shakeQTick(); if (gShakePend != 0) fail("shake quant: with the clock stopped it plays at once");
+		gSeqPlaying = sp; gSeqPos = ps; gShakeQ = q;
+	}
 	if (fr == 3) {   // ARP STRUM: the CHORD arp rolls the chord, down then up with DOWN+UP
 		int ch[3] = {67, 60, 64}; int sa = gArp, sr = gArpRate; float sg = gArpGate; int sb = gBPM; float sv = gArpVel; gArp = 6; gArpRate = 0; gArpGate = 0.9f; gBPM = 120;
 		gArpStrum = 30; gArpStrumDir = 2; gStrUp = 0;
