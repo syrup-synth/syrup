@@ -12,7 +12,7 @@ static void checks(void) {
 	}
 	// 2. beats come with beat patches only; CHIP > FX and XY follow every patch
 	load("BOOM BAP BASS");
-	if (!gDrums || gKit != 1 || gKickPat != 6 || gSnarePat != 1 || gHatPat != 5 || gBPM != 90) fail("format: BOOM BAP BASS should bring its beat (drums %d kit %d %d/%d/%d bpm %d)", gDrums, gKit, gKickPat, gSnarePat, gHatPat, gBPM);
+	if (!gDrums || gKit != 1 || gKickPat != 6 || gSnarePat != 1 || gHatPat != 5 || gBPM != 120) fail("format: BOOM BAP BASS should bring its beat but keep the tempo (drums %d kit %d %d/%d/%d bpm %d)", gDrums, gKit, gKickPat, gSnarePat, gHatPat, gBPM);
 	load("WARM FELT");
 	if (gDrums) fail("format: leaving BOOM BAP BASS should take its beat with it");
 	gDrums = 1; gKickPat = 2; gBeatFromPatch = 0;   // a beat you started yourself
@@ -25,7 +25,7 @@ static void checks(void) {
 	load("SLOWDOWN"); if (!gTapeKeys || gLoopBars != 1) fail("format: SLOWDOWN should tie the tape to the keys and set 2 bars");
 	load("WARM FELT"); if (gTapeKeys) fail("format: tape-follows-keys stayed on");
 	// 3. save and reload a patch with a beat
-	load("TRAP SP-12"); gEuLen = 9; patchCapture(&gUser[3]); snprintf(gUser[3].name, sizeof gUser[3].name, "MY TRAP"); userSave();
+	load("TRAP SP-12"); gEuLen = 9; gBPM = 140; patchCapture(&gUser[3]); snprintf(gUser[3].name, sizeof gUser[3].name, "MY TRAP"); userSave();
 	gDrums = 0; userLoad();
 	if (gUser[3].magic != PATCH_MAGIC || !gUser[3].hasBeat || gUser[3].kickPat != 3 || gUser[3].euLen != 9 || gUser[3].bpm != 140) fail("format: a saved beat didn't survive the reload");
 	presetLoad(NSTYLES - 1, 3); if (!gDrums || gKickPat != 3) fail("format: loading the saved patch didn't bring its beat back");

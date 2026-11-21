@@ -2940,7 +2940,7 @@ static void patchApply(const SPatch* p) {
 	memcpy(gMot, p->mot, sizeof(gMot)); for (int l = 0; l < 4; l++) { gMotTgt[l] = p->motTgt[l] % 16; gMotOn[l] = p->motOn[l] & 1; } gMotBars = p->motBars & 3; gMotRec = -1; gMotPh = 0;
 	gVoiceMode = (p->voiceMode >= 0 && p->voiceMode < 8) ? p->voiceMode : 0; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
-	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate; if (p->bpm >= 40) gBPM = p->bpm;
+	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate;   // the tempo is yours: loading a patch never changes it
 	gArpN = 0; gArpOnN = 0; gHeldN = 0;
 	if (subChg) buildSub();
 	LightLock_Unlock(&gMipsLock);
@@ -4635,9 +4635,12 @@ static int gShapeOn = 0, gShapeView = 0, gShDrag = -1;
 #define SH_H 76
 static const float ENV_SEGW[5] = {64, 34, 64, 34, 80};   // A, H, D, sustain hold, R: widths at their longest
 static const float ENV_MAXT[5] = {4, 2, 4, 0, 5};
+#define ENV_X0 16                // inset from the edge: a stylus can't reach the last pixels under the bezel
+#define ENV_TOP (SH_Y + 14)       // clear of the tabs above and the A/D/S/R readout
+#define ENV_BOT (SH_Y + SH_H - 14)   // clear of the PERF buttons below
 static AHDSR* shEnv(void) { return gShapeView == 0 ? &gEnv1 : &gEnv2; }
 static void envPoints(const AHDSR* e, int hasHold, float* px, float* py) {   // 5 points after the start
-	float x = 6, top = SH_Y + 4, bot = SH_Y + SH_H - 4, sus = bot - (bot - top) * e->s;
+	float x = ENV_X0, top = ENV_TOP, bot = ENV_BOT, sus = bot - (bot - top) * e->s;
 	float ts[4] = {e->a, hasHold ? e->h : 0, e->d, e->r};
 	x += ENV_SEGW[0] * sqrtf(ts[0] / ENV_MAXT[0]); px[0] = x; py[0] = top;
 	x += hasHold ? ENV_SEGW[1] * sqrtf(ts[1] / ENV_MAXT[1]) : 0; px[1] = x; py[1] = top;
@@ -4655,8 +4658,8 @@ static void drawShapeEditor(void) {
 	char t[48];
 	if (gShapeView < 2) {
 		AHDSR* e = shEnv(); int hold = gShapeView == 0; float px[5], py[5]; envPoints(e, hold, px, py);
-		const u8* c = EGA[gShapeView ? 11 : 13]; float bot = SH_Y + SH_H - 4;
-		float lx = 6, ly = bot;
+		const u8* c = EGA[gShapeView ? 11 : 13]; float bot = ENV_BOT;
+		float lx = ENV_X0, ly = bot;
 		for (int k = 0; k < 5; k++) {   // filled shape, then the line
 			int x0 = (int)lx, x1 = (int)px[k];
 			for (int x = x0; x < x1; x++) { float f = (x - lx) / (px[k] - lx + 1e-6f), y = ly + (py[k] - ly) * f; rect(x, (int)y, 1, (int)(bot - y) + 1, c[0] / 3, c[1] / 3, c[2] / 3); }
@@ -4664,7 +4667,7 @@ static void drawShapeEditor(void) {
 			lx = px[k]; ly = py[k];
 		}
 		static const int HAND[4] = {0, 1, 2, 4};
-		for (int h = 0; h < 4; h++) { if (h == 1 && !hold) continue; int k = HAND[h]; rect((int)px[k] - 3, (int)py[k] - 3, 7, 7, h == gShDrag ? 255 : c[0], h == gShDrag ? 255 : c[1], h == gShDrag ? 255 : c[2]); }
+		for (int h = 0; h < 4; h++) { if (h == 1 && !hold) continue; int k = HAND[h]; rect((int)px[k] - 4, (int)py[k] - 4, 9, 9, h == gShDrag ? 255 : c[0], h == gShDrag ? 255 : c[1], h == gShDrag ? 255 : c[2]); }
 		if (hold) snprintf(t, sizeof(t), "A %.2f H %.2f D %.2f S %d%% R %.2f", e->a, e->h, e->d, (int)(e->s * 100 + 0.5f), e->r);
 		else snprintf(t, sizeof(t), "A %.2f  D %.2f  S %d%%  R %.2f", e->a, e->d, (int)(e->s * 100 + 0.5f), e->r);
 		text(314 - (int)strlen(t) * 8, SH_Y, t, 1, RGB3(TH->dim));
@@ -4707,15 +4710,15 @@ static int shapeTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (press) {   // grab the nearest handle
 		float best = 1e9f; gShDrag = -1;
 		for (int h = 0; h < 4; h++) { if (h == 1 && !hold) continue; float dx = x - px[HAND[h]], dy = y - py[HAND[h]], d = dx * dx + dy * dy; if (d < best) { best = d; gShDrag = h; } }
-		if (best > 30 * 30) gShDrag = -1;
+		if (best > 50 * 50) gShDrag = -1;
 	}
 	if (gShDrag < 0) return 0;
-	float start = gShDrag == 0 ? 6 : gShDrag == 1 ? px[0] : gShDrag == 2 ? px[1] : px[3];
+	float start = gShDrag == 0 ? ENV_X0 : gShDrag == 1 ? px[0] : gShDrag == 2 ? px[1] : px[3];
 	int seg = gShDrag == 0 ? 0 : gShDrag == 1 ? 1 : gShDrag == 2 ? 2 : 4;
 	float f = (x - start) / ENV_SEGW[seg]; f = f < 0 ? 0 : f > 1 ? 1 : f; float tt = ENV_MAXT[seg] * f * f;
 	if (gShDrag == 0) e->a = roundf(tt * 1000) / 1000;
 	else if (gShDrag == 1) e->h = roundf(tt * 100) / 100;
-	else if (gShDrag == 2) { e->d = tt < 0.01f ? 0.01f : roundf(tt * 100) / 100; float top = SH_Y + 4, bot = SH_Y + SH_H - 4, sv = (bot - y) / (bot - top); e->s = sv < 0 ? 0 : sv > 1 ? 1 : roundf(sv * 100) / 100; }
+	else if (gShDrag == 2) { e->d = tt < 0.01f ? 0.01f : roundf(tt * 100) / 100; float top = ENV_TOP, bot = ENV_BOT, sv = (bot - y) / (bot - top); e->s = sv < 0 ? 0 : sv > 1 ? 1 : roundf(sv * 100) / 100; }
 	else e->r = tt < 0.01f ? 0.01f : roundf(tt * 100) / 100;
 	gEdited = 1; return 1;
 }
