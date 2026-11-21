@@ -9,7 +9,7 @@ static int KIT = 0, padHit = 0;
 #define GAP 24   // frames between hits (0.4 s)
 static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0; gFxCore2 = 0;
-	if (fr == 2) { int st, ix; char nm[16]; static const char* K[5] = {"808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT", "PERC KIT"}; snprintf(nm, sizeof nm, "%s", K[KIT]); if (findPreset(nm, &st, &ix)) presetLoad(st, ix); else fail("kit: no preset %s", nm); }
+	if (fr == 2) { int st, ix; char nm[16]; static const char* K[6] = {"808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT", "PERC KIT", "WAVE KIT"}; snprintf(nm, sizeof nm, "%s", K[KIT]); if (findPreset(nm, &st, &ix)) presetLoad(st, ix); else fail("kit: no preset %s", nm); }
 	for (int d = 0; d < 10; d++) {
 		if (fr == T0 + d * GAP) midiPush(0x90, GM[d], 110);
 		if (fr == T0 + d * GAP + 6) midiPush(0x80, GM[d], 0);
@@ -19,11 +19,13 @@ static void SCRIPT(int fr) {
 	if (fr == tp + 2) { char n[64]; snprintf(n, sizeof n, "shots/kit%d_pads.ppm", KIT); shotBot(n); padHit = 1; }
 	if (KIT == 4 && fr >= tp + 20 && fr < tp + 32) TILTX = (fr & 1) ? 1.5f : -1.5f;   // shake it
 	if (KIT == 4 && fr == tp + 32) TILTX = 0;
+	{ static long sum0; if (KIT == 5 && fr == tp + 40) { sum0 = 0; for (int i = 0; i < 4000; i++) sum0 += abs(gDrumSmp[0][i]) * (i % 7 + 1); gOsc[0].pos = gOsc[0].pos < 0.5f ? 0.9f : 0.05f; }
+	  if (KIT == 5 && fr == tp + 75) { long s1 = 0; for (int i = 0; i < 4000; i++) s1 += abs(gDrumSmp[0][i]) * (i % 7 + 1); if (s1 == sum0) fail("wave kit: moving WT POS should rebuild the drums from the new frames"); } }
 }
 int main(int c, char** v) {
 	KIT = c > 1 ? atoi(v[1]) : 0; if (KIT == 4) GM = GMP;
 	mkdir("shots", 0777); mkdir("wav", 0777);
-	loadFont(); FRMAX = T0 + 10 * GAP + 60; app_main();
+	loadFont(); FRMAX = T0 + 10 * GAP + 90; app_main();
 	static const char* NMD[10] = {"KICK", "SNARE", "CL HAT", "OP HAT", "CLAP", "RIM", "LO TOM", "HI TOM", "BELL", "CRASH"};
 	static const char* NMP[10] = {"SHAKER", "MARACA", "CABASA", "TAMB", "GUIRO", "CLAVES", "CONGA L", "CONGA H", "BONGO", "WOOD"};
 	const char** NM = KIT == 4 ? NMP : NMD;

@@ -96,7 +96,7 @@ static u8 gMot[4][64]; static int gMotTgt[4], gMotOn[4], gMotRec, gMotBars; stat
 static int gCamVid, gMidiNet, gAddEdit, gOfType; static float gOfCut, gOfRes, gOfDrive, gOfEnv; static const char* OFT_NAMES[14]; static float gWtScan; static const char* VID_NAMES[3];
 static void chipSet(float lv);
 static void grainsChanged(void);
-static const char* KIT_NAMES[5]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[5];
+static const char* KIT_NAMES[6]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[5];
 // live drum shaping: TUNE (semitones, applied at each hit: no rebuild), CHANCE (each hit of the row plays this often), MUTE (rows, bit 1 kick 2 snare 4 hat)
 static float gDrumTune[3] = {0, 0, 0}, gDrumChance[3] = {1, 1, 1}; static int gDrumMute = 0;
 static const char* DMUTE_NAMES[8] = {"NONE", "KICK", "SNARE", "KICK+SNARE", "HAT", "KICK+HAT", "SNARE+HAT", "ALL"};
@@ -460,7 +460,7 @@ static float gSpinX, gSpinY, gMicBright, gCamMove;   // gyro pitch/roll speed, v
 static int gHeadphones;   // (0 until the first check)
 enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_FXMIX, DST_COUNT };
 static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF", "FX MIX"};   // VOLUME: when routed, the source IS the loudness (breath control)
-static const char* VOICE_MODES[8] = {"POLY", "MONO", "LEGATO", "808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT", "PERC KIT"};   // KIT: keys play the drum kit
+static const char* VOICE_MODES[9] = {"POLY", "MONO", "LEGATO", "808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT", "PERC KIT", "WAVE KIT"};   // KIT: keys play the drum kit
 static const char* FX_NAMES[4] = {"OFF", "ECHO", "SPACE", "REVERB"};
 static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
 static const float ECHO_T[3] = {0.25f, 0.375f, 0.5f};
@@ -2760,6 +2760,7 @@ static void d_909(SPatch* p) { p->voiceMode = 4; p->master = 0.8f; }
 static void d_lofi(SPatch* p) { p->voiceMode = 5; p->master = 0.8f; }
 static void d_chip(SPatch* p) { p->voiceMode = 6; p->master = 0.8f; }
 static void d_perc(SPatch* p) { p->voiceMode = 7; p->master = 0.8f; }   // shake the console: it plays the shaker
+static void d_wave(SPatch* p) { p->voiceMode = 8; p->master = 1.0f; OA.table = T_DIGITAL; OA.pos = 0.35f; }   // the drums are made of OSC A's wavetable: change the table or WT POS and they follow
 // ---- added patches (with XY PAD modes set for playing)
 static void b_dark808(SPatch* p) { p->master = 0.85f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -1; OA.level = 0.9f; p->subShape = 0; p->subOct = -1; p->subLevel = 0.8f;
 	ENV1(0.002f, 0, 0.45f, 0.0f, 0.35f); ENV2(0.0f, 0, 0.08f, 0.0f, 0.05f); MOD(0, SRC_ENV2, DST_PITCH, 0.2f);   // starts a little over 2 semitones high, drops in
@@ -2833,7 +2834,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"RAVE STRINGS", r_ravestrings}, {"DREAM PAD", r_dreampad}, {"HOOVER PAD", r_hooverpad}, {"SUPERSAW PUMP", r_supersaw}, {"EURO CHOIR", r_eurochoir},
 	 {"FLANGE PAD", r_flangepad}, {"HOUSE PIANO", r_housepiano}, {"ORGAN BASS", r_organbass}, {"RAVE STAB", r_ravestab}, {"DEEP CHORD", r_deepchord},
 	 {"EURO BASS", r_eurobass}, {"EURO LEAD", r_eurolead}, {"HOOVER", r_hoover}, {"NEON PWM", r_neonpwm}},
-	{{"808 KIT", d_808}, {"909 KIT", d_909}, {"LOFI KIT", d_lofi}, {"CHIP KIT", d_chip}, {"PERC KIT", d_perc}},
+	{{"808 KIT", d_808}, {"909 KIT", d_909}, {"LOFI KIT", d_lofi}, {"CHIP KIT", d_chip}, {"PERC KIT", d_perc}, {"WAVE KIT", d_wave}},
 	{{"BOOM BAP BASS", g_boombap}, {"TRAP SP-12", g_trap}, {"EUCLID CHIP", g_euclid}, {"BEATBOX TAP", g_beatbox}, {"LOOP PARTNER", g_loopcomp},
 	 {"TAPE LOOP", g_tapeloop}, {"VARIECHO", g_variecho}, {"SLOWDOWN", g_slowdown}},
 };
@@ -2942,7 +2943,7 @@ static void patchApply(const SPatch* p) {
 	}
 	if (p->hasBeat) {
 		gBeatFromPatch = p->drums & 1;
-		gDrums = p->drums & 1; gKit = p->kit >= 0 && p->kit < 5 ? p->kit : 0; gKickPat = p->kickPat % 9; gSnarePat = p->snarePat % 8; gHatPat = p->hatPat % 8;
+		gDrums = p->drums & 1; gKit = p->kit >= 0 && p->kit < 6 ? p->kit : 0; gKickPat = p->kickPat % 9; gSnarePat = p->snarePat % 8; gHatPat = p->hatPat % 8;
 		gDrumLevel = p->drumLevel; gSwing = p->swing;
 		for (int r = 0; r < 3; r++) { gEuHits[r] = p->euHits[r] % 17; gEuRot[r] = p->euRot[r] % 16; } gEuLen = p->euLen >= 2 && p->euLen <= 16 ? p->euLen : 16;
 		if (gCsndOK) drumsChanged();
@@ -2951,7 +2952,7 @@ static void patchApply(const SPatch* p) {
 	if (p->ofType % NOFT != gOfType) { gOfType = p->ofType % NOFT; ofReset(); } gOfCut = p->ofCut; gOfRes = p->ofRes; gOfDrive = p->ofDrive; gOfEnv = p->ofEnv;
 	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) gDl[k][i] = p->dl[k][i] / 127.0f; gDlRate[k] = p->dlRate[k]; gDlSync[k] = p->dlSync[k] % NSYNC; }
 	memcpy(gMot, p->mot, sizeof(gMot)); for (int l = 0; l < 4; l++) { gMotTgt[l] = p->motTgt[l] % 16; gMotOn[l] = p->motOn[l] & 1; } gMotBars = p->motBars & 3; gMotRec = -1; gMotPh = 0;
-	gVoiceMode = (p->voiceMode >= 0 && p->voiceMode < 8) ? p->voiceMode : 0; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
+	gVoiceMode = (p->voiceMode >= 0 && p->voiceMode < 9) ? p->voiceMode : 0; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
 	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate;   // the tempo is yours: loading a patch never changes it
 	gArpN = 0; gArpOnN = 0; gHeldN = 0;
@@ -2981,7 +2982,7 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 2.00f, 1.60f},   // MOTION
 	{1.73f, 3.00f, 2.80f, 2.50f, 1.60f, 0.70f, 0.69f, 2.50f, 1.86f, 0.80f, 2.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // QUIRKS
 	{1.39f, 2.04f, 1.36f, 1.81f, 1.69f, 1.50f, 1.17f, 1.24f, 2.90f, 3.10f, 2.20f, 1.65f, 1.26f, 1.52f, 1.00f},   // RAVE
-	{1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // DRUMS
+	{1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.60f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // DRUMS
 	{0.94f, 0.36f, 1.00f, 0.60f, 2.50f, 0.54f, 1.80f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // GROOVE
 };
 static int presetCount(int style) {
@@ -3142,7 +3143,7 @@ static Param P_MOD[] = {
 	PEND};
 static const char* BEND_NAMES[13] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"};
 static Param P_VOICE[] = {
-	PE("MODE", &gVoiceMode, 8, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0),
+	PE("MODE", &gVoiceMode, 9, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0),
 	PE("BEND RANGE", &gBendRange, 13, BEND_NAMES, 0), PE("CHORD", &gChord, 5, CHORD_NAMES, 0),
 	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("GPU VISUALS", &gGpuFx, 2, ONOFF, 0), PE("FX", &gFx, 4, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
 	PF("ECHO FDBK", &gEchoFb, 0, 0.9f, 0.03f, "%", 0), PE("OUTPUT", &gOutMode, 3, OUT_NAMES, D_OUT), PE("SURROUND", &gSurDepth, 4, DEPTH_NAMES, D_OUT),
@@ -3214,7 +3215,7 @@ static Param P_MASTER[] = {
 	PE("CIRCLE PAD", &gStickMode, 4, STICK_NAMES, 0), PE("SPEAKER EQ", &gSpkEq, 3, SPK_NAMES, 0), PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
 	PEND};
 static Param P_DRUMS[] = {
-	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 5, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 9, KICKP_NAMES, 0),
+	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 6, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 9, KICKP_NAMES, 0),
 	PE("SNARE", &gSnarePat, 8, SNAREP_NAMES, 0), PE("HAT", &gHatPat, 8, HATP_NAMES, 0), PE("MIC TAP", &gDrumRec, 5, DREC_NAMES, D_DREC), PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0),
 	PF("KICK TUNE", &gDrumTune[0], -12, 12, 1, "ST", 0), PF("SNARE TUNE", &gDrumTune[1], -12, 12, 1, "ST", 0), PF("HAT TUNE", &gDrumTune[2], -12, 12, 1, "ST", 0),
 	PF("KICK CHANCE", &gDrumChance[0], 0, 1, 0.05f, "%", 0), PF("SNARE CHANCE", &gDrumChance[1], 0, 1, 0.05f, "%", 0), PF("HAT CHANCE", &gDrumChance[2], 0, 1, 0.05f, "%", 0), PE("MUTE", &gDrumMute, 8, DMUTE_NAMES, 0),
@@ -7024,7 +7025,7 @@ static float gDrumLevel = 0.8f;
 static int gDrumCh[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, gDrumStep = -1;
 static float gDrumPh = 0;
 static s16* gDrumSmp[NDRUM]; static int gDrumLen[NDRUM];
-static const char* KIT_NAMES[5] = {"808", "909", "LOFI", "CHIP", "PERC"};
+static const char* KIT_NAMES[6] = {"808", "909", "LOFI", "CHIP", "PERC", "WAVE"};
 static const char* KICKP_NAMES[9] = {"OFF", "FOUR FLOOR", "BREAK", "TRAP", "DNB", "HALFTIME", "BOOM BAP", "MINE", "EUCLID"};
 static const char* SNAREP_NAMES[8] = {"OFF", "BACKBEAT", "BREAK", "TRAP", "DNB", "CLAP 2+4", "MINE", "EUCLID"};
 static const char* HATP_NAMES[8] = {"OFF", "8THS", "16THS", "OFFBEAT", "TRAP ROLL", "SHUFFLE", "MINE", "EUCLID"};
@@ -7059,6 +7060,16 @@ static int drumReserved(int c) {
 }
 static u32 csSend(float l, float r);
 
+static float wdRead(float pos, float ph) {   // OSC A's wavetable at pos, phase ph (cycles), about -1..1
+	Table* tb = &gOsc[0].tb; if (!tb->frames || tb->nFrames < 1) return sinf(TWO_PI * ph);
+	if (pos < 0) pos = 0; if (pos > 1) pos = 1;
+	float fp = pos * (tb->nFrames - 1); int f0 = (int)fp; if (f0 > tb->nFrames - 2) f0 = tb->nFrames > 1 ? tb->nFrames - 2 : 0;
+	float u = tb->nFrames > 1 ? fp - f0 : 0; const float* A = tb->frames + f0 * CYC; const float* B = tb->frames + (tb->nFrames > 1 ? f0 + 1 : f0) * CYC;
+	float a = rd(A, ph), b = rd(B, ph), pk = tb->peak > 0.01f ? tb->peak : 1;
+	return (a + (b - a) * u) / pk;
+}
+static unsigned gWaveSig = 0;
+static unsigned waveSig(void) { return (unsigned)(uintptr_t)gOsc[0].tb.frames ^ ((unsigned)gOsc[0].tb.nFrames << 20) ^ (unsigned)(gOsc[0].pos * 40); }
 static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear memory for CSND
 	const float sr = 32728;
 	static const float MAXS[NDRUM] = {0.6f, 0.3f, 0.12f, 0.5f, 0.35f, 0.1f, 0.5f, 0.4f, 0.35f, 1.4f};
@@ -7066,6 +7077,9 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 		(int)(sr * 0.08f), (int)(sr * 0.5f), (int)(sr * 0.4f), (int)(sr * 0.3f), (int)(sr * (kit == 2 ? 0.9f : 1.4f))};
 	static const float PERCLEN[NDRUM] = {0.16f, 0.1f, 0.12f, 0.35f, 0.3f, 0.1f, 0.45f, 0.35f, 0.25f, 0.12f};   // PERC kit
 	if (kit == 4) for (int d = 0; d < NDRUM; d++) len[d] = (int)(sr * PERCLEN[d]);
+	static const float WAVELEN[NDRUM] = {0.55f, 0.25f, 0.08f, 0.4f, 0.3f, 0.06f, 0.4f, 0.35f, 0.3f, 1.2f};   // WAVE kit
+	if (kit == 5) for (int d = 0; d < NDRUM; d++) len[d] = (int)(sr * WAVELEN[d]);
+	gWaveSig = waveSig();
 	unsigned seed = 1234;
 	unsigned lfsr = 0x7FFF; float lph = 0;   // CHIP kit: Game Boy style noise register
 	for (int d = 0; d < NDRUM; d++) {
@@ -7076,7 +7090,20 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 		for (int i = 0; i < len[d]; i++) {
 			float t = i / sr, v = 0;
 			seed = seed * 1664525u + 1013904223u; float nz = ((seed >> 9) & 0xFFFF) / 32768.0f - 1;
-			if (kit == 4) {   // PERC kit: shaker, maracas, cabasa, tambourine, guiro, claves, congas, bongo, woodblock
+			if (kit == 5) {   // WAVE kit: every drum made of OSC A's wavetable (at its WT POS)
+				float P = gOsc[0].pos, rp = ((seed >> 8) & 0xFFFF) / 65536.0f, tn = wdRead(P, rp);   // table noise: the table read at random phases
+				hp = tn - prev; prev = tn;
+				switch (d) {
+				case 0: { float f = 45 + 210 * expf(-t * 32); ph += f / sr; float ps = P + (1 - P) * expf(-t * 22);   // kick: from the bright end of the table down to WT POS
+					v = tanhf(wdRead(ps, ph) * 2.6f) * expf(-t * 4.0f) + (t < 0.003f ? sinf(TWO_PI * 1200 * t) * expf(-t * 900) * 0.5f : 0); break; }
+				case 1: { ph += 190 * (1 + 0.35f * expf(-t * 45)) / sr; v = wdRead(P, ph) * expf(-t * 20) * 0.55f + hp * expf(-t * 15) * 0.55f; break; }   // snare
+				case 2: case 3: case 9: { ph += 6300.0f / sr; v = hp * (0.5f + 0.5f * wdRead(1 - P, ph)) * expf(-t * (d == 2 ? 40 : d == 3 ? 7 : 2.4f)) * (d == 9 ? 0.7f : d == 2 ? 1.6f : 0.9f); if (v > 1) v = 1; if (v < -1) v = -1; break; }   // hats, crash: ring-modded table noise
+				case 4: { float tt = t < 0.03f ? fmodf(t, 0.01f) : t - 0.02f; bp1 += (hp - bp1) * 0.5f; v = bp1 * expf(-tt * (t < 0.03f ? 170 : 15)) * 1.6f; break; }   // clap
+				case 5: { ph += 1650.0f / sr; v = wdRead(P, ph) * expf(-t * 70) * 0.7f; break; }   // rim
+				case 6: case 7: { float f0 = d == 6 ? 105 : 165, f = f0 * (1 + 0.6f * expf(-t * 25)); ph += f / sr; v = tanhf(wdRead(P + (1 - P) * expf(-t * 30), ph) * 1.3f) * expf(-t * 8) * 0.8f; break; }   // toms
+				default: { ph += 560.0f / sr; ph2 += 837.0f / sr; { float x = wdRead(P, ph), y2 = wdRead(P, ph2); v = tanhf((x * y2 * 2.2f + x * 0.35f) * 1.4f) * expf(-t * 8) * 0.9f; } break; }   // bell: two table voices, ring-modulated
+				}
+			} else if (kit == 4) {   // PERC kit: shaker, maracas, cabasa, tambourine, guiro, claves, congas, bongo, woodblock
 				hp = nz - prev; prev = nz;
 				switch (d) {
 				case 0: { float e = t < 0.018f ? t / 0.018f : expf(-(t - 0.018f) * 28); lp += (hp - lp) * 0.7f; v = lp * e * 0.9f; break; }   // shaker: a swish
@@ -8392,6 +8419,7 @@ int main(void) {
 			curKey = key;
 		}
 		if (gVoiceMode >= 3 && (gDrumBuilt != gVoiceMode - 3 || gDrumCh[3] < 0)) { kitEnsure(); botDirty = 1; }
+		{ static float st = 0; if (gDrumBuilt == 5 && waveSig() != gWaveSig) { st += 1.0f / 60; if (st > 0.25f) { drumBuild(5); st = 0; } } else st = 0; }   // WAVE kit: the drums follow OSC A's table and WT POS (rebuilt once it settles)
 		if (gTapeKeys) gTapeStop = !(curKey >= 0 || gHeldN > 0 || gArpN > 0 || gSqNn > 0);   // SLOWDOWN: the loop runs while you hold notes
 		if (page != gCurPage) { gCurPage = page; botDirty = 1; }
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; if (!g) { gStepEd = -1; gSeqSaveDue = 1; } } }
