@@ -1,4 +1,4 @@
-**Syrup 1.0 beta**: a wavetable synth for Nintendo 2DS / 3DS.
+**Syrup 1.0 beta**: a wavetable synth for 2DS / 3DS.
 
 This is a beta: it's feature-complete, but please report anything that breaks (open an issue, and say which build you're on, shown on the splash screen and the HARDWARE page).
 

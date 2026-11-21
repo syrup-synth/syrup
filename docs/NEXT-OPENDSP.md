@@ -68,7 +68,7 @@ Fallback: if `opendspInit()` failed or the caps lack `OPENDSP_CAP_REVERB` /
 - DSP code is fixed-point (16-bit data, wide accumulators); hot loops in assembly if
   teak-llvm's output is too slow.
 - Test in Azahar with **LLE** audio (HLE never runs the firmware), and with teakra in CI.
-- Ship the built firmware with `opendspInitFromMemory()`; keep it free of any Nintendo code.
+- Ship the built firmware with `opendspInitFromMemory()`; keep it free of any console firmware code.
 
 ## Order
 

@@ -2,7 +2,7 @@
 
 ![SYRUP](../art/syrup_logo.png)
 
-A Serum-style wavetable synth for Nintendo 2DS / 3DS (homebrew).
+A Serum-style wavetable synth for 2DS / 3DS (homebrew).
 
 The 3DS's DSP chip plays the oscillators: each voice layer is a DSP channel looping a single-cycle waveform at the note's pitch, through that channel's own biquad filter. The main processor only rebuilds a cycle when something changes or is modulated:
 

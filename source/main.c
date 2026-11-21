@@ -1,4 +1,4 @@
-// SYRUP v2 - Serum-style wavetable synth for Nintendo 2DS / 3DS (homebrew, libctru)
+// SYRUP v2 - Serum-style wavetable synth for 2DS / 3DS (homebrew, libctru)
 //
 // The DSP plays the oscillators: every voice layer is a DSP channel looping a single-cycle
 // waveform at the note's pitch, through the channel's own biquad filter. The ARM rebuilds the
@@ -504,7 +504,7 @@ static int gVoiceMode = 0, gChord = 0, gFx = 0, gEchoT = 1, gDrive = 0, gBendRan
 static int gODspUp = 0, gODspRev = 0;     // OpenDSP running / has reverb (experimental build)
 static volatile int gDspRevOn = 0;        // aux bus 1 carries the DSP reverb right now
 static float revAmt(void);
-static int gDspRevSel = 0, gFwSel = 0, gFwBoot = 0;    // EXP: REVERB ON (0 DSP, 1 ARM) live; DSP FIRMWARE (0 OPENDSP, 1 NINTENDO) at launch
+static int gDspRevSel = 0, gFwSel = 0, gFwBoot = 0;    // EXP: REVERB ON (0 DSP, 1 ARM) live; DSP FIRMWARE (0 OPENDSP, 1 SYSTEM) at launch
 static const char* EXP_PATH = "sdmc:/3ds/syrup/exp.bin";   // EXP's own settings; the release never reads it
 static float gGlide = 0.0f, gChorus = 0.3f, gDriveAmt = 0.4f, gMaster = 0.8f;
 
@@ -3338,7 +3338,7 @@ static Param P_HW[] = {
 static const char* ONOFF2[2] = {"OFF", "ON"};
 #ifdef SYRUP_OPENDSP
 static const char* REVENG_NAMES[2] = {"DSP", "ARM"};
-static const char* FW_NAMES[2] = {"OPENDSP", "NINTENDO"};
+static const char* FW_NAMES[2] = {"OPENDSP", "SYSTEM"};
 #endif
 static Param P_MASTER[] = {
 	PE("OUT FILTER", &gOfType, NOFT, OFT_NAMES, D_OFT), PF("OUT CUTOFF", &gOfCut, 0, 1, 0.01f, "%", 0), PF("OUT RES", &gOfRes, 0, 1, 0.02f, "%", 0),
@@ -3911,7 +3911,7 @@ static void drawHeader(int page) {
 static void drawFooter(int page, int sel) {
 	rect(0, 226, 400, 1, LINE);
 	if (!gAudioOK) {   // no DSP firmware dump yet: say exactly how to make one (Luma's Rosalina menu works right here)
-		static const char* L[] = {"NO SOUND YET: ONE-TIME SETUP", "", "THE 3DS SOUND CHIP NEEDS ITS FIRMWARE", "COPIED TO THE SD CARD (NINTENDO'S, SO", "SYRUP CAN'T INCLUDE IT). TO MAKE IT:", "",
+		static const char* L[] = {"NO SOUND YET: ONE-TIME SETUP", "", "THE 3DS SOUND CHIP NEEDS ITS FIRMWARE", "COPIED TO THE SD CARD (THE CONSOLE'S", "OWN, SO SYRUP CAN'T INCLUDE IT):", "",
 			"1. PRESS L + DOWN + SELECT (ROSALINA)", "2. MISCELLANEOUS OPTIONS >", "   DUMP DSP FIRMWARE", "3. PRESS B, THEN QUIT AND REOPEN SYRUP", "", "(OR RUN THE DSP1 APP ONCE)"};
 		int n = sizeof(L) / sizeof(L[0]), h = n * 12 + 16, y0 = 113 - h / 2;
 		rect(40, y0, 320, h, BG); rect(40, y0, 320, 1, WARN); rect(40, y0 + h - 1, 320, 1, WARN); rect(40, y0, 1, h, WARN); rect(359, y0, 1, h, WARN);
@@ -4019,9 +4019,9 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			if (gODspUp && ++tick >= 30) { tick = 0; opendspStats st = {.struct_size = sizeof st}; if (R_SUCCEEDED(opendspGetStats(&st, false))) load = st.load; }
 			int pend = gFwSel != gFwBoot;   // DSP FIRMWARE changed: takes effect next launch
 			if (pend) snprintf(s, sizeof(s), "DSP FW: RESTART TO APPLY");
-			else if (!gFwBoot && !gODspUp) snprintf(s, sizeof(s), "OPENDSP FAILED: NINTENDO");
+			else if (!gFwBoot && !gODspUp) snprintf(s, sizeof(s), "OPENDSP FAILED: SYSTEM DSP");
 			else if (gODspUp) snprintf(s, sizeof(s), "OPENDSP %d%%  REV %s", (int)(load * 100 + 0.5f), gDspRevOn ? "DSP" : "ARM");
-			else snprintf(s, sizeof(s), "NINTENDO DSP  REV ARM");
+			else snprintf(s, sizeof(s), "SYSTEM DSP  REV ARM");
 			text(150, 186, s, 1, (pend || (!gFwBoot && !gODspUp)) ? WARN : DIM); }
 #endif
 		{ u32 dr = gAudioOK ? ndspGetDroppedFrames() : 0;
@@ -8396,7 +8396,7 @@ int main(void) {
 	if (!gFwSel && R_SUCCEEDED(opendspInit())) {   // ships its own DSP firmware: no dspfirm.cdc dump needed
 		u32 caps = 0; opendspGetCapabilities(&caps);
 		gODspUp = 1; gODspRev = (caps & OPENDSP_CAP_REVERB) != 0; gAudioOK = 1;
-	} else gAudioOK = R_SUCCEEDED(ndspInit());   // Nintendo firmware fallback (needs the dump)
+	} else gAudioOK = R_SUCCEEDED(ndspInit());   // the console's own firmware fallback (needs the dump)
 #else
 	gAudioOK = R_SUCCEEDED(ndspInit());
 #endif

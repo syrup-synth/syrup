@@ -2,7 +2,7 @@
 
 ![SYRUP](art/syrup_logo.png)
 
-**A wavetable synth for the Nintendo 2DS and 3DS.** Serum-style oscillators played by the console's DSP chip, a filter and envelope section, a master effects chain, a step sequencer with a piano roll, drums, a looper, a four-track tape recorder and a granular engine. It all runs on the handheld, with nothing to plug in.
+**A wavetable synth for the 2DS and 3DS.** Serum-style oscillators played by the console's DSP chip, a filter and envelope section, a master effects chain, a step sequencer with a piano roll, drums, a looper, a four-track tape recorder and a granular engine. It all runs on the handheld, with nothing to plug in.
 
 > **Beta.** Syrup 1.0 is in beta. Things may still break; see [Reporting bugs](#reporting-bugs).
 
@@ -10,7 +10,7 @@
 
 You need a 2DS / 3DS with custom firmware (Luma3DS).
 
-**Sound needs a one-time setup.** The console's sound chip runs Nintendo firmware that homebrew can't include, so you copy it to the SD card once:
+**Sound needs a one-time setup.** The sound chip runs the console's own firmware, which homebrew can't include, so you copy it to the SD card once:
 
 1. Press **L + Down + Select** to open the Rosalina menu (this works anywhere, even inside Syrup).
 2. Choose **Miscellaneous options > Dump DSP firmware**. It saves `dspfirm.cdc` to `/3ds/` on the SD card.
