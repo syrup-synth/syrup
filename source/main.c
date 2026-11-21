@@ -2829,6 +2829,13 @@ static void d_lofi(SPatch* p) { p->voiceMode = 5; p->master = 0.8f; }
 static void d_chip(SPatch* p) { p->voiceMode = 6; p->master = 0.8f; }
 static void d_perc(SPatch* p) { p->voiceMode = 7; p->master = 0.8f; }   // shake the console: it plays the shaker
 static void d_wave(SPatch* p) { p->voiceMode = 8; p->master = 1.0f; OA.table = T_DIGITAL; OA.pos = 0.35f; }   // the drums are made of OSC A's wavetable: change the table or WT POS and they follow
+// more WAVE KITs: the same drums cut from other tables (sweep WT POS to morph the whole kit)
+static void d_wvowel(SPatch* p) { d_wave(p); OA.table = T_VOWELS; OA.pos = 0.4f; }      // talking drums: formant kick, vowel toms
+static void d_wgrowl(SPatch* p) { d_wave(p); OA.table = T_GROWL; OA.pos = 0.65f; }      // FM: clangy metal hats, a gritty kick
+static void d_wpluck(SPatch* p) { d_wave(p); OA.table = T_PLUCK; OA.pos = 0.2f; }       // KARPLUS: woody, string-like toms and bell
+static void d_wsync(SPatch* p) { d_wave(p); OA.table = T_SYNC; OA.pos = 0.75f; }        // sync saw: buzzy, aggressive
+static void d_wpwm(SPatch* p) { d_wave(p); OA.table = T_PWM; OA.pos = 0.55f; }          // pulse: hollow, chiptune-adjacent
+static void d_wharm(SPatch* p) { d_wave(p); OA.table = T_HARMONIX; OA.pos = 0.15f; }    // few harmonics: soft, round, sub-heavy
 // ---- added patches (with XY PAD modes set for playing)
 static void b_dark808(SPatch* p) { p->master = 0.85f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -1; OA.level = 0.9f; p->subShape = 0; p->subOct = -1; p->subLevel = 0.8f;
 	ENV1(0.002f, 0, 0.45f, 0.0f, 0.35f); ENV2(0.0f, 0, 0.08f, 0.0f, 0.05f); MOD(0, SRC_ENV2, DST_PITCH, 0.2f);   // starts a little over 2 semitones high, drops in
@@ -2903,7 +2910,8 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"RAVE STRINGS", r_ravestrings}, {"DREAM PAD", r_dreampad}, {"HOOVER PAD", r_hooverpad}, {"SUPERSAW PUMP", r_supersaw}, {"EURO CHOIR", r_eurochoir},
 	 {"FLANGE PAD", r_flangepad}, {"HOUSE PIANO", r_housepiano}, {"ORGAN BASS", r_organbass}, {"RAVE STAB", r_ravestab}, {"DEEP CHORD", r_deepchord},
 	 {"EURO BASS", r_eurobass}, {"EURO LEAD", r_eurolead}, {"HOOVER", r_hoover}, {"NEON PWM", r_neonpwm}},
-	{{"808 KIT", d_808}, {"909 KIT", d_909}, {"LOFI KIT", d_lofi}, {"CHIP KIT", d_chip}, {"PERC KIT", d_perc}, {"WAVE KIT", d_wave}},
+	{{"808 KIT", d_808}, {"909 KIT", d_909}, {"LOFI KIT", d_lofi}, {"CHIP KIT", d_chip}, {"PERC KIT", d_perc}, {"WAVE KIT", d_wave},
+	 {"VOWEL KIT", d_wvowel}, {"FM KIT", d_wgrowl}, {"PLUCK KIT", d_wpluck}, {"SYNC KIT", d_wsync}, {"PULSE KIT", d_wpwm}, {"SOFT KIT", d_wharm}},
 	{{"BOOM BAP BASS", g_boombap}, {"TRAP SP-12", g_trap}, {"EUCLID CHIP", g_euclid}, {"BEATBOX TAP", g_beatbox}, {"LOOP PARTNER", g_loopcomp},
 	 {"TAPE LOOP", g_tapeloop}, {"VARIECHO", g_variecho}, {"SLOWDOWN", g_slowdown}},
 };
@@ -3835,7 +3843,13 @@ static void drawHeader(int page) {
 }
 static void drawFooter(int page, int sel) {
 	rect(0, 226, 400, 1, LINE);
-	if (!gAudioOK) { text(4, 230, "NO AUDIO - RUN DSP1 ONCE (DUMPS DSP FIRMWARE)", 1, WARN); return; }
+	if (!gAudioOK) {   // no DSP firmware dump yet: say exactly how to make one (Luma's Rosalina menu works right here)
+		static const char* L[] = {"NO SOUND YET: ONE-TIME SETUP", "", "THE 3DS SOUND CHIP NEEDS ITS FIRMWARE", "COPIED TO THE SD CARD (NINTENDO'S, SO", "SYRUP CAN'T INCLUDE IT). TO MAKE IT:", "",
+			"1. PRESS L + DOWN + SELECT (ROSALINA)", "2. MISCELLANEOUS OPTIONS >", "   DUMP DSP FIRMWARE", "3. PRESS B, THEN QUIT AND REOPEN SYRUP", "", "(OR RUN THE DSP1 APP ONCE)"};
+		int n = sizeof(L) / sizeof(L[0]), h = n * 12 + 16, y0 = 113 - h / 2;
+		rect(40, y0, 320, h, BG); rect(40, y0, 320, 1, WARN); rect(40, y0 + h - 1, 320, 1, WARN); rect(40, y0, 1, h, WARN); rect(359, y0, 1, h, WARN);
+		for (int i = 0; i < n; i++) text(200 - (int)strlen(L[i]) * 4, y0 + 8 + i * 12, L[i], 1, i == 0 ? WARN : TXT);
+		text(4, 230, "NO SOUND - DSP FIRMWARE NOT DUMPED (SEE ABOVE)", 1, WARN); return; }
 	if (gSafeMode) { char m[60]; snprintf(m, sizeof(m), "SAFE MODE - LAST RUN CRASHED AT %.24s", gCrashStage); text(4, 230, m, 1, WARN); return; }
 	if (gMsgT > 0) { text(4, 230, gMsg, 1, VAL); return; }
 	if (page == 0) { text(4, 230, "< > STYLE   ^ v PATCH   A TWICE: SAVE + NAME", 1, DIM); return; }
@@ -7193,6 +7207,11 @@ static float wdRead(float pos, float ph) {   // OSC A's wavetable at pos, phase 
 }
 static unsigned gWaveSig = 0;
 static unsigned waveSig(void) { return (unsigned)(uintptr_t)gOsc[0].tb.frames ^ ((unsigned)gOsc[0].tb.nFrames << 20) ^ (unsigned)(gOsc[0].pos * 40); }
+static float metal808(float t, float k) {   // the 808's cymbal / hat source: six square oscillators at odd ratios (k scales them)
+	static const float F[6] = {205.3f, 304.4f, 369.6f, 522.7f, 540.0f, 800.0f};
+	float s = 0; for (int j = 0; j < 6; j++) s += fmodf(t * F[j] * k, 1.0f) < 0.5f ? 1.0f : -1.0f;
+	return s / 6;
+}
 static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear memory for CSND
 	const float sr = 32728;
 	static const float MAXS[NDRUM] = {0.6f, 0.3f, 0.12f, 0.5f, 0.35f, 0.1f, 0.5f, 0.4f, 0.35f, 1.4f};
@@ -7243,17 +7262,29 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 				default: v = (sinf(TWO_PI * 1050 * t) * 0.7f + sinf(TWO_PI * 1720 * t) * 0.4f) * expf(-t * 48) * 0.8f; break;   // woodblock
 				}
 			} else if (d == 0) {   // kick: falling sine, a click, kit-shaped decay
-				float f0 = kit == 1 ? 60 : (kit == 2 ? 50 : 45), f1 = kit == 3 ? 400 : 160, dec = kit == 0 ? 2.2f : (kit == 1 ? 5 : 4);
-				float f = f0 + (f1 - f0) * expf(-t * 35);
-				ph += f / sr; v = sinf(TWO_PI * ph) * expf(-t * dec) + (t < 0.004f ? nz * 0.4f : 0);
-				if (t < 0.003f && kit != 3) v += sinf(TWO_PI * 1200 * t) * expf(-t * 900) * 0.6f;   // a short 1.2 kHz click: the beater, so it reads on small speakers
+				// 808: long low boom, gentle sweep. 909: short punchy thud with a hard noise click. LOFI: a saturated boom-bap thump
+				float f0 = kit == 1 ? 56 : (kit == 2 ? 52 : 45), f1 = kit == 3 ? 400 : kit == 1 ? 330 : kit == 2 ? 150 : 115;
+				float sw = kit == 1 ? 48 : kit == 0 ? 22 : 35, dec = kit == 0 ? 1.5f : (kit == 1 ? 6.5f : 4.5f);
+				float f = f0 + (f1 - f0) * expf(-t * sw);
+				ph += f / sr; v = sinf(TWO_PI * ph) * expf(-t * dec);
+				if (kit == 1) { hp = nz - prev; prev = nz; if (t < 0.006f) v += hp * 0.7f * (1 - t / 0.006f); v = tanhf(v * 1.6f); }
+				else if (t < 0.004f) v += nz * (kit == 0 ? 0.15f : 0.4f);
+				if (t < 0.003f && kit != 3) v += sinf(TWO_PI * 1200 * t) * expf(-t * 900) * (kit == 0 ? 0.3f : 0.6f);   // a short 1.2 kHz click: the beater, so it reads on small speakers
 				if (kit == 3) v = v > 0 ? 0.8f : -0.8f, v *= floorf(expf(-t * 6) * 15) / 15;
-				if (kit == 2) v = tanhf(v * 2.5f) * 0.8f;
+				if (kit == 2) v = tanhf(v * 3.0f) * 0.85f;
 			} else if (d == 1) {   // snare: body tone + filtered noise
-				float body = sinf(TWO_PI * 185 * t) * expf(-t * 22);
-				lp += (nz - lp) * (kit == 2 ? 0.25f : 0.55f);
-				float sn = (nz - lp * 0.6f) * expf(-t * (kit == 1 ? 13 : 17));
-				v = body * (kit == 0 ? 0.7f : 0.45f) + sn * (kit == 3 ? 0.3f : 0.8f);
+				lp += (nz - lp) * (kit == 2 ? 0.22f : 0.55f);
+				if (kit == 0) {   // 808: two tuned skins (180 / 330 Hz) and a thin, high "snappy"
+					hp = nz - prev; prev = nz;
+					v = sinf(TWO_PI * 180 * t) * expf(-t * 20) * 0.55f + sinf(TWO_PI * 330 * t) * expf(-t * 28) * 0.35f + hp * expf(-t * 19) * 0.45f;
+				} else if (kit == 1) {   // 909: a pitched-down body and a loud, bright, longer noise
+					ph += 195 * (1 + 0.4f * expf(-t * 60)) / sr; hp = nz - prev; prev = nz;
+					v = tanhf((sinf(TWO_PI * ph) * expf(-t * 24) * 0.5f + (hp * 0.6f + nz * 0.4f) * expf(-t * 11) * 0.85f) * 1.4f);
+				} else {   // LOFI (and CHIP's base): a fat low body and dark, lowpassed noise
+					float body = sinf(TWO_PI * (kit == 2 ? 160 : 185) * t) * expf(-t * 18);
+					float sn = (kit == 2 ? lp * 1.6f : nz - lp * 0.6f) * expf(-t * (kit == 2 ? 12 : 17));
+					v = body * 0.55f + sn * (kit == 3 ? 0.3f : 0.8f);
+				}
 				if (kit == 3) {   // 15-bit LFSR clocked at 9 kHz, 4-bit stepped decay
 					lph += 9000.0f / sr; while (lph >= 1) { lph -= 1; unsigned b = (lfsr ^ (lfsr >> 1)) & 1; lfsr = (lfsr >> 1) | (b << 14); }
 					float e = floorf(expf(-t * 15) * 15) / 15; v = ((lfsr & 1) ? 0.6f : -0.6f) * e + (t < 0.03f ? (fmodf(t * 220, 1) < 0.5f ? 0.3f : -0.3f) * e : 0);
@@ -7262,7 +7293,10 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 				float e;
 				switch (d) {
 				case 3:   // open hat: the closed hat's noise, long tail
-					hp = nz - prev; prev = nz; v = hp * expf(-t * (kit == 1 ? 6.5f : 8.0f)) * 0.55f;
+					hp = nz - prev; prev = nz; bp1 += (hp - bp1) * 0.6f;
+					if (kit == 0) { float m = metal808(t, 1); float mh = m - bp2; bp2 = m; v = mh * expf(-t * 7.0f) * 0.55f; }   // 808: metal, not noise
+					else if (kit == 1) { float m = metal808(t, 1.7f); float mh = m - bp2; bp2 = m; v = (hp * 0.5f + mh * 0.4f) * expf(-t * 5.5f) * 0.6f; }
+					else v = (kit == 2 ? bp1 : hp) * expf(-t * 8.0f) * 0.55f;
 					if (kit == 3) { lph += 30000.0f / sr; while (lph >= 1) { lph -= 1; unsigned b = (lfsr ^ (lfsr >> 1)) & 1; lfsr = ((lfsr >> 1) & ~0x40u) | (b << 6) | (b << 14); }
 						v = ((lfsr & 1) ? 0.4f : -0.4f) * (floorf(expf(-t * 8) * 15) / 15); }
 					break;
@@ -7290,6 +7324,7 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 				default: {   // crash: bright noise, slow decay
 					hp = nz - prev; prev = nz; lp += (hp - lp) * 0.6f;
 					v = (hp * 0.6f + lp * 0.4f) * expf(-t * (kit == 2 ? 4.5f : 2.6f)) * 0.5f;
+					if (kit == 0) { float m = metal808(t, 1.3f); float mh = m - bp2; bp2 = m; v = (mh * 0.6f + hp * 0.25f) * expf(-t * 2.2f) * 0.5f; }
 					if (kit == 3) { lph += 30000.0f / sr; while (lph >= 1) { lph -= 1; unsigned b = (lfsr ^ (lfsr >> 1)) & 1; lfsr = (lfsr >> 1) | (b << 14); }
 						v = ((lfsr & 1) ? 0.3f : -0.3f) * floorf(expf(-t * 2.6f) * 15) / 15; }
 					break; }
@@ -7297,12 +7332,16 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 				if (kit == 2) v = roundf(v * 10) / 10;   // LOFI: coarse steps
 			} else {   // hat: high-passed noise, very short
 				hp = nz - prev; prev = nz;
-				v = hp * expf(-t * (kit == 1 ? 30 : 55)) * 0.7f;
-				if (kit == 2) v = roundf(v * 8) / 8;
+				if (kit == 0) { float m = metal808(t, 1); float mh = m - bp2; bp2 = m; v = mh * expf(-t * 60) * 0.7f; }   // 808: the metal squares, clipped short
+				else if (kit == 1) { float m = metal808(t, 1.7f); float mh = m - bp2; bp2 = m; v = (hp * 0.55f + mh * 0.45f) * expf(-t * 32) * 0.75f; }   // 909: noise + brighter metal
+				else { bp1 += (hp - bp1) * 0.5f; v = bp1 * expf(-t * 40) * 0.9f; }   // LOFI: a dull, dusty tick
 				if (kit == 3) {   // short 7-bit LFSR mode at 30 kHz: the metallic chip hat
 					lph += 30000.0f / sr; while (lph >= 1) { lph -= 1; unsigned b = (lfsr ^ (lfsr >> 1)) & 1; lfsr = ((lfsr >> 1) & ~0x40u) | (b << 6) | (b << 14); }
 					v = ((lfsr & 1) ? 0.45f : -0.45f) * (floorf(expf(-t * 60) * 15) / 15);
 				}
+			}
+			if (kit == 2) {   // LOFI: every drum through an old sampler: ~8 kHz, 6-bit
+				static float hold; if (i % 4 == 0) hold = v; v = roundf(hold * 32) / 32;
 			}
 			if (v > 1) v = 1;
 			if (v < -1) v = -1;

@@ -8,7 +8,15 @@
 
 ## Install
 
-You need a 2DS / 3DS with custom firmware (Luma3DS) and the DSP firmware dumped once (run **DSP1**), or there's no sound.
+You need a 2DS / 3DS with custom firmware (Luma3DS).
+
+**Sound needs a one-time setup.** The console's sound chip runs Nintendo firmware that homebrew can't include, so you copy it to the SD card once:
+
+1. Press **L + Down + Select** to open the Rosalina menu (this works anywhere, even inside Syrup).
+2. Choose **Miscellaneous options > Dump DSP firmware**. It saves `dspfirm.cdc` to `/3ds/` on the SD card.
+3. Close the menu with B, quit Syrup and open it again.
+
+No Luma3DS menu? Run the DSP1 app once instead. If the file is missing, Syrup shows these steps on screen.
 
 - **QR code:** FBI > Remote Install > Scan QR Code, and scan [`install-qr.png`](install-qr.png). It installs the newest `syrup.cia`.
 - **Manual:** download `syrup.cia` (install with FBI) or `syrup.3dsx` (copy to `/3ds/` on the SD card, open from the Homebrew Launcher) from [Releases](../../releases).

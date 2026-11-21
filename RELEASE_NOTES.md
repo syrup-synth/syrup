@@ -2,7 +2,7 @@
 
 This is a beta: it's feature-complete, but please report anything that breaks (open an issue, and say which build you're on, shown on the splash screen and the HARDWARE page).
 
-**Install:** FBI > Remote Install > Scan QR Code with `install-qr.png`, or install `syrup.cia` with FBI, or copy `syrup.3dsx` to `/3ds/`. Sound needs the DSP firmware dumped once (DSP1).
+**Install:** FBI > Remote Install > Scan QR Code with `install-qr.png`, or install `syrup.cia` with FBI, or copy `syrup.3dsx` to `/3ds/`. Sound needs a one-time setup: press L + Down + Select (Rosalina menu) > Miscellaneous options > Dump DSP firmware, then reopen Syrup.
 
 ### New in this beta
 - **TAPE:** bounce the sequencer to four tracks (overdub, mute, level, erase), then export WAVs to `sdmc:/3ds/syrup/tape/`.
