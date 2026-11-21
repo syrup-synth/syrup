@@ -156,8 +156,8 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | B | Latch |
 | L / R | Previous / next page |
 | Circle pad | Left/right pitch bend, up/down = STICK mod source |
-| SELECT | Help |
-| START | Quick menu over the top screen: SAVE PATCH, BROWSER, PANIC, THEME, QUIT (D-pad + A; B or START closes it). The touch screen keeps playing while it's open. |
+| SELECT | PANIC: all notes off, sequencer and arp stop (help is in the START menu) |
+| START | Quick menu over the top screen: SAVE PATCH, BROWSER, PANIC, HELP, THEME, QUIT (D-pad + A; B or START closes it). The touch screen keeps playing while it's open. |
 
 ## Wavetables
 
@@ -297,7 +297,7 @@ A touch chord instrument that replaces the keys and XY pad. There is one pad per
 
 - **Where you touch a pad:** low = triad, middle = 7th, top = 9th, left edge = first inversion, right edge = sus4.
 - **STRUM strip:** slide along the bottom strip to strum the last chord across three octaves, autoharp-style. Lower on the strip strums louder.
-- **With other features:** works with LATCH, the arpeggiator and every patch. Help moved to SELECT only.
+- **With other features:** works with LATCH, the arpeggiator and every patch. Help is in the START menu.
 
 ## MOD page bottom screen: MATRIX and drawn LFOs
 

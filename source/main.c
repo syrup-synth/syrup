@@ -17,7 +17,7 @@
 //   D-pad U/D select parameter, L/R change it (hold to repeat)   X / Y  next / previous page
 //   Bottom tabs: HELP, < PAGE, PAGE >, LATCH   XY pad: X = OSC A WT POS, Y = filter cutoff
 //   Keyboard: play (lower on a key = louder), slide to glide
-//   A chord mode   B latch   L / R octave   SELECT help   START quit
+//   A chord mode   B latch   L / R octave   SELECT panic   START menu (save, browser, panic, help, theme, quit)
 //   Circle pad: left/right pitch bend, up/down = STICK mod source
 
 #include <3ds.h>
@@ -3030,8 +3030,8 @@ static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound
 }
 // START: a quick menu over the top screen (no more quitting by accident)
 static int gStartMenu = 0, gStartSel = 0;
-#define NSTART 5
-static const char* START_NAMES[NSTART] = {"SAVE PATCH", "BROWSER", "PANIC", "THEME", "QUIT"};
+#define NSTART 6
+static const char* START_NAMES[NSTART] = {"SAVE PATCH", "BROWSER", "PANIC", "HELP", "THEME", "QUIT"};
 static void browseSave(void) {
 	int slot = (gStyle == NSTYLES - 1 && gPreset < NUSER) ? gPreset : -1;
 	if (slot < 0) { for (int i = 0; i < NUSER; i++) if (gUser[i].magic != PATCH_MAGIC) { slot = i; break; } if (slot < 0) slot = gSaveSlot; }
@@ -3914,7 +3914,7 @@ static void drawHelp(void) {
 	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
 	rect(0, 0, 400, 240, BG);
 	text(4, 3, "SYRUP", 1, TXT); text(58, 3, "HELP", 1, TXT); rect(0, 13, 400, 1, LINE);
-	text(200, 3, "SELECT / HELP TO CLOSE", 1, DIM);
+	text(200, 3, "ANY BUTTON TO CLOSE", 1, DIM);
 	static const char* L[] = {
 		"PAGES",
 		"  X / Y ........ NEXT / PREVIOUS PAGE",
@@ -7762,7 +7762,7 @@ int main(void) {
 			if (!gStartMenu) topDirty = topAgain = botDirty = 1;
 			kDown &= KEY_TOUCH; kHeld &= KEY_TOUCH;
 		}
-		if (startAct == 4) break;   // QUIT
+		if (startAct == 5) break;   // QUIT
 		wakeTick();
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
@@ -7786,8 +7786,9 @@ int main(void) {
 		u64 now = osGetTime(); float dt = (now - last) / 1000.0f; last = now; if (dt > 0.1f) dt = 0.1f;
 		sensorsUpdate(dt);
 
-		if (helpOn && (kDown & ~(KEY_TOUCH | KEY_SELECT))) { helpOn = 0; topDirty = botDirty = 1; }
-		if (kDown & KEY_SELECT) { helpOn = !helpOn; topDirty = botDirty = 1; }
+		if (helpOn && (kDown & ~KEY_TOUCH)) { helpOn = 0; topDirty = botDirty = 1; kDown &= KEY_TOUCH; }   // any button closes help
+		if (kDown & KEY_SELECT) startAct = 2;   // SELECT: PANIC, one press
+		if (startAct == 3) { helpOn = 1; topDirty = botDirty = 1; }
 		if (kDown & KEY_X) { page = navStep(page, 1); topDirty = 1; }
 		if (kDown & KEY_Y) { page = navStep(page, -1); topDirty = 1; }
 		if (kDown & KEY_A) { if (page == 0) browseSave(); else gChord = (gChord + 1) % 5; topDirty = 1; }
@@ -7797,7 +7798,7 @@ int main(void) {
 		if (startAct == 0) { browseSave(); if (gSaveArm >= 0) browseSave(); }   // one press from the menu: no "A again"
 		if (startAct == 1) page = 0;
 		if (startAct == 2) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; say("PANIC: ALL NOTES OFF"); }
-		if (startAct == 3) { gTheme = (gTheme + 1) % NTHEMES; char m[32]; snprintf(m, sizeof(m), "THEME: %s", THEME_NAMES[gTheme]); say(m); }
+		if (startAct == 4) { gTheme = (gTheme + 1) % NTHEMES; char m[32]; snprintf(m, sizeof(m), "THEME: %s", THEME_NAMES[gTheme]); say(m); }
 		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
 
 		if (page == 0) {   // preset browser: the D-pad moves through the list itself

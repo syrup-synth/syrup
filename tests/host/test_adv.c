@@ -134,15 +134,18 @@ static void SCRIPT(int fr) {
 	if (fr == 310) { gLoopQuant = 1; gBeatPh = 1; gBPM = 120; loopRecStart(); int want = (int)(3 * 0.5f * 32728);
 		if (abs(gLoopSkip - want) > 200) fail("LOOP START NEXT BAR: one beat in at 120 should wait 1.5 s (%d, want %d)", gLoopSkip, want);
 		gLoopMode = 0; loopModeChanged(); gLoopQuant = 0; gLoopSkip = 0; }
-	press(fr, 312, KEY_START); press(fr, 315, KEY_DUP); press(fr, 318, KEY_A);
-	if (fr == 317) shotTop("shots/start_menu.ppm");
+	if (fr == 310) { midiPush(0x90, 64, 100); gSeqMode = 1; }
+	press(fr, 311, KEY_SELECT);
+	if (fr == 314 && (gSeqMode == 1 || gHeldN)) fail("SELECT should PANIC: sequencer and notes off");
+	press(fr, 316, KEY_START); press(fr, 319, KEY_DUP); press(fr, 322, KEY_A);
+	if (fr == 321) shotTop("shots/start_menu.ppm");
 	if (fr == 193 && !(gHeldN && (gHeld[0] % 12) == 1)) fail("keys: a 2 px slip off C# shouldn't change the note (held %d)", gHeldN ? gHeld[0] : -1);
 }
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	FILE* f = fopen("sd/settings.bin", "wb"); int d[4] = {0x53455431, 1, 0, 0}; fwrite(d, sizeof(d), 1, f); fclose(f);
 	loadFont(); FRMAX = 340; app_main();
-	if (FR > 325) fail("menu: QUIT should leave the app (frame %d)", FR);
+	if (FR > 330) fail("menu: QUIT should leave the app (frame %d)", FR);
 	remove("sd/settings.bin");
 	printf("adv: last page, XY modes, PERF, circle pad, matrix hold, HUD ghost, vis tiles, hardware view\n");
 	return gFails ? 1 : 0;
