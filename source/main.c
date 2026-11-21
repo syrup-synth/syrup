@@ -3028,6 +3028,10 @@ static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound
 	}
 	presetLoad(gStyle, gPreset); return 1;
 }
+// START: a quick menu over the top screen (no more quitting by accident)
+static int gStartMenu = 0, gStartSel = 0;
+#define NSTART 5
+static const char* START_NAMES[NSTART] = {"SAVE PATCH", "BROWSER", "PANIC", "THEME", "QUIT"};
 static void browseSave(void) {
 	int slot = (gStyle == NSTYLES - 1 && gPreset < NUSER) ? gPreset : -1;
 	if (slot < 0) { for (int i = 0; i < NUSER; i++) if (gUser[i].magic != PATCH_MAGIC) { slot = i; break; } if (slot < 0) slot = gSaveSlot; }
@@ -3158,13 +3162,15 @@ static Param P_VIS[] = {
 	PEND};
 static const char* LOOP_NAMES_P[3] = {"OFF", "REC", "PLAY"};
 static const char* BARS_NAMES_P[5] = {"1 BAR", "2 BARS", "4 BARS", "8 BARS", "16 BARS"};
+static const char* LQ_NAMES[2] = {"OFF", "NEXT BAR"};
+static int gLoopQuant = 0;   // LOOP START: REC waits for the next bar
 static const char* LINK_NAMES_P[6] = {"OFF", "WIFI HOST", "WIFI JOIN", "IR SEND", "IR RECEIVE", "IR MIDI IN"};
 static int gLoopMode, gLoopBars, gCamOn, gLink, gBeatLight;
 static float gNetLat = 20;   // ms: FM-1 LINK's timing buffer (steady delay instead of wobble)
 static float gLoopLevel;
 static float gLoopSpeed, gLoopWow, gThruCut, gThruRes, gEchoWow; static int gTapeStop, gThru; static const char* TAPESTOP_NAMES[2];   // defined with the looper / CHIP > FX
 static Param P_HW[] = {
-	PE("LOOPER", &gLoopMode, 3, LOOP_NAMES_P, D_LOOP), PE("LOOP BARS", &gLoopBars, 5, BARS_NAMES_P, 0), PF("LOOP LEVEL", &gLoopLevel, 0, 1, 0.05f, "%", 0), PF("LOOP SPEED", &gLoopSpeed, -12, 12, 0.5f, "ST", 0), PF("LOOP WOW", &gLoopWow, 0, 1, 0.05f, "%", 0), PE("TAPE STOP", &gTapeStop, 2, TAPESTOP_NAMES, 0),
+	PE("LOOPER", &gLoopMode, 3, LOOP_NAMES_P, D_LOOP), PE("LOOP BARS", &gLoopBars, 5, BARS_NAMES_P, 0), PE("LOOP START", &gLoopQuant, 2, LQ_NAMES, 0), PF("LOOP LEVEL", &gLoopLevel, 0, 1, 0.05f, "%", 0), PF("LOOP SPEED", &gLoopSpeed, -12, 12, 0.5f, "ST", 0), PF("LOOP WOW", &gLoopWow, 0, 1, 0.05f, "%", 0), PE("TAPE STOP", &gTapeStop, 2, TAPESTOP_NAMES, 0),
 	PE("GRAINS", &gGrains, 3, GRAIN_MODES, D_GRAIN), PE("GRAIN SOURCE", &gGrainSrc, 3, GRAIN_SRCS, D_GRAIN), PF("GRAIN SIZE", &gGrainSize, 0, 1, 0.02f, "%", 0), PF("GRAIN SCAN", &gGrainScan, 0, 1, 0.02f, "%", 0),
 	PF("GRAIN SPRAY", &gGrainSpray, 0, 1, 0.02f, "%", 0), PF("GRAIN PITCH", &gGrainPitch, -24, 24, 1, "ST", 0), PF("GRAIN LEVEL", &gGrainLevel, 0, 1, 0.05f, "%", 0),
 	{"LOOP > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_LOOPTAB},
@@ -4635,6 +4641,19 @@ static int gShapeOn = 0, gShapeView = 0, gShDrag = -1;
 #define SH_H 76
 static const float ENV_SEGW[5] = {64, 34, 64, 34, 80};   // A, H, D, sustain hold, R: widths at their longest
 static const float ENV_MAXT[5] = {4, 2, 4, 0, 5};
+static void drawStartMenu(void) {
+	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
+	int mw = 200, mh = NSTART * 22 + 44, mx = 200 - mw / 2, my = 120 - mh / 2;
+	rect(mx, my, mw, mh, RGB3(TH->bg)); outline(mx, my, mw, mh, RGB3(TH->line)); outline(mx + 2, my + 2, mw - 4, mh - 4, RGB3(TH->grid));
+	text(200 - 5 * 8, my + 8, "MENU", 2, RGB3(TH->val));
+	for (int i = 0; i < NSTART; i++) {
+		int y = my + 30 + i * 22, on = i == gStartSel;
+		if (on) rect(mx + 10, y - 3, mw - 20, 16, RGB3(TH->keyOn));
+		const u8* c = on ? EGA[0] : TH->tabTxt;
+		text(200 - (int)strlen(START_NAMES[i]) * 4, y + 1, START_NAMES[i], 1, c[0], c[1], c[2]);
+	}
+	text(200 - 16 * 4, my + mh - 12, "A: OK  B: CLOSE", 1, RGB3(TH->dim));
+}
 #define ENV_X0 16                // inset from the edge: a stylus can't reach the last pixels under the bezel
 #define ENV_TOP (SH_Y + 14)       // clear of the tabs above and the A/D/S/R readout
 #define ENV_BOT (SH_Y + SH_H - 14)   // clear of the PERF buttons below
@@ -5474,6 +5493,7 @@ static void loopStartPlay(void) {
 	}
 	csndExecCmds(false);
 }
+static int gLoopSkip = 0;   // samples still to drop before the recording starts (LOOP START: NEXT BAR)
 static void loopRecStart(void) {
 	if (!gCapBuf) gCapBuf = (s16*)linearAlloc(CAPRING * 4);
 	if (!gCapBuf || !adpcmReady()) { say("NOT ENOUGH MEMORY FOR THE LOOPER"); gLoopMode = 0; return; }
@@ -5483,10 +5503,14 @@ static void loopRecStart(void) {
 	len -= len % 160; if (len < 160 * 8) len = 160 * 8;
 	memset(&gCapWB, 0, sizeof(gCapWB));
 	gCapWB.data_pcm16 = gCapBuf; gCapWB.nsamples = CAPRING; gCapWB.offset = 0;
-	gLoopLen = len; gCapLast = 0; gAdPos = 0; gLoopHave = 0;
+	gLoopLen = len; gCapLast = 0; gAdPos = 0; gLoopHave = 0; gLoopSkip = 0;
+	if (gLoopQuant) {   // capture starts now, but everything before the next bar line is thrown away: the loop starts exactly on the bar
+		float into = gBeatPh - 4 * floorf(gBeatPh / 4);   // quarter notes into this bar
+		gLoopSkip = (int)((4 - into) * 60.0f / gBPM * 32728.0f);
+	}
 	for (int k = 0; k < 2; k++) { gAdEnc[k].pred = 0; gAdEnc[k].idx = 0; }
 	ndspSetCapture(&gCapWB);
-	char m[40]; snprintf(m, sizeof(m), "LOOPER RECORDING %d S", len / 32728); say(m);
+	char m[40]; snprintf(m, sizeof(m), gLoopSkip ? "LOOPER ARMED: STARTS ON THE BAR" : "LOOPER RECORDING %d S", len / 32728); say(m);
 }
 static void loopTick(void) {   // main thread: pack whatever the capture wrote since last frame
 	if (gLoopMode != 1) return;
@@ -5494,6 +5518,10 @@ static void loopTick(void) {   // main thread: pack whatever the capture wrote s
 	int n = (int)off - (int)gCapLast; if (n < 0) n += CAPRING;
 	if (n <= 0) return;
 	DSP_InvalidateDataCache(gCapBuf, CAPRING * 4);
+	if (gLoopSkip > 0) {   // still before the bar line: drop it
+		int d = n < gLoopSkip ? n : gLoopSkip; gLoopSkip -= d; n -= d; gCapLast = (gCapLast + d) % CAPRING;
+		if (!gLoopSkip) { char m[40]; snprintf(m, sizeof(m), "LOOPER RECORDING %d S", gLoopLen / 32728); say(m); }
+	}
 	while (n > 0 && gAdPos < gLoopLen) {
 		int run = CAPRING - gCapLast; if (run > n) run = n;
 		if (run > gLoopLen - gAdPos) run = gLoopLen - gAdPos;
@@ -6617,7 +6645,7 @@ static void drawHardwarePanel(void) {
 	if (gLink) { snprintf(s, sizeof(s), "LINK %s %s", LINK_NAMES[gLink], gLinkUp ? (gLink == 1 ? "" : (gLinkRx < 1.5f ? "SYNCED" : "WAITING")) : "OFF"); text(10, 48, s, 1, TXT);
 		if (gLink == 1 && gLinkUp) { snprintf(s, sizeof(s), "%d JOINED", gLinkPeers); text(10, 60, s, 1, DIM); } }
 	else text(10, 48, "LINK OFF", 1, DIM);
-	snprintf(s, sizeof(s), "LOOPER %s", LOOP_NAMES[gLoopMode]); text(10, 74, s, 1, TXT);
+	snprintf(s, sizeof(s), "LOOPER %s", gLoopMode == 1 && gLoopSkip > 0 ? "ARMED" : LOOP_NAMES[gLoopMode]); text(10, 74, s, 1, TXT);
 	rect(10, 86, 184, 6, RGB3(TH->pad));
 	if (gLoopMode == 1 && gLoopLen) rect(10, 86, (int)(184.0f * gCapWB.offset / gLoopLen), 6, WARN);
 	else if (gLoopHave) rect(10, 86, 184, 6, DIM);
@@ -7724,7 +7752,17 @@ int main(void) {
 			if (kDown || osGetTime() - gSplashT0 > 4000) { gSplash = 0; kDown = 0; topDirty = botDirty = topAgain = botAgain = 1; }
 			else { gspWaitForVBlank(); continue; }
 		}
-		if (kDown & KEY_START) break;
+		if (kDown & KEY_START) { gStartMenu = !gStartMenu; gStartSel = 0; topDirty = topAgain = 1; kDown &= ~KEY_START; }
+		int startAct = -1;
+		if (gStartMenu) {   // the menu has the buttons; the touch screen keeps playing
+			if (kDown & KEY_DUP) { gStartSel = (gStartSel + NSTART - 1) % NSTART; topDirty = 1; }
+			if (kDown & KEY_DDOWN) { gStartSel = (gStartSel + 1) % NSTART; topDirty = 1; }
+			if (kDown & KEY_A) { startAct = gStartSel; gStartMenu = 0; }
+			if (kDown & KEY_B) gStartMenu = 0;
+			if (!gStartMenu) topDirty = topAgain = botDirty = 1;
+			kDown &= KEY_TOUCH; kHeld &= KEY_TOUCH;
+		}
+		if (startAct == 4) break;   // QUIT
 		wakeTick();
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
@@ -7756,6 +7794,11 @@ int main(void) {
 		if (kDown & KEY_B) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
 		if (kDown & KEY_L) { page = coreStep(page, -1); topDirty = 1; }   // shoulders: the main pages only (X / Y go through all of them)
 		if (kDown & KEY_R) { page = coreStep(page, 1); topDirty = 1; }
+		if (startAct == 0) { browseSave(); if (gSaveArm >= 0) browseSave(); }   // one press from the menu: no "A again"
+		if (startAct == 1) page = 0;
+		if (startAct == 2) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; say("PANIC: ALL NOTES OFF"); }
+		if (startAct == 3) { gTheme = (gTheme + 1) % NTHEMES; char m[32]; snprintf(m, sizeof(m), "THEME: %s", THEME_NAMES[gTheme]); say(m); }
+		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
 
 		if (page == 0) {   // preset browser: the D-pad moves through the list itself
 			int ds = 0, dp = 0, fresh = 0;
@@ -7773,7 +7816,7 @@ int main(void) {
 		int dir = 0, fast = 0;
 		if (kDown & (KEY_DLEFT | KEY_DRIGHT)) { dir = (kDown & KEY_DRIGHT) ? 1 : -1; repeatT = 0.35f; }
 		else if (kHeld & (KEY_DLEFT | KEY_DRIGHT)) { repeatT -= dt; if (repeatT <= 0) { dir = (kHeld & KEY_DRIGHT) ? 1 : -1; repeatT = 0.05f; fast = 1; } }
-		else if (gStickDX != 0 && page != 0) {   // circle pad DATA: the further it's pushed, the faster the value moves (2 to 30 steps a second)
+		else if (gStickDX != 0 && page != 0 && !gStartMenu) {   // circle pad DATA: the further it's pushed, the faster the value moves (2 to 30 steps a second)
 			static float acc = 0; acc += gStickDX * fabsf(gStickDX) * dt * 30 + (gStickDX > 0 ? 2 : -2) * dt;
 			if (acc >= 1) { dir = 1; fast = 1; acc -= 1; } else if (acc <= -1) { dir = -1; fast = 1; acc += 1; }
 			if (acc > 1) acc = 1; if (acc < -1) acc = -1;
@@ -8081,7 +8124,8 @@ int main(void) {
 					else { frame(4, 30, 196, 125); text(8, 34, "A", 1, DIM); text(8, 96, "B", 1, DIM); }
 					scanlines();
 				}
-				if (gCallT > 0 && page != 8) {   // big value pop-up, drawn last so the visuals don't cover it
+				if (gStartMenu) drawStartMenu();
+				else if (gCallT > 0 && page != 8) {   // big value pop-up, drawn last so the visuals don't cover it
 					fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
 					const Param* cp = (const Param*)gCallP; int bar = cp && cp->type != PT_E && cp->mx > cp->mn;
 					int w = (int)strlen(gCallTxt) * 16 + 16; if (bar && w < 160) w = 160;

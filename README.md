@@ -68,7 +68,7 @@ Four MACRO knobs (mod sources MACRO 1-4); XY PAD can play MACRO 1+2 or 3+4 inste
 
 ## HARDWARE page (HW tab)
 
-- **LOOPER:** REC records 1, 2 or 4 bars of Syrup's output (the DSP's own output tap), then loops it on two channels of the second sound chip while you play on top. LOOP LEVEL sets its volume.
+- **LOOPER:** REC records 1, 2 or 4 bars of Syrup's output (the DSP's own output tap), then loops it on two channels of the second sound chip while you play on top. LOOP LEVEL sets its volume. LOOP START NEXT BAR: REC arms the looper and the recording starts exactly on the next bar line (the top screen says ARMED until then).
 - **LOOP > TABLE / MIC > TABLE / CAM > TABLE:** turn the loop, one second of mic (sing or play into it), or a camera photo (each image row becomes a frame) into a 64-frame wavetable. It's saved as a Serum-style .wav in /3ds/syrup/ and loaded into OSC A. Pitched audio is cut into clean single cycles; anything else becomes even slices.
 - **UPDATE SYRUP:** checks the latest build over Wi-Fi and installs it (CIA through the system installer, or replaces /3ds/syrup.3dsx when run from the Homebrew Launcher). Close and reopen Syrup afterwards.
 - **GET WAVETABLES:** downloads the Syrup Pack (35 original wavetables in `wavetables/` of this repo) over Wi-Fi into /3ds/syrup/, skipping ones you already have. Any Serum-format .wav you copy there works too.
@@ -157,7 +157,7 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | L / R | Previous / next page |
 | Circle pad | Left/right pitch bend, up/down = STICK mod source |
 | SELECT | Help |
-| START | Quit |
+| START | Quick menu over the top screen: SAVE PATCH, BROWSER, PANIC, THEME, QUIT (D-pad + A; B or START closes it). The touch screen keeps playing while it's open. |
 
 ## Wavetables
 
@@ -212,7 +212,7 @@ On the PLAY page the bottom screen's XY pad becomes a 16-step grid. Each of the 
 - **UNDO** (in PAT, after ACID, CLEAR, REV, ROT, HUM or a PASTE): takes it back; tap again to redo.
 - **REV / ROT / HUM** (in PAT): REV plays the pattern back to front (a long note ends where it used to start); ROT moves everything one step later, the last step wrapping to the first; HUM nudges each note's velocity (±20%) and timing (±10% of a step).
 - **COPY / PASTE** (step editor, under the sliders): copies a whole step, notes, lengths and locks, onto another step.
-- **Patterns and song (PAT):** 16 patterns, A to P. Tap one to switch; while playing, it waits for the end of the current pattern. COPY> copies the pattern into the next one and moves there (for variations), CLEAR empties it. +ADD puts the current pattern at the end of the song chain, <DEL removes the last one; SONG plays the chain (tap a slot to jump to it). Patterns and song are saved on the SD card when you leave the page and when you quit.
+- **Patterns and song (PAT):** 16 patterns, A to P. Tap one to switch; while playing, it waits for the end of the current pattern. COPY> copies the pattern into the next one and moves there (for variations), CLEAR empties it. +ADD puts the current pattern at the end of the song chain, <DEL removes the last one; SONG plays the chain (tap a slot to jump to it). Patterns and song are saved on the SD card when you leave the page and when you quit (START > QUIT).
 - **ACID:** writes a random 303-style bassline. It favours the root, adds octave jumps, rests, accents and slides, and sits in the bass octave. Tap it again for a new line. Try it with the BASS > ACID patch.
 - **While it plays:** the keys transpose the pattern.
 

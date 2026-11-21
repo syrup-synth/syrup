@@ -124,12 +124,25 @@ static void SCRIPT(int fr) {
 		gMacro[3] = 0.6f; gFxMixMod = modSum(DST_FXMIX, newestVoice()); if (fabsf(fxMixEff() - 0.6f) > 0.01f) fail("INIT PATCH: M4 should set the FX MIX (%.2f)", fxMixEff());
 		gMacro[3] = 0; gFxMixMod = 0;
 	}
+	// START opens the quick menu instead of quitting; PANIC from it; QUIT really quits (last thing in this test)
+	press(fr, 296, KEY_START);
+	if (fr == 299 && !gStartMenu) fail("START should open the quick menu, not quit");
+	press(fr, 300, KEY_DDOWN); press(fr, 303, KEY_DDOWN);
+	if (fr == 305) { midiPush(0x90, 60, 100); gSeqMode = 1; }
+	press(fr, 306, KEY_A);
+	if (fr == 309) { if (gStartMenu) fail("menu: A should close it"); if (gSeqMode == 1 || gHeldN) fail("menu: PANIC should stop the sequencer and notes"); }
+	if (fr == 310) { gLoopQuant = 1; gBeatPh = 1; gBPM = 120; loopRecStart(); int want = (int)(3 * 0.5f * 32728);
+		if (abs(gLoopSkip - want) > 200) fail("LOOP START NEXT BAR: one beat in at 120 should wait 1.5 s (%d, want %d)", gLoopSkip, want);
+		gLoopMode = 0; loopModeChanged(); gLoopQuant = 0; gLoopSkip = 0; }
+	press(fr, 312, KEY_START); press(fr, 315, KEY_DUP); press(fr, 318, KEY_A);
+	if (fr == 317) shotTop("shots/start_menu.ppm");
 	if (fr == 193 && !(gHeldN && (gHeld[0] % 12) == 1)) fail("keys: a 2 px slip off C# shouldn't change the note (held %d)", gHeldN ? gHeld[0] : -1);
 }
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	FILE* f = fopen("sd/settings.bin", "wb"); int d[4] = {0x53455431, 1, 0, 0}; fwrite(d, sizeof(d), 1, f); fclose(f);
-	loadFont(); FRMAX = 295; app_main();
+	loadFont(); FRMAX = 340; app_main();
+	if (FR > 325) fail("menu: QUIT should leave the app (frame %d)", FR);
 	remove("sd/settings.bin");
 	printf("adv: last page, XY modes, PERF, circle pad, matrix hold, HUD ghost, vis tiles, hardware view\n");
 	return gFails ? 1 : 0;
