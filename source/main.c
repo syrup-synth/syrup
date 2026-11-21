@@ -504,7 +504,7 @@ static int gVoiceMode = 0, gChord = 0, gFx = 0, gEchoT = 1, gDrive = 0, gBendRan
 static int gODspUp = 0, gODspRev = 0;     // OpenDSP running / has reverb (experimental build)
 static volatile int gDspRevOn = 0;        // aux bus 1 carries the DSP reverb right now
 static float revAmt(void);
-static int gDspRevSel = 0, gFwSel = 0, gFwBoot = 0;    // EXP: REVERB ON (0 DSP, 1 ARM) live; DSP FIRMWARE (0 OPENDSP, 1 SYSTEM) at launch
+static int gDspRevSel = 0, gFwSel = 0, gFwBoot = 0;    // EXP: REVERB ON (0 DSP, 1 ARM) live; DSP FIRMWARE (0 OPENDSP, 1 OEM) at launch
 static const char* EXP_PATH = "sdmc:/3ds/syrup/exp.bin";   // EXP's own settings; the release never reads it
 static float gGlide = 0.0f, gChorus = 0.3f, gDriveAmt = 0.4f, gMaster = 0.8f;
 
@@ -3338,7 +3338,7 @@ static Param P_HW[] = {
 static const char* ONOFF2[2] = {"OFF", "ON"};
 #ifdef SYRUP_OPENDSP
 static const char* REVENG_NAMES[2] = {"DSP", "ARM"};
-static const char* FW_NAMES[2] = {"OPENDSP", "SYSTEM"};
+static const char* FW_NAMES[2] = {"OPENDSP", "OEM"};
 #endif
 static Param P_MASTER[] = {
 	PE("OUT FILTER", &gOfType, NOFT, OFT_NAMES, D_OFT), PF("OUT CUTOFF", &gOfCut, 0, 1, 0.01f, "%", 0), PF("OUT RES", &gOfRes, 0, 1, 0.02f, "%", 0),
@@ -4019,9 +4019,9 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			if (gODspUp && ++tick >= 30) { tick = 0; opendspStats st = {.struct_size = sizeof st}; if (R_SUCCEEDED(opendspGetStats(&st, false))) load = st.load; }
 			int pend = gFwSel != gFwBoot;   // DSP FIRMWARE changed: takes effect next launch
 			if (pend) snprintf(s, sizeof(s), "DSP FW: RESTART TO APPLY");
-			else if (!gFwBoot && !gODspUp) snprintf(s, sizeof(s), "OPENDSP FAILED: SYSTEM DSP");
+			else if (!gFwBoot && !gODspUp) snprintf(s, sizeof(s), "OPENDSP FAILED: OEM DSP");
 			else if (gODspUp) snprintf(s, sizeof(s), "OPENDSP %d%%  REV %s", (int)(load * 100 + 0.5f), gDspRevOn ? "DSP" : "ARM");
-			else snprintf(s, sizeof(s), "SYSTEM DSP  REV ARM");
+			else snprintf(s, sizeof(s), "OEM DSP  REV ARM");
 			text(150, 186, s, 1, (pend || (!gFwBoot && !gODspUp)) ? WARN : DIM); }
 #endif
 		{ u32 dr = gAudioOK ? ndspGetDroppedFrames() : 0;
