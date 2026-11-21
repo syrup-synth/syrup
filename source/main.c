@@ -7774,6 +7774,11 @@ int main(void) {
 			static float acc = 0; acc += gStickDX * fabsf(gStickDX) * dt * 30 + (gStickDX > 0 ? 2 : -2) * dt;
 			if (acc >= 1) { dir = 1; fast = 1; acc -= 1; } else if (acc <= -1) { dir = -1; fast = 1; acc += 1; }
 			if (acc > 1) acc = 1; if (acc < -1) acc = -1;
+			if (dir && PAGES[page][sel[page]].p == &gBPM) {   // the circle pad never moves the tempo: too easy to knock while playing
+				dir = 0; acc = 0;
+				static float hintT = 0; if (hintT <= 0) { say("TEMPO: USE THE D-PAD"); hintT = 3; }
+				hintT -= dt;
+			}
 		}
 		if (dir) {
 			Param* p = &PAGES[page][sel[page]];
