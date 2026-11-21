@@ -132,6 +132,22 @@ static void crashCheck(void) {
 }        // set while the audio thread runs the arp/seq clock (it holds gMipsLock)
 static LightLock gMipsLock;   // guards the shared FFT buffers (worker on core 1 vs main core)
 static Thread gWorker = NULL;
+#define SYRUP_VERSION "1.0"
+// safe saves: write NAME.new, then swap it in, so pulling the power mid-save can never leave a half-written file
+static FILE* safeOpen(const char* path) { char t[96]; snprintf(t, sizeof(t), "%s.new", path); return fopen(t, "wb"); }
+static int safeClose(FILE* f, const char* path, int ok) {
+	char t[96]; snprintf(t, sizeof(t), "%s.new", path);
+	if (fflush(f) != 0) ok = 0;
+	if (fclose(f) != 0) ok = 0;
+	if (!ok) { remove(t); return 0; }
+	remove(path); return rename(t, path) == 0;
+}
+static FILE* safeRead(const char* path) {   // a save that lost power between the remove and the rename left only NAME.new: use it
+	FILE* f = fopen(path, "rb"); if (f) return f;
+	char t[96]; snprintf(t, sizeof(t), "%s.new", path);
+	f = fopen(t, "rb"); if (f) { fclose(f); rename(t, path); return fopen(path, "rb"); }
+	return NULL;
+}
 static Result gCore2Rc = 0, gCore2ThRc = 0; static u32 gCore2Lim = 0;   // why core 2 is off (HARDWARE page)
 static void probeMain(void* a) { (void)a; svcExitThread(); }
 static volatile u64 gCore1Busy = 0;   // system ticks core 1 spent rebuilding (HARDWARE page meter)
@@ -2008,12 +2024,13 @@ static void seqSnap(void) {   // copy what gets saved (hold the voice lock: the 
 	gSnapHdr[0] = gPatCur; gSnapHdr[1] = gSongLen; gSnapHdr[2] = gSongOn; gSnapHdr[3] = (int)sizeof(SeqPat);
 }
 static void seqWriteSnap(void) {   // the slow part, done without the lock
-	FILE* f = fopen(SEQ_PATH, "wb"); if (!f) return;
-	u32 m = SEQ_MAGIC; fwrite(&m, 4, 1, f); fwrite(gSnapHdr, sizeof(gSnapHdr), 1, f); fwrite(gSnapPat, sizeof(gSnapPat), 1, f); fwrite(gSnapSong, sizeof(gSnapSong), 1, f); fclose(f);
+	FILE* f = safeOpen(SEQ_PATH); if (!f) return;
+	u32 m = SEQ_MAGIC; int ok = fwrite(&m, 4, 1, f) == 1 && fwrite(gSnapHdr, sizeof(gSnapHdr), 1, f) == 1 && fwrite(gSnapPat, sizeof(gSnapPat), 1, f) == 1 && fwrite(gSnapSong, sizeof(gSnapSong), 1, f) == 1;
+	safeClose(f, SEQ_PATH, ok);
 }
 static void seqSave(void) { seqSnap(); seqWriteSnap(); }
 static void seqLoad(void) {
-	FILE* f = fopen(SEQ_PATH, "rb"); if (!f) return;
+	FILE* f = safeRead(SEQ_PATH); if (!f) return;
 	u32 m = 0; int hdr[4]; static SeqPat tmp[NPAT]; static SeqPatV1 old[NPAT]; u8 song[NSONG]; int ok = 0;
 	if (fread(&m, 4, 1, f) == 1 && m == SEQ_MAGIC && fread(hdr, sizeof(hdr), 1, f) == 1) {
 		if (hdr[3] == (int)sizeof(SeqPat)) ok = fread(tmp, sizeof(tmp), 1, f) == 1;
@@ -2470,6 +2487,11 @@ static void c_dub(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = 0.
 static void c_techno(SPatch* p) { p->master = 0.5f; OA.table = T_DIGITAL; OA.pos = 0.6f; ENV1(0.001f, 0, 0.2f, 0.0f, 0.15f); OUTF(OF_COMBP, 0.4f, 0.45f, 0.2f, 0); REVB(0.3f, RV_HALL); DLYS(0.2f, S8D, DL_DIGI); }
 static void c_strum(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = 0.55f; OA.uni = 2; OA.detune = 6; ENV1(0.002f, 0, 1.4f, 0.0f, 0.8f); ENV2(0.0f, 0, 0.4f, 0, 0.3f);
 	MOD(0, SRC_ENV2, DST_CUTOFF, 0.35f); p->cutoff = 0.4f; MFX(FX_CHORUS, 0.4f, 0.3f, 0.25f); REVB(0.2f, RV_HALL); }
+static void c_omni(SPatch* p);
+// ARP STRUM showcases: hold one key, the CHORD arp strums it
+static void c_strum8(SPatch* p) { c_strum(p); p->chord = 2; ARP(6, 1, 1, 0.85f); p->arpStrum = 22; p->arpStrumDir = 2; }   // MAJ7, eighths, down-up like a rhythm guitar
+static void c_harproll(SPatch* p) { c_omni(p); p->chord = 1; ARP(6, 0, 1, 0.95f); p->arpStrum = 70; p->arpStrumDir = 0; }   // slow rolled MIN7, one stroke a beat
+static void c_rake(SPatch* p) { c_strum(p); OA.pos = 0.7f; p->cutoff = 0.5f; p->chord = 4; ARP(6, 3, 1, 0.6f); p->arpStrum = 12; p->arpStrumDir = 3; }   // SUS, fast raked sixteenths
 static void c_omni(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = TRI; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1; OB.level = 0.3f; ENV1(0.002f, 0, 2.0f, 0.0f, 1.5f);
 	MFX(FX_CHORUS, 0.5f, 0.6f, 0.45f); REVB(0.35f, RV_HALL); }
 static void c_pump(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 4; OA.detune = 16; ENV1(0.01f, 0, 0.6f, 0.8f, 0.3f); OUTF(OF_L12, 0.5f, 0.2f, 0, 0); p->pump = 0.7f; REVB(0.2f, RV_HALL); }
@@ -2835,7 +2857,8 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"NYLON", u_nylon}, {"MARIMBA WOOD", u_marimba}, {"KALIMBA", u_kalimba}, {"DIGI HARP", u_digiharp}, {"STAB 1999", u_stab99}, {"KOTO SPRING", u_koto},
 	 {"CHIP PLINK", u_chipplink}, {"GRAIN PLUCK", u_grain}, {"STEEL PAN", u_steel}, {"RAIN ON TIN", u_raintin}, {"SOFT PLUCK", u_softpluck}, {"KS GUITAR", u_ksguitar}, {"KS BASS", u_ksbass}, {"KS HARP", u_ksharp}},
 	{{"ORGAN STAB", c_organstab}, {"NEO SOUL 9", c_neosoul}, {"DUB CHORD", c_dub}, {"TECHNO STAB", c_techno}, {"STRUM GUITAR", c_strum}, {"OMNI HARP", c_omni},
-	 {"PUMP CHORDS", c_pump}, {"GOSPEL ORGAN", c_gospel}, {"SHOEGAZE WALL", c_shoegaze}},
+	 {"PUMP CHORDS", c_pump}, {"GOSPEL ORGAN", c_gospel}, {"SHOEGAZE WALL", c_shoegaze},
+	 {"STRUM 8THS", c_strum8}, {"HARP ROLL", c_harproll}, {"RAKE 16THS", c_rake}},
 	{{"BERLIN 16", q_berlin}, {"ACID CIRCLE", q_acidcircle}, {"TRANCE GATE", q_gate}, {"PING ARP", q_pingarp}, {"CHAOS ARP", q_chaosarp}, {"MOTION BELLS", q_motionbells},
 	 {"OCTAVE BOUNCE", q_octbounce}, {"DRAWN STEPS", q_drawnsteps}, {"GRAIN RUN", q_grainrun}, {"POLYRHYTHM", q_polyrhythm}},
 	{{"TIDE POOL", x_tidepool}, {"FROZEN TABLE", x_frozen}, {"NET STATIC", x_netstatic}, {"TAPE ROOM", x_taperoom}, {"BROWN SEA", x_sea}, {"GEIGER", x_geiger},
@@ -2868,7 +2891,7 @@ static const char* USER_PATH = "sdmc:/3ds/syrup/user_presets.bin";
 
 static void userLoad(void) {
 	for (int i = 0; i < NUSER; i++) { patchInit(&gUser[i]); snprintf(gUser[i].name, sizeof(gUser[i].name), "EMPTY %d", i + 1); gUser[i].magic = 0; }
-	FILE* f = fopen(USER_PATH, "rb");
+	FILE* f = safeRead(USER_PATH);
 	if (!f) return;
 	fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
@@ -2889,11 +2912,10 @@ static void userLoad(void) {
 }
 static int userSave(void) {
 	mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777);
-	FILE* f = fopen(USER_PATH, "wb");
+	FILE* f = safeOpen(USER_PATH);
 	if (!f) return 0;
 	int ok = fwrite(gUser, sizeof(SPatch), NUSER, f) == NUSER;
-	fclose(f);
-	return ok;
+	return safeClose(f, USER_PATH, ok);
 }
 
 static void patchCapture(SPatch* p) {
@@ -3335,6 +3357,7 @@ static void splashDraw(void) {
 	}
 	static const char* T = "WAVETABLE SYNTH";
 	text(200 - (int)strlen(T) * 4, y0 + SPLASH_H + 22, T, 1, 255, 255, 85);
+	text(200 - 4 * 4, y0 + SPLASH_H + 36, "V" SYRUP_VERSION, 1, 170, 85, 0);
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	memset(fb, 0, 320 * 240 * 3);
 	text(160 - 10 * 4, 112, "LOADING...", 1, 170, 85, 0);
@@ -3724,9 +3747,9 @@ static int paramDst(const void* p) {   // the matrix destination that moves this
 	return -1;
 }
 static const char* SET_PATH = "sdmc:/3ds/syrup/settings.bin";
-static void settingsSave(int page) { FILE* f = fopen(SET_PATH, "wb"); if (!f) return; int d[4] = {0x53455432, page, gStickMode, gSpkEq}; fwrite(d, sizeof(d), 1, f); fclose(f); }
+static void settingsSave(int page) { FILE* f = safeOpen(SET_PATH); if (!f) return; int d[4] = {0x53455432, page, gStickMode, gSpkEq}; safeClose(f, SET_PATH, fwrite(d, sizeof(d), 1, f) == 1); }
 static int settingsLoad(void) {   // returns the page you were on last time
-	FILE* f = fopen(SET_PATH, "rb"); int d[4] = {0}, pg = 0; if (!f) return pg;   // first run: the browser
+	FILE* f = safeRead(SET_PATH); int d[4] = {0}, pg = 0; if (!f) return pg;   // first run: the browser
 	if (fread(d, sizeof(d), 1, f) == 1 && (d[0] == 0x53455431 || d[0] == 0x53455432)) {
 		if (d[1] >= 0 && d[1] < NPAGES && d[1] != 8) pg = d[1]; gSpkEq = d[3] >= 0 && d[3] < 3 ? d[3] : 2;
 		gStickMode = d[0] == 0x53455432 && d[2] >= 0 && d[2] < 4 ? d[2] : SM_DATA;   // older settings: the new default, DATA
@@ -7043,6 +7066,7 @@ static void drawHardwarePanel(void) {
 		meter(10, 164, 96, gCamLight, 0, "LIGHT");
 		meter(10, 176, 96, gCamColor, 1, "COLOR");
 	} else text(10, 166, gCamOn ? "CAMERA STARTING" : "CAMERA OFF", 1, DIM);
+	text(10, 212, "SYRUP V" SYRUP_VERSION, 1, DIM);
 }
 
 // ================================================================ drums: synthesised kit on 3 CSND channels, pattern presets, tempo-locked
@@ -7331,8 +7355,8 @@ static void kitNoteOn(int note, float vel) { kitHitSound(kitSound(note), vel); }
 // MIC TAP: knock or tap near the mic; each hit plays the drum now and is written into MINE at the nearest 16th,
 // as loud as you hit it. Switching to a row copies its current pattern into MINE first, so you overdub.
 static int gMyDrumLoaded = 0;
-static void myDrumSave(void) { if (!gMyDrumLoaded) return; FILE* f = fopen("sdmc:/3ds/syrup/mydrums.bin", "wb"); if (f) { fwrite(gMyDrum, 1, sizeof(gMyDrum), f); fclose(f); } }
-static void myDrumLoad(void) { if (gMyDrumLoaded) return; gMyDrumLoaded = 1; FILE* f = fopen("sdmc:/3ds/syrup/mydrums.bin", "rb"); if (f) { if (fread(gMyDrum, 1, sizeof(gMyDrum), f) != sizeof(gMyDrum)) memset(gMyDrum, 0, sizeof(gMyDrum)); fclose(f); } }
+static void myDrumSave(void) { if (!gMyDrumLoaded) return; FILE* f = safeOpen("sdmc:/3ds/syrup/mydrums.bin"); if (f) safeClose(f, "sdmc:/3ds/syrup/mydrums.bin", fwrite(gMyDrum, 1, sizeof(gMyDrum), f) == sizeof(gMyDrum)); }
+static void myDrumLoad(void) { if (gMyDrumLoaded) return; gMyDrumLoaded = 1; FILE* f = safeRead("sdmc:/3ds/syrup/mydrums.bin"); if (f) { if (fread(gMyDrum, 1, sizeof(gMyDrum), f) != sizeof(gMyDrum)) memset(gMyDrum, 0, sizeof(gMyDrum)); fclose(f); } }
 static void drumRecChanged(void) {
 	myDrumLoad();
 	if (gDrumRec == 4) { memset(gMyDrum, 0, sizeof(gMyDrum)); gDrumRec = 0; myDrumSave(); say("MINE CLEARED"); return; }
