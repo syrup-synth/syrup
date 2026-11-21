@@ -44,6 +44,7 @@ static void SCRIPT(int fr) {
 		stepSetNote(3, 52, 1); gSeq[3].skip = 100; seqFireAt(3, 3, 0, 0); if (gSqNn) fail("PROB 0%%: the step shouldn't play"); gSeq[3].skip = 0; stepSetNote(3, 52, 0);
 	}
 	tap(fr, 98, 280, SE_Y + 2);                        // DONE
+	if (fr == 101) { gSeq[0].pitch = 3; shotBot("shots/seq_locks.ppm"); gSeq[0].pitch = 0; }
 	if (fr == 100 && gStepEd >= 0) fail("DONE should close the step editor");
 	tap(fr, 101, BTN_X(1), XY_Y + 5);
 	tap(fr, 104, 4 + 30, PV_Y + 33);                  // COPY>

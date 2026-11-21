@@ -4047,6 +4047,12 @@ static void drawGrid(void) {
 			rectP(x, y, 2, ROLL_RH - 3, TH->txt);   // the note's start
 			if (p->fl & 1) rectP(x + 3, y + 2, 3, ROLL_RH - 7, TH->bg);   // accent
 			if (p->fl & 2) rectP(x + w, y + ROLL_RH / 2 - 2, 3, 2, TH->keyOn);   // slide into the next note
+			{   // the step's locks as letters inside the note, tracker-style: C cutoff, R res, P pitch, G gate, N nudge, % chance
+				char lk[8]; int n = 0;
+				if (p->cut) lk[n++] = 'C'; if (p->res) lk[n++] = 'R'; if (p->pitch) lk[n++] = 'P'; if (p->gate) lk[n++] = 'G'; if (p->nudge) lk[n++] = 'N'; if (p->skip) lk[n++] = '%';
+				int lx = x + (p->fl & 1 ? 7 : 3), fit = (x + w - lx) / 8; if (n > fit) n = fit; lk[n] = 0;
+				if (n > 0) { rectP(lx, y, n * 8, ROLL_RH - 3, TH->txt); text(lx, y + 1, lk, 1, RGB3(TH->bg)); }
+			}
 		}
 		if (p->gate || p->skip || p->cut || p->res || p->pitch || p->nudge || p->rat > 1) rectP(rollX(st) + (int)ROLL_CW / 2 - 1, ROLL_TOP - 2, 3, 2, TH->keyOn);   // the step has locks
 		if (p->rat > 1) for (int k = 0; k < p->rat; k++) rectP(rollX(st) + 2 + k * 4, ROLL_TOP - 5, 2, 2, TH->warn);   // ratchet dots
