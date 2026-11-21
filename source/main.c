@@ -5118,6 +5118,7 @@ static void hwMeter(int x, int y, const char* nm, float v, int bip) {
 	if (bip) { int z = x + 106, e = z + (int)(v * 50); rect(z, y, 1, 8, RGB3(TH->txt)); rect(e < z ? e : z, y + 1, abs(e - z) + 1, 6, RGB3(TH->val)); }
 	else rect(x + 56, y + 1, (int)((v < 0 ? 0 : v) * 100), 6, RGB3(TH->val));
 }
+static void drawGrainEd(void); static int grainEdTouch(int x, int y, int press, int release);
 static void drawHwView(void) {   // HARDWARE: what the sensors read right now, and the camera
 	rect(0, TAB_H, 320, WORK_B - TAB_H, RGB3(TH->bg));
 	text(4, XY_Y, "SENSORS", 1, RGB3(TH->val));
@@ -5235,7 +5236,7 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	if (gShapeOn && !gGridOn && !gAddEdit) drawShapeEditor();
 	if (gChainOn && !gGridOn && !gAddEdit) drawChainView();
 	if (gVisOnB && !gGridOn && !gAddEdit) drawVisTiles();
-	if (gHwOnB && !gGridOn && !gAddEdit) drawHwView();
+	if (gHwOnB && !gGridOn && !gAddEdit) { if (gGrains) drawGrainEd(); else drawHwView(); }
 	if (!gGridOn && !gAddEdit) drawSeqStrip();
 	drawPerfRow(latch);
 	if (latch) { outline(0, KB_Y, 320, 240 - KB_Y, HI); outline(1, KB_Y + 1, 318, 238 - KB_Y, HI); }   // LATCH: notes hold, and the keyboard says so
@@ -6062,7 +6063,7 @@ static const char* GRAIN_SRCS[3] = {"LOOP", "TABLE", "MIC"};
 #define GR_N 4
 #define GR_MAX 8192
 static s16* gGrBuf[GR_N]; static ndspWaveBuf gGrWB[GR_N]; static s16* gGrPad = NULL; static ndspWaveBuf gGrPadWB;
-static float gGrPos = 0;
+static float gGrPos = 0; static int gGrHold = 0, gGrBuildN = 0;   // GRAIN EDITOR: a finger on the waveform holds the position there
 static s16* gGrSrcBuf = NULL; static int gGrSrcLen = 0, gGrSrcRate = 32728, gGrSrcKind = -1; static char gGrSrcTab[40] = "";
 #define GR_SRCMAX (32728 * 16)
 static int grainReserved(int c) { return gGrains && (c == GR_CH0 || c == GR_CH0 + 1); }
@@ -6093,7 +6094,7 @@ static int grainBuild(void) {   // (re)make the source buffer for the chosen sou
 		gGrSrcLen = N; gGrSrcRate = 16364;
 	}
 	DSP_FlushDataCache(gGrSrcBuf, gGrSrcLen * 2);
-	gGrSrcKind = gGrainSrc;
+	gGrSrcKind = gGrainSrc; gGrBuildN++;
 	return gGrSrcLen > 64;
 }
 static void grainMix(float g) {   // both grain channels: level, and into the master chain when it's on
@@ -6121,7 +6122,8 @@ static void grainsTick(void) {   // main thread, every frame
 		if (gGrWB[b].status == NDSP_WBUF_QUEUED || gGrWB[b].status == NDSP_WBUF_PLAYING) continue;
 		if (!gGrBuf[b] && !(gGrBuf[b] = (s16*)linearAlloc(GR_MAX * 2))) return;
 		int L = gGrSrcLen;
-		if (gGrains == 2 && gGrainSrc == 1) {   // TABLE in KEYS: position = OSC A's WT POS (with mods) plus SCAN drift
+		if (gGrHold) {}   // the editor has it
+		else if (gGrains == 2 && gGrainSrc == 1) {   // TABLE in KEYS: position = OSC A's WT POS (with mods) plus SCAN drift
 			static float drift = 0; drift += len * 0.5f * (gGrainScan * 2 - 1); while (drift < 0) drift += L; while (drift >= L) drift -= L;
 			gGrPos = gPosEff[0] * (L - len) + (gGrainScan != 0.5f ? drift : 0);
 		} else gGrPos += len * 0.5f * (gGrainScan * 2 - 1);   // SCAN: 50% = frozen, above = forwards, below = backwards
@@ -6157,6 +6159,50 @@ static void grainsChanged(void) {
 		ndspChnSetRate(GR_CH0 + 1, gGrSrcRate); ndspChnWaveBufAdd(GR_CH0 + 1, &gGrPadWB);
 	}
 	if (gGrainSrc == 2) say("GRAINS: GRABBED THE LAST SECOND OF MIC (PICK MIC AGAIN TO REGRAB)");
+}
+
+// ---- GRAIN EDITOR: HARDWARE page with GRAINS on, in place of the sensor view. The source waveform, the grain
+// (its length, where it is now) and the spray zone around it. Drag on it: left / right = position (held while
+// your finger is down, SCAN carries on from there when you let go), up / down = GRAIN SIZE.
+#define GE_X 4
+#define GE_W 312
+#define GE_Y (XY_Y + 12)
+#define GE_H 62
+static void drawGrainEd(void) {
+	rect(0, TAB_H, 320, WORK_B - TAB_H, RGB3(TH->bg));
+	char s[48]; int len = (int)(512 + gGrainSize * 7000); if (len > GR_MAX) len = GR_MAX;
+	snprintf(s, sizeof(s), "GRAINS %s  SOURCE %s", GRAIN_MODES[gGrains], GRAIN_SRCS[gGrainSrc]); text(4, XY_Y, s, 1, RGB3(TH->val));
+	snprintf(s, sizeof(s), "%dMS", (int)(len * 1000.0f / (gGrSrcRate > 0 ? gGrSrcRate : 32728))); text(316 - (int)strlen(s) * 8, XY_Y, s, 1, RGB3(TH->txt));
+	rect(GE_X, GE_Y, GE_W, GE_H, RGB3(TH->kbBg)); outline(GE_X - 1, GE_Y - 1, GE_W + 2, GE_H + 2, RGB3(TH->line));
+	int L = gGrSrcLen;
+	if (!gGrSrcBuf || L <= 64) { text(GE_X + 8, GE_Y + GE_H / 2 - 4, gGrainSrc == 0 ? "RECORD A LOOP FIRST" : "NO SOURCE YET", 1, RGB3(TH->dim)); return; }
+	static u8 pk[GE_W]; static int pkFor = -1;   // waveform peaks, worked out once per source, scaled to fill the box
+	if (pkFor != gGrBuildN) { pkFor = gGrBuildN; static int raw[GE_W]; int top = 1;
+		for (int x = 0; x < GE_W; x++) { int a = (int)((long long)x * L / GE_W), b = (int)((long long)(x + 1) * L / GE_W), m = 0;
+			for (int i = a; i < b; i += 4) { int v = abs(gGrSrcBuf[i]); if (v > m) m = v; }
+			raw[x] = m; if (m > top) top = m; }
+		for (int x = 0; x < GE_W; x++) pk[x] = (u8)((long long)raw[x] * (GE_H / 2 - 3) / top); }
+	float pos = gGrPos / L, w = (float)len / L, sp = gGrainSpray * gGrSrcRate / (float)L;
+	int cx = GE_X + (int)(pos * GE_W), sw = (int)(sp * GE_W), gw = (int)(w * GE_W); if (gw < 2) gw = 2;
+	for (int x = cx - sw; x < cx + sw + gw; x++) { int xx = GE_X + ((x - GE_X) % GE_W + GE_W) % GE_W; rect(xx, GE_Y, 1, GE_H, RGB3(TH->grid)); }   // spray zone (wraps)
+	int my = GE_Y + GE_H / 2;
+	for (int x = 0; x < GE_W; x++) rect(GE_X + x, my - pk[x], 1, pk[x] * 2 + 1, RGB3(TH->dim));
+	for (int x = cx; x < cx + gw; x++) { int xx = GE_X + ((x - GE_X) % GE_W + GE_W) % GE_W; rect(xx, my - pk[xx - GE_X], 1, pk[xx - GE_X] * 2 + 1, RGB3(TH->val)); rect(xx, GE_Y, 1, 2, RGB3(TH->val)); rect(xx, GE_Y + GE_H - 2, 1, 2, RGB3(TH->val)); }   // the grain
+	rect(cx, GE_Y, 1, GE_H, gGrHold ? WARN : RGB3(TH->hi));
+	const char* sc = gGrainScan > 0.51f ? "FORWARD" : gGrainScan < 0.49f ? "BACKWARD" : "HOLD";
+	snprintf(s, sizeof(s), "SCAN %s  SPRAY %d%%", sc, (int)lrintf(gGrainSpray * 100)); text(4, GE_Y + GE_H + 4, s, 1, RGB3(TH->dim));
+	text(316 - 13 * 8, GE_Y + GE_H + 4, "<> POS ^ SIZE", 1, RGB3(TH->dim));
+}
+static int grainEdTouch(int x, int y, int press, int release) {   // 1 = it changed something
+	static int y0; static float s0;
+	if (release) { if (gGrHold) { gGrHold = 0; return 1; } return 0; }
+	if (gGrSrcLen <= 64) return 0;
+	if (press) { if (y < GE_Y - 6 || y > GE_Y + GE_H + 6) return 0; y0 = y; s0 = gGrainSize; gGrHold = 1; }
+	if (!gGrHold) return 0;
+	float f = (x - GE_X) / (float)GE_W; if (f < 0) f = 0; if (f > 0.999f) f = 0.999f;
+	gGrPos = f * gGrSrcLen;
+	float sz = s0 + (y0 - y) / (float)GE_H; gGrainSize = sz < 0 ? 0 : sz > 1 ? 1 : sz;
+	return 1;
 }
 
 // ---- camera: brightness / colour mod sources, and photo -> wavetable (each image row is a frame)
@@ -8446,6 +8492,7 @@ int main(void) {
 			} else if (gVisOnB && t.py < WORK_B && t.py >= TAB_H && !gGridOn && !gAddEdit) {
 				if (!prevTouch && visTilesTouch(t.px, t.py)) { botDirty = 1; topDirty = 1; }
 			} else if (gHwOnB && t.py < WORK_B && t.py >= TAB_H) {
+				if (gGrains && grainEdTouch(t.px, t.py, !prevTouch, 0)) { botDirty = 1; gEdited = 1; }
 			} else if (t.py >= KB_Y) {
 				int deg0 = gKeyDeg;   // (keyAt sets the scale degree; a kept key keeps its own)
 				key = keyAt(t.px, t.py, base);
@@ -8466,6 +8513,7 @@ int main(void) {
 		if (gGridOn && prevTouch && !touching && gridTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gSlDrag >= 0 && prevTouch && !touching && xyTouch(gLastTX, gLastTY, 0, 1)) botDirty = 1;
 		{ static int gT = 0; if (xyShown() && ++gT % 3 == 0 && xyModulated()) botDirty = 1; }   // the ghost follows the modulation
+		if (prevTouch && !touching && grainEdTouch(0, 0, 0, 1)) botDirty = 1;   // let go of the grain editor: SCAN carries on from there
 		if (gPads && prevTouch && !touching) { gStrumZone = -1; if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
 		padsTick(dt);
 		int freshPress = touching && !prevTouch;   // a new tap restrikes the key even if it's the one still held (LATCH, drum pads)
