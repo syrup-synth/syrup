@@ -1444,7 +1444,8 @@ static volatile u32 gFxTicks = 0;      // CPU time of the chain per frame (for t
 static const char* MODFX_NAMES[8] = {"OFF", "CHORUS", "FLANGER", "PHASER", "COMB", "FORMANT", "HYPER", "DIMENSION"};
 static const char* DSYNC_NAMES[7] = {"FREE", "1/16", "1/8", "1/8 DOT", "1/4", "1/4 DOT", "1/2"};
 static const float DSYNC_BEATS[7] = {0, 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f};
-static const char* PUMP_NAMES[3] = {"1/2", "1/4", "1/8"};
+static const char* PUMP_NAMES[4] = {"1/2", "1/4", "1/8", "KICK"};   // KICK: ducks on every kick the drums actually play
+static volatile u32 gKickT = 1u << 30;   // samples since the last kick hit
 static const char* BITS_NAMES[6] = {"OFF", "12 BIT", "10 BIT", "8 BIT", "6 BIT", "4 BIT"};
 static int masterActive(void) { return gMasterFX && busActive(); }
 
@@ -1757,7 +1758,9 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 		}
 		// sidechain pump: duck on each beat, recover through it
 		if (gPump > 0.001f && !gDry) {
-			float ph = (gBeatPh + s * beatInc) * pumpRate; ph -= floorf(ph);
+			float ph;
+			if (gPumpRate == 3) { ph = (gKickT + s) * beatInc * 1.6f; if (ph > 1) ph = 1; }   // KICK: from the last kick, recovering over ~a quarter at this tempo
+			else { ph = (gBeatPh + s * beatInc) * pumpRate; ph -= floorf(ph); }
 			float r = ph < 0.45f ? ph / 0.45f : 1; r = r * r * (3 - 2 * r);
 			float g = 1 - gPump * (1 - r);
 			x[0] *= g; x[1] *= g;
@@ -1769,6 +1772,7 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 		L[s] = (s32)(x[0] * lg * 32768.0f); R[s] = (s32)(x[1] * lg * 32768.0f);
 	}
 	gBeatPh += n * beatInc; if (gBeatPh > 4096) gBeatPh -= 4096;
+	if (gKickT < (1u << 30)) gKickT += n;
 	// 3D ORBIT: in surround the DSP places the rear channels behind you; the sound circles the listener
 	if (gOrbit > 0.001f && gSurActive) {
 		static float oph = 0; oph += n / 32728.0f * gOrbitRate; if (oph >= 1) oph -= 1;
@@ -3000,7 +3004,7 @@ static void patchApply(const SPatch* p) {
 	for (int i = 0; i < 2; i++) { gLfo[i].shape = p->lfoShape[i] < NLFOSH ? p->lfoShape[i] : 0; gLfo[i].mode = p->lfoMode[i]; gLfo[i].rate = p->lfoRate[i]; gLfo[i].sync = p->lfoSync[i] < NSYNC ? p->lfoSync[i] : 0; gLfo[i].table = p->lfoTable[i] < T_BUILTIN ? p->lfoTable[i] : 0; gLfo[i].pos = p->lfoPos[i]; gLfo[i].tabKey = -1; }
 	for (int i = 0; i < 4; i++) { gMod[i] = p->mod[i]; gMod[i + 4] = p->mod2[i]; gMacro[i] = p->macro[i]; }
 	for (int i = 0; i < 8; i++) gModCurve[i] = p->modCurve[i] & 3;
-	gModFx = p->modFx % 8; gDlySync = p->dlySync % 7; gShimmer = p->shimmer & 1; gFreeze = p->freeze & 1; gPumpRate = p->pumpRate % 3; gLofiBits = p->lofiBits % 6;
+	gModFx = p->modFx % 8; gDlySync = p->dlySync % 7; gShimmer = p->shimmer & 1; gFreeze = p->freeze & 1; gPumpRate = p->pumpRate % 4; gLofiBits = p->lofiBits % 6;
 	gModRate = p->modRate; gModDepth = p->modDepth; gModMix = p->modMix; gFxColor = p->fxColor; gEqLow = p->eqLow; gEqMid = p->eqMid; gEqHigh = p->eqHigh;
 	gDlyMix = p->dlyMix; gDlyWow = p->dlyWow; gDlySat = p->dlySat; gRevMix = p->revMix; gOtt = p->ott; gPump = p->pump; gLofiRate = p->lofiRate;
 	chipSet(p->chipLevel); gChipDuty = p->chipDuty; gChipOct = p->chipOct; gCsEcho = p->csEcho; gCsEchoFb = p->csEchoFb; gCsEchoT = p->csEchoT; gOrbit = p->orbit; gOrbitRate = p->orbitRate; gRevType = p->revType % NREVT; gDlyType = p->dlyType % NDLYT; dlyTypeChanged();
@@ -3285,7 +3289,7 @@ static Param P_MASTER[] = {
 	PF("EQ LOW", &gEqLow, -12, 12, 0.5f, "DB", 0), PF("EQ MID", &gEqMid, -12, 12, 0.5f, "DB", 0), PF("EQ HIGH", &gEqHigh, -12, 12, 0.5f, "DB", 0),
 	PE("DELAY TYPE", &gDlyType, NDLYT, DLYT_NAMES, D_DLYT), PF("DELAY MIX", &gDlyMix, 0, 1, 0.02f, "%", 0), PE("DELAY SYNC", &gDlySync, 7, DSYNC_NAMES, 0), PF("TAPE WOW", &gDlyWow, 0, 1, 0.02f, "%", 0), PF("TAPE SAT", &gDlySat, 0, 1, 0.02f, "%", 0),
 	PF("REVERB MIX", &gRevMix, 0, 1, 0.02f, "%", 0), PE("REVERB TYPE", &gRevType, NREVT, REVT_NAMES, 0), PE("SHIMMER", &gShimmer, 2, ONOFF2, 0), PE("FREEZE", &gFreeze, 2, ONOFF2, 0),
-	PF("OTT", &gOtt, 0, 1, 0.02f, "%", 0), PF("PUMP", &gPump, 0, 1, 0.02f, "%", 0), PE("PUMP RATE", &gPumpRate, 3, PUMP_NAMES, 0),
+	PF("OTT", &gOtt, 0, 1, 0.02f, "%", 0), PF("PUMP", &gPump, 0, 1, 0.02f, "%", 0), PE("PUMP RATE", &gPumpRate, 4, PUMP_NAMES, 0),
 	PE("LOFI BITS", &gLofiBits, 6, BITS_NAMES, 0), PF("LOFI RATE", &gLofiRate, 0, 1, 0.02f, "%", 0),
 	PF("3D ORBIT", &gOrbit, 0, 1, 0.02f, "%", 0), PF("ORBIT RATE", &gOrbitRate, 0, 2, 0.02f, "HZ", 0),
 	PE("CIRCLE PAD", &gStickMode, 4, STICK_NAMES, 0), PE("SPEAKER EQ", &gSpkEq, 3, SPK_NAMES, 0), PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
@@ -3745,7 +3749,7 @@ static const char* paramHelp(const char* n) {
 		{"DELAY MIX", "TAPE DELAY AMOUNT (ADDS TO FX ECHO)"}, {"DELAY SYNC", "DELAY TIME LOCKED TO THE BPM"}, {"TAPE WOW", "TAPE PITCH WOBBLE"},
 		{"TAPE SAT", "TAPE SATURATION ON REPEATS"}, {"REVERB MIX", "REVERB AMOUNT (ADDS TO FX REVERB)"}, {"SHIMMER", "OCTAVE-UP REVERB TAIL"},
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
-		{"PUMP RATE", "HOW OFTEN IT PUMPS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
+		{"PUMP RATE", "HOW OFTEN IT PUMPS; KICK = SIDECHAIN FROM THE DRUMS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM MACHINE ON / OFF"}, {"KIT", "DRUM SOUNDS"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
 		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
@@ -7361,6 +7365,7 @@ static void drumHit(int d, float vel) {   // from the audio thread (voice lock h
 	static const int DCH[NDRUM] = {0, 1, 2, 2, 3, 1, 4, 4, 5, 6};   // open hat chokes the closed hat (same channel), rim cuts the snare
 	static const int PCH[NDRUM] = {0, 1, 2, 3, 4, 5, 6, 6, 5, 1};   // PERC: each shaker on its own channel; the drums share
 	int perc = gKit == 4, ch = perc ? PCH[d] : DCH[d];
+	if (d == 0 && !perc && vel > 0.05f) gKickT = 0;   // PUMP RATE KICK: duck the synth under it
 	int c = gDrumCh[ch]; if (c < 0) c = gDrumCh[ch % 3];
 	if (c < 0 || !gDrumSmp[d]) return;
 	{   // DRUM POLY: the same drum hit again rings on while the new hit plays on a borrowed free channel (they take

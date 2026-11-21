@@ -15,6 +15,8 @@ static void SCRIPT(int fr) {
 		if (fr == T0 + d * GAP + 6) midiPush(0x80, GM[d], 0);
 	}
 	int tp = T0 + 10 * GAP + 10;   // tap the bottom-left pad (KICK) and check the screen
+	if (KIT == 0 && fr == tp + 45) { gKickT = 1u << 30; drumHit(0, 1); if (gKickT != 0) fail("sidechain: a kick should restart the KICK pump"); }
+	if (KIT == 0 && fr == tp + 47 && (gKickT < 1000 || gKickT > 8000)) fail("sidechain: the kick timer should run with the audio (%u)", (unsigned)gKickT);
 	if (KIT == 0 && fr == tp + 50) {   // DRUM POLY: a second kick rings over the first; OFF cuts it; open hat still chokes
 		int on0 = 0, on1 = 0, on2 = 0;
 		gDrumPoly = 0; drumHit(0, 1); drumHit(0, 1); csndExecCmds(false); for (int i = 0; i < 32; i++) on0 += CS[i].on;
