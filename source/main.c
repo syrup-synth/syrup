@@ -23,6 +23,10 @@
 #include <3ds.h>
 #include <citro3d.h>
 #include <citro2d.h>
+#ifdef SYRUP_OPENDSP
+#include <opendsp.h>
+#include <opendsp/effects.h>
+#endif
 #include <stddef.h>
 #ifndef SYRUP_VER
 #define SYRUP_VER "dev"
@@ -497,6 +501,8 @@ static AHDSR gEnv1 = {0.005f, 0.0f, 0.6f, 0.7f, 0.35f}, gEnv2 = {0.002f, 0.0f, 0
 static LFO gLfo[2] = {{0, 0, 0.6f, 0, 0, 0}, {1, 1, 4.0f, 0, 0, 0}};
 static ModSlot gMod[8] = {{SRC_ENV2, DST_CUTOFF, 0.35f}, {SRC_STICK, DST_APOS, 0.5f}, {SRC_LFO1, DST_BPOS, 0.0f}, {SRC_OFF, DST_PITCH, 0.0f}};
 static int gVoiceMode = 0, gChord = 0, gFx = 0, gEchoT = 1, gDrive = 0, gBendRange = 2;
+static int gODspUp = 0, gODspRev = 0;     // OpenDSP running / has reverb (experimental build)
+static volatile int gDspRevOn = 0;        // aux bus 1 carries the DSP reverb right now
 static float gGlide = 0.0f, gChorus = 0.3f, gDriveAmt = 0.4f, gMaster = 0.8f;
 
 // ---------------------------------------------------------------- oscillator cycle build
@@ -1145,7 +1151,10 @@ static void voicesUpdate(float dt, float bend) {
 		float mix[12] = {0};
 		mix[0] = dL[c] * gAutoGain; mix[1] = dR[c] * gAutoGain;
 		if (gQMixDrive > 0.001f && masterActive()) { float k = 1.0f + gQMixDrive * 15.0f; mix[0] *= k; mix[1] *= k; }   // MIX OVERDRIVE
-		if (masterActive()) { mix[4] = mix[0]; mix[5] = mix[1]; mix[0] = mix[1] = 0; }   // whole sound through the master chain
+		if (masterActive()) {   // whole sound through the master chain
+			if (gDspRevOn) { float k = revAmt() * 0.5f; mix[8] = mix[0] * k; mix[9] = mix[1] * k; }   // + the DSP reverb (bus 1)
+			mix[4] = mix[0]; mix[5] = mix[1]; mix[0] = mix[1] = 0;
+		}
 		else {
 			float s0 = busSend(0), s1 = busSend(1);   // per-channel sends to the DSP effect buses
 			mix[4] = mix[0] * s0; mix[5] = mix[1] * s0;
@@ -1422,6 +1431,7 @@ static float busSend(int bus) {
 	return 0;
 }
 
+
 // ================================================================ master effects chain (on DSP aux bus 0)
 // With MASTER FX on, every DSP channel goes to aux bus 0 only; the audio thread runs this chain on the
 // whole mix every 160 samples and the DSP mixes the result back: lofi -> mod FX -> EQ -> tape delay ->
@@ -1438,6 +1448,41 @@ static void dlyTypeChanged(void) {   // clear the line so switching type never r
 	gDlLp[0] = gDlLp[1] = gDlHp[0] = gDlHp[1] = 0; gRevK = 0;
 }
 static float gDlyMix = 0, gDlyWow = 0.25f, gDlySat = 0.3f, gRevMix = 0, gOtt = 0, gPump = 0, gLofiRate = 0;
+
+// ---------------------------------------------------------------- OpenDSP (experimental build only)
+// With the OpenDSP firmware, HALL / ROOM / PLATE reverb runs on the DSP itself instead of the ARM.
+// Only in MASTER FX mode, where aux bus 1 is otherwise unused: voices also send to bus 1, the DSP
+// reverb returns there, and the master chain's own reverb input is muted. SPRING / GATED / SWELL,
+// SHIMMER and FREEZE stay on the ARM. The DSP return joins after the master chain (no OTT / pump on it).
+static float revAmt(void) { return gRevMix + (gFx == 3 ? fxMixEff() : 0); }
+#ifdef SYRUP_OPENDSP
+static int dspRevWanted(void) { return gODspRev && gMasterFX && busActive() && !gDry && !gFreeze && !gShimmer && gRevType <= 2; }
+static void dspRevUpdate(void) {   // main loop only: each call is a mailbox round trip to the DSP
+	static float last[3] = {-1, -1, -1}; static int lastType = -1, wait = 0;
+	int want = dspRevWanted();
+	if (!want) {
+		if (gDspRevOn) { gDspRevOn = 0; opendspReverbSet(1, NULL); ndspAuxSetEnable(1, true); lastType = -1; }
+		return;
+	}
+	if (wait > 0) { wait--; return; }   // at most ~6 updates a second while a knob turns
+	float sz = gRevSize, dm = gRevDamp;
+	if (gDspRevOn && lastType == gRevType && fabsf(sz - last[0]) < 0.01f && fabsf(dm - last[1]) < 0.01f) return;
+	opendspReverbConfig r = {.struct_size = sizeof r, .width = 1.0f, .level = 0.7f};
+	if (gRevType == 1) {        // ROOM
+		r.room_size = 0.15f + 0.3f * sz; r.decay_time = 0.3f + 1.0f * sz; r.damping = 0.3f + 0.55f * dm; r.diffusion = 0.6f;
+	} else if (gRevType == 2) { // PLATE
+		r.room_size = 0.45f + 0.3f * sz; r.decay_time = 0.8f + 3.0f * sz; r.damping = 0.03f + 0.25f * dm; r.diffusion = 0.95f;
+	} else {                    // HALL
+		r.room_size = 0.6f + 0.4f * sz; r.decay_time = 1.2f + 4.5f * sz; r.damping = 0.15f + 0.6f * dm; r.diffusion = 0.8f;
+	}
+	if (!gDspRevOn) { ndspAuxSetEnable(1, false); ndspAuxSetVolume(1, 1.0f); }   // ARM processing off, or the DSP gets no input
+	if (R_SUCCEEDED(opendspReverbSet(1, &r))) { gDspRevOn = 1; lastType = gRevType; last[0] = sz; last[1] = dm; }
+	else { gODspRev = 0; ndspAuxSetEnable(1, true); }   // firmware refused: stay on the ARM reverb for this session
+	wait = 10;
+}
+#else
+static void dspRevUpdate(void) {}
+#endif
 static volatile float gFxModVal = 0;   // FX COLOR modulation from the mod matrix (set by the main loop)
 static float gBeatPh = 0;              // quarter notes, advanced by the audio clock (sidechain pump)
 static volatile u32 gFxTicks = 0;      // CPU time of the chain per frame (for the meter)
@@ -1603,7 +1648,7 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 	}
 	float dSec = gDlySync ? DSYNC_BEATS[gDlySync] * 60.0f / gBPM : ECHO_T[gEchoT];
 	if (dSec > 0.78f) dSec = 0.78f;
-	float dSmp = dSec * DSPRATE, dMix = (gDlyMix + (gFx == 1 ? fxMixEff() : 0)) * 1.2f, rMix = (gRevMix + (gFx == 3 ? fxMixEff() : 0)) * 1.4f;
+	float dSmp = dSec * DSPRATE, dMix = (gDlyMix + (gFx == 1 ? fxMixEff() : 0)) * 1.2f, rMix = gDspRevOn ? 0 : (gRevMix + (gFx == 3 ? fxMixEff() : 0)) * 1.4f;
 	float fb, damp; revParams(&fb, &damp); if (gFreeze) { fb = 1.0f; damp = 0; }
 	int bits = gLofiBits ? 14 - gLofiBits * 2 : 0, hold = 1 + (int)(gLofiRate * 15);
 	float pumpRate = gPumpRate == 0 ? 0.5f : (gPumpRate == 1 ? 1.0f : 2.0f), beatInc = gBPM / 60.0f / DSPRATE;
@@ -3951,6 +3996,13 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		for (int c = 0; c < NCH; c++) if (gDspOwner[c] >= 0 || (gNoiseOn && c == NOISE_CH)) dsp++;
 		for (int c = 0; c < NCS; c++) if (csUsable(c)) { csTot++; if (gCsOwner[c] >= 0) cs++; }
 		snprintf(s, sizeof(s), "NOTES %d  FX BUS %s", voices, busActive() ? (gBusSeen ? "OK" : "ON") : (gBusFail ? "FALLBK" : "OFF")); text(6, 186, s, 1, DIM);
+#ifdef SYRUP_OPENDSP
+		{ static float load = 0; static int tick = 0;
+			if (gODspUp && ++tick >= 30) { tick = 0; opendspStats st = {.struct_size = sizeof st}; if (R_SUCCEEDED(opendspGetStats(&st, false))) load = st.load; }
+			if (gODspUp) snprintf(s, sizeof(s), "OPENDSP %d%%  REV %s", (int)(load * 100 + 0.5f), gDspRevOn ? "DSP" : "ARM");
+			else snprintf(s, sizeof(s), "OPENDSP OFF (NINTENDO DSP)");
+			text(150, 186, s, 1, gODspUp ? DIM : WARN); }
+#endif
 		{ u32 dr = gAudioOK ? ndspGetDroppedFrames() : 0;
 			snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d%s", dsp, cs, csTot, dr ? " DROP" : skipRecent() ? " SKIP" : ""); text(6, 198, s, 1, (dr || skipRecent()) ? WARN : DIM); }
 		if (gGpuHung) { snprintf(s, sizeof(s), "GPU HUNG AFTER %d FRAMES", gGpuFrames); text(6, 210, s, 1, WARN); }
@@ -6964,7 +7016,11 @@ static void dlTick(void) {   // progress in the footer; when done, rescan so the
 
 
 // ---- in-app updater: compare the release's version.txt with this build, then download and install the new CIA
+#ifdef SYRUP_OPENDSP
+#define REL_URL "https://github.com/syrup-synth/syrup/releases/download/experimental/"   // EXP updates from its own channel
+#else
 #define REL_URL "https://github.com/syrup-synth/syrup/releases/latest/download/"
+#endif
 // where this copy of Syrup was launched from: the Homebrew Launcher passes the .3dsx path as argv[0]
 extern int __system_argc; extern char** __system_argv;
 static const char* selfPath(void) {
@@ -8314,7 +8370,14 @@ int main(void) {
 	}
 	buildSub(); buildNoise();
 
+#ifdef SYRUP_OPENDSP
+	if (R_SUCCEEDED(opendspInit())) {   // ships its own DSP firmware: no dspfirm.cdc dump needed
+		u32 caps = 0; opendspGetCapabilities(&caps);
+		gODspUp = 1; gODspRev = (caps & OPENDSP_CAP_REVERB) != 0; gAudioOK = 1;
+	} else gAudioOK = R_SUCCEEDED(ndspInit());   // Nintendo firmware fallback (needs the dump)
+#else
 	gAudioOK = R_SUCCEEDED(ndspInit());
+#endif
 	if (gAudioOK) {
 		ndspSetOutputMode(NDSP_OUTPUT_STEREO);
 		ndspSetMasterVol(1.0f);
@@ -8701,6 +8764,7 @@ int main(void) {
 			if (any) { gBusWait += dt; if (gBusWait > 1.5f) { gBusFail = 1; topDirty = 1; } }
 		}
 		LightLock_Unlock(&gVoiceLock);
+		if (gAudioOK) dspRevUpdate();
 		// SD writes wait until here, so a page press never holds the lock the audio tick needs
 		if (gPageMarkDue) { gPageMarkDue = 0; settingsSave(page); char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
 		if (gSeqSaveDue) { gSeqSaveDue = 0; LightLock_Lock(&gVoiceLock); seqSnap(); LightLock_Unlock(&gVoiceLock); seqWriteSnap(); }
@@ -8809,7 +8873,11 @@ int main(void) {
 	}
 	LightLock_Unlock(&gVoiceLock);
 	gFxCore2 = 0; svcSleepThread(20000000); fxCore2Stop();   // effects back on the DSP thread before it goes away
-	if (gAudioOK) { ndspSetCapture(NULL); for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }
+	if (gAudioOK) { ndspSetCapture(NULL); for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch);
+#ifdef SYRUP_OPENDSP
+		if (gODspUp) { if (gDspRevOn) opendspReverbSet(1, NULL); opendspExit(); } else
+#endif
+		ndspExit(); }
 	if (!gSafeMode) { extrasExit(); sensorsExit(); }
 	myDrumSave();
 	seqSave();

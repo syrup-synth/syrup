@@ -30,13 +30,19 @@ jobs:
         # already in the devkitarm image; only reach pkg.devkitpro.org (which sometimes refuses CI) when one is missing
         run: dkp-pacman -Q 3ds-curl 3ds-mbedtls 3ds-zlib || dkp-pacman -Sy --noconfirm --needed 3ds-curl 3ds-mbedtls 3ds-zlib
 
+      - name: Install OpenDSP (experimental build; pinned commit)
+        run: |
+          git clone https://github.com/Cellenseres/OpenDSP /tmp/opendsp
+          git -C /tmp/opendsp checkout 81601bdc3bd648c413a2693b12a973e1874e1f97
+          make -C /tmp/opendsp/library install
+
       - name: Build .3dsx
         run: make
 
       - name: Build .cia
         run: |
           bannertool makebanner -i app/banner.png -a app/BannerAudio.wav -o build/banner.bin
-          bannertool makesmdh -s "Syrup" -l "Wavetable synth" -p "Soul Provider Records" -i app/icon.png -o build/icon.bin
+          bannertool makesmdh -s "Syrup EXP" -l "Wavetable synth (experimental)" -p "Soul Provider Records" -i app/icon.png -o build/icon.bin
           makerom -f cia -target t -o syrup.cia -elf syrup.elf -rsf app/syrup.rsf -banner build/banner.bin -icon build/icon.bin
 
       - name: Version stamp (read by the in-app updater)
@@ -66,7 +72,7 @@ jobs:
             install-qr.png
 
       - name: Publish to "latest" release (QR / phone download)
-        if: github.ref_type == 'branch'
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
@@ -77,3 +83,27 @@ jobs:
             syrup.cia
             syrup.elf
             version.txt
+
+      - name: Experimental QR code
+        if: github.ref_type == 'branch' && github.ref != 'refs/heads/main'
+        run: |
+          apt-get install -y qrencode
+          qrencode -s 8 -o install-qr-exp.png "https://github.com/${{ github.repository }}/releases/download/experimental/syrup.cia"
+
+      - name: Publish to "experimental" pre-release (other branches; separate app, never touches "latest")
+        if: github.ref_type == 'branch' && github.ref != 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: experimental
+          name: Syrup EXP (experimental, ${{ github.ref_name }})
+          prerelease: true
+          make_latest: false
+          body: |
+            Experimental build from `${{ github.ref_name }}`. Not a release.
+            Installs as a separate app, **Syrup EXP**, next to Syrup. Patches on the SD card are shared.
+            OpenDSP firmware (BSD-2, Copyright Cellenseres; see docs/OPENDSP-LICENSE.txt): no DSP dump needed.
+          files: |
+            syrup.3dsx
+            syrup.cia
+            version.txt
+            install-qr-exp.png

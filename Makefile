@@ -32,7 +32,7 @@ include $(DEVKITARM)/3ds_rules
 #     - <libctru folder>/default_icon.png
 #---------------------------------------------------------------------------------
 TARGET		:=	syrup
-APP_TITLE	:=	Syrup
+APP_TITLE	:=	Syrup EXP
 APP_DESCRIPTION	:=	Wavetable synth
 APP_AUTHOR	:=	Soul Provider Records
 BUILD		:=	build
@@ -54,14 +54,14 @@ CFLAGS	:=	-g -Wall -O3 -ffast-math -mword-relocations \
 			$(ARCH)
 
 SYRUP_VER := $(shell echo $${GITHUB_SHA:-dev} | cut -c1-7)
-CFLAGS	+=	$(INCLUDE) -D__3DS__ -DSYRUP_VER=\"$(SYRUP_VER)\"
+CFLAGS	+=	$(INCLUDE) -D__3DS__ -DSYRUP_VER=\"$(SYRUP_VER)\" -DSYRUP_OPENDSP   # experimental OpenDSP build
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lcitro2d -lcitro3d -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lctru -lm
+LIBS	:= -lopendsp -lcitro2d -lcitro3d -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lctru -lm
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing

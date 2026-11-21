@@ -1,12 +1,12 @@
 BasicInfo:
-  Title                   : "Syrup"
-  ProductCode             : "CTR-H-SYRP"
+  Title                   : "Syrup EXP"
+  ProductCode             : "CTR-H-SYRX"
   Logo                    : Homebrew # Nintendo / Licensed / Distributed / iQue / iQueForSystem
 
 
 TitleInfo:
   Category                : Application
-  UniqueId                : 0xC5A7E
+  UniqueId                : 0xC5A7F   # EXP installs next to the release, not over it
 
 Option:
   UseOnSD                 : true # true if App is to be installed to SD
