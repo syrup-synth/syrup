@@ -15,6 +15,16 @@ static void SCRIPT(int fr) {
 		if (fr == T0 + d * GAP + 6) midiPush(0x80, GM[d], 0);
 	}
 	int tp = T0 + 10 * GAP + 10;   // tap the bottom-left pad (KICK) and check the screen
+	if (KIT == 0 && fr == tp + 50) {   // DRUM POLY: a second kick rings over the first; OFF cuts it; open hat still chokes
+		int on0 = 0, on1 = 0, on2 = 0;
+		gDrumPoly = 0; drumHit(0, 1); drumHit(0, 1); csndExecCmds(false); for (int i = 0; i < 32; i++) on0 += CS[i].on;
+		gDrumPoly = 1; drumHit(0, 1); drumHit(0, 1); csndExecCmds(false); for (int i = 0; i < 32; i++) on1 += CS[i].on;
+		if (on1 != on0 + 1) fail("drum poly: the second kick should ring on its own channel (%d -> %d)", on0, on1);
+		drumHit(0, 1); csndExecCmds(false); for (int i = 0; i < 32; i++) on2 += CS[i].on;
+		if (on2 != on1) fail("drum poly: a third kick should take turns, not add a channel (%d -> %d)", on1, on2);
+		int hb = 0; drumHit(2, 1); drumHit(2, 1); drumHit(3, 1); csndExecCmds(false); for (int i = 0; i < 32; i++) hb += CS[i].on;
+		if (hb != on2 + 1) fail("drum poly: open hat should choke both closed-hat channels (%d vs %d)", hb, on2 + 1);
+	}
 	if (fr == tp || fr == tp + 1 || fr == tp + 2) { TOUCH = 1; TX = 30; TY = KB_Y + 61 + 40; }
 	if (fr == tp + 2) { char n[64]; snprintf(n, sizeof n, "shots/kit%d_pads.ppm", KIT); shotBot(n); padHit = 1; }
 	if (KIT == 4 && fr >= tp + 20 && fr < tp + 32) TILTX = (fr & 1) ? 1.5f : -1.5f;   // shake it

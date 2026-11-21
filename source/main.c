@@ -98,7 +98,7 @@ static void chipSet(float lv);
 static void grainsChanged(void);
 static const char* KIT_NAMES[6]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[5];
 // live drum shaping: TUNE (semitones, applied at each hit: no rebuild), CHANCE (each hit of the row plays this often), MUTE (rows, bit 1 kick 2 snare 4 hat)
-static float gDrumTune[3] = {0, 0, 0}, gDrumChance[3] = {1, 1, 1}; static int gDrumMute = 0;
+static float gDrumTune[3] = {0, 0, 0}, gDrumChance[3] = {1, 1, 1}; static int gDrumMute = 0; static int gDrumPoly;
 static const char* DMUTE_NAMES[8] = {"NONE", "KICK", "SNARE", "KICK+SNARE", "HAT", "KICK+HAT", "SNARE+HAT", "ALL"};
 #define NVISM 11
 static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM", "VOXELS", "VOXEL TABLE", "TUNNEL", "KALEIDO", "RIPPLES", "PLASMA"};
@@ -3265,7 +3265,7 @@ static Param P_DRUMS[] = {
 	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 6, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 9, KICKP_NAMES, 0),
 	PE("SNARE", &gSnarePat, 8, SNAREP_NAMES, 0), PE("HAT", &gHatPat, 8, HATP_NAMES, 0), PE("MIC TAP", &gDrumRec, 5, DREC_NAMES, D_DREC), PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0),
 	PF("KICK TUNE", &gDrumTune[0], -12, 12, 1, "ST", 0), PF("SNARE TUNE", &gDrumTune[1], -12, 12, 1, "ST", 0), PF("HAT TUNE", &gDrumTune[2], -12, 12, 1, "ST", 0),
-	PF("KICK CHANCE", &gDrumChance[0], 0, 1, 0.05f, "%", 0), PF("SNARE CHANCE", &gDrumChance[1], 0, 1, 0.05f, "%", 0), PF("HAT CHANCE", &gDrumChance[2], 0, 1, 0.05f, "%", 0), PE("MUTE", &gDrumMute, 8, DMUTE_NAMES, 0),
+	PF("KICK CHANCE", &gDrumChance[0], 0, 1, 0.05f, "%", 0), PF("SNARE CHANCE", &gDrumChance[1], 0, 1, 0.05f, "%", 0), PF("HAT CHANCE", &gDrumChance[2], 0, 1, 0.05f, "%", 0), PE("MUTE", &gDrumMute, 8, DMUTE_NAMES, 0), PE("DRUM POLY", &gDrumPoly, 2, ONOFF, 0),
 	PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
 	PI_("EUCLID STEPS", &gEuLen, 2, 16, D_EUCLID), PI_("KICK HITS", &gEuHits[0], 0, 16, D_EUCLID), PI_("KICK ROTATE", &gEuRot[0], 0, 15, D_EUCLID),
 	PI_("SNARE HITS", &gEuHits[1], 0, 16, D_EUCLID), PI_("SNARE ROTATE", &gEuRot[1], 0, 15, D_EUCLID), PI_("HAT HITS", &gEuHits[2], 0, 16, D_EUCLID), PI_("HAT ROTATE", &gEuRot[2], 0, 15, D_EUCLID),
@@ -3718,7 +3718,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM MACHINE ON / OFF"}, {"KIT", "DRUM SOUNDS"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -7126,7 +7126,7 @@ static float gDrumLevel = 0.8f;
 #define NDCH 7
 static int gDrumCh[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, gDrumStep = -1;
 static float gDrumPh = 0;
-static s16* gDrumSmp[NDRUM]; static int gDrumLen[NDRUM];
+static s16* gDrumSmp[NDRUM]; static int gDrumLen[NDRUM]; static int gDrumPoly = 1;   // DRUM POLY
 static const char* KIT_NAMES[6] = {"808", "909", "LOFI", "CHIP", "PERC", "WAVE"};
 static const char* KICKP_NAMES[9] = {"OFF", "FOUR FLOOR", "BREAK", "TRAP", "DNB", "HALFTIME", "BOOM BAP", "MINE", "EUCLID"};
 static const char* SNAREP_NAMES[8] = {"OFF", "BACKBEAT", "BREAK", "TRAP", "DNB", "CLAP 2+4", "MINE", "EUCLID"};
@@ -7303,6 +7303,24 @@ static void drumHit(int d, float vel) {   // from the audio thread (voice lock h
 	int perc = gKit == 4, ch = perc ? PCH[d] : DCH[d];
 	int c = gDrumCh[ch]; if (c < 0) c = gDrumCh[ch % 3];
 	if (c < 0 || !gDrumSmp[d]) return;
+	{   // DRUM POLY: the same drum hit again rings on while the new hit plays on a borrowed free channel (they take
+		// turns); a different drum on the same channel (open hat after closed, rim after snare) still chokes it
+		static int sp[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, lastD[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, onSp[NDCH];
+		int slot = gDrumCh[ch] >= 0 ? ch : ch % 3;
+		if (gDrumPoly && lastD[slot] == d && !(gKit == 3 && d >= 1 && d <= 2)) {
+			if (!onSp[slot]) {   // this hit goes to the spare: keep the one we had if it's still free, else borrow one
+				int ok = sp[slot] >= 0 && csUsable(sp[slot]) && gCsOwner[sp[slot]] < 0;
+				for (int k = 0; ok && k < NDCH; k++) if (k != slot && sp[k] == sp[slot]) ok = 0;
+				if (!ok) { sp[slot] = -1;
+					for (int i = 8; i < NCS && sp[slot] < 0; i++) if (csUsable(i) && gCsOwner[i] < 0) { int used = 0; for (int k = 0; k < NDCH; k++) if (sp[k] == i) used = 1; if (!used) sp[slot] = i; } }
+				if (sp[slot] >= 0) { c = sp[slot]; onSp[slot] = 1; }
+			} else onSp[slot] = 0;
+		} else {
+			if (sp[slot] >= 0 && csUsable(sp[slot]) && gCsOwner[sp[slot]] < 0) CSND_SetPlayState(sp[slot], 0);   // choke both
+			onSp[slot] = 0;
+		}
+		lastD[slot] = d;
+	}
 	static const s8 TROW[NDRUM] = {0, 1, 2, 2, 1, 1, -1, -1, -1, 2};   // which TUNE moves each drum: kick; snare, clap, rim; hats, crash
 	float tm = perc || TROW[d] < 0 ? 1.0f : powf(2.0f, gDrumTune[TROW[d]] / 12.0f);
 	u32 tmr = CSND_TIMER(32728 * tm); if (tmr < 0x42) tmr = 0x42; if (tmr > 0xFFFF) tmr = 0xFFFF;
