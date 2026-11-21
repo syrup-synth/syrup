@@ -157,8 +157,9 @@ static Result udsPullPacket(const udsBindContext* c,void* b,size_t s,size_t* a,u
 static Result udsGetConnectionStatus(udsConnectionStatus* o){o->total_nodes=0;return 0;}
 static Result iruInit(u32* m,u32 s){(void)m;(void)s;return -1;} static void iruExit(void){} static Result iruSendData(u8* b,u32 s,bool w){(void)b;(void)s;(void)w;return 0;}
 static Result iruRecvData(u8* b,u32 s,u8 f,u32* c,bool w){(void)b;(void)s;(void)f;(void)w;*c=0;return -1;}
+static s16 DOUT[4096*2];
 static void dspFrameEnd(void){
-  if(CAPWB){ int o=CAPWB->offset; for(int i=0;i<160;i++){ int k=(ON-160+i); if(k<0)k=0; ((s16*)CAPWB->data_pcm16)[(o+i)*2]=OUT[k*2]; ((s16*)CAPWB->data_pcm16)[(o+i)*2+1]=OUT[k*2+1]; } CAPWB->offset+=160; if(CAPWB->offset>=CAPWB->nsamples) CAPWB->offset=0; }
+  if(CAPWB){ int o=CAPWB->offset; for(int i=0;i<160;i++){ int k=(ON-160+i); if(k<0)k=0; ((s16*)CAPWB->data_pcm16)[(o+i)*2]=DOUT[(k&4095)*2]; ((s16*)CAPWB->data_pcm16)[(o+i)*2+1]=DOUT[(k&4095)*2+1]; } CAPWB->offset+=160; if(CAPWB->offset>=CAPWB->nsamples) CAPWB->offset=0; }
   for(int b=0;b<2;b++){ if(!AUXEN[b]||!AUXCB[b]||AUXDEAD){ memset(RET[b],0,sizeof RET[b]); continue; }
     static s32 buf[4][160]; for(int c=0;c<2;c++) for(int i=0;i<160;i++) buf[c][i]=(s32)(AXS[b][c][i]*32768); memset(buf[2],0,640); memset(buf[3],0,640);
     void* p[4]={buf[0],buf[1],buf[2],buf[3]}; AUXCB[b](NULL,160,p); for(int c=0;c<2;c++) for(int i=0;i<160;i++) RET[b][c][i]=buf[c][i]/32768.0f; }
@@ -169,7 +170,9 @@ static void renderFrame(void){ int n=32728/60; for(int s=0;s<n;s++){ float L=0,R
     long long y=acc>>14; if(y>32767)y=32767; if(y<-32768)y=-32768; h->x2=h->x1; h->x1=xi; h->y2=h->y1; h->y1=(int)y; x=(float)y/32768.0f; }
   else if(h->bq){ float y=h->b0*x+h->z1; h->z1=h->b1*x-h->a1*y+h->z2; h->z2=h->b2*x-h->a2*y; x=y; }
   L+=x*h->mix[0]; R+=x*h->mix[1]; AXS[0][0][FPOS]+=x*h->mix[4]; AXS[0][1][FPOS]+=x*h->mix[5]; AXS[1][0][FPOS]+=x*h->mix[8]; AXS[1][1][FPOS]+=x*h->mix[9]; }
-  L+=RET[0][0][FPOS]+RET[1][0][FPOS]; R+=RET[0][1][FPOS]+RET[1][1][FPOS]; if(++FPOS==160){FPOS=0; dspFrameEnd();}
+  L+=RET[0][0][FPOS]+RET[1][0][FPOS]; R+=RET[0][1][FPOS]+RET[1][1][FPOS];
+  DOUT[(ON&4095)*2]=(s16)((L>1?1:L<-1?-1:L)*32767); DOUT[(ON&4095)*2+1]=(s16)((R>1?1:R<-1?-1:R)*32767);   // the DSP's own output: what ndsp capture hears (not the second chip)
+  if(++FPOS==160){FPOS=0; dspFrameEnd();}
   float CL=0,CR=0;
   for(int c=0;c<32;c++){ CsCh* h=&CS[c]; if(!h->on||(!h->d&&h->fmt!=3)) continue; float x=csNext(h); L+=x*h->l; R+=x*h->r; CL+=x*h->cl; CR+=x*h->cr; }
   for(int u=0;u<2;u++) if(CAPU[u].on&&CAPU[u].b){ float v=u?CR:CL; if(v>1)v=1; if(v<-1)v=-1; CAPU[u].b[CAPU[u].pos]=(s16)(v*32767); if(++CAPU[u].pos>=CAPU[u].n) CAPU[u].pos=0; }
