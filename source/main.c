@@ -503,6 +503,7 @@ static ModSlot gMod[8] = {{SRC_ENV2, DST_CUTOFF, 0.35f}, {SRC_STICK, DST_APOS, 0
 static int gVoiceMode = 0, gChord = 0, gFx = 0, gEchoT = 1, gDrive = 0, gBendRange = 2;
 static int gODspUp = 0, gODspRev = 0;     // OpenDSP running / has reverb (experimental build)
 static volatile int gDspRevOn = 0;        // aux bus 1 carries the DSP reverb right now
+static float revAmt(void);
 static float gGlide = 0.0f, gChorus = 0.3f, gDriveAmt = 0.4f, gMaster = 0.8f;
 
 // ---------------------------------------------------------------- oscillator cycle build
