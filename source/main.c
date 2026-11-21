@@ -132,7 +132,7 @@ static void crashCheck(void) {
 }        // set while the audio thread runs the arp/seq clock (it holds gMipsLock)
 static LightLock gMipsLock;   // guards the shared FFT buffers (worker on core 1 vs main core)
 static Thread gWorker = NULL;
-#define SYRUP_VERSION "1.0"
+#define SYRUP_VERSION "1.0 BETA"
 // safe saves: write NAME.new, then swap it in, so pulling the power mid-save can never leave a half-written file
 static FILE* safeOpen(const char* path) { char t[96]; snprintf(t, sizeof(t), "%s.new", path); return fopen(t, "wb"); }
 static int safeClose(FILE* f, const char* path, int ok) {
@@ -3357,7 +3357,7 @@ static void splashDraw(void) {
 	}
 	static const char* T = "WAVETABLE SYNTH";
 	text(200 - (int)strlen(T) * 4, y0 + SPLASH_H + 22, T, 1, 255, 255, 85);
-	text(200 - 4 * 4, y0 + SPLASH_H + 36, "V" SYRUP_VERSION, 1, 170, 85, 0);
+	text(200 - (int)strlen("V" SYRUP_VERSION) * 4, y0 + SPLASH_H + 36, "V" SYRUP_VERSION, 1, 170, 85, 0);
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	memset(fb, 0, 320 * 240 * 3);
 	text(160 - 10 * 4, 112, "LOADING...", 1, 170, 85, 0);
