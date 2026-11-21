@@ -128,9 +128,9 @@ static void SCRIPT(int fr) {
 	press(fr, 296, KEY_START);
 	if (fr == 299 && !gStartMenu) fail("START should open the quick menu, not quit");
 	press(fr, 300, KEY_DDOWN); press(fr, 303, KEY_DDOWN);
-	if (fr == 305) { midiPush(0x90, 60, 100); gSeqMode = 1; gLoopMode = 2; }
+	if (fr == 305) { midiPush(0x90, 60, 100); gSeqMode = 1; gLoopMode = 2; gDrums = 1; drumsChanged(); }
 	press(fr, 306, KEY_A);
-	if (fr == 309) { if (gStartMenu) fail("menu: A should close it"); if (gSeqMode == 1 || gHeldN) fail("menu: PANIC should stop the sequencer and notes"); if (gLoopMode) fail("menu: PANIC should stop the loop"); }
+	if (fr == 309) { if (gStartMenu) fail("menu: A should close it"); if (gSeqMode == 1 || gHeldN) fail("menu: PANIC should stop the sequencer and notes"); if (gLoopMode) fail("menu: PANIC should stop the loop"); if (gDrums) fail("menu: PANIC should stop the drum machine"); }
 	if (fr == 310) { gLoopQuant = 1; gBeatPh = 1; gBPM = 120; loopRecStart(); int want = (int)(3 * 0.5f * 32728);
 		if (abs(gLoopSkip - want) > 200) fail("LOOP START NEXT BAR: one beat in at 120 should wait 1.5 s (%d, want %d)", gLoopSkip, want);
 		gLoopMode = 0; loopModeChanged(); gLoopQuant = 0; gLoopSkip = 0; }

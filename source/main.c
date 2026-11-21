@@ -3061,7 +3061,7 @@ static int presetCount(int style) {
 static void say(const char* m);
 // edit guard: after you change a patch, the first step to another patch only warns (the second one goes)
 static int gEdited = 0, gGuard = 0, gStyleCur = 0, gPresetCur = 0;
-static char gCallTxt[24]; static float gCallT = 0; static const void* gCallP = NULL;   // big pop-up of the value being changed (Shrub-style); gCallP: its Param, for the bar
+static char gCallTxt[24], gCallCtx[40]; static float gCallT = 0; static const void* gCallP = NULL;   // big pop-up of the value being changed (Shrub-style); gCallP: its Param, for the bar
 static void presetLoad(int style, int idx) {
 	gEdited = 0; gGuard = 0; gStyleCur = style; gPresetCur = idx;
 	if (style == NSTYLES - 1) { if (gUser[idx].magic == PATCH_MAGIC) patchApply(&gUser[idx]); return; }
@@ -7410,6 +7410,16 @@ static void drumsChanged(void) {   // main thread
 		drumPickChannels(); gDrumStep = -1; gEuPos = 0;
 	} else if (gCsndOK && gVoiceMode < 3) { for (int d = 0; d < 3; d++) if (gDrumCh[d] >= 0) CSND_SetPlayState(gDrumCh[d], 0); for (int k = 0; k < 2; k++) if (gNzCh[k] >= 0) CSND_SetPlayState(gNzCh[k], 0); csndExecCmds(false); }
 }
+// PANIC, after the notes, sequencer and arp: the loop (kept recorded: LOOPER PLAY brings it back), live REC, the tape,
+// the chip echo's tail, the drum machine, a held shake, and anything still ringing on the second chip
+static void panicRest(void) {
+	if (gLoopMode) { gLoopMode = 0; loopModeChanged(); }
+	if (gLiveRec || gPreFor == 2) liveRecStop();
+	tapeStopPlay(); echoStop();
+	if (gDrums) { gDrums = 0; drumsChanged(); }
+	gShakePend = 0;
+	if (gCsndOK) { for (int c = 0; c < NCS; c++) if ((csndChannels & BIT(c)) && gCsOwner[c] < 0) CSND_SetPlayState(c, 0); csndExecCmds(false); }
+}
 // ---- DRUM KIT patches (voice MODE 808 KIT .. CHIP KIT): every key is a drum. Notes follow General MIDI from C1 (36)
 // up, folded every two octaves, so an FM-1, a DAW or Drambo plays the right drums and the keyboard always has a full kit.
 static const s8 KIT_GM[24] = {0, 5, 1, 4, 1, 6, 2, 6, 2, 6, 3, 7, 7, 9, 7, 9, 9, 8, 2, 9, 8, 9, 5, 9};   // 36..59 -> sound
@@ -8347,9 +8357,7 @@ int main(void) {
 		if (startAct == 0) { browseSave(); if (gSaveArm >= 0) browseSave(); }   // one press from the menu: no "A again"
 		if (startAct == 1) page = 0;
 		if (startAct == 2) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0;
-			if (gLoopMode) { gLoopMode = 0; loopModeChanged(); }   // the loop stops too (it stays recorded: LOOPER PLAY brings it back)
-			if (gLiveRec || gPreFor == 2) liveRecStop();
-			tapeStopPlay(); echoStop();   // and the tape, and the chip echo's tail (it restarts empty)
+			panicRest();
 			say("PANIC: EVERYTHING STOPPED"); }
 		if (startAct == 4) { gTheme = (gTheme + 1) % NTHEMES; char m[32]; snprintf(m, sizeof(m), "THEME: %s", THEME_NAMES[gTheme]); say(m); }
 		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
@@ -8410,6 +8418,7 @@ int main(void) {
 				gGuard = 1; say("PATCH EDITED: PRESS AGAIN TO LEAVE IT (SAVE IT IN USER)"); topDirty = 1;
 			} else if (paramChange(p, dir, fast)) {
 				if (page != 0 && p->names != PRESS_RIGHT) {   // VALUE HUD: the new value, big, for a moment
+					snprintf(gCallCtx, sizeof(gCallCtx), "%s > %s", PAGE_NAMES[page], p->name);   // which control this is
 					paramFmt(p, gCallTxt, sizeof(gCallTxt));   // (paramFmt knows the TABLE / PRESET name stand-ins; indexing names[] directly read past them)
 					gCallT = p->type == PT_E ? 0.9f : 0.6f; gCallP = p;
 				}
@@ -8486,6 +8495,7 @@ int main(void) {
 			if (mx || my) {
 				topDirty = 1; botDirty = 1;
 				int useX = mx && (!my || fabsf(sx) >= fabsf(sy)); const Param* q = useX ? qx : qy; float* pv = useX ? px_ : py_;
+				snprintf(gCallCtx, sizeof(gCallCtx), "%s", gStickMode == SM_MACROS ? "CIRCLE PAD: MACROS" : PAGE_NAMES[page]);
 				if (q) { char v[16]; paramFmt(q, v, sizeof(v)); snprintf(gCallTxt, sizeof(gCallTxt), "%.10s %s", q->name, v); gCallP = q; }   // show what the pad is moving
 				else { int k = pv == &gMacro[0] ? 1 : pv == &gMacro[1] ? 2 : 0; snprintf(gCallTxt, sizeof(gCallTxt), "MACRO %d %d%%", k, (int)lroundf(*pv * 100)); gCallP = NULL; }
 				gCallT = 0.6f;
@@ -8522,7 +8532,7 @@ int main(void) {
 					if (b == 3) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } }
 					if (b == 4) { if (gChord) { gChordLast = gChord; gChord = 0; } else gChord = gChordLast; char m[32]; snprintf(m, sizeof(m), "CHORD: %s", gChord ? CHORD_NAMES[gChord] : "OFF"); say(m); }
 					if (b == 5) { gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0); if (gSeqMode == 0) seqStop(); }
-					if (b == 6) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; if (gLoopMode) { gLoopMode = 0; loopModeChanged(); } if (gLiveRec || gPreFor == 2) liveRecStop(); tapeStopPlay(); echoStop(); say("PANIC: EVERYTHING STOPPED"); }
+					if (b == 6) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; panicRest(); say("PANIC: EVERYTHING STOPPED"); }
 					topDirty = botDirty = 1;
 				}
 			} else if (gModOn && !gPads) {
@@ -8694,12 +8704,15 @@ int main(void) {
 					fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
 					const Param* cp = (const Param*)gCallP; int bar = cp && cp->type != PT_E && cp->mx > cp->mn;
 					int w = (int)strlen(gCallTxt) * 16 + 16; if (bar && w < 160) w = 160;
+					int cw = (int)strlen(gCallCtx) * 8 + 16; if (cw > w) w = cw; if (w > 396) w = 396;
 					int mdst = cp ? paramDst(cp->p) : -1, msl = -1; float mamt = 0;
 					if (mdst >= 0) for (int m = 0; m < NMOD; m++) if (gMod[m].src != SRC_OFF && gMod[m].dst == mdst && fabsf(gMod[m].amt) > fabsf(mamt)) { mamt = gMod[m].amt; msl = m; }
 					int mcount = 0; if (mdst >= 0) for (int m = 0; m < NMOD; m++) if (gMod[m].src != SRC_OFF && gMod[m].dst == mdst && gMod[m].amt != 0) mcount++;
 					char mtx[32] = ""; if (msl >= 0) { if (mcount > 1) snprintf(mtx, sizeof(mtx), "< %s %+d%% +%d MORE", SRC_NAMES[gMod[msl].src], (int)lroundf(mamt * 100), mcount - 1); else snprintf(mtx, sizeof(mtx), "< %s %+d%%", SRC_NAMES[gMod[msl].src], (int)lroundf(mamt * 100)); if ((int)strlen(mtx) * 8 + 20 > w) w = (int)strlen(mtx) * 8 + 20; }
-					int x = 200 - w / 2, h = (bar ? 52 : 40) + (msl >= 0 ? 12 : 0);
-					rect(x, 96, w, h, RGB3(TH->tab)); outline(x, 96, w, h, RGB3(TH->line));
+					int x = 200 - w / 2, h = (bar ? 52 : 40) + (msl >= 0 ? 12 : 0) + 12;
+					rect(x, 84, w, h, RGB3(TH->tab)); outline(x, 84, w, h, RGB3(TH->line));
+					text(200 - (int)strlen(gCallCtx) * 4, 88, gCallCtx, 1, RGB3(TH->dim));   // what you're adjusting
+					h -= 12;
 					if (msl >= 0) text(200 - (int)strlen(mtx) * 4, 96 + h - 12, mtx, 1, RGB3(TH->tabTxt));   // what's moving it
 					text(200 - (int)strlen(gCallTxt) * 8, 106, gCallTxt, 2, RGB3(TH->tabTxt));
 					if (bar) {   // where it sits in its range; bipolar values grow from the centre so the sign shows
