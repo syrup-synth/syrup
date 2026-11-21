@@ -1858,13 +1858,17 @@ static const char* RATE_NAMES[6] = {"1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32
 static const float RATE_BEATS[6] = {1.0f, 0.5f, 1.0f / 3, 0.25f, 1.0f / 6, 0.125f};
 static int gArp = 0, gArpRate = 3, gArpOct = 1, gBPM = 120;
 static float gArpGate = 0.5f;
+static float gArpStrum = 0; static int gArpStrumDir = 0;   // ARP STRUM (ms between strings) + direction: the CHORD arp rolls its notes like a strummed guitar
+#define NSTRD 4
+static const char* STRUMDIR_NAMES[NSTRD] = {"DOWN", "UP", "DOWN+UP", "RANDOM"};
+static int gStrQ[8], gStrN = 0, gStrUp = 0; static float gStrT[8], gStrV[8];   // strummed notes still to sound (time left, velocity)
 static int gArpPool[8], gArpN = 0;   // notes the arp is cycling through (held keys or the current sequencer step)
 static float gArpVel = 0.8f, gArpPh = 0;
 static int gArpIdx = 0, gArpDir = 1, gArpFresh = 0;
 static int gArpOn[8], gArpOnN = 0;
 static int gBeatFlash = 0;   // set on each arp/seq step (UI blink)
 
-static void arpRelease(void) { for (int i = 0; i < gArpOnN; i++) voiceOff(gArpOn[i]); gArpOnN = 0; }
+static void arpRelease(void) { for (int i = 0; i < gArpOnN; i++) voiceOff(gArpOn[i]); gArpOnN = 0; gStrN = 0; }
 static void arpSetPool(const int* notes, int n, float vel) {
 	if (n > 8) n = 8;
 	int was = gArpN;
@@ -1877,8 +1881,18 @@ static void arpStep(void) {
 	arpRelease();
 	int s[8], n = gArpN;
 	for (int i = 0; i < n; i++) s[i] = gArpPool[i];
-	if (gArp == 6) {   // CHORD: retrigger the whole chord
-		for (int i = 0; i < n; i++) { voiceOn(s[i], gArpVel); gArpOn[gArpOnN++] = s[i]; }
+	if (gArp == 6) {   // CHORD: retrigger the whole chord (strummed when ARP STRUM is up)
+		if (gArpStrum < 0.5f || n < 2) { for (int i = 0; i < n; i++) { voiceOn(s[i], gArpVel); gArpOn[gArpOnN++] = s[i]; } return; }
+		for (int i = 1; i < n; i++) for (int j = i; j > 0 && s[j] < s[j - 1]; j--) { int t = s[j]; s[j] = s[j - 1]; s[j - 1] = t; }
+		int up = gArpStrumDir == 1 || (gArpStrumDir == 2 && gStrUp);   // a down stroke goes low string to high
+		if (gArpStrumDir == 2) gStrUp = !gStrUp;
+		if (up) for (int i = 0; i < n / 2; i++) { int t = s[i]; s[i] = s[n - 1 - i]; s[n - 1 - i] = t; }
+		if (gArpStrumDir == 3) for (int i = n - 1; i > 0; i--) { int j = rand() % (i + 1), t = s[i]; s[i] = s[j]; s[j] = t; }
+		float step = 60.0f / gBPM * RATE_BEATS[gArpRate], room = step * (gArpGate < 0.99f ? gArpGate : 1) * 0.9f;
+		float gap = gArpStrum / 1000.0f; if (gap * (n - 1) > room) gap = room / (n - 1);   // the whole strum fits inside the note
+		float v0 = gArpVel * (up ? 0.85f : 1.0f);   // up strokes land a little lighter
+		voiceOn(s[0], v0); gArpOn[gArpOnN++] = s[0];
+		for (int i = 1; i < n; i++) { gStrQ[gStrN] = s[i]; gStrT[gStrN] = gap * i; gStrV[gStrN] = v0 * (1.0f - 0.05f * i); gStrN++; }
 		return;
 	}
 	if (gArp != 5) for (int i = 1; i < n; i++) for (int j = i; j > 0 && s[j] < s[j - 1]; j--) { int t = s[j]; s[j] = s[j - 1]; s[j - 1] = t; }
@@ -1895,7 +1909,11 @@ static void arpStep(void) {
 	voiceOn(note, gArpVel); gArpOn[gArpOnN++] = note;
 }
 static void arpTick(float dt) {
-	if (!gArp || !gArpN) { if (gArpOnN) arpRelease(); gArpPh = 0; return; }
+	if (!gArp || !gArpN) { if (gArpOnN || gStrN) arpRelease(); gArpPh = 0; return; }
+	for (int i = 0; i < gStrN; i++) if ((gStrT[i] -= dt) <= 0) {   // strummed strings arriving
+		if (gArpOnN < 8) { voiceOn(gStrQ[i], gStrV[i]); gArpOn[gArpOnN++] = gStrQ[i]; }
+		gStrN--; gStrQ[i] = gStrQ[gStrN]; gStrT[i] = gStrT[gStrN]; gStrV[i] = gStrV[gStrN]; i--;
+	}
 	float stepsPerSec = gBPM / 60.0f / RATE_BEATS[gArpRate];
 	if (gArpFresh) { gArpFresh = 0; gArpPh = 0; arpStep(); gBeatFlash = 1; return; }
 	float before = gArpPh;
@@ -2186,8 +2204,11 @@ typedef struct {
 	int hasLoop, loopBars; float loopSpeed, loopWow;
 	int thru, xyMode, tapeKeys; float thruCut, thruRes, thruEnv, thruLfo, echoWow;
 	u8 fxOrder[8];   // v13: master FX chain order (first 5 used)
+	int arpStrumDir; float arpStrum;   // v14: ARP STRUM
 } SPatch;
-#define PATCH_MAGIC 0x5359523D   // "SYR=" (v13)
+#define PATCH_MAGIC 0x5359523E   // "SYR>" (v14)
+#define PATCH_MAGIC13 0x5359523D // v13 (no arp strum)
+#define PATCH_V13_SIZE offsetof(SPatch, arpStrumDir)
 #define PATCH_MAGIC12 0x5359523C // v12 (fixed FX order)
 #define PATCH_V12_SIZE offsetof(SPatch, fxOrder)
 #define PATCH_MAGIC11 0x5359523B // v11 (no beat / loop / CHIP > FX / XY mode)
@@ -2234,7 +2255,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->mod[3] = (ModSlot){SRC_OFF, DST_PITCH, 0.0f};
 	p->bendRange = 2; p->chorus = 0.2f; p->revSize = 0.5f; p->revDamp = 0.5f; p->fxMix = 0.5f;
 	p->driveAmt = 0.4f; p->master = 0.8f; p->echoT = 1;
-	p->arp = 0; p->arpRate = 3; p->arpOct = 1; p->arpGate = 0.5f; p->bpm = 0;
+	p->arp = 0; p->arpRate = 3; p->arpOct = 1; p->arpGate = 0.5f; p->bpm = 0; p->arpStrum = 0; p->arpStrumDir = 0;
 	for (int i = 0; i < 2; i++) { p->lfoSync[i] = 0; p->lfoTable[i] = T_HARMONIX; p->lfoPos[i] = 0.5f; }
 	for (int i = 0; i < 4; i++) { p->mod2[i] = (ModSlot){SRC_OFF, DST_PITCH, 0}; p->macro[i] = 0; }
 	for (int i = 0; i < 8; i++) p->modCurve[i] = 0;
@@ -2853,12 +2874,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER) || len == (long)(PATCH_V11_SIZE * NUSER) || len == (long)(PATCH_V12_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER) || len == (long)(PATCH_V11_SIZE * NUSER) || len == (long)(PATCH_V12_SIZE * NUSER) || len == (long)(PATCH_V13_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10 || t.magic == PATCH_MAGIC11 || t.magic == PATCH_MAGIC12)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10 || t.magic == PATCH_MAGIC11 || t.magic == PATCH_MAGIC12 || t.magic == PATCH_MAGIC13)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -2903,7 +2924,7 @@ static void patchCapture(SPatch* p) {
 	memcpy(p->mot, gMot, sizeof(gMot)); memcpy(p->motTgt, gMotTgt, sizeof(gMotTgt)); memcpy(p->motOn, gMotOn, sizeof(gMotOn)); p->motBars = gMotBars;
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
 	p->glide = gGlide; p->chorus = gChorus; p->revSize = gRevSize; p->revDamp = gRevDamp; p->fxMix = gFxMix; p->driveAmt = gDriveAmt; p->master = gMaster;
-	p->arp = gArp; p->arpRate = gArpRate; p->arpOct = gArpOct; p->arpGate = gArpGate; p->bpm = gBPM;
+	p->arp = gArp; p->arpRate = gArpRate; p->arpOct = gArpOct; p->arpGate = gArpGate; p->bpm = gBPM; p->arpStrum = gArpStrum; p->arpStrumDir = gArpStrumDir;
 }
 
 static int gForceBuild = 3;
@@ -2954,7 +2975,7 @@ static void patchApply(const SPatch* p) {
 	memcpy(gMot, p->mot, sizeof(gMot)); for (int l = 0; l < 4; l++) { gMotTgt[l] = p->motTgt[l] % 16; gMotOn[l] = p->motOn[l] & 1; } gMotBars = p->motBars & 3; gMotRec = -1; gMotPh = 0;
 	gVoiceMode = (p->voiceMode >= 0 && p->voiceMode < 9) ? p->voiceMode : 0; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
-	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate;   // the tempo is yours: loading a patch never changes it
+	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate; gArpStrum = p->arpStrum; gArpStrumDir = p->arpStrumDir >= 0 && p->arpStrumDir < NSTRD ? p->arpStrumDir : 0;   // the tempo is yours: loading a patch never changes it
 	gArpN = 0; gArpOnN = 0; gHeldN = 0;
 	if (subChg) buildSub();
 	LightLock_Unlock(&gMipsLock);
@@ -3163,7 +3184,7 @@ static Param P_PRESET[] = {
 static Param P_PLAY[] = {
 	PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
 	PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ), PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0),
-	PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PI_("BPM", &gBPM, 40, 240, 0),
+	PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0), PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PI_("BPM", &gBPM, 40, 240, 0),
 	PE("SEQ", &gSeqMode, 3, SEQ_NAMES, D_SEQ), PI_("SEQ LENGTH", &gSeqLen, 1, NSTEP, 0), PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0),
 	PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("REC CLICK", &gClick, 3, CLICK_NAMES, 0), PE("REC QUANT", &gRecQ, 3, RQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
 	{"ADD REST", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_REST},
@@ -3649,7 +3670,7 @@ static const char* paramHelp(const char* n) {
 		{"SURROUND", "SURROUND DEPTH"}, {"TILT CENTER", "PRESS > TO RE-CENTRE THE TILT"}, {"REV SIZE", "REVERB ROOM SIZE"},
 		{"REV DAMP", "DARKER REVERB TAIL"}, {"FX MIX", "HOW MUCH EFFECT"}, {"DRIVE", "DISTORTION TYPE"}, {"DRIVE AMT", "HOW MUCH DISTORTION"},
 		{"MASTER", "OUTPUT VOLUME"}, {"ROOT", "KEY OF THE SCALE"}, {"SCALE", "LOCK THE KEYS TO A SCALE"}, {"ARP", "ARPEGGIATOR PATTERN"},
-		{"ARP RATE", "ARPEGGIATOR SPEED"}, {"ARP OCTAVES", "OCTAVES THE ARP CLIMBS"}, {"ARP GATE", "ARP NOTE LENGTH"}, {"BPM", "TEMPO"},
+		{"ARP RATE", "ARPEGGIATOR SPEED"}, {"ARP OCTAVES", "OCTAVES THE ARP CLIMBS"}, {"ARP GATE", "ARP NOTE LENGTH"}, {"ARP STRUM", "CHORD ARP: TIME BETWEEN STRINGS"}, {"STRUM DIR", "DOWN, UP, OR BOTH LIKE A GUITAR"}, {"BPM", "TEMPO"},
 		{"SEQ", "SEQUENCER: OFF, PLAY OR RECORD"}, {"SEQ LENGTH", "STEPS IN THE PATTERN"}, {"SEQ GATE", "STEP NOTE LENGTH"},
 		{"SWING", "SHUFFLE FEEL"}, {"ADD REST", "PRESS > TO RECORD A REST"}, {"CLEAR SEQ", "PRESS > TO ERASE THE PATTERN"},
 		{"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},

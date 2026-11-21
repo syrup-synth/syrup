@@ -9,6 +9,17 @@ static void tap(int fr, int at, int x, int y) { if (fr == at) { TOUCH = 1; TX = 
 static int songA = -1, songB = -1;
 static int sqHas(int nt) { for (int i = 0; i < gSqNn; i++) if (gSqN[i].note == nt && !gSqN[i].rel) return 1; return 0; }
 static void SCRIPT(int fr) {
+	if (fr == 3) {   // ARP STRUM: the CHORD arp rolls the chord, down then up with DOWN+UP
+		int ch[3] = {67, 60, 64}; int sa = gArp, sr = gArpRate; float sg = gArpGate; int sb = gBPM; float sv = gArpVel; gArp = 6; gArpRate = 0; gArpGate = 0.9f; gBPM = 120;
+		gArpStrum = 30; gArpStrumDir = 2; gStrUp = 0;
+		arpSetPool(ch, 3, 0.8f); gArpFresh = 0; arpStep();
+		if (gArpOnN != 1 || gArpOn[0] != 60) fail("strum: a down stroke starts on the lowest note (%d on, first %d)", gArpOnN, gArpOn[0]);
+		arpTick(0.035f); if (gArpOnN != 2 || gArpOn[1] != 64) fail("strum: second string 30 ms later (%d on)", gArpOnN);
+		arpTick(0.035f); if (gArpOnN != 3 || gArpOn[2] != 67) fail("strum: third string 60 ms later (%d on)", gArpOnN);
+		arpStep(); if (gArpOnN != 1 || gArpOn[0] != 67) fail("strum: DOWN+UP: the next stroke comes up from the top (%d)", gArpOn[0]);
+		gArpStrum = 0; arpStep(); if (gArpOnN != 3) fail("strum: ARP STRUM 0 plays the chord at once");
+		arpSetPool(ch, 0, 0); gArp = sa; gArpRate = sr; gArpGate = sg; gArpStrumDir = 0; gBPM = sb; gArpVel = sv;
+	}
 	HD = 0; TOUCH = 0; gFxCore2 = 0; CX = 0;
 	if (fr == 3) { int st, ix; if (findPreset("REESE CRATE", &st, &ix)) presetLoad(st, ix); gBPM = 120; gScale = 0; gGridOct = 0; gArp = 0; }
 	tap(fr, 5, 5 * 320 / 7 + 20, 8);   // SEQ chip
@@ -118,7 +129,7 @@ static void SCRIPT(int fr) {
 		gPatView = 0;
 	}
 	// circle pad in the step editor: moves the selected setting, whatever the pad's mode
-	{ static int v0; if (fr == 292) { gStickMode = SM_BEND; stepSetNote(2, 60, 1); gStepEd = 2; gStepEdRow = 60; gSeTab = 0; gSeSel = 0; v0 = gSeq[2].vel; }
+	{ static int v0; if (fr == 292) { gStickMode = SM_BEND; stepSetNote(2, 60, 1); gSeq[2].vel = 150; gStepEd = 2; gStepEdRow = 60; gSeTab = 0; gSeSel = 0; v0 = gSeq[2].vel; }
 	  if (fr > 292 && fr < 330) CX = 150;
 	  if (fr == 332) { if (gSeq[2].vel <= v0 + 8) fail("step editor: the circle pad should raise VEL (%d -> %d)", v0, gSeq[2].vel); gStepEd = -1; gStickMode = SM_DATA; } }
 	// live REC: count-in (1 bar at 240 = 1 s), then MIDI notes land on the nearest 16th with their held length
