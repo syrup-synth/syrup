@@ -504,6 +504,8 @@ static int gVoiceMode = 0, gChord = 0, gFx = 0, gEchoT = 1, gDrive = 0, gBendRan
 static int gODspUp = 0, gODspRev = 0;     // OpenDSP running / has reverb (experimental build)
 static volatile int gDspRevOn = 0;        // aux bus 1 carries the DSP reverb right now
 static float revAmt(void);
+static int gDspRevSel = 0, gFwSel = 0, gFwBoot = 0;    // EXP: REVERB ON (0 DSP, 1 ARM) live; DSP FIRMWARE (0 OPENDSP, 1 NINTENDO) at launch
+static const char* EXP_PATH = "sdmc:/3ds/syrup/exp.bin";   // EXP's own settings; the release never reads it
 static float gGlide = 0.0f, gChorus = 0.3f, gDriveAmt = 0.4f, gMaster = 0.8f;
 
 // ---------------------------------------------------------------- oscillator cycle build
@@ -1457,9 +1459,17 @@ static float gDlyMix = 0, gDlyWow = 0.25f, gDlySat = 0.3f, gRevMix = 0, gOtt = 0
 // SHIMMER and FREEZE stay on the ARM. The DSP return joins after the master chain (no OTT / pump on it).
 static float revAmt(void) { return gRevMix + (gFx == 3 ? fxMixEff() : 0); }
 #ifdef SYRUP_OPENDSP
-static int dspRevWanted(void) { return gODspRev && gMasterFX && busActive() && !gDry && !gFreeze && !gShimmer && gRevType <= 2; }
+static int dspRevWanted(void) { return gODspRev && !gDspRevSel && gMasterFX && busActive() && !gDry && !gFreeze && !gShimmer && gRevType <= 2; }
+static void expSave(void) { FILE* f = fopen(EXP_PATH, "wb"); if (!f) return; int d[3] = {0x45585031, gDspRevSel, gFwSel}; fwrite(d, sizeof d, 1, f); fclose(f); }
+static void expLoad(void) {
+	FILE* f = fopen(EXP_PATH, "rb"); int d[3] = {0}; if (!f) return;
+	if (fread(d, sizeof d, 1, f) == 1 && d[0] == 0x45585031) { gDspRevSel = d[1] & 1; gFwSel = d[2] & 1; }
+	fclose(f);
+}
 static void dspRevUpdate(void) {   // main loop only: each call is a mailbox round trip to the DSP
-	static float last[3] = {-1, -1, -1}; static int lastType = -1, wait = 0;
+	static float last[3] = {-1, -1, -1}; static int lastType = -1, wait = 0, savedRev = -1, savedFw = -1;
+	if (savedRev < 0) { savedRev = gDspRevSel; savedFw = gFwSel; }
+	if (savedRev != gDspRevSel || savedFw != gFwSel) { savedRev = gDspRevSel; savedFw = gFwSel; expSave(); }
 	int want = dspRevWanted();
 	if (!want) {
 		if (gDspRevOn) { gDspRevOn = 0; opendspReverbSet(1, NULL); ndspAuxSetEnable(1, true); lastType = -1; }
@@ -3326,6 +3336,10 @@ static Param P_HW[] = {
 	PE("LINK", &gLink, 6, LINK_NAMES_P, D_LINK), PE("BEAT LIGHT", &gBeatLight, 2, ONOFF, 0),
 	PEND};
 static const char* ONOFF2[2] = {"OFF", "ON"};
+#ifdef SYRUP_OPENDSP
+static const char* REVENG_NAMES[2] = {"DSP", "ARM"};
+static const char* FW_NAMES[2] = {"OPENDSP", "NINTENDO"};
+#endif
 static Param P_MASTER[] = {
 	PE("OUT FILTER", &gOfType, NOFT, OFT_NAMES, D_OFT), PF("OUT CUTOFF", &gOfCut, 0, 1, 0.01f, "%", 0), PF("OUT RES", &gOfRes, 0, 1, 0.02f, "%", 0),
 	PF("OUT DRIVE", &gOfDrive, 0, 1, 0.02f, "%", 0), PF("OUT ENV2", &gOfEnv, -1, 1, 0.02f, "%", 0),
@@ -3335,6 +3349,9 @@ static Param P_MASTER[] = {
 	PF("EQ LOW", &gEqLow, -12, 12, 0.5f, "DB", 0), PF("EQ MID", &gEqMid, -12, 12, 0.5f, "DB", 0), PF("EQ HIGH", &gEqHigh, -12, 12, 0.5f, "DB", 0),
 	PE("DELAY TYPE", &gDlyType, NDLYT, DLYT_NAMES, D_DLYT), PF("DELAY MIX", &gDlyMix, 0, 1, 0.02f, "%", 0), PE("DELAY SYNC", &gDlySync, 7, DSYNC_NAMES, 0), PF("TAPE WOW", &gDlyWow, 0, 1, 0.02f, "%", 0), PF("TAPE SAT", &gDlySat, 0, 1, 0.02f, "%", 0),
 	PF("REVERB MIX", &gRevMix, 0, 1, 0.02f, "%", 0), PE("REVERB TYPE", &gRevType, NREVT, REVT_NAMES, 0), PE("SHIMMER", &gShimmer, 2, ONOFF2, 0), PE("FREEZE", &gFreeze, 2, ONOFF2, 0),
+#ifdef SYRUP_OPENDSP
+	PE("REVERB ON", &gDspRevSel, 2, REVENG_NAMES, 0), PE("DSP FIRMWARE", &gFwSel, 2, FW_NAMES, 0),
+#endif
 	PF("OTT", &gOtt, 0, 1, 0.02f, "%", 0), PF("PUMP", &gPump, 0, 1, 0.02f, "%", 0), PE("PUMP RATE", &gPumpRate, 4, PUMP_NAMES, 0),
 	PE("LOFI BITS", &gLofiBits, 6, BITS_NAMES, 0), PF("LOFI RATE", &gLofiRate, 0, 1, 0.02f, "%", 0),
 	PF("3D ORBIT", &gOrbit, 0, 1, 0.02f, "%", 0), PF("ORBIT RATE", &gOrbitRate, 0, 2, 0.02f, "HZ", 0),
@@ -4000,9 +4017,12 @@ static void drawTop(int page, int sel, int oct, int latch) {
 #ifdef SYRUP_OPENDSP
 		{ static float load = 0; static int tick = 0;
 			if (gODspUp && ++tick >= 30) { tick = 0; opendspStats st = {.struct_size = sizeof st}; if (R_SUCCEEDED(opendspGetStats(&st, false))) load = st.load; }
-			if (gODspUp) snprintf(s, sizeof(s), "OPENDSP %d%%  REV %s", (int)(load * 100 + 0.5f), gDspRevOn ? "DSP" : "ARM");
-			else snprintf(s, sizeof(s), "OPENDSP OFF (NINTENDO DSP)");
-			text(150, 186, s, 1, gODspUp ? DIM : WARN); }
+			int pend = gFwSel != gFwBoot;   // DSP FIRMWARE changed: takes effect next launch
+			if (pend) snprintf(s, sizeof(s), "DSP FW: RESTART TO APPLY");
+			else if (!gFwBoot && !gODspUp) snprintf(s, sizeof(s), "OPENDSP FAILED: NINTENDO");
+			else if (gODspUp) snprintf(s, sizeof(s), "OPENDSP %d%%  REV %s", (int)(load * 100 + 0.5f), gDspRevOn ? "DSP" : "ARM");
+			else snprintf(s, sizeof(s), "NINTENDO DSP  REV ARM");
+			text(150, 186, s, 1, (pend || (!gFwBoot && !gODspUp)) ? WARN : DIM); }
 #endif
 		{ u32 dr = gAudioOK ? ndspGetDroppedFrames() : 0;
 			snprintf(s, sizeof(s), "DSP %d/24  CSND %d/%d%s", dsp, cs, csTot, dr ? " DROP" : skipRecent() ? " SKIP" : ""); text(6, 198, s, 1, (dr || skipRecent()) ? WARN : DIM); }
@@ -8372,7 +8392,8 @@ int main(void) {
 	buildSub(); buildNoise();
 
 #ifdef SYRUP_OPENDSP
-	if (R_SUCCEEDED(opendspInit())) {   // ships its own DSP firmware: no dspfirm.cdc dump needed
+	expLoad(); gFwBoot = gFwSel;
+	if (!gFwSel && R_SUCCEEDED(opendspInit())) {   // ships its own DSP firmware: no dspfirm.cdc dump needed
 		u32 caps = 0; opendspGetCapabilities(&caps);
 		gODspUp = 1; gODspRev = (caps & OPENDSP_CAP_REVERB) != 0; gAudioOK = 1;
 	} else gAudioOK = R_SUCCEEDED(ndspInit());   // Nintendo firmware fallback (needs the dump)
@@ -8765,7 +8786,7 @@ int main(void) {
 			if (any) { gBusWait += dt; if (gBusWait > 1.5f) { gBusFail = 1; topDirty = 1; } }
 		}
 		LightLock_Unlock(&gVoiceLock);
-		if (gAudioOK) dspRevUpdate();
+		dspRevUpdate();   // also saves the EXP switches, even with no audio
 		// SD writes wait until here, so a page press never holds the lock the audio tick needs
 		if (gPageMarkDue) { gPageMarkDue = 0; settingsSave(page); char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
 		if (gSeqSaveDue) { gSeqSaveDue = 0; LightLock_Lock(&gVoiceLock); seqSnap(); LightLock_Unlock(&gVoiceLock); seqWriteSnap(); }
