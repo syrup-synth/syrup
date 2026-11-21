@@ -3957,8 +3957,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		else {
 			int pct = cpuPct();
 			if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, (!gFxCore2 || (gCore2Lim && gCore2Lim < 50)) ? "CORE 1" : (!(gFxThread || gFxOnWorker) || gFxC2Fail) ? "FELL BACK" : gFxThread ? "CORE 3" : "ON CORE 2");
-			else snprintf(s, sizeof(s), "CORE 2 OFF %s %08lX %08lX L%lu", envIsHomebrew() ? "3DSX" : "CIA", (unsigned long)gCore2Rc, (unsigned long)gCore2ThRc, (unsigned long)gCore2Lim);
-			if (gWorker) text(6, 210, s, 1, DIM); else text(6, 210, s, 1, WARN);
+			if (gWorker) text(6, 210, s, 1, DIM);   // (no second core: nothing to say, everything runs on the first)
 		}
 		}
 	}
