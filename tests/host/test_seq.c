@@ -9,7 +9,7 @@ static void tap(int fr, int at, int x, int y) { if (fr == at) { TOUCH = 1; TX = 
 static int songA = -1, songB = -1;
 static int sqHas(int nt) { for (int i = 0; i < gSqNn; i++) if (gSqN[i].note == nt && !gSqN[i].rel) return 1; return 0; }
 static void SCRIPT(int fr) {
-	HD = 0; TOUCH = 0; gFxCore2 = 0;
+	HD = 0; TOUCH = 0; gFxCore2 = 0; CX = 0;
 	if (fr == 3) { int st, ix; if (findPreset("REESE CRATE", &st, &ix)) presetLoad(st, ix); gBPM = 120; gScale = 0; gGridOct = 0; gArp = 0; }
 	tap(fr, 5, 5 * 320 / 7 + 20, 8);   // SEQ chip
 	if (fr == 8 && !gGridOn) fail("SEQ chip should open the piano roll");
@@ -27,11 +27,13 @@ static void SCRIPT(int fr) {
 	if (fr >= 40 && fr < 80) { TOUCH = 1; TX = RX(0); TY = RY(48); }   // hold: step editor
 	if (fr == 80 && (gStepEd != 0 || gStepEdRow != 48)) fail("roll: holding a note should open its step (%d, %d)", gStepEd, gStepEdRow);
 	if (fr == 80 && !stepHasNote(0, 48)) fail("roll: holding shouldn't remove the note");
-	if (fr >= 84 && fr < 87) { TOUCH = 1; TX = 313; TY = SE_ROW(3) + 4; }   // CUTOFF lock all the way up
-	if (fr >= 88 && fr < 90) { TOUCH = 1; TX = 313; TY = SE_ROW(7) + 4; }   // ACCENT on
-	if (fr >= 91 && fr < 94) { TOUCH = 1; TX = 162 + 28; TY = SE_ROW(9) + 4; }   // ROW EUCL ~3 for this pitch
+	if (fr >= 82 && fr < 84) { TOUCH = 1; TX = 100; TY = SE_RY + 4 * SE_RH + 8; }   // ACCENT (NOTE tab, row 5): a tap flips it on
+	tap(fr, 85, 240, SE_TAB_Y + 5);                    // LOCKS tab
+	if (fr >= 87 && fr < 90) { TOUCH = 1; TX = 300; TY = SE_RY + 8; TY += (fr - 87) * 12; }   // CUTOFF all the way up; sliding down doesn't change row
+	if (fr >= 91 && fr < 94) { TOUCH = 1; TX = SE_TX + 33; TY = SE_RY + 4 * SE_RH + 8; }   // ROW EUCL ~3 for this pitch
 	if (fr == 96) {
 		shotBot("shots/seq_step.ppm");
+		if (gSeq[0].res != 0) fail("step editor: dragging down off CUTOFF shouldn't touch RES (%d)", gSeq[0].res);
 		if (gSeq[0].cut < 90) fail("step editor: CUTOFF lock didn't move (%d)", gSeq[0].cut);
 		if (!(gSeq[0].fl & 1)) fail("step editor: ACCENT should switch on");
 		int r = rowOfNote(48), hits = 0; if (r >= 0) for (int i = 0; i < 16; i++) hits += rowCellOn(r, i);
@@ -114,11 +116,15 @@ static void SCRIPT(int fr) {
 		  if (!ch) fail("HUM should change velocities"); if (gSeq[1].n || gSeq[1].vel) fail("HUM should leave empty steps alone"); }
 		gPatView = 0;
 	}
+	// circle pad in the step editor: moves the selected setting, whatever the pad's mode
+	{ static int v0; if (fr == 292) { gStickMode = SM_BEND; stepSetNote(2, 60, 1); gStepEd = 2; gStepEdRow = 60; gSeTab = 0; gSeSel = 0; v0 = gSeq[2].vel; }
+	  if (fr > 292 && fr < 330) CX = 150;
+	  if (fr == 332) { if (gSeq[2].vel <= v0 + 8) fail("step editor: the circle pad should raise VEL (%d -> %d)", v0, gSeq[2].vel); gStepEd = -1; gStickMode = SM_DATA; } }
 }
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	remove("sd/seq.bin");
-	loadFont(); FRMAX = 292; app_main();
+	loadFont(); FRMAX = 336; app_main();
 	printf("seq: piano roll tap/drag/delete/hold, step locks, accent, euclid pitch row, patterns, song, save, note lengths, nudge, copy/paste, rev/rot/hum\n");
 	return gFails ? 1 : 0;
 }

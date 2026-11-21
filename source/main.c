@@ -4180,27 +4180,42 @@ static void seFmt(int k, int v, char* o, int n) {
 	else if (k == 1 || k == 2) snprintf(o, n, "%d%%", v); else if (k >= 3 && k <= 6 && v) snprintf(o, n, "%+d", v); else snprintf(o, n, "%d", v);
 }
 #define SE_Y (XY_Y + 16)
-#define SE_ROW(k) (SE_Y + 11 + ((k) / 2) * 14)   // top of slider k's row
+// two tabs of full-width, 18 px rows: NOTE (how the step plays) and LOCKS (sound locks and the rhythm row)
+#define SE_TAB_Y (SE_Y + 12)
+#define SE_RY (SE_TAB_Y + 17)          // first row
+#define SE_RH 18
+#define SE_TX 88                       // slider track: x and width
+#define SE_TW 172
+static const int SE_PAGE[2][8] = {{0, 1, 2, 6, 7, 11, 12, 13}, {3, 4, 5, 8, 9, 10, -1, -1}};
+static const char* SE_TABN[2] = {"NOTE", "LOCKS + ROW"};
+static int gSeTab = 0, gSeSel = 0;     // gSeSel: the selected setting (SE index), the circle pad moves it
 static int gClipOk = 0; static Step gClip;
-#define SE_CP_Y (SE_ROW(SE_N - 1) + 18)
+#define SE_CP_Y (SE_RY + 8 * SE_RH + 4)
 static void drawStepEd(void) {
 	char t[40]; int nt = gStepEdRow;
 	snprintf(t, sizeof(t), "STEP %d %s%d", gStepEd + 1, NOTE_NAMES[nt % 12], nt / 12 - 1); text(4, SE_Y, t, 1, RGB3(TH->val));
 	rectP(262, SE_Y - 2, 54, 12, TH->keyOn); text(273, SE_Y, "DONE", 1, RGB3(EGA[0]));
 	rectP(126, SE_Y - 2, 40, 12, TH->tab); text(134, SE_Y, "RND", 1, RGB3(TH->tabTxt));
 	rectP(170, SE_Y - 2, 40, 12, TH->tab); text(178, SE_Y, "<ST", 1, RGB3(TH->tabTxt)); rectP(214, SE_Y - 2, 40, 12, TH->tab); text(222, SE_Y, "ST>", 1, RGB3(TH->tabTxt));
+	for (int i = 0; i < 2; i++) {
+		int x = 4 + i * 156, on = i == gSeTab; rectP(x, SE_TAB_Y, 152, 14, on ? TH->keyOn : TH->tab);
+		const u8* c = on ? EGA[0] : TH->tabTxt; text(x + 76 - (int)strlen(SE_TABN[i]) * 4, SE_TAB_Y + 3, SE_TABN[i], 1, c[0], c[1], c[2]);
+	}
+	for (int r = 0; r < 8; r++) {
+		int k = SE_PAGE[gSeTab][r]; if (k < 0) continue;
+		int y = SE_RY + r * SE_RH, v = seGet(k), sel = k == gSeSel;
+		if (sel) { rectP(2, y, 316, SE_RH - 2, TH->pad); outline(2, y, 316, SE_RH - 2, RGB3(TH->line)); }
+		char vs[12]; seFmt(k, v, vs, sizeof(vs));
+		const u8* lc = sel ? TH->val : (k >= 8 && k <= 10 ? TH->keyOn : TH->txt);
+		text(8, y + 5, SE_NAMES[k], 1, lc[0], lc[1], lc[2]); text(312 - (int)strlen(vs) * 8, y + 5, vs, 1, RGB3(TH->val));
+		rectP(SE_TX, y + 7, SE_TW, 3, sel ? TH->grid : TH->tab);
+		float f = (v - SE_MIN[k]) / (float)(SE_MAX[k] - SE_MIN[k]); int z = SE_MIN[k] < 0 ? SE_TW / 2 : 0, p = (int)(f * (SE_TW - 1));
+		if (SE_MIN[k] < 0) { int a = p < z ? p : z, b = p < z ? z : p; rectP(SE_TX + a, y + 6, b - a + 1, 5, TH->val); rectP(SE_TX + z, y + 4, 1, 9, TH->dim); }
+		else rectP(SE_TX, y + 6, p + 1, 5, TH->val);
+		rectP(SE_TX + p - 1, y + 3, 3, 11, sel ? TH->keyOn : TH->val);   // the knob
+	}
 	rectP(4, SE_CP_Y, 152, 16, TH->tab); text(64, SE_CP_Y + 4, "COPY", 1, RGB3(TH->tabTxt));
 	rectP(162, SE_CP_Y, 152, 16, gClipOk ? TH->tab : TH->pad); text(218, SE_CP_Y + 4, "PASTE", 1, RGB3(gClipOk ? TH->tabTxt : TH->grid));
-	for (int k = 0; k < SE_N; k++) {
-		int x = 4 + (k & 1) * 158, y = SE_ROW(k), v = seGet(k);
-		char vs[12]; seFmt(k, v, vs, sizeof(vs));
-		const u8* lc = k >= 8 && k <= 10 ? TH->keyOn : TH->txt;
-		text(x, y, SE_NAMES[k], 1, lc[0], lc[1], lc[2]); text(x + 152 - (int)strlen(vs) * 8, y, vs, 1, RGB3(TH->val));
-		rectP(x, y + 9, 152, 3, TH->pad);
-		float f = (v - SE_MIN[k]) / (float)(SE_MAX[k] - SE_MIN[k]); int z = SE_MIN[k] < 0 ? 76 : 0, p = (int)(f * 151);
-		if (SE_MIN[k] < 0) { int a = p < z ? p : z, b = p < z ? z : p; rectP(x + a, y + 9, b - a + 1, 3, TH->val); }
-		else rectP(x, y + 9, p + 1, 3, TH->val);
-	}
 }
 static int gSeDrag = -1;
 static int stepEdTouch(int x, int y, int press, int release) {
@@ -4228,9 +4243,18 @@ static int stepEdTouch(int x, int y, int press, int release) {
 		} else say("COPY A STEP FIRST");
 		return 1;
 	}
-	if (press) { int c = x >= 160, r = (y - SE_Y - 11) / 14; gSeDrag = (y >= SE_Y + 11 && r >= 0 && r < SE_N / 2) ? r * 2 + c : -1; }
-	if (gSeDrag < 0) return 0;
-	int bx = 4 + (gSeDrag & 1) * 158; float f = (x - bx) / 151.0f; f = f < 0 ? 0 : f > 1 ? 1 : f;
+	if (press && y >= SE_TAB_Y && y < SE_TAB_Y + 15) { int t = x >= 160; if (t != gSeTab) { gSeTab = t; gSeSel = SE_PAGE[t][0]; } gSeDrag = -1; return 1; }
+	if (press) {   // the row is picked on the press and kept: sliding up or down while dragging never changes it
+		int r = (y - SE_RY) / SE_RH; gSeDrag = -1;
+		if (y >= SE_RY && r >= 0 && r < 8 && SE_PAGE[gSeTab][r] >= 0) {
+			int k = SE_PAGE[gSeTab][r]; gSeSel = k;
+			if (SE_MAX[k] - SE_MIN[k] == 1) { seSet(k, !seGet(k)); return 1; }   // on / off: a tap flips it
+			if (x < SE_TX - 6) return 1;   // tapping the name only selects it; the circle pad fine-tunes it
+			gSeDrag = k;
+		}
+	}
+	if (gSeDrag < 0) return press;
+	float f = (x - SE_TX) / (float)(SE_TW - 1); f = f < 0 ? 0 : f > 1 ? 1 : f;
 	seSet(gSeDrag, SE_MIN[gSeDrag] + (int)lroundf(f * (SE_MAX[gSeDrag] - SE_MIN[gSeDrag])));
 	return 1;
 }
@@ -7821,6 +7845,9 @@ int main(void) {
 			static float acc = 0; acc += gStickDX * fabsf(gStickDX) * dt * 30 + (gStickDX > 0 ? 2 : -2) * dt;
 			if (acc >= 1) { dir = 1; fast = 1; acc -= 1; } else if (acc <= -1) { dir = -1; fast = 1; acc += 1; }
 			if (acc > 1) acc = 1; if (acc < -1) acc = -1;
+			if (dir && gStepEd >= 0) {   // step editor open: the pad moves the selected step setting one notch at a time
+				int k = gSeSel; seSet(k, seGet(k) + dir); dir = 0; botDirty = 1;
+			}
 			if (dir && PAGES[page][sel[page]].p == &gBPM) {   // the circle pad never moves the tempo: too easy to knock while playing
 				dir = 0; acc = 0;
 				static float hintT = 0; if (hintT <= 0) { say("TEMPO: USE THE D-PAD"); hintT = 3; }
@@ -7908,9 +7935,9 @@ int main(void) {
 		float cx = sx;
 		gStick = sy;
 		int stickRouted = 0; for (int m = 0; m < NMOD; m++) if (gMod[m].src == SRC_STICK && gMod[m].amt != 0) stickRouted = 1;
-		if (gStickMode == SM_DATA) { gStickDX = fabsf(sx) > 0.12f ? sx : 0; cx = 0; }   // DATA: X edits the selected value (no bend), Y stays the STICK source
+		if (gStickMode == SM_DATA || gStepEd >= 0) { gStickDX = fabsf(sx) > 0.12f ? sx : 0; cx = 0; }   // DATA (and the step editor, any mode): X edits the selected value (no bend), Y stays the STICK source
 		else gStickDX = 0;
-		if ((gStickMode == SM_PAGE || gStickMode == SM_MACROS) && !stickRouted) {   // PAGE / MACROS (a patch that routes STICK keeps bend + STICK): the pad pushes two values up and down (hold it over to keep moving)
+		if ((gStickMode == SM_PAGE || gStickMode == SM_MACROS) && !stickRouted && gStepEd < 0) {   // PAGE / MACROS (a patch that routes STICK keeps bend + STICK): the pad pushes two values up and down (hold it over to keep moving)
 			float* px_ = NULL; float* py_ = NULL;
 			if (gStickMode == SM_MACROS) { px_ = &gMacro[0]; py_ = &gMacro[1]; }
 			else switch (page) {
