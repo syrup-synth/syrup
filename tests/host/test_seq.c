@@ -126,9 +126,9 @@ static void SCRIPT(int fr) {
 	  if (fr == 340) { gStickMode = SM_DATA; seqClear(); gSeqLen = 16; gSeqBase = 60; gBPM = 240; gPreroll = 1; gClick = 1; liveRecToggle(); t0 = fr; }
 	  if (fr == 360 && (gPreFor != 2 || gLiveRec)) fail("live rec: should count in first");
 	  if (fr == 405 && !gLiveRec) fail("live rec: should be recording after the count-in");
-	  if (gLiveRec && gSeqPlaying && gSeqClock == 4 && !(gLvN) && gSeqPh < 0.4f) midiPush(0x90, 64, 100);   // on step 5
-	  if (gLiveRec && gSeqPlaying && gSeqClock == 6 && gLvN && gSeqPh > 0.3f) midiPush(0x80, 64, 0);       // held ~2 steps
-	  if (gLiveRec && gSeqPlaying && gSeqClock == 9 && !gLvN && gSeqPh > 0.7f && !stepHasNote(10, 67)) midiPush(0x90, 67, 100);   // late on step 10: goes to 11
+	  if (fr < 480 && gLiveRec && gSeqPlaying && gSeqClock == 4 && !(gLvN) && gSeqPh < 0.4f) midiPush(0x90, 64, 100);   // on step 5
+	  if (fr < 480 && gLiveRec && gSeqPlaying && gSeqClock == 6 && gLvN && gSeqPh > 0.3f) midiPush(0x80, 64, 0);       // held ~2 steps
+	  if (fr < 480 && gLiveRec && gSeqPlaying && gSeqClock == 9 && !gLvN && gSeqPh > 0.7f && !stepHasNote(10, 67)) midiPush(0x90, 67, 100);   // late on step 10: goes to 11
 	  if (fr == 470) { midiPush(0x80, 67, 0); }
 	  if (fr == 480) {
 		if (!stepHasNote(4, 64)) fail("live rec: a note on step 5 should be written there");
@@ -137,11 +137,36 @@ static void SCRIPT(int fr) {
 		liveRecToggle(); if (gLiveRec) fail("live rec: REC again should stop");
 		gSeqMode = 0; seqStop(); gBPM = 120;
 	  } }
+	// TAP REC: knocks (the mic) while live REC; REC QUANT 8TH and OFF
+	{ static int stage = 0; static unsigned kClock = 0;
+	  #define KNOCK(a) do { s16* m_ = (s16*)gMicBuf; u32 N_ = gMicSize / 2; for (int i_ = 0; i_ < 300; i_++) m_[N_ - 1 - i_] = (s16)((a) * 32767); } while (0)
+	  if (gMicBuf && fr >= 490 && fr < 760) { s16* m_ = (s16*)gMicBuf; u32 N_ = gMicSize / 2; for (int i_ = 0; i_ < 300; i_++) m_[N_ - 1 - i_] = 0; }
+	  if (fr == 492) { if (!gMicOK || !gMicBuf) fail("tap rec: no mic in the simulator"); seqClear(); gSeqLen = 16; gSeqBase = 60; gBPM = 240; gPreroll = 0; gRecQ = 0; gTapRec = 1; gTapNote = 62; liveRecToggle(); stage = 1; }
+	  if (stage == 1 && gLiveRec && gSeqPlaying && gSeqClock == 2 && gSeqPh < 0.3f) { KNOCK(0.9f); stage = 2; }        // hard, on step 3
+	  if (stage == 2 && gSeqClock == 6 && gSeqPh > 0.7f) { KNOCK(0.35f); stage = 3; }                                  // soft, late on step 7: step 8
+	  if (stage == 3 && gSeqClock >= 9) {
+		if (!stepHasNote(2, 62) || gSeq[2].vel < 200) fail("tap rec: a hard knock on step 3 should write the note, loud (vel %d)", gSeq[2].vel);
+		if (!stepHasNote(7, 62) || gSeq[7].vel > 140) fail("tap rec: a soft late knock should land on step 8, quiet (vel %d)", gSeq[7].vel);
+		gTapRec = 2; stage = 4; }
+	  if (stage == 4 && gSeqClock == 18 && gSeqPh < 0.3f) { KNOCK(0.3f); stage = 5; }                                  // VELOCITY: step 3 again, soft
+	  if (stage == 5 && gSeqClock >= 20) { if (gSeq[2].vel > 140 || gSeq[2].n != 1) fail("tap rec VELOCITY: a soft knock should only turn step 3 down (vel %d, n %d)", gSeq[2].vel, gSeq[2].n);
+		gTapRec = 0; gRecQ = 1; stage = 6; }
+	  if (stage == 6 && gSeqClock == 36 && gSeqPh > 0.4f) { midiPush(0x90, 65, 100); stage = 7; kClock = gSeqClock; }   // step 5 + a bit: 8THS -> step 5 (index 4)
+	  if (stage == 7 && gSeqClock == 37) { midiPush(0x80, 65, 0); stage = 8; }
+	  if (stage == 8 && gSeqClock == 41 && gSeqPh > 0.3f) { gRecQ = 2; midiPush(0x90, 67, 100); stage = 9; }            // OFF: step 10 (index 9) + 30 % nudge
+	  if (stage == 9 && gSeqClock == 42) { midiPush(0x80, 67, 0); stage = 10; }
+	  if (stage == 10 && gSeqClock >= 44) {
+		if (!stepHasNote(4, 65)) fail("REC QUANT 8TH: a note just after step 5 should land on step 5");
+		{ float at = -1; for (int k = 8; k <= 11; k++) if (stepHasNote(k, 67)) at = k + gSeq[k].nudge / 100.0f;
+		  if (at < 9.2f || at > 9.8f) fail("REC QUANT OFF: the note should keep its timing as NUDGE (at %.2f, played ~9.3-9.6)", at); }
+		liveRecToggle(); gSeqMode = 0; seqStop(); gRecQ = 0; gBPM = 120; stage = 11; }
+	  if (fr == 758 && stage != 11) fail("tap rec: the test got stuck at stage %d", stage);
+	}
 }
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	remove("sd/seq.bin");
-	loadFont(); FRMAX = 490; app_main();
+	loadFont(); FRMAX = 760; app_main();
 	printf("seq: piano roll tap/drag/delete/hold, step locks, accent, euclid pitch row, patterns, song, save, note lengths, nudge, copy/paste, rev/rot/hum\n");
 	return gFails ? 1 : 0;
 }

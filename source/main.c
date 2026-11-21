@@ -1962,6 +1962,9 @@ static unsigned gSeqClock = 0;   // steps since PLAY: polymeter rows count from 
 // PREROLL + REC CLICK: a count-in before TAPE REC and live sequencer REC (clicks on the second chip: never on tape)
 static const char* PRE_NAMES[3] = {"OFF", "1 BAR", "2 BARS"}; static const char* CLICK_NAMES[3] = {"OFF", "COUNT-IN", "ALWAYS"};
 static int gPreroll = 1, gClick = 1, gPreFor = 0, gLiveRec = 0; static float gPreBeats = 0, gPreDone = 0;
+// REC QUANT: where live notes land (16TH, 8TH, or OFF = your exact timing kept as the step's NUDGE); TAP REC: knocks on the table (mic) while live REC
+static const char* RQ_NAMES[3] = {"16TH", "8TH", "OFF (NUDGE)"}; static const char* TAPR_NAMES[3] = {"OFF", "NOTES", "VELOCITY"};
+static int gRecQ = 0, gTapRec = 0, gTapNote = -1;
 static float gLockCut = 0, gLockRes = 0, gStepGate = 0.6f, gFireOff = 0;   // the playing step's locks
 static int gPendFire = -1, gEarlyDone = 0;
 static void patStore(void) {
@@ -3158,7 +3161,7 @@ static Param P_PLAY[] = {
 	PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ), PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0),
 	PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PI_("BPM", &gBPM, 40, 240, 0),
 	PE("SEQ", &gSeqMode, 3, SEQ_NAMES, D_SEQ), PI_("SEQ LENGTH", &gSeqLen, 1, NSTEP, 0), PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0),
-	PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("REC CLICK", &gClick, 3, CLICK_NAMES, 0),
+	PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("REC CLICK", &gClick, 3, CLICK_NAMES, 0), PE("REC QUANT", &gRecQ, 3, RQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
 	{"ADD REST", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_REST},
 	{"CLEAR SEQ", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CLEAR},
 	PEND};
@@ -4351,7 +4354,7 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 		if (rowOfNote(gGtNote) >= 0) { say("RHYTHM ROW: HOLD A STEP TO CHANGE IT (ROW LEN / EUCL)"); return 0; }
 		if (gGtHit >= 0) { stepSetNote(gGtHit, gGtNote, 0); return 1; }   // tap a note: gone
 		if (gSeq[s0].n >= 4) { say("4 NOTES PER STEP"); return 0; }
-		stepSetNote(s0, gGtNote, 1); audition(gGtNote); return 1;
+		stepSetNote(s0, gGtNote, 1); gTapNote = gGtNote; audition(gGtNote); return 1;
 	}
 	if (!gGtLong && ok && st != gGtSt) {   // a drag along the row: length
 		if (!gGtDrag) { gGtDrag = 1; if (gGtHit < 0) { if (gSeq[gGtSt].n >= 4 || rowOfNote(gGtNote) >= 0) { gGtSt = -1; return 0; } stepSetNote(gGtSt, gGtNote, 1); gGtHit = gGtSt; } }
@@ -5700,12 +5703,43 @@ static void liveUp(void) {   // the held notes end: their length is how long the
 	for (int i = 0; i < gLvN; i++) stepSetLen(gLvStep, gLvNote[i], L);
 	gLvN = 0;
 }
-static void liveDown(const int* notes, int n, float vel) {   // a note played while recording: onto the nearest 16th
+static int recPos(int* nudge, int* ahead) {   // where a note played now goes, by REC QUANT
+	int Lp = gSeqLen < 1 ? 1 : gSeqLen, p = gSeqPos < 0 ? 0 : gSeqPos; float f = gSeqPh / stepLen(p);   // 0..1 through this step
+	*nudge = 0;
+	if (gRecQ == 1) {   // 8ths: the nearest even step
+		float pos = p + f; int q = (int)(pos / 2 + 0.5f) * 2; *ahead = q - p; return ((q % Lp) + Lp) % Lp;
+	}
+	int late = f >= 0.5f; *ahead = late;
+	if (gRecQ == 2) { int nd = (int)lroundf((late ? f - 1 : f) * 100); *nudge = nd < -50 ? -50 : nd > 50 ? 50 : nd; }   // OFF: keep the timing
+	return (p + late) % Lp;
+}
+static void liveDown(const int* notes, int n, float vel) {   // a note played while recording: onto the grid (REC QUANT)
 	liveUp();
 	if (!gSeqPlaying || n <= 0) return;
-	int Lp = gSeqLen < 1 ? 1 : gSeqLen, late = gSeqPh / stepLen(gSeqPos < 0 ? 0 : gSeqPos) >= 0.5f, st = ((gSeqPos < 0 ? 0 : gSeqPos) + late) % Lp;
+	int nd, ah, st = recPos(&nd, &ah); int fresh = !gSeq[st].n;
 	for (int i = 0; i < n && i < 4; i++) { int nt = notes[i] - gSeqTr; stepSetNote(st, nt, 1); gLvNote[i] = nt; }
-	gSeq[st].vel = (u8)(vel * 255 > 255 ? 255 : vel * 255); gLvN = n < 4 ? n : 4; gLvStep = st; gLvT0 = (float)(gSeqClock + late);
+	gTapNote = notes[0] - gSeqTr;
+	gSeq[st].vel = (u8)(vel * 255 > 255 ? 255 : vel * 255); if (fresh || gRecQ == 2) gSeq[st].nudge = (s8)nd;
+	gLvN = n < 4 ? n : 4; gLvStep = st; gLvT0 = (float)(gSeqClock + ah);
+}
+// TAP REC: knock on the table while live REC; the mic hears it, harder = louder, onto the grid like a played note
+static float gSqTapLevel = 0, gSqTapHold = 0;
+static void seqTapTick(float dt) {   // main thread, voice lock held
+	if (!gLiveRec || !gTapRec || !gSeqPlaying || !gMicOK || !gMicBuf || gDrumRec) return;
+	u32 N = gMicSize / 2, end = micGetLastSampleOffset() / 2; const s16* m = (const s16*)gMicBuf;
+	float pk = 0; for (int i = 0; i < 300; i++) { float v = fabsf(m[(end + N - 1 - i) % N] / 32768.0f); if (v > pk) pk = v; }
+	if (gSqTapHold > 0) { gSqTapHold -= dt; gSqTapLevel += (pk - gSqTapLevel) * 0.2f; return; }
+	if (pk > 0.2f && pk > gSqTapLevel * 2.5f + 0.05f) {
+		float vel = (pk - 0.2f) / 0.6f; if (vel > 1) vel = 1; vel = 0.3f + 0.7f * vel;
+		int nd, ah, st = recPos(&nd, &ah);
+		if (gTapRec == 1) {   // NOTES: the last pitch you played or put on the roll
+			int nt = gTapNote >= 0 ? gTapNote : (gSeqBase >= 0 ? gSeqBase : gridNote(0)); int fresh = !gSeq[st].n;
+			stepSetNote(st, nt, 1); gSeq[st].vel = (u8)(vel * 255); if (fresh || gRecQ == 2) gSeq[st].nudge = (s8)nd;
+			voiceOn(snapScale(nt + gSeqTr), vel);   // you hear it now; the sequence plays it from the next loop
+		} else if (gSeq[st].n) { gSeq[st].vel = (u8)(vel * 255); if (gSeq[st].vel > 200) gSeq[st].fl |= 1; else gSeq[st].fl &= ~1; }   // VELOCITY: re-sets that step (hard = accent)
+		gSqTapHold = 0.09f; gVisBeat = vel;
+	}
+	gSqTapLevel += (pk - gSqTapLevel) * 0.2f;
 }
 static void liveRecGo(void) {
 	undoMark();   // UNDO (in PAT) takes the whole take back
@@ -8087,7 +8121,7 @@ int main(void) {
 			if (armed && gShakeD > 0.35f && tnow - lastHit > 60) { kitHitSound(0, 0.4f + 0.6f * (gShakeD > 1 ? 1 : gShakeD)); armed = 0; lastHit = tnow; }
 			if (gShakeD < 0.2f) armed = 1;
 		}
-		micRecTick(1.0f / 60); loopTick(); prerollTick(1.0f / 60); tapeTick(); loopLevelTick(); loopVariTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
+		micRecTick(1.0f / 60); loopTick(); prerollTick(1.0f / 60); seqTapTick(1.0f / 60); tapeTick(); loopLevelTick(); loopVariTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
 		if (midiTick()) topDirty = botDirty = 1;
 		if (gOfType) {   // OUT FILTER cutoff mod: the mod matrix and ENV 2 of the newest note
 			const SVoice* nv = newestVoice(); float m = modSum(DST_OFCUT, (SVoice*)nv);
