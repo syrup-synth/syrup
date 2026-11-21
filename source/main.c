@@ -1948,18 +1948,39 @@ static int tqDrain(int inTick); static int mqDrain(int inTick); static volatile 
 static void audioTick(void* data) {
 	(void)data;
 	if (!gAudioClock) return;
-	float dt = 160.0f / DSPRATE + gClockDebt;
-	if (dt > 0.06f) { dt = 0.06f; gClockSkips++; }   // a long stall drops time instead of firing a burst of steps
-	if (LightLock_TryLock(&gVoiceLock)) { gClockDebt = dt; return; }   // main loop busy: catch up next frame
-	if (LightLock_TryLock(&gMipsLock)) { LightLock_Unlock(&gVoiceLock); gClockDebt = dt; return; }
-	gClockDebt = 0;
+	// time comes from the DSP's own frame counter, not from how often this callback ran: when the ndsp thread or
+	// the voice lock makes us miss frames, the clock still advances by exactly the audio that played, so the
+	// drums, sequencer and arp stay locked to the loop and tape (which the second chip plays in real time)
+#ifdef SYRUP_HOST
+	int nf = 1;
+#else
+	extern u16 ndspFrameId; static u16 lastId; static int init = 0;
+	u16 id = ndspFrameId; int nf = (u16)(id - lastId); if (id < lastId) nf -= 2;   // (the id skips 0 and 1 when it wraps)
+	if (!init || nf < 0 || nf > 2000) nf = 1;
+	if (nf == 0) return;   // no new frame yet
+#endif
+#ifdef SYRUP_HOST
+	#define CLK_MISS gClockDebt += 160.0f / DSPRATE
+#else
+	#define CLK_MISS (void)0
+#endif
+	if (LightLock_TryLock(&gVoiceLock)) { CLK_MISS; return; }   // main loop busy: the frames are counted next time
+	if (LightLock_TryLock(&gMipsLock)) { LightLock_Unlock(&gVoiceLock); CLK_MISS; return; }
+#ifndef SYRUP_HOST
+	lastId = id; init = 1;
+#endif
+	float dt = nf * 160.0f / DSPRATE + gClockDebt; gClockDebt = 0;
+	if (dt > 0.25f) { dt = 160.0f / DSPRATE; gClockSkips++; }   // a very long stall drops time rather than firing a burst
 	gInAudioTick = 1;
 	if (tqDrain(1)) gTqUi = 1;   // FM-1 LINK's timed notes, on time to the tick
 	gTickMidi = 1; if (mqDrain(1)) gTqUi = 1;   // network, IR and remote MIDI: as soon as it arrives, not at the next screen frame
-	arpTick(dt);
-	seqTick(dt);
-	drumTick(dt);
-	shakeQTick();
+	while (dt > 1e-6f) {   // missed frames: catch up in frame-sized pieces so every step still fires, in order
+		float d = dt > 160.0f / DSPRATE ? 160.0f / DSPRATE : dt; dt -= d;
+		arpTick(d);
+		seqTick(d);
+		drumTick(d);
+		shakeQTick();
+	}
 	gInAudioTick = 0;
 	LightLock_Unlock(&gMipsLock);
 	LightLock_Unlock(&gVoiceLock);
