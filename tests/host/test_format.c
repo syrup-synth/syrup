@@ -38,6 +38,18 @@ int main(void) {
 	{ SPatch p; patchInit(&p); p.magic = PATCH_MAGIC11; snprintf(p.name, sizeof p.name, "OLD ONE"); p.cutoff = 0.33f;
 	  FILE* f = fopen("sd/user_presets.bin", "wb"); for (int i = 0; i < NUSER; i++) fwrite(&p, PATCH_V11_SIZE, 1, f); fclose(f); }
 	loadFont(); FRMAX = 10; app_main();
+	{   // drums: TUNE changes the hit's rate (no rebuild), MUTE and CHANCE stop row hits, the kit pads ignore them
+		gDrums = 1; gKit = 1; drumsChanged(); int c = gDrumCh[0];
+		if (c < 0) fail("drums: no kick channel");
+		else {
+			gDrumTune[0] = 0; drumHit(0, 1); u32 t0 = CS[c].timer; gDrumTune[0] = 12; drumHit(0, 1); u32 t1 = CS[c].timer; gDrumTune[0] = 0;
+			if (!(t1 < t0 && abs((int)t1 * 2 - (int)t0) < 0x40)) fail("drums: KICK TUNE +12 should double the kick's rate (timer %u -> %u)", t0, t1);
+			CS[c].on = 0; gDrumMute = 1; rowHit(0, 1); if (CS[c].on) fail("drums: MUTE KICK should silence pattern kicks");
+			gDrumMute = 0; gDrumChance[0] = 0; rowHit(0, 1); if (CS[c].on) fail("drums: KICK CHANCE 0 should drop every kick");
+			gDrumChance[0] = 1; rowHit(0, 1); if (!CS[c].on) fail("drums: a normal kick should play");
+		}
+		gDrums = 0; drumsChanged();
+	}
 	{   // a seq.bin from before the song grew to 64 slots (32 song bytes) still loads
 		FILE* f = fopen("sd/seq.bin", "wb"); u32 m = SEQ_MAGIC; int hdr[4] = {0, 3, 1, (int)sizeof(SeqPat)}; static SeqPat z[NPAT]; u8 song[32] = {2, 1, 5};
 		fwrite(&m, 4, 1, f); fwrite(hdr, sizeof(hdr), 1, f); fwrite(z, sizeof(z), 1, f); fwrite(song, 32, 1, f); fclose(f);
