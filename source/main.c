@@ -8362,8 +8362,10 @@ int main(void) {
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
 		if (gVoiceMode == 7 && !gSafeMode) {   // PERC KIT: shake the console, it plays the shaker
-			static int armed = 1; static u64 lastHit = 0; u64 tnow = osGetTime();
-			if (armed && gShakeD > 0.35f && tnow - lastHit > 60) {
+			static int armed = 1; static u64 lastHit = 0, lastTouch = 0; u64 tnow = osGetTime();
+			if ((kHeld | kDown) & KEY_TOUCH) lastTouch = tnow;   // tapping the screen jolts the console: no shaker while touching, or just after
+			static int over = 0; over = gShakeD > 0.6f ? over + 1 : 0;   // a real shake: hard, and two readings in a row
+			if (armed && over >= 2 && tnow - lastHit > 60 && tnow - lastTouch > 250) {
 				float v = 0.4f + 0.6f * (gShakeD > 1 ? 1 : gShakeD);
 				if (gShakeQ && (gSeqPlaying || (gDrums && gDrumStep >= 0))) { if (v > gShakePend) gShakePend = v; }   // the audio clock plays it on the step
 				else kitHitSound(0, v);
