@@ -12,7 +12,7 @@ static int playOk = 0;
 static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0; gFxCore2 = 0;
 	if (fr == 2) { int st, ix; if (findPreset("SOFT PLUCK", &st, &ix)) presetLoad(st, ix); else fail("tape: no SOFT PLUCK");
-		gBPM = 240; gTapeLenSel = 0; gDrums = 0; seqClear(); gSeqLen = 16; for (int k = 0; k < 16; k += 4) stepSetNote(k, 60, 1); }
+		gBPM = 240; gTapeLenSel = 0; gDrums = 0; gPreroll = 0; seqClear(); gSeqLen = 16; for (int k = 0; k < 16; k += 4) stepSetNote(k, 60, 1); }
 	tap(fr, 3, 5 * 320 / 7 + 20, 8);                       // SEQ chip
 	tap(fr, 6, 1 * 320 / 7 + 20, XY_Y + 5);                // PAT
 	tap(fr, 9, 160, PV_TAPE_Y + 8);                           // TAPE >>>
@@ -48,10 +48,20 @@ static void SCRIPT(int fr) {
 	tap(fr, 622, 300, TP_RY + 1 * TP_RH + 8); tap(fr, 625, 300, TP_RY + 1 * TP_RH + 8);   // X twice: erase track 2
 	if (fr == 630 && gTpHave[1]) fail("tape: X twice should erase track 2");
 	if (fr == 632 && (gTapeLen == 0 || !gTpHave[0])) fail("tape: track 1 should stay");
+	// PREROLL 1 BAR: REC counts in (1 s at 240), then records; REC during the count-in cancels
+	if (fr == 640) { gPreroll = 1; gClick = 1; gTapeArm = 2; }
+	tap(fr, 641, 2 * 63 + 30, TP_Y + 8);
+	if (fr == 660 && (gPreFor != 1 || gTapeRec >= 0)) fail("preroll: REC should count in first (pre %d rec %d)", gPreFor, gTapeRec);
+	if (fr == 712 && gTapeRec != 2) fail("preroll: after a bar the tape should record (rec %d)", gTapeRec);
+	tap(fr, 714, 2 * 63 + 30, TP_Y + 8);   // stop: nothing kept
+	if (fr == 720 && (gTapeRec >= 0 || gTpHave[2])) fail("preroll: stopping mid-take shouldn't keep the track");
+	if (fr == 722) { gTapeArm = 2; }
+	tap(fr, 723, 2 * 63 + 30, TP_Y + 8); tap(fr, 730, 2 * 63 + 30, TP_Y + 8);   // REC, then REC again during the count-in
+	if (fr == 740 && (gPreFor || gTapeRec >= 0)) fail("preroll: REC during the count-in should cancel it");
 }
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777); remove("sd/tape/track1.wav"); remove("sd/tape/track2.wav"); remove("sd/tape/track3.wav"); remove("sd/tape/mix.wav");
-	loadFont(); FRMAX = 640; app_main();
+	loadFont(); FRMAX = 760; app_main();
 	printf("tape: 2 tracks bounced, played, saved, erased\n");
 	return gFails ? 1 : 0;
 }

@@ -1959,6 +1959,9 @@ static int gPatCur = 0, gPatNext = -1;
 static u8 gSong[NSONG]; static int gSongLen = 0, gSongPos = 0, gSongOn = 0;
 static u8 gRowLen[8], gRowHits[8], gRowRot[8], gRowNote[8];
 static unsigned gSeqClock = 0;   // steps since PLAY: polymeter rows count from this
+// PREROLL + REC CLICK: a count-in before TAPE REC and live sequencer REC (clicks on the second chip: never on tape)
+static const char* PRE_NAMES[3] = {"OFF", "1 BAR", "2 BARS"}; static const char* CLICK_NAMES[3] = {"OFF", "COUNT-IN", "ALWAYS"};
+static int gPreroll = 1, gClick = 1, gPreFor = 0, gLiveRec = 0; static float gPreBeats = 0, gPreDone = 0;
 static float gLockCut = 0, gLockRes = 0, gStepGate = 0.6f, gFireOff = 0;   // the playing step's locks
 static int gPendFire = -1, gEarlyDone = 0;
 static void patStore(void) {
@@ -3155,7 +3158,7 @@ static Param P_PLAY[] = {
 	PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ), PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0),
 	PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PI_("BPM", &gBPM, 40, 240, 0),
 	PE("SEQ", &gSeqMode, 3, SEQ_NAMES, D_SEQ), PI_("SEQ LENGTH", &gSeqLen, 1, NSTEP, 0), PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0),
-	PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
+	PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("REC CLICK", &gClick, 3, CLICK_NAMES, 0),
 	{"ADD REST", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_REST},
 	{"CLEAR SEQ", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CLEAR},
 	PEND};
@@ -3994,10 +3997,11 @@ static int gridNote(int row) {   // row 0 = bottom; follows the scale (major ste
 	return gScale ? scaleNote(root, row) : root + MAJ[row];
 }
 static void rectP(int x, int y, int w, int h, const u8* c) { rect(x, y, w, h, c[0], c[1], c[2]); }
-#define GRID_BTNS 7
+#define GRID_BTNS 8
 static int gPatView = 0, gStepEd = -1, gStepEdRow = 0;
 static SeqPat gUndoPat; static int gUndoOk = 0, gUndoIdx = 0;   // one step back for ACID and CLEAR
 static void undoMark(void) { patStore(); gUndoPat = gPat[gPatCur]; gUndoIdx = gPatCur; gUndoOk = 1; }
+static void liveRecToggle(void); static void liveRecStop(void); static void liveDown(const int* notes, int n, float vel); static void liveUp(void);
 static void drawPatView(void); static void drawTapeView(void); static int tapeTouch(int x, int y, int press, int release); static void tapeSeqStarted(void);
 static void drawStepEd(void);
 // PIANO ROLL (SEQ page, the whole bottom screen): pitch up the side with a keyboard, the 16 steps across.
@@ -4018,11 +4022,12 @@ static int noteCover(int st, int nt, int* k0) {   // the step whose note nt cove
 }
 static void drawGrid(void) {
 	rectP(0, XY_Y, 320, 240 - XY_Y, TH->bg);
-	char pb[8]; snprintf(pb, sizeof(pb), "PAT %c", 'A' + gPatCur);
-	const char* B[GRID_BTNS] = {gSeqMode == 1 ? "STOP" : "PLAY", pb, "<LEN", "LEN>", "OCT-", "OCT+", "ACID"};
+	char pb[8]; snprintf(pb, sizeof(pb), "PAT%c", 'A' + gPatCur);
+	char rb[8]; if (gPreFor == 2) snprintf(rb, sizeof(rb), "IN %d", (int)(gPreBeats - gPreDone) + 1); else snprintf(rb, sizeof(rb), "REC");
+	const char* B[GRID_BTNS] = {gSeqMode == 1 ? "STOP" : "PLAY", pb, "<LEN", "LEN>", "OCT-", "OCT+", "ACID", rb};
 	for (int i = 0; i < GRID_BTNS; i++) {
-		int x = i * 320 / GRID_BTNS, lit = (i == 0 && gSeqMode == 1) || (i == 1 && gPatView) || i == 6;
-		rectP(x + 2, XY_Y, 320 / GRID_BTNS - 4, 14, lit ? TH->keyOn : TH->tab);
+		int x = i * 320 / GRID_BTNS, lit = (i == 0 && gSeqMode == 1) || (i == 1 && gPatView) || i == 6 || (i == 7 && (gLiveRec || gPreFor == 2));
+		rectP(x + 2, XY_Y, 320 / GRID_BTNS - 4, 14, i == 7 && (gLiveRec || gPreFor == 2) ? TH->warn : lit ? TH->keyOn : TH->tab);
 		const u8* tc = lit ? EGA[0] : TH->tabTxt;
 		text(x + 160 / GRID_BTNS - (int)strlen(B[i]) * 4, XY_Y + 3, B[i], 1, tc[0], tc[1], tc[2]);
 	}
@@ -4298,7 +4303,8 @@ static void acidGen(void) {
 }
 static void gridButtons(int x) {
 	int b = x * GRID_BTNS / 320;
-	if (b == 0) { gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0); if (gSeqMode == 0) seqStop(); }
+	if (b == 0) { gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0); if (gSeqMode == 0) { seqStop(); if (gLiveRec || gPreFor == 2) liveRecStop(); } }
+	if (b == 7) liveRecToggle();
 	if (b == 1) { gPatView = !gPatView; gStepEd = -1; }
 	if (b == 2 && gSeqLen > 1) gSeqLen--;
 	if (b == 3 && gSeqLen < NSTEP) gSeqLen++;
@@ -5655,7 +5661,7 @@ static void tapeRecStop(int keep) {
 		for (int i = 1; i <= NTRK; i++) if (!gTpHave[(t + i) % NTRK]) { gTapeArm = (t + i) % NTRK; break; }   // the next empty track is armed
 	} else say("TAPE: STOPPED, NOTHING KEPT");
 }
-static void tapeRecStart(void) {
+static void tapeRecGo(void) {
 	int t = gTapeArm;
 	if (!gCapBuf) gCapBuf = (s16*)linearAlloc(CAPRING * 4);
 	if (!gCapBuf || !tapeAlloc(t)) { say("NOT ENOUGH MEMORY FOR THE TAPE"); return; }
@@ -5667,6 +5673,70 @@ static void tapeRecStart(void) {
 	seqStop(); gSongPos = 0; gSeqMode = 1;   // the sequence (or song) from the top
 	tapeStartPlay(t);
 	char m[48]; snprintf(m, sizeof(m), "TAPE: RECORDING TRACK %d (%d S)", t + 1, gTapeRecLen / 32728); say(m);
+}
+
+// ---- count-in and click, and live recording into the sequencer
+static s16* gClickBuf[2];
+static void clickNow(int acc) {   // a short tick on a free second-chip channel (the tape recorder hears only the DSP)
+	if (!gCsndOK) return;
+	if (!gClickBuf[0]) for (int k = 0; k < 2; k++) {
+		if (!(gClickBuf[k] = (s16*)linearAlloc(1200 * 2))) return;
+		for (int i = 0; i < 1200; i++) { float t = i / 32728.0f; gClickBuf[k][i] = (s16)(sinf(TWO_PI * (k ? 2000 : 1300) * t) * expf(-t * 110) * 0.7f * 32767); }
+		CSND_FlushDataCache(gClickBuf[k], 1200 * 2);
+	}
+	int c = -1; for (int i = NCS - 1; i >= 0; i--) if (csUsable(i) && gCsOwner[i] < 0) { c = i; break; }
+	if (c < 0) return;
+	u32 v = acc ? 0x7000 : 0x4400;
+	CSND_SetChnRegs(SOUND_FORMAT_16BIT | SOUND_ONE_SHOT | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(c) | (CSND_TIMER(32728) << 16),
+		osConvertVirtToPhys(gClickBuf[acc]), osConvertVirtToPhys(gClickBuf[acc]), 1200 * 2, v | (v << 16), 0);
+	csndExecCmds(false);
+}
+static void undoMark(void);
+static int gLvN = 0, gLvNote[4], gLvStep = 0; static float gLvT0 = 0;   // the notes being held while recording live
+static float seqNowSteps(void) { float l = stepLen(gSeqPos < 0 ? 0 : gSeqPos); return gSeqClock + (l > 0 ? gSeqPh / l : 0); }
+static void liveUp(void) {   // the held notes end: their length is how long they were held, to the nearest step
+	if (!gLvN) return;
+	int L = (int)(seqNowSteps() - gLvT0 + 0.5f); if (L < 1) L = 1; if (L > NSTEP) L = NSTEP;
+	for (int i = 0; i < gLvN; i++) stepSetLen(gLvStep, gLvNote[i], L);
+	gLvN = 0;
+}
+static void liveDown(const int* notes, int n, float vel) {   // a note played while recording: onto the nearest 16th
+	liveUp();
+	if (!gSeqPlaying || n <= 0) return;
+	int Lp = gSeqLen < 1 ? 1 : gSeqLen, late = gSeqPh / stepLen(gSeqPos < 0 ? 0 : gSeqPos) >= 0.5f, st = ((gSeqPos < 0 ? 0 : gSeqPos) + late) % Lp;
+	for (int i = 0; i < n && i < 4; i++) { int nt = notes[i] - gSeqTr; stepSetNote(st, nt, 1); gLvNote[i] = nt; }
+	gSeq[st].vel = (u8)(vel * 255 > 255 ? 255 : vel * 255); gLvN = n < 4 ? n : 4; gLvStep = st; gLvT0 = (float)(gSeqClock + late);
+}
+static void liveRecGo(void) {
+	undoMark();   // UNDO (in PAT) takes the whole take back
+	if (gSeqBase < 0) gSeqBase = gridNote(0);
+	gLiveRec = 1; gLvN = 0; seqStop(); gSongPos = 0; gSeqMode = 1;
+	say("LIVE REC: PLAY THE KEYS (ANY PAGE) OR MIDI");
+}
+static void liveRecStop(void) { liveUp(); gLiveRec = 0; if (gPreFor == 2) gPreFor = 0; patStore(); say("LIVE REC OFF"); }
+static void prerollStart(int what) {   // what: 1 tape, 2 live sequencer
+	if (!gPreroll) { if (what == 1) tapeRecGo(); else liveRecGo(); return; }
+	if (what == 2) { gSeqMode = 0; seqStop(); }
+	gPreFor = what; gPreBeats = gPreroll * 4.0f; gPreDone = 0;
+	if (gClick) clickNow(1);
+	char m[32]; snprintf(m, sizeof(m), "COUNT-IN: %d", (int)gPreBeats); say(m);
+}
+static void tapeRecStart(void) { prerollStart(1); }
+static void liveRecToggle(void) { if (gLiveRec || gPreFor == 2) liveRecStop(); else prerollStart(2); }
+static void prerollTick(float dt) {   // main loop, voice lock held
+	if (gPreFor) {
+		int before = (int)gPreDone; gPreDone += dt * gBPM / 60.0f; int now = (int)gPreDone;
+		if (gPreDone >= gPreBeats) { int w = gPreFor; gPreFor = 0; if (w == 1) tapeRecGo(); else liveRecGo(); return; }
+		if (now != before) { if (gClick) clickNow(now % 4 == 0); char m[32]; snprintf(m, sizeof(m), "COUNT-IN: %d", (int)(gPreBeats - now)); say(m); }
+		return;
+	}
+	if (gClick == 2) {   // ALWAYS: the click keeps going while recording
+		static int lastBeat = -1; int beat = -1;
+		if (gTapeRec >= 0 && gTapeState == 3) beat = (int)(gTapePos / 32728.0f * gBPM / 60.0f);
+		else if (gLiveRec && gSeqPlaying) beat = (int)(gSeqClock / 4);
+		if (beat >= 0 && beat != lastBeat) clickNow(beat % 4 == 0);
+		lastBeat = beat;
+	}
 }
 static void tapeTick(void) {   // main thread, voice lock held
 	if (gTapePlay && gTapeRec < 0 && osGetTime() - gTapeT0 > (u64)gTapeLen * 1000 / 32728 + 300) tapeStopPlay();
@@ -5728,11 +5798,12 @@ static void tapeExport(void) {   // each track and the mix, 16-bit WAV at the co
 #define TP_Y (XY_Y + 18)
 #define TP_RY (TP_Y + 22)
 #define TP_RH 32
+#define TP_OPT_Y (TP_RY + NTRK * TP_RH + 14)
 static void drawTapeView(void) {
 	static const char* TB[5] = {"< PAT", "", "REC", "PLAY", "WAV"};
 	for (int i = 0; i < 5; i++) {
 		int x = 4 + i * 63, lit = (i == 2 && gTapeRec >= 0) || (i == 3 && gTapePlay && gTapeRec < 0);
-		char lab[20]; if (i == 1) snprintf(lab, sizeof(lab), "%s", gTapeLen ? "LOCKED" : TLEN_NAMES[gTapeLenSel]); else snprintf(lab, sizeof(lab), "%s", i == 3 && gTapePlay && gTapeRec < 0 ? "STOP" : i == 2 && gTapeRec >= 0 ? "STOP" : TB[i]);
+		char lab[20]; if (i == 2 && gPreFor == 1) { snprintf(lab, sizeof(lab), "IN %d", (int)(gPreBeats - gPreDone) + 1); } else if (i == 1) snprintf(lab, sizeof(lab), "%s", gTapeLen ? "LOCKED" : TLEN_NAMES[gTapeLenSel]); else snprintf(lab, sizeof(lab), "%s", i == 3 && gTapePlay && gTapeRec < 0 ? "STOP" : i == 2 && gTapeRec >= 0 ? "STOP" : TB[i]);
 		const u8* bg = i == 2 ? (gTapeRec >= 0 ? TH->warn : TH->keyOn) : lit ? TH->keyOn : TH->tab;
 		rectP(x, TP_Y, 59, 16, bg); const u8* tc = (i == 2 || lit) ? EGA[0] : TH->tabTxt; text(x + 30 - (int)strlen(lab) * 4, TP_Y + 4, lab, 1, tc[0], tc[1], tc[2]);
 	}
@@ -5757,6 +5828,9 @@ static void drawTapeView(void) {
 	if (gTapeLen || gTapeRec >= 0) snprintf(m, sizeof(m), "%d:%02d  %s", (int)dur / 60, (int)dur % 60, gThru ? "DRUMS GO ON TAPE" : "DRUMS: CHIP>FX TO TAPE THEM");
 	else snprintf(m, sizeof(m), "REC PLAYS THE %s FROM THE TOP", gTapeLenSel == 5 && gSongOn ? "SONG" : "PATTERN");
 	text(4, TP_RY + NTRK * TP_RH + 2, m, 1, RGB3(TH->dim));
+	char a[24], c2[24]; snprintf(a, sizeof(a), "PREROLL %s", PRE_NAMES[gPreroll]); snprintf(c2, sizeof(c2), "CLICK %s", CLICK_NAMES[gClick]);
+	rectP(4, TP_OPT_Y, 152, 16, TH->tab); text(80 - (int)strlen(a) * 4, TP_OPT_Y + 4, a, 1, RGB3(TH->tabTxt));
+	rectP(162, TP_OPT_Y, 152, 16, TH->tab); text(238 - (int)strlen(c2) * 4, TP_OPT_Y + 4, c2, 1, RGB3(TH->tabTxt));
 }
 static int gTpDrag = -1;
 static int tapeTouch(int x, int y, int press, int release) {
@@ -5765,11 +5839,12 @@ static int tapeTouch(int x, int y, int press, int release) {
 		int b = (x - 4) / 63;
 		if (b == 0) gPatView = 1;
 		if (b == 1) { if (gTapeLen) say("ERASE EVERY TRACK TO CHANGE THE LENGTH"); else gTapeLenSel = (gTapeLenSel + 1) % 6; }
-		if (b == 2) { if (gTapeRec >= 0) tapeRecStop(0); else tapeRecStart(); }
+		if (b == 2) { if (gPreFor == 1) { gPreFor = 0; say("COUNT-IN STOPPED"); } else if (gTapeRec >= 0) tapeRecStop(0); else tapeRecStart(); }
 		if (b == 3 && gTapeRec < 0) { if (gTapePlay) tapeStopPlay(); else if (gTapeLen) tapeStartPlay(-1); else say("THE TAPE IS EMPTY"); }
 		if (b == 4 && gTapeRec < 0) tapeExport();
 		return 1;
 	}
+	if (press && y >= TP_OPT_Y && y < TP_OPT_Y + 16) { if (x < 160) gPreroll = (gPreroll + 1) % 3; else gClick = (gClick + 1) % 3; return 1; }
 	int t = (y - TP_RY) / TP_RH;
 	if (press) gTpDrag = -1;
 	if (y < TP_RY || t < 0 || t >= NTRK) return press;
@@ -6535,9 +6610,11 @@ static void midiNoteOn(int n, float v) {
 	if (gMidiHeldN < 16) gMidiHeld[gMidiHeldN++] = n;
 	gMidiVel = v;
 	if (gArp) arpSetPool(gMidiHeld, gMidiHeldN, v); else voiceOn(n, v);
+	if (gLiveRec) liveDown(&n, 1, v);
 }
 static void midiNoteOff(int n) {
 	for (int i = 0; i < gMidiHeldN; i++) if (gMidiHeld[i] == n) { gMidiHeld[i] = gMidiHeld[--gMidiHeldN]; break; }
+	if (gLiveRec && gLvN && gLvNote[0] == n) liveUp();
 	if (gArp) arpSetPool(gMidiHeld, gMidiHeldN, gMidiVel); else voiceOff(n);
 }
 static void acidGen(void);
@@ -8010,7 +8087,7 @@ int main(void) {
 			if (armed && gShakeD > 0.35f && tnow - lastHit > 60) { kitHitSound(0, 0.4f + 0.6f * (gShakeD > 1 ? 1 : gShakeD)); armed = 0; lastHit = tnow; }
 			if (gShakeD < 0.2f) armed = 1;
 		}
-		micRecTick(1.0f / 60); loopTick(); tapeTick(); loopLevelTick(); loopVariTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
+		micRecTick(1.0f / 60); loopTick(); prerollTick(1.0f / 60); tapeTick(); loopLevelTick(); loopVariTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
 		if (midiTick()) topDirty = botDirty = 1;
 		if (gOfType) {   // OUT FILTER cutoff mod: the mod matrix and ENV 2 of the newest note
 			const SVoice* nv = newestVoice(); float m = modSum(DST_OFCUT, (SVoice*)nv);
@@ -8258,7 +8335,8 @@ int main(void) {
 		{ static int f = 0; if (gAddDirty && (++f % 6 == 0 || !touching)) { gAddDirty = 0; addApply(); topDirty = 1; } }   // additive editor: rebuild a few times a second while drawing
 		if ((key != curKey || (freshPress && key >= 0)) && !(latch && key < 0)) {
 			int notes[4], n = key >= 0 ? chordNotes(key, notes) : 0;
-			if (gSeqMode == 1) { if (key >= 0 && gSeqBase >= 0) { gSeqTr = key - gSeqBase; topDirty = 1; } }   // transpose the pattern
+			if (gLiveRec) { if (key >= 0) liveDown(notes, n, vel); else liveUp(); playSet(notes, n, vel); botDirty = 1; }   // live REC: the keys play and write
+			else if (gSeqMode == 1) { if (key >= 0 && gSeqBase >= 0) { gSeqTr = key - gSeqBase; topDirty = 1; } }   // transpose the pattern
 			else {
 				if (gSeqMode == 2 && key >= 0) { seqRecord(notes, n, vel); topDirty = 1; }
 				playSet(notes, n, vel);

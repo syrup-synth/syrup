@@ -121,11 +121,27 @@ static void SCRIPT(int fr) {
 	{ static int v0; if (fr == 292) { gStickMode = SM_BEND; stepSetNote(2, 60, 1); gStepEd = 2; gStepEdRow = 60; gSeTab = 0; gSeSel = 0; v0 = gSeq[2].vel; }
 	  if (fr > 292 && fr < 330) CX = 150;
 	  if (fr == 332) { if (gSeq[2].vel <= v0 + 8) fail("step editor: the circle pad should raise VEL (%d -> %d)", v0, gSeq[2].vel); gStepEd = -1; gStickMode = SM_DATA; } }
+	// live REC: count-in (1 bar at 240 = 1 s), then MIDI notes land on the nearest 16th with their held length
+	{ static int t0;
+	  if (fr == 340) { gStickMode = SM_DATA; seqClear(); gSeqLen = 16; gSeqBase = 60; gBPM = 240; gPreroll = 1; gClick = 1; liveRecToggle(); t0 = fr; }
+	  if (fr == 360 && (gPreFor != 2 || gLiveRec)) fail("live rec: should count in first");
+	  if (fr == 405 && !gLiveRec) fail("live rec: should be recording after the count-in");
+	  if (gLiveRec && gSeqPlaying && gSeqClock == 4 && !(gLvN) && gSeqPh < 0.4f) midiPush(0x90, 64, 100);   // on step 5
+	  if (gLiveRec && gSeqPlaying && gSeqClock == 6 && gLvN && gSeqPh > 0.3f) midiPush(0x80, 64, 0);       // held ~2 steps
+	  if (gLiveRec && gSeqPlaying && gSeqClock == 9 && !gLvN && gSeqPh > 0.7f && !stepHasNote(10, 67)) midiPush(0x90, 67, 100);   // late on step 10: goes to 11
+	  if (fr == 470) { midiPush(0x80, 67, 0); }
+	  if (fr == 480) {
+		if (!stepHasNote(4, 64)) fail("live rec: a note on step 5 should be written there");
+		else { int L = 0; for (int k = 0; k < gSeq[4].n; k++) if (gSeq[4].note[k] == 64) L = noteLen(&gSeq[4], k); if (L < 2 || L > 3) fail("live rec: held ~2 steps should be 2 long (%d)", L); }
+		if (!stepHasNote(10, 67)) fail("live rec: a late note should land on the next 16th");
+		liveRecToggle(); if (gLiveRec) fail("live rec: REC again should stop");
+		gSeqMode = 0; seqStop(); gBPM = 120;
+	  } }
 }
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	remove("sd/seq.bin");
-	loadFont(); FRMAX = 336; app_main();
+	loadFont(); FRMAX = 490; app_main();
 	printf("seq: piano roll tap/drag/delete/hold, step locks, accent, euclid pitch row, patterns, song, save, note lengths, nudge, copy/paste, rev/rot/hum\n");
 	return gFails ? 1 : 0;
 }
