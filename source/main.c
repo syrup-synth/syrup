@@ -8230,6 +8230,9 @@ int main(void) {
 			if (dir && gStepEd >= 0) {   // step editor open: the pad moves the selected step setting one notch at a time
 				int k = gSeSel; seSet(k, seGet(k) + dir); dir = 0; botDirty = 1;
 			}
+			{ const void* pp = PAGES[page][sel[page]].p;   // nor the looper: a knock would re-record, stop or re-pitch the loop
+			  if (dir && (pp == &gLoopMode || pp == &gLoopBars || pp == &gLoopQuant || pp == &gLoopLevel || pp == &gLoopSpeed || pp == &gLoopWow || pp == &gTapeStop)) {
+				dir = 0; acc = 0; static float lh = 0; if (lh <= 0) { say("LOOPER: USE THE D-PAD"); lh = 3; } lh -= dt; } }
 			if (dir && PAGES[page][sel[page]].p == &gBPM) {   // the circle pad never moves the tempo: too easy to knock while playing
 				dir = 0; acc = 0;
 				static float hintT = 0; if (hintT <= 0) { say("TEMPO: USE THE D-PAD"); hintT = 3; }
