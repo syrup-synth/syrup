@@ -156,7 +156,7 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | B | Latch |
 | L / R | Previous / next page |
 | Circle pad | Left/right pitch bend, up/down = STICK mod source |
-| SELECT | PANIC: all notes off, sequencer and arp stop (help is in the START menu) |
+| SELECT | PLAY / STOP the sequencer (PANIC and HELP are in the START menu) |
 | START | Quick menu over the top screen: SAVE PATCH, BROWSER, PANIC, HELP, THEME, QUIT (D-pad + A; B or START closes it). The touch screen keeps playing while it's open. |
 
 ## Wavetables

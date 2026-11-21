@@ -128,15 +128,17 @@ static void SCRIPT(int fr) {
 	press(fr, 296, KEY_START);
 	if (fr == 299 && !gStartMenu) fail("START should open the quick menu, not quit");
 	press(fr, 300, KEY_DDOWN); press(fr, 303, KEY_DDOWN);
-	if (fr == 305) { midiPush(0x90, 60, 100); gSeqMode = 1; }
+	if (fr == 305) { midiPush(0x90, 60, 100); gSeqMode = 1; gLoopMode = 2; }
 	press(fr, 306, KEY_A);
-	if (fr == 309) { if (gStartMenu) fail("menu: A should close it"); if (gSeqMode == 1 || gHeldN) fail("menu: PANIC should stop the sequencer and notes"); }
+	if (fr == 309) { if (gStartMenu) fail("menu: A should close it"); if (gSeqMode == 1 || gHeldN) fail("menu: PANIC should stop the sequencer and notes"); if (gLoopMode) fail("menu: PANIC should stop the loop"); }
 	if (fr == 310) { gLoopQuant = 1; gBeatPh = 1; gBPM = 120; loopRecStart(); int want = (int)(3 * 0.5f * 32728);
 		if (abs(gLoopSkip - want) > 200) fail("LOOP START NEXT BAR: one beat in at 120 should wait 1.5 s (%d, want %d)", gLoopSkip, want);
 		gLoopMode = 0; loopModeChanged(); gLoopQuant = 0; gLoopSkip = 0; }
-	if (fr == 310) { midiPush(0x90, 64, 100); gSeqMode = 1; }
+	if (fr == 310) gSeqMode = 0;
 	press(fr, 311, KEY_SELECT);
-	if (fr == 314 && (gSeqMode == 1 || gHeldN)) fail("SELECT should PANIC: sequencer and notes off");
+	if (fr == 313 && gSeqMode != 1) fail("SELECT should start the sequencer");
+	press(fr, 314, KEY_SELECT);
+	if (fr == 316 && gSeqMode == 1) fail("SELECT again should stop the sequencer");
 	press(fr, 316, KEY_START); press(fr, 319, KEY_DUP); press(fr, 322, KEY_A);
 	if (fr == 321) shotTop("shots/start_menu.ppm");
 	if (fr == 193 && !(gHeldN && (gHeld[0] % 12) == 1)) fail("keys: a 2 px slip off C# shouldn't change the note (held %d)", gHeldN ? gHeld[0] : -1);

@@ -17,7 +17,7 @@
 //   D-pad U/D select parameter, L/R change it (hold to repeat)   X / Y  next / previous page
 //   Bottom tabs: HELP, < PAGE, PAGE >, LATCH   XY pad: X = OSC A WT POS, Y = filter cutoff
 //   Keyboard: play (lower on a key = louder), slide to glide
-//   A chord mode   B latch   L / R octave   SELECT panic   START menu (save, browser, panic, help, theme, quit)
+//   A chord mode   B latch   L / R octave   SELECT play/stop   START menu (save, browser, panic, help, theme, quit)
 //   Circle pad: left/right pitch bend, up/down = STICK mod source
 
 #include <3ds.h>
@@ -665,7 +665,7 @@ static void stopCh(int bk, int ch) {
 		ndspChnWaveBufClear(ch); gDspOwner[ch] = -1;
 		if (gQScream > 0.001f && ch < 24) { ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, 0, 0, 0, 0, 0); gChClean[ch] = 1; }   // flush while silent: no gap on the next note
 	}
-	else { if (gCsndOK) CSND_SetPlayState(ch, 0); gCsOwner[ch] = -1; }
+	else { if (ch < 0 || ch >= NCS) return; if (gCsndOK) CSND_SetPlayState(ch, 0); gCsOwner[ch] = -1; }   // (-1 would land on channel 31: the looper)
 }
 
 static void chipStop(SVoice* v);
@@ -5398,6 +5398,7 @@ static const char* CSECHO_T_NAMES[4] = {"1/8", "3/16", "1/4", "3/8"};
 static const float CSECHO_BEATS[4] = {0.5f, 0.75f, 1.0f, 1.5f};
 static int gEchoUnits[2] = {-1, -1}, gEchoCh[2] = {-1, -1}, gEchoOn = 0, gEchoLen = 0, gEchoBpm = 0;
 static s16* gEchoBuf[2];
+static int gLoopCh[2];   // (defined with the looper below)
 static int echoReserved(int c) { return gEchoOn && (c == gEchoCh[0] || c == gEchoCh[1]); }
 static void csWait(void) { csndExecCmds(false); svcSleepThread(6000000); }   // never spin on the chip's done flag: a wedged chip would hang Syrup forever
 static u32 csSend(float l, float r) {   // capture volumes: the chip echo, or CHIP > FX
@@ -5425,7 +5426,13 @@ static void echoStart(void) {
 		gEchoUnits[k] = u;
 	}
 	int n = 0;   // two channels nobody else uses
-	for (int c = NCS - 3; c > 18 && n < 2; c--) if (csndChannels & BIT(c)) { if (gCsOwner[c] >= 0) stopCh(BK_CSND, c); gEchoCh[n++] = c; }   // below the looper's two, above the drums
+	int top = 0;   // the looper's two (top two channels, whether or not they're picked yet) are never touched
+	for (int c = NCS - 1; c > 18 && n < 2; c--) if (csndChannels & BIT(c)) {
+		if (top < 2) { top++; continue; }
+		if (c == gLoopCh[0] || c == gLoopCh[1] || tapeReserved(c) || drumReserved(c) || chipReserved(c)) continue;
+		if (gCsOwner[c] >= 0) stopCh(BK_CSND, c);
+		gEchoCh[n++] = c;
+	}
 	if (n < 2) { for (int k = 0; k < 2; k++) CSND_ReleaseCapUnit(gEchoUnits[k]); return; }
 	u32 timer = CSND_TIMER(32728);
 	for (int k = 0; k < 2; k++) {
@@ -5529,7 +5536,7 @@ static float gLoopLevel = 0.8f;
 static ndspWaveBuf gCapWB;
 static s16* gCapBuf = NULL;
 static u32 gCapLast = 0;
-static int loopReserved(int c) { return gLoopHave && gLoopMode == 2 && (c == gLoopCh[0] || c == gLoopCh[1]); }
+static int loopReserved(int c) { return (gLoopHave || gLoopMode) && (c == gLoopCh[0] || c == gLoopCh[1]); }   // a recorded loop keeps its channels, playing or not
 static void loopStopPlay(void) {
 	if (!gCsndOK) return;
 	for (int k = 0; k < 2; k++) if (gLoopCh[k] >= 0) CSND_SetPlayState(gLoopCh[k], 0);
@@ -5537,7 +5544,7 @@ static void loopStopPlay(void) {
 }
 static void loopStartPlay(void) {
 	if (!gCsndOK || !gLoopHave) { say("LOOPER NEEDS THE SECOND SOUND CHIP"); return; }
-	if (gLoopCh[0] < 0) { int n = 0; for (int c = NCS - 1; c >= 0 && n < 2; c--) if (gCsndOK && (csndChannels & BIT(c))) gLoopCh[n++] = c; }
+	if (gLoopCh[0] < 0 || gLoopCh[1] < 0) { int n = 0; gLoopCh[0] = gLoopCh[1] = -1; for (int c = NCS - 1; c >= 0 && n < 2; c--) if (gCsndOK && (csndChannels & BIT(c)) && !echoReserved(c) && !tapeReserved(c) && !drumReserved(c)) gLoopCh[n++] = c; }
 	if (gLoopCh[1] < 0) return;
 	for (int k = 0; k < 2; k++) {
 		int c = gLoopCh[k]; stopCh(BK_CSND, c);
@@ -8178,7 +8185,11 @@ int main(void) {
 		sensorsUpdate(dt);
 
 		if (helpOn && (kDown & ~KEY_TOUCH)) { helpOn = 0; topDirty = botDirty = 1; kDown &= KEY_TOUCH; }   // any button closes help
-		if (kDown & KEY_SELECT) startAct = 2;   // SELECT: PANIC, one press
+		if (kDown & KEY_SELECT) {   // SELECT: PLAY / STOP (PANIC lives in the START menu)
+			gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0);
+			if (gSeqMode == 0) { seqStop(); if (gLiveRec || gPreFor == 2) liveRecStop(); }
+			say(gSeqMode == 1 ? "PLAY" : "STOP"); topDirty = botDirty = 1;
+		}
 		if (startAct == 3) { helpOn = 1; topDirty = botDirty = 1; }
 		if (kDown & KEY_X) { page = navStep(page, 1); topDirty = 1; }
 		if (kDown & KEY_Y) { page = navStep(page, -1); topDirty = 1; }
@@ -8188,7 +8199,11 @@ int main(void) {
 		if (kDown & KEY_R) { page = coreStep(page, 1); topDirty = 1; }
 		if (startAct == 0) { browseSave(); if (gSaveArm >= 0) browseSave(); }   // one press from the menu: no "A again"
 		if (startAct == 1) page = 0;
-		if (startAct == 2) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; say("PANIC: ALL NOTES OFF"); }
+		if (startAct == 2) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0;
+			if (gLoopMode) { gLoopMode = 0; loopModeChanged(); }   // the loop stops too (it stays recorded: LOOPER PLAY brings it back)
+			if (gLiveRec || gPreFor == 2) liveRecStop();
+			tapeStopPlay(); echoStop();   // and the tape, and the chip echo's tail (it restarts empty)
+			say("PANIC: EVERYTHING STOPPED"); }
 		if (startAct == 4) { gTheme = (gTheme + 1) % NTHEMES; char m[32]; snprintf(m, sizeof(m), "THEME: %s", THEME_NAMES[gTheme]); say(m); }
 		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
 
@@ -8357,7 +8372,7 @@ int main(void) {
 					if (b == 3) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } }
 					if (b == 4) { if (gChord) { gChordLast = gChord; gChord = 0; } else gChord = gChordLast; char m[32]; snprintf(m, sizeof(m), "CHORD: %s", gChord ? CHORD_NAMES[gChord] : "OFF"); say(m); }
 					if (b == 5) { gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0); if (gSeqMode == 0) seqStop(); }
-					if (b == 6) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; say("PANIC: ALL NOTES OFF"); }
+					if (b == 6) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; if (gLoopMode) { gLoopMode = 0; loopModeChanged(); } if (gLiveRec || gPreFor == 2) liveRecStop(); tapeStopPlay(); echoStop(); say("PANIC: EVERYTHING STOPPED"); }
 					topDirty = botDirty = 1;
 				}
 			} else if (gModOn && !gPads) {
