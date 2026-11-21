@@ -1487,20 +1487,23 @@ static void ofBlock(s32* L, s32* R, int n) {   // audio thread, inside auxMaster
 	float d = DSPRATE / hz; if (d > OFDL - 4) d = OFDL - 4; if (d < 2) d = 2;
 	float apc = (1 - tanf(3.14159f * hz / DSPRATE)) / (1 + tanf(3.14159f * hz / DSPRATE));
 	float comp = 1 + res * 2.2f;   // ladders lose bass as resonance rises: give some back
+	float hn = g / (2 - g), hn2 = hn * hn;   // one stage's gain at Nyquist: the feedback's one-sample delay flips its sign there,
+	// so past loop gain 1 the ladder rings at 16 kHz instead of the cutoff (high cutoff + high resonance). The caps below keep it under.
 	for (int i = 0; i < n; i++) {
 		float x[2] = {L[i] / 32768.0f, R[i] / 32768.0f};
 		for (int c = 0; c < 2; c++) {
 			float in = x[c] * drv, y = in; float* s4 = gOfS[c];
 			switch (gOfType) {
 			case 1: case 2: case 5: {   // ladder: four one-pole stages with saturated resonance feedback
-				float k = gOfType == 5 ? res * 2.6f : res * 4.1f;
+				float k = gOfType == 5 ? res * 2.6f : res * 4.1f, kmax = 0.9f / (gOfType == 2 ? hn2 : hn2 * hn2); if (k > kmax) k = kmax;
 				float u = ftanh(in - k * (gOfType == 2 ? s4[1] : s4[3]) + (gOfType == 5 ? 0 : 0.0f));
 				s4[0] += g * (u - s4[0]); s4[1] += g * (ftanh(s4[0]) - s4[1]); s4[2] += g * (s4[1] - s4[2]); s4[3] += g * (s4[2] - s4[3]);
 				y = (gOfType == 2 ? s4[1] : s4[3]) * comp;
 				if (gOfType == 5) y = (s4[3] * 0.85f + s4[2] * 0.15f) * (1 + res);   // creamy: softer knee, rounder peak
 				break; }
 			case 3: {   // acid: three stages, asymmetric squelch
-				float u = ftanh(in - res * 3.3f * s4[2]) + 0.02f * s4[2] * s4[2];
+				float k = res * 3.3f, kmax = 0.9f / (hn2 * hn); if (k > kmax) k = kmax;
+				float u = ftanh(in - k * s4[2]) + 0.02f * s4[2] * s4[2];
 				s4[0] += g * (u - s4[0]); s4[1] += g * (s4[0] - s4[1]); s4[2] += g * (ftanh(s4[1] * 1.2f) / 1.2f - s4[2]);
 				y = s4[2] * comp; break; }
 			case 4: {   // dirty: 2-pole state variable with the resonance path clipping hard
@@ -1948,7 +1951,7 @@ static int gSeqPlaying = 0;
 // patterns + song. gSeq / gSeqLen / gSeqBase / gRow* are the pattern being played and edited; gPat holds all 16.
 // Rows of the grid can run their own length (polymeter) or an euclid rhythm instead of the steps.
 #define NPAT 16
-#define NSONG 32
+#define NSONG 64
 typedef struct { Step st[NSTEP]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8], rowNote[8]; } SeqPat;   // rowNote: the pitch a rhythm row plays
 typedef struct { StepV1 st[NSTEP]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8]; } SeqPatV1;
 static SeqPat gPat[NPAT];
@@ -1998,7 +2001,7 @@ static void seqLoad(void) {
 			}
 			ok = 1;
 		}
-		ok = ok && fread(song, sizeof(song), 1, f) == 1;
+		memset(song, 0, sizeof(song)); ok = ok && fread(song, 1, sizeof(song), f) >= 32;   // files from before the song grew to 64 hold 32
 	}
 	if (ok) {
 		memcpy(gPat, tmp, sizeof(gPat)); memcpy(gSong, song, sizeof(gSong));
@@ -4072,6 +4075,10 @@ static void drawGrid(void) {
 }
 // pattern + song view (PAT button): 16 patterns, COPY / CLEAR, and a song chain of up to 32 patterns
 #define PV_Y (XY_Y + 18)
+#define PV_SONG_Y (PV_Y + 45)    // 4 rows of 16 song slots
+#define PV_SONG_H 11
+#define PV_TOOLS_Y (PV_SONG_Y + 4 * PV_SONG_H + 4)   // REV ROT HUM / UNDO
+#define PV_TAPE_Y (PV_TOOLS_Y + 20)
 static void drawPatView(void) {
 	text(4, PV_Y, "PATTERN", 1, RGB3(TH->dim));
 	for (int i = 0; i < NPAT; i++) {
@@ -4086,13 +4093,13 @@ static void drawPatView(void) {
 		text(x + 30 - (int)strlen(PB[i]) * 4, y + 3, PB[i], 1, tc[0], tc[1], tc[2]);
 	}
 	{ static const char* PTB[3] = {"REV", "ROT", "HUM"};
-		for (int i = 0; i < 3; i++) { int x = 130 + i * 62; rectP(x, PV_Y + 84, 58, 14, TH->tab); text(x + 29 - (int)strlen(PTB[i]) * 4, PV_Y + 87, PTB[i], 1, RGB3(TH->tabTxt)); } }
-	rectP(4, PV_Y + 104, 312, 18, TH->keyOn); text(160 - 9 * 4, PV_Y + 109, "TAPE  >>>", 1, RGB3(EGA[0]));   // bounce to tape
-	if (gUndoOk) { rectP(4, PV_Y + 84, 122, 14, TH->tab); char u[20]; snprintf(u, sizeof(u), "UNDO (PAT %c)", 'A' + gUndoIdx); text(65 - (int)strlen(u) * 4, PV_Y + 87, u, 1, RGB3(TH->tabTxt)); }   // takes back the last ACID / CLEAR
+		for (int i = 0; i < 3; i++) { int x = 130 + i * 62; rectP(x, PV_TOOLS_Y, 58, 14, TH->tab); text(x + 29 - (int)strlen(PTB[i]) * 4, PV_TOOLS_Y + 3, PTB[i], 1, RGB3(TH->tabTxt)); } }
+	rectP(4, PV_TAPE_Y, 312, 18, TH->keyOn); text(160 - 9 * 4, PV_TAPE_Y + 5, "TAPE  >>>", 1, RGB3(EGA[0]));   // bounce to tape
+	if (gUndoOk) { rectP(4, PV_TOOLS_Y, 122, 14, TH->tab); char u[20]; snprintf(u, sizeof(u), "UNDO (PAT %c)", 'A' + gUndoIdx); text(65 - (int)strlen(u) * 4, PV_TOOLS_Y + 3, u, 1, RGB3(TH->tabTxt)); }   // takes back the last ACID / CLEAR
 	for (int i = 0; i < NSONG; i++) {
-		int x = 4 + (i % 16) * 19, y = PV_Y + 46 + (i / 16) * 16, has = i < gSongLen, cur = has && gSongOn && gSeqPlaying && i == gSongPos;
-		rectP(x, y, 17, 14, cur ? TH->keyOn : has ? TH->pad : TH->bg); outline(x, y, 17, 14, RGB3(TH->grid));
-		if (has) { char c[2] = {(char)('A' + gSong[i]), 0}; const u8* tc = cur ? EGA[0] : TH->txt; text(x + 5, y + 3, c, 1, tc[0], tc[1], tc[2]); }
+		int x = 4 + (i % 16) * 19, y = PV_SONG_Y + (i / 16) * PV_SONG_H, has = i < gSongLen, cur = has && gSongOn && gSeqPlaying && i == gSongPos;
+		rectP(x, y, 17, PV_SONG_H - 1, cur ? TH->keyOn : has ? TH->pad : TH->bg); outline(x, y, 17, PV_SONG_H - 1, RGB3(TH->grid));
+		if (has) { char c[2] = {(char)('A' + gSong[i]), 0}; const u8* tc = cur ? EGA[0] : TH->txt; text(x + 5, y + 1, c, 1, tc[0], tc[1], tc[2]); }
 	}
 }
 // pattern tools: REV (back to front, long notes end where they started), ROT (one step later, wraps), HUM (velocity +-20 %, nudge +-10 %)
@@ -4122,7 +4129,7 @@ static void patHumanize(void) {
 	}
 }
 static void patViewTouch(int x, int y) {   // on press
-	if (y >= PV_Y + 104 && y < PV_Y + 122) { gPatView = 2; return; }
+	if (y >= PV_TAPE_Y && y < PV_TAPE_Y + 18) { gPatView = 2; return; }
 	if (y >= PV_Y + 10 && y < PV_Y + 24) {
 		int i = (x - 4) / 19; if (i < 0 || i >= NPAT) return;
 		if (gSeqPlaying && !gSongOn && i != gPatCur) { gPatNext = i; char m[40]; snprintf(m, sizeof(m), "PATTERN %c NEXT (AT THE END OF THIS ONE)", 'A' + i); say(m); }
@@ -4130,7 +4137,7 @@ static void patViewTouch(int x, int y) {   // on press
 		else say("SONG IS ON: IT PICKS THE PATTERNS");
 		return;
 	}
-	if (y >= PV_Y + 84 && y < PV_Y + 98 && x >= 130) {
+	if (y >= PV_TOOLS_Y && y < PV_TOOLS_Y + 14 && x >= 130) {
 		int b = (x - 130) / 62; if (b > 2) b = 2;
 		undoMark();
 		if (b == 0) { patReverse(); say("REVERSED (UNDO TAKES IT BACK)"); }
@@ -4138,7 +4145,7 @@ static void patViewTouch(int x, int y) {   // on press
 		if (b == 2) { patHumanize(); say("HUMANIZED: VELOCITY AND TIMING LOOSENED"); }
 		patStore(); return;
 	}
-	if (gUndoOk && y >= PV_Y + 84 && y < PV_Y + 98 && x < 126) {
+	if (gUndoOk && y >= PV_TOOLS_Y && y < PV_TOOLS_Y + 14 && x < 126) {
 		patStore(); SeqPat cur = gPat[gUndoIdx]; gPat[gUndoIdx] = gUndoPat; gUndoPat = cur;   // swap: UNDO again redoes
 		int c = gPatCur; gPatCur = -1; { gPatCur = gUndoIdx; SeqPat* p = &gPat[gPatCur]; memcpy(gSeq, p->st, sizeof(gSeq)); gSeqLen = p->len < 1 ? 16 : p->len; gSeqBase = p->base;
 			memcpy(gRowLen, p->rowLen, 8); memcpy(gRowHits, p->rowHits, 8); memcpy(gRowRot, p->rowRot, 8); memcpy(gRowNote, p->rowNote, 8); }
@@ -4157,8 +4164,8 @@ static void patViewTouch(int x, int y) {   // on press
 		if (b == 4 && gSongLen > 0) gSongLen--;
 		return;
 	}
-	if (y >= PV_Y + 46 && y < PV_Y + 78) {   // a song slot: play from there
-		int i = (x - 4) / 19 + ((y - PV_Y - 46) / 16) * 16; if (i < 0 || i >= gSongLen) return;
+	if (y >= PV_SONG_Y && y < PV_SONG_Y + 4 * PV_SONG_H) {   // a song slot: play from there
+		int i = (x - 4) / 19 + ((y - PV_SONG_Y) / PV_SONG_H) * 16; if (i < 0 || i >= gSongLen) return;
 		gSongPos = i; if (gSong[i] != gPatCur) patSwitch(gSong[i]);
 	}
 }
@@ -5585,7 +5592,7 @@ static void loopModeChanged(void) {
 // output through the looper's DSP tap as IMA-ADPCM; the tracks already on tape play along on the second sound chip,
 // so you change the patch and bounce the next part over them. SAVE WAV writes each track and the mix to the SD card.
 #define NTRK 4
-#define TAPE_MAX (32728 * 90)   // 90 s a track
+#define TAPE_MAX (32728 * 120)   // 2 minutes a track
 static u8* gTp[NTRK][2]; static int gTpHave[NTRK], gTpMute[NTRK]; static float gTpLevel[NTRK] = {0.8f, 0.8f, 0.8f, 0.8f};
 static int gTapeLen = 0, gTapeLenSel = 2, gTapeArm = 0, gTapeRec = -1, gTapeRecLen = 0, gTapePos = 0, gTapePlay = 0, gTapeCh[NTRK * 2] = {-1, -1, -1, -1, -1, -1, -1, -1};
 static volatile int gTapeState = 0, gTapeSkip = 0;   // 1 waiting for the sequence, 2 dropping what came before it, 3 recording

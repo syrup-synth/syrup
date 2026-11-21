@@ -94,7 +94,7 @@ static void SCRIPT(int fr) {
 		if (v < 3) fail("RATCHET 3: the step should hit three times (%d hits)", v);
 		// UNDO after ACID; step editor < / > walks the steps
 		memset(gSeq, 0, sizeof(gSeq)); stepSetNote(5, 66, 1); gSeqLen = 16; undoMark(); acidGen();
-		gPatView = 1; patViewTouch(20, PV_Y + 90); gPatView = 0;
+		gPatView = 1; patViewTouch(20, PV_TOOLS_Y + 6); gPatView = 0;
 		if (!stepHasNote(5, 66) || gSeq[0].n) fail("UNDO should bring back the pattern from before ACID");
 		gStepEd = 5; gStepEdRow = 66; stepEdTouch(230, SE_Y + 2, 1, 0); stepEdTouch(0, 0, 0, 1); if (gStepEd != 6) fail("step editor ST> should go to step 7 (%d)", gStepEd);
 		stepEdTouch(190, SE_Y + 2, 1, 0); stepEdTouch(190, SE_Y + 2, 1, 0); stepEdTouch(0, 0, 0, 1); if (gStepEd != 4) fail("step editor <ST twice should go to step 5 (%d)", gStepEd);
@@ -107,13 +107,13 @@ static void SCRIPT(int fr) {
 		gStepEd = 5; stepEdTouch(200, SE_CP_Y + 4, 1, 0); stepEdTouch(0, 0, 0, 1); gStepEd = -1;
 		if (!stepHasNote(5, 60) || gSeq[5].cut != 40 || gSeq[5].len[0] != 2) fail("PASTE should copy the note, length and locks to step 6");
 		memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 8; stepSetNote(0, 60, 1); stepSetLen(0, 60, 2); stepSetNote(3, 64, 1); patStore();
-		gPatView = 1; patViewTouch(150, PV_Y + 90);
+		gPatView = 1; patViewTouch(150, PV_TOOLS_Y + 6);
 		if (!stepHasNote(6, 60) || !stepHasNote(4, 64) || gSeq[6].len[0] != 2) fail("REV: the long note should end where it started (step 7), step 4 -> 5");
-		patViewTouch(20, PV_Y + 90); if (!stepHasNote(0, 60) || !stepHasNote(3, 64)) fail("UNDO after REV should restore");
-		patViewTouch(20, PV_Y + 90); patViewTouch(20, PV_Y + 90);   // redo, undo again
-		patViewTouch(212, PV_Y + 90); if (!stepHasNote(1, 60) || !stepHasNote(4, 64) || gSeq[0].n) fail("ROT: everything one step later");
-		gSeq[7] = gSeq[4]; memset(&gSeq[4], 0, sizeof(Step)); patViewTouch(212, PV_Y + 90); if (!stepHasNote(0, 64)) fail("ROT should wrap the last step to step 1");
-		{ int v0 = gSeq[0].vel; int ch = 0; for (int k = 0; k < 6; k++) { patViewTouch(274, PV_Y + 90); if (gSeq[0].vel != v0) ch = 1; if (gSeq[0].nudge < -50 || gSeq[0].nudge > 50) fail("HUM nudge out of range"); }
+		patViewTouch(20, PV_TOOLS_Y + 6); if (!stepHasNote(0, 60) || !stepHasNote(3, 64)) fail("UNDO after REV should restore");
+		patViewTouch(20, PV_TOOLS_Y + 6); patViewTouch(20, PV_TOOLS_Y + 6);   // redo, undo again
+		patViewTouch(212, PV_TOOLS_Y + 6); if (!stepHasNote(1, 60) || !stepHasNote(4, 64) || gSeq[0].n) fail("ROT: everything one step later");
+		gSeq[7] = gSeq[4]; memset(&gSeq[4], 0, sizeof(Step)); patViewTouch(212, PV_TOOLS_Y + 6); if (!stepHasNote(0, 64)) fail("ROT should wrap the last step to step 1");
+		{ int v0 = gSeq[0].vel; int ch = 0; for (int k = 0; k < 6; k++) { patViewTouch(274, PV_TOOLS_Y + 6); if (gSeq[0].vel != v0) ch = 1; if (gSeq[0].nudge < -50 || gSeq[0].nudge > 50) fail("HUM nudge out of range"); }
 		  if (!ch) fail("HUM should change velocities"); if (gSeq[1].n || gSeq[1].vel) fail("HUM should leave empty steps alone"); }
 		gPatView = 0;
 	}

@@ -15,7 +15,7 @@ static void SCRIPT(int fr) {
 		gBPM = 240; gTapeLenSel = 0; gDrums = 0; seqClear(); gSeqLen = 16; for (int k = 0; k < 16; k += 4) stepSetNote(k, 60, 1); }
 	tap(fr, 3, 5 * 320 / 7 + 20, 8);                       // SEQ chip
 	tap(fr, 6, 1 * 320 / 7 + 20, XY_Y + 5);                // PAT
-	tap(fr, 9, 160, PV_Y + 110);                           // TAPE >>>
+	tap(fr, 9, 160, PV_TAPE_Y + 8);                           // TAPE >>>
 	if (fr == 12 && gPatView != 2) fail("tape: PAT > TAPE should open the tape view (%d)", gPatView);
 	tap(fr, 13, 2 * 63 + 30, TP_Y + 8);                    // REC
 	if (fr == 20 && gTapeRec != 0) fail("tape: REC should record track 1 (%d)", gTapeRec);
