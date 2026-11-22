@@ -6747,10 +6747,11 @@ static void irRecvMain(void* a) {
 	}
 }
 // IR MIDI IN: raw MIDI bytes from the Syrup IR-MIDI adapter (an RP2040 on USB, sending IrDA at 115200)
-static void midiParse(const u8* p, int n, u8* run);
+typedef struct { u8 run, cur, need, nd, sysex, d[2]; } MidiIn;   // one raw MIDI input's parser state
+static void midiParse(const u8* p, int n, MidiIn* m);
 static volatile int gIrMidiBytes = 0;
 static void irMidiMain(void* a) {
-	(void)a; u8 run = 0;
+	(void)a; MidiIn run = {0};
 	while (!gIrQuit) {
 		u8 b[1]; u32 n = 0;
 		if (R_SUCCEEDED(iruRecvData(b, 1, 0, &n, true)) && n == 1) { midiParse(b, 1, &run); gIrMidiBytes++; }
@@ -6846,18 +6847,25 @@ static int midiLen(u8 st) {   // data bytes after a status byte
 	if (st >= 0xF8) return 0;
 	switch (st & 0xF0) { case 0xC0: case 0xD0: return 1; case 0xF0: return st == 0xF2 ? 2 : (st == 0xF1 || st == 0xF3) ? 1 : 0; default: return 2; }
 }
-// raw MIDI byte stream (WebSocket frames); running status allowed, sysex skipped
-static void midiParse(const u8* p, int n, u8* run) {
-	int i = 0;
-	while (i < n) {
-		u8 st = p[i];
-		if (st == 0xF0) { while (i < n && p[i] != 0xF7) i++; i++; continue; }
-		if (st & 0x80) { i++; if (st < 0xF0) *run = st; } else st = *run;
-		if (!st) { i++; continue; }
-		int k = midiLen(st); if (i + k > n) return;
-		midiPush(st, k > 0 ? p[i] : 0, k > 1 ? p[i + 1] : 0); i += k;
+// raw MIDI byte stream (IR, WebSocket, raw UDP): a byte-at-a-time state machine, so a message may arrive split across
+// packets (IR delivers ONE byte per read: the old parser needed the whole message in one call and dropped every note).
+// Running status, real-time bytes (clock, start, stop) anywhere - even inside a message - and sysex skipped.
+static void midiByte(MidiIn* m, u8 b) {
+	if (b >= 0xF8) { midiPush(b, 0, 0); return; }   // real-time: on its own, doesn't break the message around it
+	if (b == 0xF0) { m->sysex = 1; m->cur = 0; m->nd = 0; return; }
+	if (b == 0xF7) { m->sysex = 0; return; }
+	if (m->sysex) { if (!(b & 0x80)) return; m->sysex = 0; }
+	if (b & 0x80) {   // a status byte: starts a message (a half-finished one is dropped)
+		int k = midiLen(b); m->nd = 0;
+		m->run = b < 0xF0 ? b : 0;   // system common cancels running status
+		if (!k) { midiPush(b, 0, 0); m->cur = 0; return; }
+		m->cur = b; m->need = (u8)k; return;
 	}
+	if (!m->cur) { if (!m->run) return; m->cur = m->run; m->need = (u8)midiLen(m->run); m->nd = 0; }   // running status
+	m->d[m->nd++] = b;
+	if (m->nd >= m->need) { midiPush(m->cur, m->d[0], m->need > 1 ? m->d[1] : 0); m->nd = 0; if (m->cur >= 0xF0) m->cur = 0; }
 }
+static void midiParse(const u8* p, int n, MidiIn* m) { for (int i = 0; i < n; i++) midiByte(m, p[i]); }
 
 // FM-1 LINK timed packets: "SL" 1, then records of a 4-byte sender time (24 MHz ticks) + one MIDI message. Each
 // message is played at its sender time + a learned clock offset + NET BUFFER, from the audio tick: the network's
@@ -6928,7 +6936,7 @@ static void b64(const u8* in, int n, char* out) {
 #include "remote_html.h"
 static int sendAll(int s, const void* d, int n) { const char* p = (const char*)d; while (n > 0) { int k = send(s, p, n, 0); if (k <= 0) { if (k < 0 && errno == EAGAIN) { svcSleepThread(1000000); continue; } return 0; } p += k; n -= k; } return 1; }
 #define NCLI 8
-typedef struct { int s, ws; char buf[2048]; int n; u8 run, closing; u64 t; } Cli;   // t: last activity (ms)
+typedef struct { int s, ws; char buf[2048]; int n; MidiIn run; u8 closing; u64 t; } Cli;   // t: last activity (ms)
 static void cliClose(Cli* c) { if (c->s >= 0) close(c->s); c->s = -1; c->ws = 0; c->n = 0; c->closing = 0; }
 static void cliHttp(Cli* c) {   // request complete in c->buf
 	c->buf[c->n] = 0;
@@ -7003,6 +7011,7 @@ static void rtpMidi(const u8* p, int n) {
 		if (st & 0x80) { i++; if (st < 0xF0) run = st; } else st = run;
 		if (!st) break;
 		int k = midiLen(st); if (i + k > end) break;
+		if ((k > 0 && (p[i] & 0x80)) || (k > 1 && (p[i + 1] & 0x80))) break;   // malformed: stop at it
 		midiPush(st, k > 0 ? p[i] : 0, k > 1 ? p[i + 1] : 0); i += k;
 	}
 }
@@ -7024,9 +7033,9 @@ static void netMain(void* arg) {
 	if (ls < 0 || bind(ls, (struct sockaddr*)&a, sizeof(a)) < 0 || listen(ls, 4) < 0) { snprintf(gNetAddr, sizeof(gNetAddr), "PORT 8080 BUSY"); if (ls >= 0) close(ls); netDown(); gNetRun = 0; return; }
 	fcntl(ls, F_SETFL, fcntl(ls, F_GETFL, 0) | O_NONBLOCK);
 	int uc = udpOpen(5004), ud = udpOpen(5005), ur = udpOpen(5008);   // 5008: plain MIDI bytes (FM-1 LINK and friends)
-	int ub = socket(AF_INET, SOCK_DGRAM, 0); u64 beaconT = 0; u8 rawRun = 0;
+	int ub = socket(AF_INET, SOCK_DGRAM, 0); u64 beaconT = 0; MidiIn rawRun = {0};
 	if (ub >= 0) { int on = 1; setsockopt(ub, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)); }
-	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; cl[i].run = 0; cl[i].closing = 0; cl[i].t = 0; }
+	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; memset(&cl[i].run, 0, sizeof(MidiIn)); cl[i].closing = 0; cl[i].t = 0; }
 	gNetClients = 0;
 	while (gNetRun) {
 		int idle = 1;
@@ -7038,7 +7047,7 @@ static void netMain(void* arg) {
 				for (int i = 0; i < NCLI; i++) if (!cl[i].ws && (slot < 0 || cl[i].t < cl[slot].t)) slot = i;
 				if (slot >= 0) cliClose(&cl[slot]);
 			}
-			if (slot < 0) close(s); else { cl[slot].s = s; cl[slot].ws = 0; cl[slot].n = 0; cl[slot].run = 0; cl[slot].closing = 0; cl[slot].t = osGetTime(); }
+			if (slot < 0) close(s); else { cl[slot].s = s; cl[slot].ws = 0; cl[slot].n = 0; memset(&cl[slot].run, 0, sizeof(MidiIn)); cl[slot].closing = 0; cl[slot].t = osGetTime(); }
 			idle = 0;
 		}
 		for (int i = 0; i < NCLI; i++) {
