@@ -62,6 +62,15 @@ With MASTER FX on, every DSP voice goes through the effect bus to a chain that r
 
 A synthesised kit (808, 909, LOFI, CHIP) on three channels of the second sound chip with KICK / SNARE / HAT pattern presets, DRUM LEVEL, BPM and SWING. It follows the sequencer when that's playing and drives the PUMP.
 
+**The DRUMS grid** (the DRUMS page's bottom screen; SELECT + circle pad left gets there): a row for each of the 10 drums, 16 steps.
+- Tap a step: on / off; drag along a row to paint. Tap a drum's name to hear it and pick the row.
+- **Hold a step**: VELOCITY, RATCHET (1-4 hits in the step) and a condition: 90 / 75 / 50 / 25 / 10 %, 1:2 ... 4:4 (plays on loop A of every B of the row), FILL / !FILL (while FILL is held), PRE / !PRE (the last condition on this row), NEI / !NEI (the row above), 1ST / !1ST (the first loop after start). Steps show a dot per extra ratchet and a corner when they have a condition.
+- **Hold a drum's name**: its SOUND (TUNE, PITCH ENV and its decay, DECAY up to twice as long, TONE darker / thinner, DRIVE, LEVEL, PAN) and the row's RATE (X1, 1/2, X2, 3/4, 3/2, 1/4, 1/8) and LENGTH (1-16): every row can run its own polymeter. The kit rebuilds when you let go and plays the drum.
+- **Header**: DR ON / OFF, KIT, BEAT (the next of 30 whole-kit rhythms each tap: HOUSE, BOOM BAP, TRAP, DNB, BREAK, DISCO, FUNK, HALFTIME, DEMBOW, AFROBEAT, 2-STEP, ELECTRO, ROCK, SHUFFLE, CUMBIA, BOSSA, SAMBA, RUMBA, BEGUINE, CHA-CHA, TANGO, MAMBO, MARCH, SWING, SLOW ROCK in 12/8, WALTZ in 3/4, REGGAE, FOXTROT, TECHNO, GO-GO), CLR (then a name clears that row; CLR again clears all), MIC (knocks near the mic play and record onto the picked row), FILL (hold).
+- KICK / SNARE / HAT patterns are pastes: picking one writes it into the row, which then edits like your own. EUCLID rows stay live.
+- **Circle pad**: moves a cursor on the grid (the first push shows it); A = hit, hold A = the step editor, B = the row's SOUND. In the editors up / down picks a setting, left / right changes it, B closes. The piano roll works the same way (A = note, hold A = its step editor).
+- Everything is saved on the SD card and SELECT + L undoes it.
+
 ## Macros and mod matrix
 
 Four MACRO knobs (mod sources MACRO 1-4); XY PAD can play MACRO 1+2 or 3+4 instead of WT POS + CUTOFF. Eight mod slots, each with a CURVE (linear, exp, log, S).

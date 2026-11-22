@@ -102,6 +102,8 @@ static u8 gMot[4][64]; static int gMotTgt[4], gMotOn[4], gMotRec, gMotBars; stat
 static int gCamVid, gMidiNet, gAddEdit, gOfType; static float gOfCut, gOfRes, gOfDrive, gOfEnv; static const char* OFT_NAMES[14]; static float gWtScan; static const char* VID_NAMES[3];
 static void chipSet(float lv);
 static void grainsChanged(void);
+static int gEdStick = 0, gRcS = 0, gRcN = 60, gDcR = 0, gDcI = 0, gDgSelF = 0; static u64 gCurT = 0, gDvRebuildT = 0;
+static int curShown(void) { return gCurT && osGetTime() - gCurT < 5000; }
 static int EU_IDX_(int r) { return r ? 7 : 8; }   // EUCLID in the KICK / SNARE + HAT lists
 #define NBEAT_ 30
 static const char* BEAT_NAMES_[NBEAT_] = {"HOUSE", "BOOM BAP", "TRAP", "DNB", "BREAK", "DISCO", "FUNK", "HALFTIME", "DEMBOW", "AFROBEAT", "2-STEP", "ELECTRO", "ROCK", "SHUFFLE", "CUMBIA", "BOSSA", "SAMBA", "RUMBA", "BEGUINE", "CHA-CHA", "TANGO", "MAMBO", "MARCH", "SWING", "SLOW ROCK", "WALTZ", "REGGAE", "FOXTROT", "TECHNO", "GO-GO"};
@@ -4344,6 +4346,7 @@ static void drawGrid(void) {
 		else if (nt % 12 == 0) { char t[6]; snprintf(t, sizeof(t), "C%d", nt / 12 - 1); text(2, y + 4, t, 1, RGB3(TH->keyB)); }
 		if (cr >= 0) rectP(ROLL_KW - 4, y, 3, ROLL_RH - 1, TH->keyOn);   // this pitch runs its own rhythm (step editor > ROW)
 	}
+	if (curShown() && rollRow(gRcN) >= 0) { int x = rollX(gRcS), y = rollY(gRcN); outline(x, y, (int)ROLL_CW, ROLL_RH - 1, RGB3(TH->keyOn)); }   // the circle pad's cursor
 	if (gSeqPlaying && gSeqPos >= 0) { int x = rollX(gSeqPos); rectP(x, ROLL_TOP, (int)ROLL_CW, 1, TH->keyOn); rectP(x, ROLL_TOP + ROLL_ROWS * ROLL_RH - 1, (int)ROLL_CW, 1, TH->keyOn); }
 	for (int st = 0; st < NSTEP; st++) {   // the notes, as bars as long as they last
 		const Step* p = &gSeq[st];
@@ -8101,6 +8104,7 @@ static void drawDrumGrid(void) {
 			if (on) { int v = drumCellVel(r, i); if (v < 200) rectP(x, y, w, (DG_RH - 2) * (255 - v) / 255, TH->grid);   // softer: a shorter bar
 				for (int k = 0; k < gDrRat[r][i]; k++) rectP(x + 2 + k * 4, y + DG_RH - 6, 2, 3, TH->bg);   // ratchets: a dot per extra hit
 				if (gDrCond[r][i]) { rectP(x + w - 4, y, 4, 4, TH->warn); } }   // a condition: the corner
+			if (curShown() && r == gDcR && i == gDcI) { outline(x - 1, y - 1, w + 2, DG_RH, RGB3(TH->keyOn)); outline(x, y, w, DG_RH - 2, RGB3(EGA[0])); }   // the circle pad's cursor
 		}
 	}
 }
@@ -8124,6 +8128,7 @@ static void drawDgEd(void) {
 	if (gDgEd == 1) {
 		int i = gDgEdI, v = r < 3 ? gMyDrum[r][i] : gDrumX[r - 3][i];
 		snprintf(t, sizeof(t), "%s  STEP %d", kitPadName(DG_DRUM[r]), i + 1); text(6, DE_Y + 4, t, 1, RGB3(TH->val));
+		if (curShown()) { static const int FY[3] = {24, 50, 76}; outline(2, DE_Y + FY[gDgSelF % 3], 316, 20, RGB3(TH->keyOn)); }   // the circle pad's setting
 		text(6, DE_Y + 30, "VEL", 1, RGB3(TH->txt)); rectP(60, DE_Y + 26, 250, 14, TH->pad); rectP(60, DE_Y + 26, 250 * v / 255, 14, TH->val);
 		text(6, DE_Y + 56, "RATCHET", 1, RGB3(TH->txt));
 		for (int k = 0; k < 4; k++) { int on = gDrRat[r][i] == k; rectP(84 + k * 58, DE_Y + 52, 54, 16, on ? TH->keyOn : TH->tab); char b[4]; snprintf(b, sizeof(b), "%d", k + 1); text(84 + k * 58 + 23, DE_Y + 56, b, 1, RGB3(on ? EGA[0] : TH->tabTxt)); }
@@ -8137,6 +8142,7 @@ static void drawDgEd(void) {
 	} else {
 		snprintf(t, sizeof(t), "%s SOUND", kitPadName(DG_DRUM[r])); text(6, DE_Y + 4, t, 1, RGB3(TH->val));
 		rectP(196, DE_Y, 58, 16, TH->tab); text(205, DE_Y + 4, "RESET", 1, RGB3(TH->tabTxt));
+		if (curShown()) { int f = gDgSelF % 10; outline(2, f < 8 ? DE_Y + 21 + f * 16 : DE_Y + 22 + 8 * 16 + 3, f < 8 ? 314 : 156, f < 8 ? 15 : 18, RGB3(TH->keyOn)); if (f == 9) outline(162, DE_Y + 22 + 8 * 16 + 3, 154, 18, RGB3(TH->keyOn)); }
 		for (int k = 0; k < 8; k++) {
 			int y = DE_Y + 22 + k * 16, x = dvGet(&gDV[r], k); char b[12];
 			text(6, y + 3, DV_NAMES[k], 1, RGB3(TH->txt));
@@ -8178,6 +8184,16 @@ static int dgEdTouch(int x, int y, int press) {   // 1 = redraw
 		else return 0;
 		gDrumSaveDue = 1; return 1;
 	}
+	return 0;
+}
+// CIRCLE PAD in the editors: a cursor on the piano roll and the drum grid (A puts / takes a note or hit, hold A opens
+// its step editor, B on the drum grid opens the row's SOUND), and in the step editors up / down picks a setting and
+// left / right changes it (B closes). The cursor shows for a few seconds after the pad moves; then A is CHORD again.
+static int stickStep(float j, float* acc, int* held, float dt) {   // a pushed pad: one step, a pause, then faster the further it's pushed
+	float a = fabsf(j); if (a < 0.3f) { *held = 0; *acc = 0; return 0; }
+	int d = j > 0 ? 1 : -1;
+	if (!*held) { *held = 1; *acc = -0.3f; return d; }
+	*acc += dt * (5 + 20 * (a - 0.3f) / 0.7f); if (*acc >= 1) { *acc -= 1; return d; }
 	return 0;
 }
 static int dgEdRelease(void) {   // let go: a SOUND slider rebuilds the kit (baked settings) and plays the drum
@@ -9357,6 +9373,62 @@ int main(void) {
 		}
 		if (startAct == 3) { helpOn = 1; gHelpSlide = 0; topDirty = botDirty = 1; }
 		if (startAct == 5) { learnArm(page, sel[page]); topDirty = 1; }
+		{   // CIRCLE PAD in the editors (see curShown)
+			int mode = 0;
+			if (gDrumOnB && !gPads) mode = gDgEd ? 3 : 2;
+			else if (page == 7 && gGridOn && !gPatView && !gPads) mode = gStepEd >= 0 ? 1 : 4;
+			if (kHeld & KEY_SELECT) mode = 0;   // SELECT held: the pad is the QUICK ring
+			gEdStick = mode != 0;
+			static float ax = 0, ay = 0; static int hx = 0, hy = 0; static u64 aT = 0; static int aHeld = 0, aDone = 0;
+			if (mode) {
+				circlePosition cp; hidCircleRead(&cp); float jx = cp.dx / 150.0f, jy = cp.dy / 150.0f;
+				int ex = stickStep(jx, &ax, &hx, dt), ey = stickStep(jy, &ay, &hy, dt);   // ey: + = up
+				if (ex || ey) { if (!curShown()) { ex = ey = 0; } gCurT = osGetTime(); botDirty = 1; }   // the first push only shows the cursor
+				int aDown = (kDown & KEY_A) != 0, aUp = aHeld && !(kHeld & KEY_A);
+				if (mode == 4) {   // piano roll: move, A = note, hold A = its step editor
+					if (ex) gRcS = (gRcS + ex + NSTEP) % NSTEP;
+					if (ey) { if (gVoiceMode >= 3) { int r = rollRow(gRcN) + ey; if (r < 0) r = 0; if (r > 9) r = 9; gRcN = rollNote(r); }
+						else { gRcN += ey; if (gRcN < gRollLow) gRollLow = gRcN; if (gRcN >= gRollLow + ROLL_ROWS) gRollLow = gRcN - ROLL_ROWS + 1; } audition(gRcN); }
+					if (rollRow(gRcN) < 0) gRcN = gVoiceMode >= 3 ? rollNote(0) : gRollLow + 5;
+				} else if (mode == 2) {   // drum grid
+					if (ex) gDcI = (gDcI + ex + 16) % 16;
+					if (ey) { gDcR -= ey; if (gDcR < 0) gDcR = 0; if (gDcR > DG_ROWS - 1) gDcR = DG_ROWS - 1; gDgSel = gDcR; if (gCsndOK && gDrumBuilt == gKit) { if (gDrumCh[0] < 0) drumPickChannels(); drumHit(gDcR, 0.7f); csndExecCmds(false); } }
+					if ((kDown & KEY_B) && curShown()) { kDown &= ~KEY_B; gDgEd = 2; gDgEdR = gDcR; gDgSelF = 0; gCurT = osGetTime(); botDirty = 1; }
+				} else if (mode == 1) {   // piano roll step editor: up / down = setting, left / right = value, B = done
+					if (ey) { int idx = 0, n = 0; for (int k = 0; k < 8; k++) if (SE_PAGE[gSeTab][k] >= 0) { if (SE_PAGE[gSeTab][k] == gSeSel) idx = n; n++; }
+						idx = (idx - ey + n) % n; for (int k = 0, m = 0; k < 8; k++) if (SE_PAGE[gSeTab][k] >= 0) { if (m == idx) gSeSel = SE_PAGE[gSeTab][k]; m++; } }
+					if (ex) seSet(gSeSel, seGet(gSeSel) + ex);
+					if (kDown & KEY_B) { kDown &= ~KEY_B; gStepEd = -1; botDirty = 1; }
+				} else {   // drum step / SOUND editor
+					int nf = gDgEd == 1 ? 3 : 10, r = gDgEdR;
+					if (ey) gDgSelF = (gDgSelF % nf - ey + nf) % nf;
+					if (ex) {
+						static int marked = 0; if (!marked || !curShown()) { drumGridMark(); marked = 1; }
+						if (gDgEd == 1) { int i = gDgEdI; u8* vp = r < 3 ? &gMyDrum[r][i] : &gDrumX[r - 3][i];
+							if (gDgSelF == 0) { int v = *vp + ex * 12; *vp = (u8)(v < 8 ? 8 : v > 255 ? 255 : v); }
+							else if (gDgSelF == 1) { int v = gDrRat[r][i] + ex; gDrRat[r][i] = (u8)(v < 0 ? 0 : v > 3 ? 3 : v); }
+							else gDrCond[r][i] = (u8)((gDrCond[r][i] + NCOND + ex) % NCOND); }
+						else if (gDgSelF < 8) { int k = gDgSelF, st = (DV_MAX[k] - DV_MIN[k]) / 48; if (st < 1) st = 1; dvSet(&gDV[r], k, dvGet(&gDV[r], k) + ex * st);
+							if (k != 0 && k != 6 && k != 7) gDvRebuildT = osGetTime() + 350; else gDvPlay = r + 1; }
+						else if (gDgSelF == 8) gDrRate[r] = (u8)((gDrRate[r] + NDRATE + ex) % NDRATE);
+						else { int v = gDrLen[r] + ex; gDrLen[r] = (u8)(v < 1 ? 1 : v > 16 ? 16 : v); }
+						gDrumSaveDue = 1;
+					}
+					if (kDown & KEY_B) { kDown &= ~KEY_B; gDgEd = 0; botDirty = 1; }
+				}
+				if (gDvRebuildT && osGetTime() > gDvRebuildT && !hx) { gDvRebuildT = 0; gDrumWant = gKit + 100; gDvPlay = gDgEdR + 1; }   // SOUND: rebuild once the pad lets go
+				if ((mode == 4 || mode == 2) && curShown()) {   // A: tap = note / hit, hold = its editor
+					if (aDown) { kDown &= ~KEY_A; aHeld = 1; aDone = 0; aT = osGetTime(); }
+					else if (aHeld && (kHeld & KEY_A)) { kDown &= ~KEY_A;
+						if (!aDone && osGetTime() - aT > 450) { aDone = 1; gCurT = osGetTime(); botDirty = 1;
+							if (mode == 4) { undoMark(); if (noteCover(gRcS, gRcN, NULL) < 0 && gSeq[gRcS].n < 4) stepSetNote(gRcS, gRcN, 1); gStepEd = gRcS; gStepEdRow = gRcN; gSeDrag = -1; gSeSel = SE_PAGE[gSeTab][0]; }
+							else { drumGridMark(); if (!drumCellOn(gDcR, gDcI)) drumCellSet(gDcR, gDcI, 1); gDgEd = 1; gDgEdR = gDcR; gDgEdI = gDcI; gDgSelF = 0; } } }
+					if (aUp) { aHeld = 0; if (!aDone) { gCurT = osGetTime(); botDirty = 1;
+						if (mode == 4) { undoMark(); int h = noteCover(gRcS, gRcN, NULL); if (h >= 0) stepSetNote(h, gRcN, 0); else if (gSeq[gRcS].n < 4) { stepSetNote(gRcS, gRcN, 1); audition(gRcN); } }
+						else { drumGridMark(); drumCellSet(gDcR, gDcI, !drumCellOn(gDcR, gDcI)); if (drumCellOn(gDcR, gDcI) && gCsndOK && gDrumBuilt == gKit) { drumHit(gDcR, 0.85f); csndExecCmds(false); } } } }
+				} else aHeld = 0;
+			}
+		}
 		if (kDown & KEY_X) { page = navStep(page, 1); topDirty = 1; }
 		if (kDown & KEY_Y) { page = navStep(page, -1); topDirty = 1; }
 		if (kDown & KEY_A) { if (page == 0) browseSave(); else gChord = (gChord + 1) % 5; topDirty = 1; }
@@ -9492,6 +9564,7 @@ int main(void) {
 		sx += (rx - sx) * k; sy += (ry - sy) * k;
 		if (fabsf(sx) < 0.001f) sx = 0;
 		if (fabsf(sy) < 0.001f) sy = 0;
+		if (gEdStick) { sx = 0; sy = 0; }   // an editor has the circle pad
 		float cx = sx;
 		gStick = sy;
 		int stickRouted = 0; for (int m = 0; m < NMOD; m++) if (gMod[m].src == SRC_STICK && gMod[m].amt != 0) stickRouted = 1;

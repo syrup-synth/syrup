@@ -54,5 +54,34 @@ static void SCRIPT(int fr) {
 		beatPaste(24); if (gDrLen[2] != 12 || gDrRate[2] != 3) fail("SLOW ROCK: 12 steps at 3/4 (%d %d)", gDrLen[2], gDrRate[2]);
 		beatPaste(14); if (gDrLen[0] != 16 || gDrRate[0] || !gMyDrum[2][2]) fail("CUMBIA: 16 steps, the guacharaca on the hat");
 		histStep(1); if (gDrRate[2] != 3) fail("undo should bring back SLOW ROCK's rate"); }
+	// CIRCLE PAD: a cursor on the grid (the first push only shows it), A = hit, hold A = the step editor, the pad edits it, B closes
+	if (fr >= 1955) { CX = 0; CY = 0; }
+	if (fr == 1956) { gCurT = 0; gDcR = 0; gDcI = 0; }
+	if (fr >= 1960 && fr < 1964) CX = 150;
+	if (fr >= 1968 && fr < 1970) CX = 150;
+	if (fr == 1972) { if (gDcI != 1 || gDcR != 0) fail("PAD: one push right should move the cursor to step 2 (%d,%d)", gDcR, gDcI); gMyDrum[0][1] = 0; }
+	if (fr == 1974 || fr == 1975) HD |= KEY_A;
+	if (fr == 1978 && !gMyDrum[0][1]) fail("PAD: A should put a kick at the cursor");
+	if (fr >= 1980 && fr < 2012) HD |= KEY_A;
+	if (fr == 2013) { if (gDgEd != 1 || gDgEdI != 1) fail("PAD: holding A should open the step's editor (%d)", gDgEd); if (!gMyDrum[0][1]) fail("PAD: holding A shouldn't take the hit away"); }
+	if (fr >= 2014 && fr < 2016) CY = -150;
+	if (fr >= 2020 && fr < 2022) CX = 150;
+	if (fr == 2025) { if (gDgSelF != 1) fail("PAD: down should pick RATCHET (%d)", gDgSelF); if (gDrRat[0][1] != 1) fail("PAD: right should add a ratchet (%d)", gDrRat[0][1]); }
+	if (fr == 2026 || fr == 2027) HD |= KEY_B;
+	if (fr == 2029 && gDgEd) fail("PAD: B should close the editor");
+	// and on the piano roll
+	if (fr >= 2032 && fr < 2036) { HD |= KEY_SELECT; CX = -138; CY = -57; }   // QUICK: SEQ (between DRUMS and TAPE)
+	if (fr >= 2040 && fr < 2042) CX = 150;   // shows the cursor
+	if (fr == 2038) gCurT = 0;
+	if (fr >= 2038 && fr < 2040) {}
+	if (fr == 2044) { gSeq[gRcS].n = 0; }
+	if (fr == 2046 || fr == 2047) HD |= KEY_A;
+	if (fr == 2050 && noteCover(gRcS, gRcN, NULL) < 0) fail("PAD: A should put a note at the piano roll cursor (step %d note %d)", gRcS, gRcN);
+	if (fr >= 2052 && fr < 2084) HD |= KEY_A;
+	if (fr == 2085 && gStepEd != gRcS) fail("PAD: holding A should open the note's step editor (%d)", gStepEd);
+	if (fr >= 2086 && fr < 2088) CX = 150;
+	if (fr == 2090) { int k = gSeSel; (void)k; }
+	if (fr == 2092 || fr == 2093) HD |= KEY_B;
+	if (fr == 2095 && gStepEd >= 0) fail("PAD: B should close the step editor");
 }
-int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 1960; app_main(); printf("drum2: ratchets, conditions, row rate / length, sound editor, holds, beats\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 2100; app_main(); printf("drum2: ratchets, conditions, row rate / length, sound editor, holds, beats\n"); return gFails ? 1 : 0; }
