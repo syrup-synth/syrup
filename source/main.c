@@ -681,12 +681,33 @@ static u8 gWbPend[NCH];   // a voice layer waiting to start with its first volum
 // its next 5 ms frame. On a sine (G-FUNK SINE, EP SATURDAY) each 16 ms step was a click, worst on note changes.
 // The main loop now sets targets and the audio tick walks every channel there over ~3 DSP frames.
 static float gMixTgt[NCH][12], gMixCur[NCH][12]; static u8 gMixLive[NCH];
+// TRANCE GATE: the voices chopped in time with the clock by a 16-step on / off pattern. Each lit step opens
+// for its first 60%; DEPTH is how far it closes (100% = silence between). Runs in the audio tick with the ramps.
+#define NGATE 8
+static int gGatePat = 0, gGateRate = 0; static float gGateDepth = 1.0f, gGateG = 1.0f, gGatePh = 0;
+static const char* GATE_NAMES[NGATE] = {"OFF", "16THS", "8THS", "OFFBEAT", "TRANCE 1", "TRANCE 2", "HALF", "STUTTER"};
+static const char* GRATE_NAMES[3] = {"1/16", "1/8", "1/32"};
+static const u16 GATEP[NGATE] = {0, 0xFFFF, 0xAAAA, 0x5555, 0xB6DB, 0xEEEE, 0xF0F0, 0xFAB5};
+static int seqStepNow(void);   // the sequencer's step while it plays, else -1 (defined with the sequencer)
+static void gateTick(float dt, int seqStep) {   // audio tick, every 5 ms piece
+	static int lastSeq = -1;
+	if (!gGatePat) { gGateG = 1; return; }
+	float r = gGateRate == 1 ? 0.5f : gGateRate == 2 ? 2.0f : 1.0f;
+	gGatePh += dt * gBPM / 60.0f * 4.0f * r;
+	if (seqStep >= 0 && seqStep != lastSeq && gGateRate == 0) gGatePh = (float)seqStep;   // lock to the sequencer's steps
+	lastSeq = seqStep;
+	if (gGatePh >= 16) gGatePh -= 16 * floorf(gGatePh / 16);
+	int st = (int)gGatePh; float fr = gGatePh - st;
+	int open = (GATEP[gGatePat] & (0x8000 >> st)) && fr < 0.6f;
+	float tgt = open ? 1.0f : 1.0f - gGateDepth;
+	gGateG += (tgt - gGateG) * 0.5f;   // ~10 ms edges: a chop, not a click
+}
 static void mixRampTick(void) {   // audio tick, voice lock held
-	static float lastG = -1; int gch = gAutoGain != lastG; lastG = gAutoGain;
+	static float lastG = -1, lastGate = 1; float g = gAutoGain * gGateG; int gch = g != lastG; lastG = g; (void)lastGate;
 	for (int c = 0; c < NCH; c++) if (gMixLive[c]) {
 		int moved = gch;
 		for (int k = 0; k < 12; k++) { float d = gMixTgt[c][k] - gMixCur[c][k]; if (d > 1e-5f || d < -1e-5f) { gMixCur[c][k] += fabsf(d) < 0.002f ? d : d * (d > 0 ? 0.5f : 0.75f); /* up a little slower than down: no added sustain */ moved = 1; } }
-		if (moved) { float m[12]; for (int k = 0; k < 12; k++) m[k] = gMixCur[c][k] * gAutoGain; ndspChnSetMix(c, m); }
+		if (moved) { float m[12]; for (int k = 0; k < 12; k++) m[k] = gMixCur[c][k] * g; ndspChnSetMix(c, m); }
 	}
 }
 static void stopCh(int bk, int ch) {
@@ -2009,6 +2030,7 @@ static void audioTick(void* data) {
 		seqTick(d);
 		drumTick(d);
 		shakeQTick();
+		gateTick(d, seqStepNow());
 	}
 	mixRampTick();
 	gInAudioTick = 0; gTickNoMips = 0;
@@ -2203,6 +2225,7 @@ static void seqAdvance(void) {   // to the next step; at the end of the pattern 
 		else if (gPatNext >= 0) { patSwitch(gPatNext); gPatNext = -1; }
 	}
 }
+static int seqStepNow(void) { return gSeqPlaying ? gSeqPos : -1; }
 static void seqTick(float dt) {
 	if (gSeqMode != 1) { if (gSeqPlaying) seqStop(); return; }
 	if (!gSeqPlaying) {
@@ -2277,8 +2300,11 @@ typedef struct {
 	int thru, xyMode, tapeKeys; float thruCut, thruRes, thruEnv, thruLfo, echoWow;
 	u8 fxOrder[8];   // v13: master FX chain order (first 5 used)
 	int arpStrumDir; float arpStrum;   // v14: ARP STRUM
+	int gatePat, gateRate; float gateDepth;   // v15: TRANCE GATE
 } SPatch;
-#define PATCH_MAGIC 0x5359523E   // "SYR>" (v14)
+#define PATCH_MAGIC 0x5359523F   // "SYR?" (v15)
+#define PATCH_MAGIC14 0x5359523E // v14 (no trance gate)
+#define PATCH_V14_SIZE offsetof(SPatch, gatePat)
 #define PATCH_MAGIC13 0x5359523D // v13 (no arp strum)
 #define PATCH_V13_SIZE offsetof(SPatch, arpStrumDir)
 #define PATCH_MAGIC12 0x5359523C // v12 (fixed FX order)
@@ -2327,7 +2353,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->mod[3] = (ModSlot){SRC_OFF, DST_PITCH, 0.0f};
 	p->bendRange = 2; p->chorus = 0.2f; p->revSize = 0.5f; p->revDamp = 0.5f; p->fxMix = 0.5f;
 	p->driveAmt = 0.4f; p->master = 0.8f; p->echoT = 1;
-	p->arp = 0; p->arpRate = 3; p->arpOct = 1; p->arpGate = 0.5f; p->bpm = 0; p->arpStrum = 0; p->arpStrumDir = 0;
+	p->arp = 0; p->arpRate = 3; p->arpOct = 1; p->arpGate = 0.5f; p->bpm = 0; p->arpStrum = 0; p->arpStrumDir = 0; p->gatePat = 0; p->gateRate = 0; p->gateDepth = 1.0f;
 	for (int i = 0; i < 2; i++) { p->lfoSync[i] = 0; p->lfoTable[i] = T_HARMONIX; p->lfoPos[i] = 0.5f; }
 	for (int i = 0; i < 4; i++) { p->mod2[i] = (ModSlot){SRC_OFF, DST_PITCH, 0}; p->macro[i] = 0; }
 	for (int i = 0; i < 8; i++) p->modCurve[i] = 0;
@@ -2561,7 +2587,7 @@ static void q_berlin(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos 
 static void q_acidcircle(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.oct = -1; ARP(3, 3, 2, 0.6f); p->voiceMode = 0; ENV1(0.002f, 0, 0.2f, 0.4f, 0.08f);
 	ENV2(0.0f, 0, 0.18f, 0, 0.1f); OUTF(OF_ACID, 0.25f, 0.8f, 0.5f, 0.5f); lane(p, 0, 5, 2, 0.55f, 0.92f, 2); lane(p, 1, 4, 3, 0.15f, 0.45f, 1); DLYS(0.2f, S8D, DL_DUB); }
 static void q_gate(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 5; OA.detune = 20; ENV1(0.01f, 0, 1.0f, 1.0f, 0.4f); dshape(p, 0, 3, NULL); p->dlSync[0] = LY_16;
-	MOD(2, SRC_LFO3, DST_AMP, 0.5f); MOD(3, SRC_OFF, DST_AMP, 0); OUTF(OF_L12, 0.55f, 0.2f, 0, 0); REVB(0.25f, RV_HALL); DLYS(0.15f, S8D, DL_PING); }
+	OUTF(OF_L12, 0.55f, 0.2f, 0, 0); REVB(0.25f, RV_HALL); DLYS(0.15f, S8D, DL_PING); p->gatePat = 4; p->gateDepth = 0.9f; }   // the real TRANCE GATE now
 static void q_pingarp(SPatch* p) { p->master = 0.55f; OA.table = T_HARMONIX; OA.pos = 0.5f; ARP(3, 1, 2, 0.4f); ENV1(0.001f, 0, 0.3f, 0.0f, 0.2f); DLYS(0.3f, S8D, DL_PING); REVB(0.2f, RV_PLATE); }
 static void q_chaosarp(SPatch* p) { p->master = 0.55f; OA.table = T_DIGITAL; ARP(4, 3, 2, 0.5f); ENV1(0.001f, 0, 0.25f, 0.2f, 0.1f); MOD(2, SRC_CHAOSX, DST_APOS, 0.7f); MOD(3, SRC_CHAOSY, DST_OFCUT, 0.4f);
 	OUTF(OF_L12, 0.5f, 0.45f, 0.2f, 0); DLYS(0.2f, S16, DL_DIGI); }
@@ -2960,12 +2986,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER) || len == (long)(PATCH_V11_SIZE * NUSER) || len == (long)(PATCH_V12_SIZE * NUSER) || len == (long)(PATCH_V13_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER) || len == (long)(PATCH_V11_SIZE * NUSER) || len == (long)(PATCH_V12_SIZE * NUSER) || len == (long)(PATCH_V13_SIZE * NUSER) || len == (long)(PATCH_V14_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10 || t.magic == PATCH_MAGIC11 || t.magic == PATCH_MAGIC12 || t.magic == PATCH_MAGIC13)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10 || t.magic == PATCH_MAGIC11 || t.magic == PATCH_MAGIC12 || t.magic == PATCH_MAGIC13 || t.magic == PATCH_MAGIC14)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -3009,7 +3035,7 @@ static void patchCapture(SPatch* p) {
 	memcpy(p->mot, gMot, sizeof(gMot)); memcpy(p->motTgt, gMotTgt, sizeof(gMotTgt)); memcpy(p->motOn, gMotOn, sizeof(gMotOn)); p->motBars = gMotBars;
 	p->voiceMode = gVoiceMode; p->chord = gChord; p->fx = gFx; p->echoT = gEchoT; p->drive = gDrive; p->bendRange = gBendRange;
 	p->glide = gGlide; p->chorus = gChorus; p->revSize = gRevSize; p->revDamp = gRevDamp; p->fxMix = gFxMix; p->driveAmt = gDriveAmt; p->master = gMaster;
-	p->arp = gArp; p->arpRate = gArpRate; p->arpOct = gArpOct; p->arpGate = gArpGate; p->bpm = gBPM; p->arpStrum = gArpStrum; p->arpStrumDir = gArpStrumDir;
+	p->arp = gArp; p->arpRate = gArpRate; p->arpOct = gArpOct; p->arpGate = gArpGate; p->bpm = gBPM; p->arpStrum = gArpStrum; p->arpStrumDir = gArpStrumDir; p->gatePat = gGatePat; p->gateRate = gGateRate; p->gateDepth = gGateDepth;
 }
 
 static int gForceBuild = 3;
@@ -3060,6 +3086,7 @@ static void patchApply(const SPatch* p) {
 	memcpy(gMot, p->mot, sizeof(gMot)); for (int l = 0; l < 4; l++) { gMotTgt[l] = p->motTgt[l] % 16; gMotOn[l] = p->motOn[l] & 1; } gMotBars = p->motBars & 3; gMotRec = -1; gMotPh = 0;
 	gVoiceMode = (p->voiceMode >= 0 && p->voiceMode < 9) ? p->voiceMode : 0; gChord = p->chord; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
+	gGatePat = p->gatePat >= 0 && p->gatePat < NGATE ? p->gatePat : 0; gGateRate = p->gateRate >= 0 && p->gateRate < 3 ? p->gateRate : 0; gGateDepth = p->gateDepth;
 	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate; gArpStrum = p->arpStrum; gArpStrumDir = p->arpStrumDir >= 0 && p->arpStrumDir < NSTRD ? p->arpStrumDir : 0;   // the tempo is yours: loading a patch never changes it
 	gArpN = 0; gArpOnN = 0; gHeldN = 0;
 	if (subChg) buildSub();
@@ -3253,6 +3280,7 @@ static const char* BEND_NAMES[13] = {"0", "1", "2", "3", "4", "5", "6", "7", "8"
 static Param P_VOICE[] = {
 	PE("MODE", &gVoiceMode, 9, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0),
 	PE("BEND RANGE", &gBendRange, 13, BEND_NAMES, 0), PE("CHORD", &gChord, 5, CHORD_NAMES, 0),
+	PE("GATE", &gGatePat, NGATE, GATE_NAMES, 0), PE("GATE RATE", &gGateRate, 3, GRATE_NAMES, 0), PF("GATE DEPTH", &gGateDepth, 0, 1, 0.05f, "%", 0),
 	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("GPU VISUALS", &gGpuFx, 2, ONOFF, 0), PE("FX", &gFx, 4, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
 	PF("ECHO FDBK", &gEchoFb, 0, 0.9f, 0.03f, "%", 0), PE("OUTPUT", &gOutMode, 4, OUT_NAMES, D_OUT), PE("SURROUND", &gSurDepth, 4, DEPTH_NAMES, D_OUT),
 	{"TILT CENTER", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_TILT},
@@ -3762,7 +3790,7 @@ static const char* paramHelp(const char* n) {
 		{"3 SOURCE", "MOD SLOT 3: WHAT MOVES IT"}, {"3 DEST", "MOD SLOT 3: WHAT IT MOVES"}, {"3 AMOUNT", "MOD SLOT 3: HOW MUCH"},
 		{"4 SOURCE", "MOD SLOT 4: WHAT MOVES IT"}, {"4 DEST", "MOD SLOT 4: WHAT IT MOVES"}, {"4 AMOUNT", "MOD SLOT 4: HOW MUCH"},
 		{"MODE", "POLY, MONO OR LEGATO"}, {"GLIDE", "SLIDE TIME BETWEEN NOTES"}, {"BEND RANGE", "CIRCLE PAD BEND IN SEMITONES"},
-		{"CHORD", "CHORD PLAYED BY ONE KEY (ALSO A)"}, {"CHORUS", "STEREO CHORUS AMOUNT"}, {"GPU VISUALS", "GRAPHICS CHIP VISUALS ON THE LEFT"},
+		{"CHORD", "CHORD PLAYED BY ONE KEY (ALSO A)"}, {"GATE", "TRANCE GATE: CHOPS THE SOUND TO THE BEAT"}, {"GATE RATE", "STEP LENGTH OF THE GATE PATTERN"}, {"GATE DEPTH", "HOW FAR THE GATE CLOSES"}, {"CHORUS", "STEREO CHORUS AMOUNT"}, {"GPU VISUALS", "GRAPHICS CHIP VISUALS ON THE LEFT"},
 		{"FX", "ECHO, SPACE OR REVERB"}, {"ECHO TIME", "DELAY TIME"}, {"ECHO FDBK", "NUMBER OF REPEATS"}, {"OUTPUT", "STEREO OR VIRTUAL SURROUND"},
 		{"SURROUND", "SURROUND DEPTH"}, {"TILT CENTER", "PRESS > TO RE-CENTRE THE TILT"}, {"REV SIZE", "REVERB ROOM SIZE"},
 		{"REV DAMP", "DARKER REVERB TAIL"}, {"FX MIX", "HOW MUCH EFFECT"}, {"DRIVE", "DISTORTION TYPE"}, {"DRIVE AMT", "HOW MUCH DISTORTION"},
