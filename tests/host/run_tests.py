@@ -17,7 +17,7 @@ for t in ('test_patch', 'test_buzz', 'test_timing', 'test_ui', 'test_kit', 'test
     r = sh(['gcc', '-O1', '-w', '-I', os.path.join(ROOT, 'source'), t + '.c', '-o', t, '-lm', '-lpthread', '-lcurl'])
     if r.returncode: print(r.stderr[-3000:]); sys.exit('build failed: ' + t)
 def run(name, args, timeout=120):
-    for f in ('seq.bin', 'settings.bin', 'mydrums.bin'):   # every test starts from defaults: first page, default pattern, empty MINE
+    for f in ('seq.bin', 'settings.bin', 'mydrums.bin', 'last.bin'):   # every test starts from defaults: first page, default pattern, empty MINE
         try: os.remove(os.path.join(BUILD, 'sd', f))
         except OSError: pass
     try: r = sh(['./' + name] + args, timeout=timeout)
@@ -50,11 +50,13 @@ if os.path.exists(BASE):
         p = l.split(None, 2)
         if len(p) == 3: base[p[2].strip()] = float(p[1])   # key: 'style/index NAME'
 rows = []
-for f in ('seq.bin', 'settings.bin'):
+for f in ('seq.bin', 'settings.bin', 'last.bin'):
     try: os.remove(os.path.join(BUILD, 'sd', f))
     except OSError: pass
 for st in range(32):
     for ix in range(16):
+        try: os.remove(os.path.join(BUILD, 'sd', 'last.bin'))
+        except OSError: pass
         r = sh(['./test_patch', str(st), str(ix)], timeout=60)
         if r.returncode == 3: continue
         if r.returncode:

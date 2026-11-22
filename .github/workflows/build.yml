@@ -15,6 +15,11 @@ jobs:
     container: devkitpro/devkitarm:latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the build number is the commit count
+
+      - name: Trust the checkout (git in the container)
+        run: git config --global --add safe.directory '*'
 
       - name: Install CIA tools (bannertool, makerom)
         run: |
@@ -40,7 +45,7 @@ jobs:
           makerom -f cia -target t -o syrup.cia -elf syrup.elf -rsf app/syrup.rsf -banner build/banner.bin -icon build/icon.bin
 
       - name: Version stamp (read by the in-app updater)
-        run: echo "$GITHUB_SHA" | cut -c1-7 > version.txt
+        run: echo "$(git rev-list --count HEAD) $(echo $GITHUB_SHA | cut -c1-7)" > version.txt
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

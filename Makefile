@@ -54,7 +54,8 @@ CFLAGS	:=	-g -Wall -O3 -ffast-math -mword-relocations \
 			$(ARCH)
 
 SYRUP_VER := $(shell echo $${GITHUB_SHA:-dev} | cut -c1-7)
-CFLAGS	+=	$(INCLUDE) -D__3DS__ -DSYRUP_VER=\"$(SYRUP_VER)\"
+SYRUP_BUILD := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
+CFLAGS	+=	$(INCLUDE) -D__3DS__ -DSYRUP_VER=\"$(SYRUP_VER)\" -DSYRUP_BUILD=$(SYRUP_BUILD)
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 

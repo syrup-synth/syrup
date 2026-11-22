@@ -27,6 +27,12 @@
 #ifndef SYRUP_VER
 #define SYRUP_VER "dev"
 #endif
+#ifndef SYRUP_BUILD
+#define SYRUP_BUILD 0   // the build number: how many commits the source has (CI sets it)
+#endif
+#define STR2(x) #x
+#define STR1(x) STR2(x)
+#define BUILD_STR STR1(SYRUP_BUILD)
 #include <malloc.h>
 #include <math.h>
 #include <ctype.h>
@@ -109,7 +115,9 @@ static int gVisTrails = 0, gVisParts = 1, gVisBurst = 0;
 #define NTHEMES 16
 static const char* THEME_NAMES[NTHEMES] = {"ORIGINAL", "PIP GREEN", "DOS BLUE", "AMBER EGA", "MAGENTA", "STICKER", "IMPULSE",
 	"CYBER", "SOLARIZED", "GB POCKET", "VAPORWAVE", "CGA", "SINCLAIR", "X11", "NORD", "ACID"};
-static int gTheme = 0, gScan = 0;   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
+static int gTheme = 0, gScan = 0, gBright = 0;   // gBright: screen brightness 1..5, 0 = leave the system setting
+static const char* BRIGHT_NAMES[6] = {"SYSTEM", "1 DIM", "2", "3", "4", "5 BRIGHT"};
+   // graphics-chip visuals (see visFrame); off by default while being tested on hardware
 static int gInAudioTick = 0;
 // crash guard: a marker file holds the last milestone reached; it is removed on a clean exit.
 // If it is still there at launch, the last run crashed -> SAFE MODE (new hardware features off).
@@ -2109,7 +2117,10 @@ static void seqSnap(void) {   // copy what gets saved (hold the voice lock: the 
 	patStore(); memcpy(gSnapPat, gPat, sizeof(gPat)); memcpy(gSnapSong, gSong, sizeof(gSong));
 	gSnapHdr[0] = gPatCur; gSnapHdr[1] = gSongLen; gSnapHdr[2] = gSongOn; gSnapHdr[3] = (int)sizeof(SeqPat);
 }
-static void seqWriteSnap(void) {   // the slow part, done without the lock
+static void seqWriteSnap(void) {   // the slow part, done without the lock; skipped when nothing changed since the last write
+	static SeqPat prevPat[NPAT]; static u8 prevSong[NSONG]; static int prevHdr[4], have = 0;
+	if (have && !memcmp(prevPat, gSnapPat, sizeof(prevPat)) && !memcmp(prevSong, gSnapSong, sizeof(prevSong)) && !memcmp(prevHdr, gSnapHdr, sizeof(prevHdr))) return;
+	memcpy(prevPat, gSnapPat, sizeof(prevPat)); memcpy(prevSong, gSnapSong, sizeof(prevSong)); memcpy(prevHdr, gSnapHdr, sizeof(prevHdr)); have = 1;
 	FILE* f = safeOpen(SEQ_PATH); if (!f) return;
 	u32 m = SEQ_MAGIC; int ok = fwrite(&m, 4, 1, f) == 1 && fwrite(gSnapHdr, sizeof(gSnapHdr), 1, f) == 1 && fwrite(gSnapPat, sizeof(gSnapPat), 1, f) == 1 && fwrite(gSnapSong, sizeof(gSnapSong), 1, f) == 1;
 	safeClose(f, SEQ_PATH, ok);
@@ -3152,6 +3163,30 @@ static void presetLoad(int style, int idx) {
 	if (style == STYLE_SPACE && gOutMode == 0) { gOutMode = 1; outputApply(); say("3D PATCH: OUTPUT SET TO SURROUND (HEADPHONES BEST)"); }
 	else if (gPackMissing) say("GET WAVETABLES (HW PAGE) FOR THE FULL SOUND");
 }
+// AUTOSAVE: the sound you were playing (edits included) comes back next time, even after a power-off.
+// last.bin = magic, style, preset, edited, the patch. Written every few seconds when it changed, and on exit.
+static const char* LAST_PATH = "sdmc:/3ds/syrup/last.bin";
+#define LAST_MAGIC 0x53594C31   // "SYL1"
+static SPatch gLastPatch; static int gLastHdr[4];
+static int lastSnap(void) {   // 1 = something changed since the last write
+	static SPatch p; patchCapture(&p);
+	int h[4] = {LAST_MAGIC, gStyleCur, gPresetCur, gEdited};
+	if (!memcmp(&p, &gLastPatch, sizeof(p)) && !memcmp(h, gLastHdr, sizeof(h))) return 0;
+	gLastPatch = p; memcpy(gLastHdr, h, sizeof(h)); return 1;
+}
+static void lastWrite(void) {
+	FILE* f = safeOpen(LAST_PATH); if (!f) return;
+	safeClose(f, LAST_PATH, fwrite(gLastHdr, sizeof(gLastHdr), 1, f) == 1 && fwrite(&gLastPatch, sizeof(gLastPatch), 1, f) == 1);
+}
+static int lastLoad(void) {
+	FILE* f = safeRead(LAST_PATH); if (!f) return 0;
+	int h[4] = {0}; static SPatch p; int ok = fread(h, sizeof(h), 1, f) == 1 && h[0] == LAST_MAGIC && fread(&p, sizeof(p), 1, f) == 1 && p.magic == PATCH_MAGIC;
+	fclose(f); if (!ok) return 0;
+	if (h[1] >= 0 && h[1] < NSTYLES) { gStyle = gStyleCur = h[1]; gPreset = gPresetCur = h[2] >= 0 ? h[2] : 0; }
+	patchApply(&p); gEdited = h[3] ? 1 : 0; gGuard = 0;
+	gLastPatch = p; memcpy(gLastHdr, h, sizeof(h));
+	return 1;
+}
 static const char* presetName(int style, int idx) { return style == NSTYLES - 1 ? gUser[idx].name : PRESETS[style][idx].name; }
 // ---- preset browser (PATCH page): < > style, ^ v patch, A saves to a USER slot
 // USER lists the 8 slots plus INIT PATCH; an empty slot keeps the current sound so you can save into it.
@@ -3323,7 +3358,7 @@ static Param P_PLAY[] = {
 static Param P_VIS[] = {
 	PE("VIS MODE", &gVisMode, NVISM, VISM_NAMES, 0), PE("VIS OSC", &gVisOsc, 2, AB_NAMES, 0), PE("OVERLAY", &gVisOverlay, 2, ONOFF, 0),
 	PE("TRAILS", &gVisTrails, 2, ONOFF, 0), PE("PARTICLES", &gVisParts, 2, ONOFF, 0),
-	PE("THEME", &gTheme, NTHEMES, THEME_NAMES, D_THEME), PE("SCANLINES", &gScan, 2, ONOFF, D_THEME),
+	PE("THEME", &gTheme, NTHEMES, THEME_NAMES, D_THEME), PE("SCANLINES", &gScan, 2, ONOFF, D_THEME), PE("BRIGHTNESS", &gBright, 6, BRIGHT_NAMES, D_THEME),
 	PEND};
 static const char* LOOP_NAMES_P[3] = {"OFF", "REC", "PLAY"};
 static const char* BARS_NAMES_P[5] = {"1 BAR", "2 BARS", "4 BARS", "8 BARS", "16 BARS"};
@@ -3473,7 +3508,7 @@ static void splashDraw(void) {
 	}
 	static const char* T = "WAVETABLE SYNTH";
 	text(200 - (int)strlen(T) * 4, y0 + SPLASH_H + 22, T, 1, 255, 255, 85);
-	text(200 - (int)strlen("V" SYRUP_VERSION) * 4, y0 + SPLASH_H + 36, "V" SYRUP_VERSION, 1, 170, 85, 0);
+	text(200 - (int)strlen("V" SYRUP_VERSION "  BUILD " BUILD_STR) * 4, y0 + SPLASH_H + 36, "V" SYRUP_VERSION "  BUILD " BUILD_STR, 1, 170, 85, 0);
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	memset(fb, 0, 320 * 240 * 3);
 	text(160 - 10 * 4, 112, "LOADING...", 1, 170, 85, 0);
@@ -3863,12 +3898,13 @@ static int paramDst(const void* p) {   // the matrix destination that moves this
 	return -1;
 }
 static const char* SET_PATH = "sdmc:/3ds/syrup/settings.bin";
-static void settingsSave(int page) { FILE* f = safeOpen(SET_PATH); if (!f) return; int d[4] = {0x53455432, page, gStickMode, gSpkEq}; safeClose(f, SET_PATH, fwrite(d, sizeof(d), 1, f) == 1); }
+static void settingsSave(int page) { FILE* f = safeOpen(SET_PATH); if (!f) return; int d[5] = {0x53455432, page, gStickMode, gSpkEq, gBright}; safeClose(f, SET_PATH, fwrite(d, sizeof(d), 1, f) == 1); }
 static int settingsLoad(void) {   // returns the page you were on last time
 	FILE* f = safeRead(SET_PATH); int d[4] = {0}, pg = 0; if (!f) return pg;   // first run: the browser
 	if (fread(d, sizeof(d), 1, f) == 1 && (d[0] == 0x53455431 || d[0] == 0x53455432)) {
 		if (d[1] >= 0 && d[1] < NPAGES && d[1] != 8) pg = d[1]; gSpkEq = d[3] >= 0 && d[3] < 3 ? d[3] : 2;
 		gStickMode = d[0] == 0x53455432 && d[2] >= 0 && d[2] < 4 ? d[2] : SM_DATA;   // older settings: the new default, DATA
+		int b = 0; if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 6) gBright = b;   // older settings: no brightness, SYSTEM
 	}
 	fclose(f); return pg;
 }
@@ -3976,7 +4012,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			if (cur) { rect(87, y - 2, 110, 11, HI); text(90, y, nm, 1, HITXT); }
 			else text(90, y, nm, 1, TXT);
 		}
-		char cnt[40]; snprintf(cnt, sizeof(cnt), "%d PATCHES%s", presetCount(gStyle), gEdited ? "  * EDITED" : "  BUILD " SYRUP_VER); text(10, 212, cnt, 1, gEdited ? VAL : DIM);
+		char cnt[40]; snprintf(cnt, sizeof(cnt), "%d PATCHES%s", presetCount(gStyle), gEdited ? "  * EDITED" : "  BUILD " BUILD_STR); text(10, 212, cnt, 1, gEdited ? VAL : DIM);
 	} else if (page == 7) {   // scale / arp / sequencer
 		char s[40];
 		frame(4, 30, 196, 194);
@@ -5676,13 +5712,18 @@ static void extrasBasicInit(void) {
 	}
 	HIDUSER_EnableGyroscope();
 }
-static void beatLightTick(float dt) {   // brightness jump on each arp / sequencer step, then back
+static u32 brTop(void) { return gBright ? (u32)gBright : gBrightTop; }   // gBrightTop / Bot: the system's own, put back on exit
+static u32 brBot(void) { return gBright ? (u32)gBright : gBrightBot; }
+static int gBrightSaveDue = 0;
+static void beatLightTick(float dt) {   // brightness jump on each arp / sequencer step, then back; BRIGHTNESS setting
 	if (!gLcdOK) return;
-	if (gLcdFlash && (gLightT -= dt) <= 0) { GSPLCD_SetBrightness(GSPLCD_SCREEN_TOP, gBrightTop); GSPLCD_SetBrightness(GSPLCD_SCREEN_BOTTOM, gBrightBot); gLcdFlash = 0; }
+	static int applied = 0;
+	if (gBright != applied && !gLcdFlash) { applied = gBright; GSPLCD_SetBrightness(GSPLCD_SCREEN_TOP, brTop()); GSPLCD_SetBrightness(GSPLCD_SCREEN_BOTTOM, brBot()); gBrightSaveDue = 1; }
+	if (gLcdFlash && (gLightT -= dt) <= 0) { GSPLCD_SetBrightness(GSPLCD_SCREEN_TOP, brTop()); GSPLCD_SetBrightness(GSPLCD_SCREEN_BOTTOM, brBot()); gLcdFlash = 0; }
 }
 static void beatLightPulse(void) {
 	if (!gLcdOK || !gBeatLight) return;
-	u32 t = gBrightTop <= 3 ? gBrightTop + 2 : gBrightTop - 2, b = gBrightBot <= 3 ? gBrightBot + 2 : gBrightBot - 2;
+	u32 bt = brTop(), bb = brBot(), t = bt <= 3 ? bt + 2 : bt - 2, b = bb <= 3 ? bb + 2 : bb - 2;
 	GSPLCD_SetBrightness(GSPLCD_SCREEN_TOP, t); GSPLCD_SetBrightness(GSPLCD_SCREEN_BOTTOM, b);
 	gLcdFlash = 1; gLightT = 0.07f;
 }
@@ -7447,8 +7488,10 @@ static void upMain(void* arg) {
 	MemBuf v = {0};
 	int ok = httpGet(REL_URL "version.txt", &v, 0);
 	if (ok && v.p) {
-		snprintf(gUpVer, sizeof(gUpVer), "%.7s", v.p);
-		if (!strncmp(gUpVer, SYRUP_VER, 7)) gUpState = 4;
+		// version.txt: "BUILD SHA" (older releases: just the SHA). A higher build number is newer.
+		int rb = 0; char rs[8] = ""; sscanf(v.p, "%d %7s", &rb, rs);
+		if (rb > 0) snprintf(gUpVer, sizeof(gUpVer), "BUILD %d", rb); else snprintf(gUpVer, sizeof(gUpVer), "%.7s", v.p);
+		if (rb > 0 ? rb <= SYRUP_BUILD : !strncmp(gUpVer, SYRUP_VER, 7)) gUpState = 4;
 		else {
 			gUpState = 2; gUpGot = gUpTotal = 0;
 			int hb = envIsHomebrew();   // .3dsx from the Homebrew Launcher: replace the file; installed CIA: download, then install it
@@ -7535,10 +7578,12 @@ static void netTabTick(void) {
 static void upCheckTook(void) {   // at start: did the last update actually load?
 	FILE* e = fopen(UP_EXPECT, "r"); if (!e) return;
 	char v[16] = ""; if (!fgets(v, sizeof(v), e)) v[0] = 0; fclose(e);
-	if (!strncmp(v, SYRUP_VER, 7)) { remove(UP_EXPECT); return; }   // it did
+	int eb = 0; if (sscanf(v, "BUILD %d", &eb) != 1) eb = 0;
+	if (eb ? eb <= SYRUP_BUILD : !strncmp(v, SYRUP_VER, 7)) { remove(UP_EXPECT); return; }   // it did
+	v[strcspn(v, "\r\n")] = 0;
 	static char m[60];
-	if (envIsHomebrew()) snprintf(m, sizeof(m), "UPDATE %.7s DIDN'T LOAD: OPEN SYRUP FROM HOME MENU?", v);
-	else snprintf(m, sizeof(m), "UPDATE %.7s DIDN'T LOAD: FBI > SD > cias > syrup.cia", v);
+	if (envIsHomebrew()) snprintf(m, sizeof(m), "UPDATE %.9s DIDN'T LOAD: OPEN SYRUP FROM HOME MENU?", v);
+	else snprintf(m, sizeof(m), "UPDATE %.9s DIDN'T LOAD: FBI > SD > cias > syrup.cia", v);
 	say(m); gMsgT = 20; remove(UP_EXPECT);
 }
 static void upStart(void) {
@@ -7599,7 +7644,7 @@ static void drawHardwarePanel(void) {
 		meter(10, 164, 96, gCamLight, 0, "LIGHT");
 		meter(10, 176, 96, gCamColor, 1, "COLOR");
 	} else text(10, 166, gCamOn ? "CAMERA STARTING" : "CAMERA OFF", 1, DIM);
-	text(10, 212, "SYRUP V" SYRUP_VERSION, 1, DIM);
+	text(10, 212, "SYRUP V" SYRUP_VERSION "  BUILD " BUILD_STR, 1, DIM);
 }
 
 // ================================================================ drums: synthesised kit on 3 CSND channels, pattern presets, tempo-locked
@@ -8951,6 +8996,7 @@ int main(void) {
 	seqDefault();
 	seqLoad();
 	presetLoad(gStyle, gPreset);   // start on PAD / SYRUP PAD
+	lastLoad();                    // ... or where you left off (AUTOSAVE)
 	LightEvent_Init(&gJobEv, RESET_ONESHOT);
 	gCore2Rc = APT_SetAppCpuTimeLimit(80);
 	if (R_FAILED(gCore2Rc)) gCore2Rc = APT_SetAppCpuTimeLimit(30);   // some systems refuse a high limit
@@ -9478,6 +9524,8 @@ int main(void) {
 		drumService();
 		if (gDrumSaveDue) { gDrumSaveDue = 0; myDrumSave(); }
 		if (gLearnSaveDue) { gLearnSaveDue = 0; learnSave(); }
+		{ static u64 at = 0; u64 tn = osGetTime(); if (tn - at > 5000) { at = tn; if (lastSnap()) lastWrite(); gSeqSaveDue = 1; } }   // AUTOSAVE: the sound and the sequences every 5 s
+		if (gBrightSaveDue) { gBrightSaveDue = 0; settingsSave(page); }
 		if (gSeqSaveDue) { gSeqSaveDue = 0; LightLock_Lock(&gVoiceLock); seqSnap(); LightLock_Unlock(&gVoiceLock); seqWriteSnap(); }
 		{ static int sk = 0; int now = skipRecent(); if (now != sk) { sk = now; topDirty = 1; } }
 
@@ -9591,6 +9639,7 @@ int main(void) {
 	if (!gSafeMode) { extrasExit(); sensorsExit(); }
 	myDrumSave();
 	seqSave();
+	lastSnap(); lastWrite();
 	settingsSave(page);
 	gpuExit();
 	remove(CRASH_PATH);   // clean exit
