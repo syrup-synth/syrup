@@ -38,7 +38,7 @@ Two LFOs with 13 shapes: sine, triangle, saw, square, S&H, steps, bounce, exp ri
 
 ## MASTER FX (FX tab)
 
-With MASTER FX on, every DSP voice goes through the effect bus to a chain that runs in the audio thread: LOFI (bits, rate) -> MOD FX (chorus, flanger, phaser, comb, formant; FX COLOR is a mod destination) -> 3-band EQ -> tape delay (tempo sync, wow/flutter, saturation) -> reverb (shimmer, freeze) -> OTT multiband compression -> sidechain PUMP (locked to the beat / kick) -> limiter. DELAY MIX / REVERB MIX add to the FX ECHO / REVERB amounts, so older patches sound the same. The page shows the chain and its CPU use. The sub, drums and looper (second sound chip) stay dry. Every factory patch is tuned for the chain (tempo-synced tape delays on leads, plucks and arps; chorus and shimmer on pads; OTT on basses; pump on house chords; lo-fi on retro sounds). Showcase patches: OTT GROWL, FLANGE LEAD, SHIMMER HALL, TAPE KEYS, PUMP CHORDS, TALK BOX, COMB DRONE.
+With MASTER FX on, every DSP voice goes through the effect bus to a chain that runs in the audio thread: LOFI (bits, rate) -> MOD FX (chorus, flanger, phaser, comb, formant; FX COLOR is a mod destination) -> 3-band EQ -> tape delay (tempo sync, wow/flutter, saturation) -> reverb (shimmer, freeze) -> OTT multiband compression -> sidechain PUMP (locked to the beat / kick) -> limiter. DELAY MIX / REVERB MIX add to the FX ECHO / REVERB amounts, so older patches sound the same. The page shows the chain and its CPU use. The sub, drums and tape (second sound chip) stay dry. Every factory patch is tuned for the chain (tempo-synced tape delays on leads, plucks and arps; chorus and shimmer on pads; OTT on basses; pump on house chords; lo-fi on retro sounds). Showcase patches: OTT GROWL, FLANGE LEAD, SHIMMER HALL, TAPE KEYS, PUMP CHORDS, TALK BOX, COMB DRONE.
 
 **Patches (Nov 2026):** new DARK 808 and 303 SCREAM (BASS), CINE SWELL (PAD), TAPE RHODES (KEYS), NEON PWM (RAVE). BIG UNISON, STRINGS 77, SHOEGAZE WALL and the RAVE supersaw use fewer unison voices per note (5 / 4 / 4 / 4), so chords don't steal notes from the 24 sound channels. REESE CRATE, MOTION HAZE, TIDAL and the supersaw gained motion lanes; these and the new ones open with a fitting XY PAD mode.
 
@@ -68,8 +68,8 @@ Four MACRO knobs (mod sources MACRO 1-4); XY PAD can play MACRO 1+2 or 3+4 inste
 
 ## HARDWARE page (HW tab)
 
-- **LOOPER:** REC records 1, 2 or 4 bars of Syrup's output (the DSP's own output tap), then loops it on two channels of the second sound chip while you play on top. LOOP LEVEL sets its volume. LOOP START NEXT BAR: REC arms the looper and the recording starts exactly on the next bar line (the top screen says ARMED until then).
-- **LOOP > TABLE / MIC > TABLE / CAM > TABLE:** turn the loop, one second of mic (sing or play into it), or a camera photo (each image row becomes a frame) into a 64-frame wavetable. It's saved as a Serum-style .wav in /3ds/syrup/ and loaded into OSC A. Pitched audio is cut into clean single cycles; anything else becomes even slices.
+- **TAPE** (SEQ page, or the quick ring): four tracks recorded from Syrup's output, starting with the sequence so every take lines up. The tracks already on tape start with the sequence too. TRACK SPEED on each track: 1/4 1/3 1/2 2/3 3/4 1X 4/3 3/2 X2 X3 X4 (faster ones repeat, so they stay on the bar). TAPE ALIGN (ARP+SEQ page) trims new takes by a few ms if they sit early or late. Drums, kits and the sub are recorded through CHIP > FX, which the tape turns on by itself.
+- **TAPE > TABLE / MIC > TABLE / CAM > TABLE:** turn the last tape track, one second of mic (sing or play into it), or a camera photo (each image row becomes a frame) into a 64-frame wavetable. It's saved as a Serum-style .wav in /3ds/syrup/ and loaded into OSC A. Pitched audio is cut into clean single cycles; anything else becomes even slices.
 - **UPDATE SYRUP:** checks the latest build over Wi-Fi and installs it (CIA through the system installer, or replaces /3ds/syrup.3dsx when run from the Homebrew Launcher). Close and reopen Syrup afterwards.
 - **GET WAVETABLES:** downloads the Syrup Pack (35 original wavetables in `wavetables/` of this repo) over Wi-Fi into /3ds/syrup/, skipping ones you already have. Any Serum-format .wav you copy there works too.
 - **CAMERA:** CAM LIGHT and CAM COLOR mod sources (thumbnail on the page).
@@ -113,7 +113,7 @@ The factory library: 154 patches in 14 styles, with no duplicates, and levels ma
 | GROOVE | Boom Bap Bass, Trap SP-12, Euclid Chip, Beatbox Tap, Loop Partner, Tape Loop, Variecho, Slowdown: patches that bring a beat (drums, kit, patterns, euclid rows, swing, tempo), a loop setup (bars, speed, wow) or tape movement with them. Beatbox Tap arms MIC TAP so you knock the beat in; Slowdown runs the loop only while you hold notes |
 | USER | 8 save slots, plus INIT PATCH at the end of the list |
 
-Patches (format v12) also carry the drums (on/off, kit, patterns, euclid rows, level, swing) and the looper's bars, speed and wow, but only when the patch has a beat or a loop setup. A beat that came with a patch stops when you move to a patch without one; a beat you started or changed yourself keeps running whatever patch you pick. CHIP > FX, ECHO WOW and the XY PAD mode follow every patch. Older user patches load with these at their defaults.
+Patches (format v12) also carry the drums (on/off, kit, patterns, euclid rows, level, swing), but only when the patch has a beat. A beat that came with a patch stops when you move to a patch without one; a beat you started or changed yourself keeps running whatever patch you pick. CHIP > FX, ECHO WOW and the XY PAD mode follow every patch. Older user patches load with these at their defaults.
 
 To save, press A twice on the PATCH page: the first press shows which USER slot it will use (the first empty one, or the slot you're on in USER), the second opens the 3DS keyboard to name the patch (up to 13 characters). Pressing A twice on a saved USER slot saves over it and lets you rename it. User patches are stored in `sdmc:/3ds/syrup/user_presets.bin`. INIT PATCH (the last entry in USER) resets to a single saw.
 
@@ -178,7 +178,7 @@ FBI > Remote Install > Scan QR Code, and scan [`install-qr.png`](../install-qr.p
 - FM / AM / RM from the other oscillator use whole-octave ratios.
 - Two sound units are used together: the DSP (24 filtered channels) plays OSC A / OSC B plus one shared noise channel; CSND (the 3DS's second sound unit, ~24 channels, no filter) plays the sub and all effect taps. CSND layers are "filtered" by picking a darker band-limited copy of the waveform to match the cutoff.
 - With full unison on both oscillators a note uses 6 DSP channels, so 4 such notes fit; with 3-voice unison on A alone, 8.
-- Effects run on the DSP's aux buses: Syrup's own copy of the sound driver routes every DSP channel to two buses that the ARM11 processes (MASTER FX chain, reverb, echo). The sub, drums, chip layers and looper on the second sound chip stay dry. Drive is applied to the waveform.
+- Effects run on the DSP's aux buses: Syrup's own copy of the sound driver routes every DSP channel to two buses that the ARM11 processes (MASTER FX chain, reverb, echo). The sub, drums, chip layers and tape on the second sound chip stay dry. Drive is applied to the waveform.
 - With MASTER FX on core 2, the DSP mix comes out one frame (~4.9 ms) after the second sound chip's parts.
 - Envelopes and LFOs update once per screen frame (about 60 Hz); the arpeggiator, sequencer and drums run in the audio thread (~4.9 ms).
 
@@ -191,8 +191,7 @@ FBI > Remote Install > Scan QR Code, and scan [`install-qr.png`](../install-qr.p
 
 ## CHIP > FX and tape speed (HARDWARE page)
 
-- **CHIP > FX:** the second sound chip's parts (sub, CHIP SQUARE, the drums and kits) stop going straight to the speakers. Its two capture units record them instead, and DSP channels 19 and 20 play that recording through a low-pass (CHIP CUTOFF, CHIP RES) and the MASTER FX chain, so the drums get reverb, delay, OTT and pump. Both chips run off the same clock, so it never drifts; it adds about 10 ms. It uses both capture units, so CHIP ECHO is off while it's on (use the master delay instead). The looper stays dry.
-- **LOOP SPEED** (-12 to +12 semitones), **LOOP WOW** and **TAPE STOP:** the looper's playback speed is the chip channel's own clock, so pitch and tempo move together like tape. TAPE STOP runs the loop down over about a second; set it back to RUN and it spins up.
+- **CHIP > FX:** the second sound chip's parts (sub, CHIP SQUARE, the drums and kits) stop going straight to the speakers. Its two capture units record them instead, and DSP channels 19 and 20 play that recording through a low-pass (CHIP CUTOFF, CHIP RES) and the MASTER FX chain, so the drums get reverb, delay, OTT and pump. Both chips run off the same clock, so it never drifts; it adds about 10 ms. It uses both capture units, so CHIP ECHO is off while it's on (use the master delay instead). The tape stays dry.
 - **ECHO WOW:** the chip echo's replay speed drifts, so each repeat bends like a tape echo.
 
 ## Chip-level extras (no CPU in the audio path)
@@ -200,7 +199,7 @@ FBI > Remote Install > Scan QR Code, and scan [`install-qr.png`](../install-qr.p
 - **CHIP SQUARE** (SUB+NOISE page): a layer from the second sound chip's own square-wave generators, with CHIP WIDTH (pulse width) and CHIP OCTAVE.
 - **CHIP kit** (DRUMS): snare and hat are sampled LFSR noise (15-bit and 7-bit), played from the second sound chip.
 - **CHIP ECHO / ECHO TIME / ECHO REPEATS** (DRUMS): a ping-pong echo made by the chip's two capture units recording its own output. It echoes the sub, drums and chip layer.
-- **Looper**: stored as IMA-ADPCM, which the chip decodes itself, so up to 16 bars (about 48 seconds).
+- **Tape**: stored as IMA-ADPCM, which the chip decodes itself: up to 2 minutes a track.
 - **GRAINS** (HARDWARE): granular playback of the loop. The DSP plays overlapping slices back to back. Set SIZE, SCAN (50% = frozen), SPRAY, PITCH and LEVEL.
 - **3D ORBIT / ORBIT RATE** (MASTER FX): with OUTPUT set to SURROUND, the sound circles around you.
 - **New visualizer modes**: TUNNEL, KALEIDO and RIPPLES.

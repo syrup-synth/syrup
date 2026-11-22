@@ -2,7 +2,7 @@
 
 ![SYRUP](art/syrup_logo.png)
 
-**A wavetable synth for the Nintendo 2DS and 3DS.** Serum-style oscillators played by the console's DSP chip, a filter and envelope section, a master effects chain, a step sequencer with a piano roll, drums, a looper, a four-track tape recorder and a granular engine. It all runs on the handheld, with nothing to plug in.
+**A wavetable synth for the Nintendo 2DS and 3DS.** Serum-style oscillators played by the console's DSP chip, a filter and envelope section, a master effects chain, a step sequencer with a piano roll, drums, a four-track tape recorder and a granular engine. It all runs on the handheld, with nothing to plug in.
 
 > **Beta.** Syrup 1.0 is in beta. Things may still break; see [Reporting bugs](#reporting-bugs).
 
@@ -30,7 +30,7 @@ No Luma3DS menu? Run the DSP1 app once instead. If the file is missing, Syrup sh
 - **Master FX:** a reorderable chain with chorus, phaser, delay types, reverb types, shimmer, OTT, pump and lo-fi.
 - **Sequencer:** 16 patterns of 16 steps with a piano roll, a 64-slot song mode, per-step locks, live and tap recording with preroll, and an arpeggiator (including CHORD with ARP STRUM).
 - **Drums:** six synthesised kits, including WAVE KIT (built from your wavetable), with patterns, Euclid rows, tuning, chance and mute.
-- **Looper:** captures everything you hear. Change its speed, add wow and tape stop.
+- **Tape:** four tracks that capture everything you hear, in time with the sequencer. Each track can play back at a bar-friendly speed (1/4 to X4).
 - **TAPE:** four tracks that bounce the sequencer in sync, with mute, level and WAV export to the SD card.
 - **Grains:** play a loop, a wavetable or the mic as grains. The HARDWARE page has a waveform editor for it.
 - **Second sound chip:** chip voices, chip echo and CHIP > FX.
