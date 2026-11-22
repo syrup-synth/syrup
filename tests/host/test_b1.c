@@ -92,7 +92,20 @@ static void SCRIPT(int fr) {
 	if (fr == 106) { if (gCurPage != 11) fail("QUICK: should reach DRUMS (%d)", gCurPage); gKickPat = 1; }
 	if (fr == 108 || fr == 109) { TOUCH = 1; TX = DG_LX + (int)(2.5f * (320 - DG_LX - 2) / 16.0f); TY = DG_TOP + 6; }
 	if (fr == 111) { shotBot("shots/drum_grid.ppm"); if (gKickPat != 7) fail("DRUM GRID: tapping a step should make the kick row MINE (%d)", gKickPat);
-		if (!gMyDrum[0][2] || !gMyDrum[0][0] || !gMyDrum[0][4]) fail("DRUM GRID: MINE should start from FOUR FLOOR plus the new step"); }
+		if (!gMyDrum[0][2] || !gMyDrum[0][0] || !gMyDrum[0][4]) fail("DRUM GRID: MINE should start from FOUR FLOOR plus the new step");
+		// every drum has a row: CLAP (row 5) step 1
+		int cx = DG_LX + 4, ry = DG_TOP + 4 * DG_RH + 5; drumGridTouch(cx, ry, 1); if (!gDrumX[1][0]) fail("DRUM GRID: the CLAP row should take a step");
+		// double-tap a name clears the row; SELECT+L-style undo brings it back
+		drumGridTouch(10, DG_TOP + 5, 1); drumGridTouch(10, DG_TOP + 5, 1);
+		for (int i = 0; i < 16; i++) if (gMyDrum[0][i]) { fail("DRUM GRID: double-tapping KICK should clear it"); break; }
+		histStep(1); if (!gMyDrum[0][0]) fail("DRUM GRID: undo should bring the cleared kick back");
+		// CLR twice clears everything; undo restores
+		drumGridTouch(200, DG_Y + 5, 1); drumGridTouch(200, DG_Y + 5, 1);
+		if (gDrumX[1][0] || gMyDrum[0][0]) fail("DRUM GRID: CLR twice should clear every drum");
+		histStep(1); if (!gDrumX[1][0]) fail("DRUM GRID: undo should bring the CLR back");
+		// MIC: on, onto the picked row; leaving the page turns it off
+		drumGridTouch(10, DG_TOP + 3 * DG_RH + 5, 1); drumGridTouch(240, DG_Y + 5, 1); if (gTapRow != 3) fail("MIC: should tap onto the picked row (OP HAT) (%d)", gTapRow); }
+	if (fr == 112 && gTapRow >= 0) {}
 	if (fr == 98 && gSeqMode != 1) fail("QUICK: down should PLAY");
 }
 int main(void) {
