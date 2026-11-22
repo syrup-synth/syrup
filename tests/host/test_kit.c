@@ -17,15 +17,17 @@ static void SCRIPT(int fr) {
 	int tp = T0 + 10 * GAP + 10;   // tap the bottom-left pad (KICK) and check the screen
 	if (KIT == 0 && fr == tp + 45) { gKickT = 1u << 30; drumHit(0, 1); if (gKickT != 0) fail("sidechain: a kick should restart the KICK pump"); }
 	if (KIT == 0 && fr == tp + 47 && (gKickT < 1000 || gKickT > 8000)) fail("sidechain: the kick timer should run with the audio (%u)", (unsigned)gKickT);
-	if (KIT == 0 && fr == tp + 50) {   // DRUM POLY: a second kick rings over the first; OFF cuts it; open hat still chokes
-		int on0 = 0, on1 = 0, on2 = 0;
-		gDrumPoly = 0; drumHit(0, 1); drumHit(0, 1); csndExecCmds(false); for (int i = 0; i < 32; i++) on0 += CS[i].on;
-		gDrumPoly = 1; drumHit(0, 1); drumHit(0, 1); csndExecCmds(false); for (int i = 0; i < 32; i++) on1 += CS[i].on;
-		if (on1 != on0 + 1) fail("drum poly: the second kick should ring on its own channel (%d -> %d)", on0, on1);
-		drumHit(0, 1); csndExecCmds(false); for (int i = 0; i < 32; i++) on2 += CS[i].on;
-		if (on2 != on1) fail("drum poly: a third kick should take turns, not add a channel (%d -> %d)", on1, on2);
-		int hb = 0; drumHit(2, 1); drumHit(2, 1); drumHit(3, 1); csndExecCmds(false); for (int i = 0; i < 32; i++) hb += CS[i].on;
-		if (hb != on2 + 1) fail("drum poly: open hat should choke both closed-hat channels (%d vs %d)", hb, on2 + 1);
+	if (KIT == 0 && fr == tp + 50) {   // NO CLICKS: a new hit goes to the partner channel and the old one fades (DRUM POLY: slower); chokes fade too
+		gDrumPoly = 0; drumHit(0, 1); int c1 = gDrumLastCh; drumHit(0, 1); int c2 = gDrumLastCh; csndExecCmds(false);
+		if (c1 == c2) fail("no clicks: a second kick should play on the partner channel (%d %d)", c1, c2);
+		if (!gChFade[c1] || !CS[c1].on) fail("no clicks: the first kick should fade, not stop dead");
+		for (int k = 0; k < 3; k++) { drumFadeTick(); csndExecCmds(false); }
+		if (CS[c1].on) fail("no clicks: the faded kick should be stopped after a few ms");
+		gDrumPoly = 1; drumHit(0, 1); int p1 = gDrumLastCh; drumHit(0, 1); csndExecCmds(false);
+		if (gChFade[p1] < 5) fail("DRUM POLY: the last kick should ring on longer before it fades (%d)", gChFade[p1]);
+		for (int k = 0; k < 10; k++) { drumFadeTick(); csndExecCmds(false); }
+		drumHit(2, 1); int h = gDrumLastCh; drumHit(3, 1); csndExecCmds(false);
+		if (!gChFade[h]) fail("choke: the open hat should fade the closed hat out, not cut it");
 	}
 	if (fr == tp || fr == tp + 1 || fr == tp + 2) { TOUCH = 1; TX = KB_X + 20; TY = KB_Y + 61 + 40; }
 	if (fr == tp + 2) { char n[64]; snprintf(n, sizeof n, "shots/kit%d_pads.ppm", KIT); shotBot(n); padHit = 1; }

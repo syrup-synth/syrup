@@ -35,7 +35,7 @@ static void SCRIPT(int fr) {
 	if (fr == 1838) { if (gDrumLen[0] > len0 * 0.6f) fail("DECAY 50: the kick should get about half as long (%d -> %d)", len0, gDrumLen[0]);
 		gDV[0].decay = 100; gDV[0].penv = 12; gDrumWant = gKit + 100; }
 	if (fr == 1842) { if (gDrumLen[0] >= len0) fail("P.ENV +12: the pitched-up start should shorten the kick (%d -> %d)", len0, gDrumLen[0]); gDV[0] = DV_DEF; gDrumWant = gKit + 100;
-		drumHit(0, 1); timer0 = CS[gDrumCh[0]].timer; gDV[0].tune = 12; drumHit(0, 1); timerUp = CS[gDrumCh[0]].timer; gDV[0].tune = 0;
+		drumHit(0, 1); timer0 = CS[gDrumLastCh].timer; gDV[0].tune = 12; drumHit(0, 1); timerUp = CS[gDrumLastCh].timer; gDV[0].tune = 0;
 		if (abs((int)timerUp * 2 - timer0) > 4) fail("TUNE +12 should halve the timer (%d -> %d)", timer0, timerUp); }
 	// HOLD a step: the step editor; HOLD a name: the SOUND editor
 	if (fr >= 1844 && fr < 1848) { HD |= KEY_SELECT; CX = -150; CY = 0; }   // QUICK: left = DRUMS

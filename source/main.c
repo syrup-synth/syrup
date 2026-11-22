@@ -7911,6 +7911,18 @@ static void drumPickChannels(void) {
 	for (int c = 16; c < NCS && n < NDCH; c++) if (gCsndOK && (csndChannels & BIT(c)) && !chipReserved(c) && !echoReserved(c)) gDrumCh[n++] = c;
 }
 static int gDrumHitN[NDRUM];   // hits played per drum (the tests count them)
+static int gDrumLastCh = -1; static u8 gChFade[32]; static float gChG[32]; static u32 gChVol[32], gChCap[32];   // a channel fading out: frames left, its gain, the volumes it started at
+static u32 volScale(u32 v, float g) { u32 l = (u32)((v & 0xFFFF) * g), r = (u32)((v >> 16) * g); return l | (r << 16); }
+static void drumFade(int c, int frames) { if (c < 0 || c >= 32) return; gChFade[c] = (u8)frames; gChG[c] = 1; }
+static int drumFadeTick(void) {   // audio thread, each 5 ms frame: fading channels step down, then stop
+	int any = 0;
+	for (int c = 0; c < 32; c++) if (gChFade[c]) {
+		gChG[c] *= gChFade[c] > 2 ? 0.75f : 0.3f; gChFade[c]--;
+		if (!gChFade[c]) CSND_SetPlayState(c, 0); else CSND_SetVol(c, volScale(gChVol[c], gChG[c]), volScale(gChCap[c], gChG[c]));
+		any = 1;
+	}
+	return any;
+}
 static void drumHit(int d, float vel) {   // from the audio thread (voice lock held)
 	if (d >= 0 && d < NDRUM && vel > 0.05f) { gPadFlash[d] = 1; gDrumHitN[d]++; }
 	static const int DCH[NDRUM] = {0, 1, 2, 2, 3, 1, 4, 4, 5, 6};   // open hat chokes the closed hat (same channel), rim cuts the snare
@@ -7919,21 +7931,21 @@ static void drumHit(int d, float vel) {   // from the audio thread (voice lock h
 	if (d == 0 && !perc && vel > 0.05f) gKickT = 0;   // PUMP RATE KICK: duck the synth under it
 	int c = gDrumCh[ch]; if (c < 0) c = gDrumCh[ch % 3];
 	if (c < 0 || !gDrumSmp[d]) return;
-	{   // DRUM POLY: the same drum hit again rings on while the new hit plays on a borrowed free channel (they take
-		// turns); a different drum on the same channel (open hat after closed, rim after snare) still chokes it
-		static int sp[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, lastD[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, onSp[NDCH];
-		int slot = gDrumCh[ch] >= 0 ? ch : ch % 3;
-		if (gDrumPoly && lastD[slot] == d && !(gKit == 3 && d >= 1 && d <= 2)) {
-			if (!onSp[slot]) {   // this hit goes to the spare: keep the one we had if it's still free, else borrow one
-				int ok = sp[slot] >= 0 && csUsable(sp[slot]) && gCsOwner[sp[slot]] < 0;
-				for (int k = 0; ok && k < NDCH; k++) if (k != slot && sp[k] == sp[slot]) ok = 0;
-				if (!ok) { sp[slot] = -1;
-					for (int i = 8; i < NCS && sp[slot] < 0; i++) if (csUsable(i) && gCsOwner[i] < 0) { int used = 0; for (int k = 0; k < NDCH; k++) if (sp[k] == i) used = 1; if (!used) sp[slot] = i; } }
-				if (sp[slot] >= 0) { c = sp[slot]; onSp[slot] = 1; }
-			} else onSp[slot] = 0;
-		} else {
-			if (sp[slot] >= 0 && csUsable(sp[slot]) && gCsOwner[sp[slot]] < 0) CSND_SetPlayState(sp[slot], 0);   // choke both
-			onSp[slot] = 0;
+	// No clicks: a drum is never cut off mid-sound. Each channel slot has a partner channel borrowed from the free ones; a
+	// new hit goes to whichever of the two isn't sounding, and the one that was fades out over a few ms (a choke: open
+	// hat after closed, rim after snare, or the same drum again) - or, with DRUM POLY, rings on longer before it fades.
+	int fadeOld = -1, fadeFr = 2;
+	if (!(gKit == 3 && d >= 1 && d <= 2)) {
+		static int alt[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, onAlt[NDCH], lastD[NDCH] = {-1, -1, -1, -1, -1, -1, -1};
+		int slot = gDrumCh[ch] >= 0 ? ch : ch % 3, main_ = gDrumCh[slot];
+		int ok = alt[slot] >= 0 && csUsable(alt[slot]) && gCsOwner[alt[slot]] < 0 && alt[slot] != main_;
+		for (int k = 0; ok && k < NDCH; k++) if (gDrumCh[k] == alt[slot] || (k != slot && alt[k] == alt[slot])) ok = 0;
+		if (!ok) { alt[slot] = -1; onAlt[slot] = 0;
+			for (int i = 8; i < NCS && alt[slot] < 0; i++) if (csUsable(i) && gCsOwner[i] < 0) { int used = 0; for (int k = 0; k < NDCH; k++) if (gDrumCh[k] == i || alt[k] == i) used = 1; if (!used) alt[slot] = i; } }
+		if (alt[slot] >= 0 && main_ >= 0) {
+			int was = onAlt[slot] ? alt[slot] : main_;
+			c = onAlt[slot] ? main_ : alt[slot]; onAlt[slot] = !onAlt[slot];
+			fadeOld = was; fadeFr = gDrumPoly && lastD[slot] == d ? 8 : 2;   // POLY: the last hit rings ~40 ms over the new one
 		}
 		lastD[slot] = d;
 	}
@@ -7946,6 +7958,8 @@ static void drumHit(int d, float vel) {   // from the audio thread (voice lock h
 	float g = gDrumLevel * vel * (perc ? PG[d] : DG[d]) * gDV[d].level / 100.0f, pan = (perc ? PP[d] : DP[d]) + (gDV[d].pan - 100) / 100.0f;
 	pan = pan < 0 ? 0 : pan > 1 ? 1 : pan;
 	u32 l = (u32)(g * sqrtf(1 - pan) * 1.41f * 0x7FFF), r = (u32)(g * sqrtf(pan) * 1.41f * 0x7FFF), vol = l | (r << 16);
+	if (fadeOld >= 0) drumFade(fadeOld, fadeFr);
+	gChFade[c] = 0; gDrumLastCh = c; gChVol[c] = gThruOn ? 0 : csMono(vol); gChCap[c] = csSend(l / 32768.0f, r / 32768.0f);
 	CSND_SetPlayState(c, 0);
 	if (gKit == 3 && d >= 1 && d <= 2 && gNzCh[d - 1] >= 0) {   // CHIP kit: snare and hat straight from the hardware noise generators
 		int nc = gNzCh[d - 1]; gNzVol[d - 1] = g; CSND_SetPlayState(nc, 0);
@@ -7961,6 +7975,7 @@ static void rowHit(int r, float vel) {   // a pattern hit on row r (kick / snare
 	drumHit(r, vel);
 }
 static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the sequencer when it plays
+	if (drumFadeTick()) csndExecCmds(false);
 	if (!gDrums || !gCsndOK || gDrumBuilt < 0) { gDrumStep = -1; gDrClk = -1; return; }
 	if (gKit == 3) {   // noise drums have no envelope of their own: decay them from here every 5 ms
 		int any = 0;
