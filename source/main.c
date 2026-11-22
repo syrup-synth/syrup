@@ -102,7 +102,10 @@ static u8 gMot[4][64]; static int gMotTgt[4], gMotOn[4], gMotRec, gMotBars; stat
 static int gCamVid, gMidiNet, gAddEdit, gOfType; static float gOfCut, gOfRes, gOfDrive, gOfEnv; static const char* OFT_NAMES[14]; static float gWtScan; static const char* VID_NAMES[3];
 static void chipSet(float lv);
 static void grainsChanged(void);
-static const char* KIT_NAMES[6]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[4];
+static int EU_IDX_(int r) { return r ? 7 : 8; }   // EUCLID in the KICK / SNARE + HAT lists
+#define NBEAT_ 14
+static const char* BEAT_NAMES_[NBEAT_] = {"HOUSE", "BOOM BAP", "TRAP", "DNB", "BREAK", "DISCO", "FUNK", "HALFTIME", "DEMBOW", "AFROBEAT", "2-STEP", "ELECTRO", "ROCK", "SHUFFLE"};
+static int gDrumSel[3] = {1, 1, 1}; static int gBeatSel = 0; static void beatPaste(int b); static void drumPaste(int r, int v, int undo); static void drumGridMark(void); static const char* KIT_NAMES[6]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[4];
 // live drum shaping: TUNE (semitones, applied at each hit: no rebuild), CHANCE (each hit of the row plays this often), MUTE (rows, bit 1 kick 2 snare 4 hat)
 static float gDrumTune[3] = {0, 0, 0}, gDrumChance[3] = {1, 1, 1}; static int gDrumMute = 0; static int gDrumPoly;
 static const char* DMUTE_NAMES[8] = {"NONE", "KICK", "SNARE", "KICK+SNARE", "HAT", "KICK+HAT", "SNARE+HAT", "ALL"};
@@ -3050,7 +3053,7 @@ static void patchCapture(SPatch* p) {
 	p->dlyMix = gDlyMix; p->dlyWow = gDlyWow; p->dlySat = gDlySat; p->revMix = gRevMix; p->ott = gOtt; p->pump = gPump; p->lofiRate = gLofiRate;
 	p->chipLevel = gChipLevel; p->chipDuty = gChipDuty; p->chipOct = gChipOct; p->csEcho = gCsEcho; p->csEchoFb = gCsEchoFb; p->csEchoT = gCsEchoT; p->orbit = gOrbit; p->orbitRate = gOrbitRate; p->revType = gRevType; p->dlyType = gDlyType; p->grainMode = gGrains; p->grainSrc = gGrainSrc; p->grainSize = gGrainSize; p->grainScan = gGrainScan; p->grainSpray = gGrainSpray; p->grainPitch = gGrainPitch; p->grainLevel = gGrainLevel; p->ofType = gOfType; p->ofCut = gOfCut; p->ofRes = gOfRes; p->ofDrive = gOfDrive; p->ofEnv = gOfEnv;
 	p->qGrit = gQGrit; p->csEchoPitch = gCsEchoPitch; p->qScream = gQScream; p->qMixDrive = gQMixDrive;
-	p->hasBeat = gDrums; p->drums = gDrums; p->kit = gKit; p->kickPat = gKickPat; p->snarePat = gSnarePat; p->hatPat = gHatPat; p->drumRec = 0; p->drumLevel = gDrumLevel; p->swing = gSwing;
+	p->hasBeat = gDrums; p->drums = gDrums; p->kit = gKit; p->kickPat = gKickPat == EU_IDX_(0) ? gKickPat : gDrumSel[0]; p->snarePat = gSnarePat == EU_IDX_(1) ? gSnarePat : gDrumSel[1]; p->hatPat = gHatPat == EU_IDX_(2) ? gHatPat : gDrumSel[2];   // the pattern last pasted (MINE once edited) p->drumRec = 0; p->drumLevel = gDrumLevel; p->swing = gSwing;
 	for (int r = 0; r < 3; r++) { p->euHits[r] = gEuHits[r]; p->euRot[r] = gEuRot[r]; } p->euLen = gEuLen;
 	p->hasLoop = 0;   // (the looper is gone: tape does it)
 	p->thru = gThru; p->xyMode = gXyMode; p->tapeKeys = gTapeKeys; p->thruCut = gThruCut; p->thruRes = gThruRes; p->thruEnv = gThruEnv; p->thruLfo = gThruLfo; p->echoWow = gEchoWow;
@@ -3100,6 +3103,7 @@ static void patchApply(const SPatch* p) {
 		gDrums = p->drums & 1; gKit = p->kit >= 0 && p->kit < 6 ? p->kit : 0; gKickPat = p->kickPat % 9; gSnarePat = p->snarePat % 8; gHatPat = p->hatPat % 8;
 		gDrumLevel = p->drumLevel; gSwing = p->swing;
 		for (int r = 0; r < 3; r++) { gEuHits[r] = p->euHits[r] % 17; gEuRot[r] = p->euRot[r] % 16; } gEuLen = p->euLen >= 2 && p->euLen <= 16 ? p->euLen : 16;
+		drumPaste(0, gKickPat, 0); drumPaste(1, gSnarePat, 0); drumPaste(2, gHatPat, 0);   // the patch's patterns land in the grid, editable like your own
 		if (gCsndOK) drumsChanged();
 		if (p->drumRec != gDrumRec) { gDrumRec = p->drumRec % 5; if (gCsndOK) drumRecChanged(); }
 	}
@@ -3395,8 +3399,8 @@ static Param P_MASTER[] = {
 	PE("CIRCLE PAD", &gStickMode, 4, STICK_NAMES, 0), PE("SPEAKER EQ", &gSpkEq, 3, SPK_NAMES, 0), PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
 	PEND};
 static Param P_DRUMS[] = {
-	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 6, KIT_NAMES, D_DRUMS), PE("KICK", &gKickPat, 9, KICKP_NAMES, 0),
-	PE("SNARE", &gSnarePat, 8, SNAREP_NAMES, 0), PE("HAT", &gHatPat, 8, HATP_NAMES, 0), PE("MIC TAP", &gDrumRec, 4, DREC_NAMES, D_DREC), PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0),
+	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 6, KIT_NAMES, D_DRUMS), PE("BEAT", &gBeatSel, NBEAT_, BEAT_NAMES_, 0), PE("KICK", &gDrumSel[0], 9, KICKP_NAMES, 0),
+	PE("SNARE", &gDrumSel[1], 8, SNAREP_NAMES, 0), PE("HAT", &gDrumSel[2], 8, HATP_NAMES, 0), PE("MIC TAP", &gDrumRec, 4, DREC_NAMES, D_DREC), PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0),
 	PF("KICK TUNE", &gDrumTune[0], -12, 12, 1, "ST", 0), PF("SNARE TUNE", &gDrumTune[1], -12, 12, 1, "ST", 0), PF("HAT TUNE", &gDrumTune[2], -12, 12, 1, "ST", 0),
 	PF("KICK CHANCE", &gDrumChance[0], 0, 1, 0.05f, "%", 0), PF("SNARE CHANCE", &gDrumChance[1], 0, 1, 0.05f, "%", 0), PF("HAT CHANCE", &gDrumChance[2], 0, 1, 0.05f, "%", 0), PE("MUTE", &gDrumMute, 8, DMUTE_NAMES, 0), PE("DRUM POLY", &gDrumPoly, 2, ONOFF, 0),
 	PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
@@ -7595,7 +7599,7 @@ static int drumRowOn(int r, int pat, int i) {   // a preset pattern's step, for 
 static const int MINE_IDX[3] = {7, 6, 6};
 static int* const DPAT[3] = {&gKickPat, &gSnarePat, &gHatPat};
 static int gDrumRec = 0;   // 0 off, 1 kick, 2 snare, 3 hat, 4 clear
-static const char* DREC_NAMES[4] = {"OFF", "TAP KICK", "TAP SNARE", "TAP HAT"};   // (clearing is on the DRUMS grid: CLR, or double-tap a row)
+static const char* DREC_NAMES[4] = {"OFF", "TAP KICK", "TAP SNARE", "TAP HAT"};   // (clearing is on the DRUMS grid: CLR)
 static float gTapLevel = 0, gTapHold = 0;
 static const u8 HATVEL[16] = {255, 120, 200, 110, 255, 120, 200, 140, 255, 120, 200, 110, 255, 130, 220, 160};
 static int gNzCh[2] = {-1, -1}; static float gNzVol[2];   // hardware noise drums: retired (they wedged the sound chip); CHIP kit is now sampled LFSR noise
@@ -7950,7 +7954,7 @@ static void drumRecChanged(void) {
 }
 // DRUMS page: the whole bottom screen is the drum sequencer - every drum of the kit, 16 steps. Rows 1-3 (KICK,
 // SNARE, CL HAT) are the drum machine's patterns: a tap on one of their steps makes that row MINE, starting from what
-// it was playing. Tap a row's name to hear it; double-tap it to clear the row. CLR (twice) clears them all.
+// it was playing. Tap a row's name to hear it and pick it. CLR (twice) clears them all.
 // Every edit is one SELECT+L undo.
 #define DG_Y (TAB_H + 2)
 #define DG_LX 54
@@ -7966,12 +7970,15 @@ static int drumCellOn(int r, int i) {
 }
 static int drumCellVel(int r, int i) { return r >= 3 ? gDrumX[r - 3][i] : *DPAT[r] == MINE_IDX[r] ? gMyDrum[r][i] : 230; }
 static const int DG_DRUM[DG_ROWS] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};   // row -> kit drum
+static int gBeatNext = 0;
+static int clrArmed(void) { if (gDrumClrArm && osGetTime() - gDrumClrT > 4000) gDrumClrArm = 0; return gDrumClrArm; }   // CLR waits 4 s for a row (or CLR again)
 static void drawDrumGrid(void) {
 	rectP(0, TAB_H, 320, 240 - TAB_H, TH->bg);
 	char t[24];
-	snprintf(t, sizeof(t), "DRUMS %s", gDrums ? "ON" : "OFF"); rectP(4, DG_Y, 84, 14, gDrums ? TH->keyOn : TH->tab); { const u8* c = gDrums ? EGA[0] : TH->tabTxt; text(46 - (int)strlen(t) * 4, DG_Y + 3, t, 1, c[0], c[1], c[2]); }
-	snprintf(t, sizeof(t), "KIT %s >", KIT_NAMES[gKit]); rectP(92, DG_Y, 84, 14, TH->tab); text(134 - (int)strlen(t) * 4, DG_Y + 3, t, 1, RGB3(TH->tabTxt));
-	rectP(180, DG_Y, 44, 14, gDrumClrArm ? TH->warn : TH->tab); text(202 - (gDrumClrArm ? 5 : 3) * 4, DG_Y + 3, gDrumClrArm ? "AGAIN" : "CLR", 1, RGB3(TH->tabTxt));
+	snprintf(t, sizeof(t), "%s", gDrums ? "DR ON" : "DR OFF"); rectP(4, DG_Y, 52, 14, gDrums ? TH->keyOn : TH->tab); { const u8* c = gDrums ? EGA[0] : TH->tabTxt; text(30 - (int)strlen(t) * 4, DG_Y + 3, t, 1, c[0], c[1], c[2]); }
+	snprintf(t, sizeof(t), "%s >", KIT_NAMES[gKit]); rectP(60, DG_Y, 64, 14, TH->tab); text(92 - (int)strlen(t) * 4, DG_Y + 3, t, 1, RGB3(TH->tabTxt));
+	rectP(128, DG_Y, 48, 14, TH->tab); text(152 - 4 * 4, DG_Y + 3, "BEAT", 1, RGB3(TH->tabTxt));   // whole-kit rhythm presets, one tap each
+	{ int a = clrArmed(); rectP(180, DG_Y, 44, 14, a ? TH->warn : TH->tab); text(202 - (a ? 3 : 3) * 4, DG_Y + 3, a ? "ALL" : "CLR", 1, RGB3(TH->tabTxt)); }
 	rectP(228, DG_Y, 40, 14, gTapRow >= 0 ? TH->warn : TH->tab); text(236, DG_Y + 3, "MIC", 1, RGB3(TH->tabTxt));   // MIC TAP onto the picked row
 	snprintf(t, sizeof(t), "%d", gBPM); text(316 - (int)strlen(t) * 8, DG_Y + 3, t, 1, RGB3(TH->dim));
 	int play = gSeqPlaying ? (gSeqPos & 15) : (gDrums ? gDrumStep : -1);
@@ -7994,8 +8001,54 @@ static void drumRowToMine(int r) {   // a pattern row (KICK / SNARE / HAT) becom
 	for (int k = 0; k < 16; k++) gMyDrum[r][k] = drumRowOn(r, *DPAT[r], k) ? (r == 2 ? HATVEL[k] : 230) : 0;
 	*DPAT[r] = MINE_IDX[r];
 }
+// FACTORY PATTERNS are a paste: picking one writes it into the row of the grid, which then plays and edits like
+// anything you drew (rows play from the grid; only EUCLID stays a live generator, it can run shorter than 16).
+// gDrumSel is what the KICK / SNARE / HAT setting shows: the last pattern pasted, or MINE once you've edited the row.
+static void drumPaste(int r, int v, int undo) {
+	gDrumSel[r] = v;
+	if (v == EU_IDX[r] || v == MINE_IDX[r]) { *DPAT[r] = v; return; }
+	if (undo) drumGridMark();
+	myDrumLoad();
+	for (int k = 0; k < 16; k++) gMyDrum[r][k] = drumRowOn(r, v, k) ? (r == 2 ? HATVEL[k] : 230) : 0;
+	*DPAT[r] = MINE_IDX[r]; gDrumSaveDue = 1;
+}
+// BEATS: whole-kit rhythm presets, pasted into all 10 rows at once (then edit them like your own). Rows: kick, snare,
+// closed hat, open hat, clap, rim, low tom, high tom, bell, crash. x = a hit, . = rest.
+#define NBEAT NBEAT_
+#define BEAT_NAMES BEAT_NAMES_   // (the names are up top, for the DRUMS settings list)
+static const char* BEATS[NBEAT][10] = {
+	{"x...x...x...x...", "", "x...x...x...x...", "..x...x...x...x.", "....x.......x..."},
+	{"x......x..x.....", "....x.......x...", "x.x.x.x.x.x.x.x.", "..............x."},
+	{"x......x..x.....", "........x.......", "x.x.x.x.xxx.x.xx", "", "........x......."},
+	{"x.........x.....", "....x.......x...", "x.x.x.x.x.x.x.x.", "", "", "", "", "", "", "x..............."},
+	{"x.x.......xx....", "....x..x.x..x..x", "x.x.x.x.x.x.x.x."},
+	{"x...x...x...x...", "....x.......x...", "x...x...x...x...", "..x...x...x...x.", "....x.......x..."},
+	{"x..x..x...x..x..", "....x..x.x..x...", "xxxxxxxxxxxxxxxx", "", "", "...x......x....."},
+	{"x.......x.x.....", "........x.......", "x.x.x.x.x.x.x.x.", "", "", "", "..............x."},
+	{"x...x...x...x...", "...x..x....x..x.", "x.x.x.x.x.x.x.x."},
+	{"x.....x...x.....", "....x.......x...", "x.xxx.xxx.xxx.xx", "", "", "..x..x....x..x..", "", "", "x..x..x...x.x..."},
+	{"x.........x..x..", "....x.......x...", "..x...x...x...x.", "", "", ".x.....x........"},
+	{"x.....x...x.....", "", "x.x.x.x.x.x.x.x.", "", "....x.......x...", "", "", ".......x......x."},
+	{"x.......x.x.....", "....x.......x...", "x.x.x.x.x.x.x.x.", "", "", "", "", "", "", "x..............."},
+	{"x.....x.x.....x.", "....x.......x...", "x.xx.xx.xx.xx.xx", "", "", "", "", "", "", ""},
+};
+static void beatPaste(int b) {
+	if (b < 0 || b >= NBEAT) return;
+	drumGridMark(); myDrumLoad();
+	for (int r = 0; r < DG_ROWS; r++) {
+		const char* row = BEATS[b][r] ? BEATS[b][r] : "";
+		for (int i = 0; i < 16; i++) {
+			int on = i < (int)strlen(row) && row[i] == 'x'; u8 v = on ? (r == 2 ? HATVEL[i] : r == 0 || r == 1 ? 230 : 210) : 0;
+			if (r < 3) gMyDrum[r][i] = v; else gDrumX[r - 3][i] = v;
+		}
+		if (r < 3) { *DPAT[r] = MINE_IDX[r]; gDrumSel[r] = MINE_IDX[r]; }
+	}
+	gBeatSel = b; gDrumSaveDue = 1; gBeatFromPatch = 0;
+	if (!gDrums) { gDrums = 1; drumsChanged(); }
+	char m[40]; snprintf(m, sizeof(m), "BEAT: %s (SELECT+L UNDOES)", BEAT_NAMES[b]); say(m);
+}
 static void drumCellSet(int r, int i, int on) {
-	myDrumLoad(); drumRowToMine(r);
+	myDrumLoad(); drumRowToMine(r); if (r < 3) gDrumSel[r] = MINE_IDX[r];
 	u8 v = on ? (r == 2 ? HATVEL[i] : 230) : 0;
 	if (r >= 3) gDrumX[r - 3][i] = v; else gMyDrum[r][i] = v;
 	gDrumSaveDue = 1;
@@ -8007,31 +8060,32 @@ static void drumSnapGet(u8* o) { myDrumLoad(); memcpy(o, gMyDrum, 48); memcpy(o 
 static void drumSnapSet(const u8* in) { memcpy(gMyDrum, in, 48); memcpy(gDrumX, in + 48, 112); int p[3]; memcpy(p, in + 160, 12); gKickPat = p[0]; gSnarePat = p[1]; gHatPat = p[2]; gDrumSaveDue = 1; }
 static void drumGridMark(void) { static HistE e; histSnap(&e, 2, 0); histPush(gUndoH, &gUndoN, &e); gRedoN = 0; histFlags(); }
 static int drumGridTouch(int x, int y, int press) {   // 1 = redraw
-	static int paint = -1; static u64 lastTap = 0; static int lastRow = -1;
+	static int paint = -1;
 	if (y < DG_TOP) {
 		if (!press) return 0;
-		if (x < 90) { gDrums = !gDrums; drumsChanged(); return 1; }
-		if (x < 178) { gKit = (gKit + 1) % 6; gDrumWant = gKit; return 1; }
+		if (x < 58) { gDrums = !gDrums; drumsChanged(); return 1; }
+		if (x < 126) { gKit = (gKit + 1) % 6; gDrumWant = gKit; return 1; }
+		if (x < 178) { beatPaste(gBeatNext); gBeatNext = (gBeatNext + 1) % NBEAT; return 1; }   // BEAT: the next rhythm each tap
 		if (x >= 226 && x < 270) {   // MIC: knocks near the mic play and record onto the picked row (tap a row's name to pick)
 			if (gTapRow >= 0) { gTapRow = -1; gDrumRec = 0; gDrumSaveDue = 1; say("MIC TAP OFF"); }
 			else { gTapRow = gDgSel; if (!gDrums) { gDrums = 1; drumsChanged(); } drumGridMark(); char m[48]; snprintf(m, sizeof(m), "MIC TAP: KNOCK FOR %s (TAP A NAME TO SWITCH)", kitPadName(DG_DRUM[gTapRow])); say(m); }
 			return 1;
 		}
 		if (x < 226) {   // CLR: twice
-			if (!gDrumClrArm) { gDrumClrArm = 1; gDrumClrT = osGetTime(); say("CLR AGAIN TO CLEAR EVERY DRUM (SELECT+L UNDOES)"); return 1; }
+			if (!clrArmed()) { gDrumClrArm = 1; gDrumClrT = osGetTime(); say("CLR: TAP A DRUM'S NAME TO CLEAR ITS ROW, CLR AGAIN FOR ALL"); return 1; }
 			drumGridMark(); for (int r = 0; r < DG_ROWS; r++) drumRowClear(r); gDrumClrArm = 0; say("DRUMS CLEARED (SELECT+L UNDOES)"); return 1;
 		}
 		return 0;
 	}
 	int r = (y - DG_TOP) / DG_RH; if (r < 0 || r >= DG_ROWS) return 0;
-	if (x < DG_LX) {   // the name: hear it; twice quickly: clear the row
+	if (x < DG_LX) {   // the name: hear it and pick the row; after CLR: clear that row
 		if (!press) return 0;
-		u64 now = osGetTime();
-		if (r == lastRow && now - lastTap < 400) { drumGridMark(); drumRowClear(r); char m[40]; snprintf(m, sizeof(m), "%s CLEARED (SELECT+L UNDOES)", kitPadName(DG_DRUM[r])); say(m); lastRow = -1; return 1; }
-		lastRow = r; lastTap = now; gDgSel = r; if (gTapRow >= 0) gTapRow = r;
+		if (clrArmed()) { gDrumClrArm = 0; drumGridMark(); drumRowClear(r); char m[48]; snprintf(m, sizeof(m), "%s CLEARED (SELECT+L UNDOES)", kitPadName(DG_DRUM[r])); say(m); return 1; }
+		gDgSel = r; if (gTapRow >= 0) gTapRow = r;   /* a tap plays the drum and picks the row (no double-tap clear: people tap to hear it) */
 		if (gCsndOK && gDrumBuilt == gKit) kitHitSound(DG_DRUM[r], 0.85f); else if (gCsndOK) gDrumWant = gKit; return 1;
 	}
 	int i = (int)((x - DG_LX) / ((320 - DG_LX - 2) / 16.0f)); if (i < 0 || i > 15) return 0;
+	if (press) gDrumClrArm = 0;   // painting steps: CLR is off again
 	if (press) { drumGridMark(); paint = !drumCellOn(r, i); drumCellSet(r, i, paint); return 1; }   // a drag paints the same along the row
 	if (paint >= 0 && drumCellOn(r, i) != paint) { drumCellSet(r, i, paint); return 1; }
 	return 0;
@@ -9149,7 +9203,9 @@ int main(void) {
 				if (page != 0 && page != 8 && page != 9) gEdited = 1;
 				if (p->dirty & D_STYLE) { gPreset = 0; presetLoad(gStyle, 0); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				if (p->dirty & D_OUT) outputApply();
-				if ((p->dirty & (D_DRUMS | D_EUCLID | D_DREC)) || p->p == &gKickPat || p->p == &gSnarePat || p->p == &gHatPat || p->p == &gDrumLevel) gBeatFromPatch = 0;   // you changed the beat: it stays when you change patch
+				if ((p->dirty & (D_DRUMS | D_EUCLID | D_DREC)) || p->p == &gBeatSel || p->p == &gDrumSel[0] || p->p == &gDrumSel[1] || p->p == &gDrumSel[2] || p->p == &gDrumLevel) gBeatFromPatch = 0;   // you changed the beat: it stays when you change patch
+				for (int r = 0; r < 3; r++) if (p->p == &gDrumSel[r]) drumPaste(r, gDrumSel[r], 1);
+				if (p->p == &gBeatSel) beatPaste(gBeatSel);   // a factory pattern: pasted into the grid
 				if ((p->dirty & D_DRUMS) && p->p == &gDrumRec) drumRecChanged();
 				else if (p->dirty & D_DRUMS) drumsChanged();
 				else if (p->dirty & D_EUCLID) {   // touching a row's HITS or ROTATE switches that row to EUCLID and starts the drums

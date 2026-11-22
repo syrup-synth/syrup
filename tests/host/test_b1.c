@@ -92,17 +92,23 @@ static void SCRIPT(int fr) {
 		if (!gMyDrum[0][2] || !gMyDrum[0][0] || !gMyDrum[0][4]) fail("DRUM GRID: MINE should start from FOUR FLOOR plus the new step");
 		// every drum has a row: CLAP (row 5) step 1
 		int cx = DG_LX + 4, ry = DG_TOP + 4 * DG_RH + 5; drumGridTouch(cx, ry, 1); if (!gDrumX[1][0]) fail("DRUM GRID: the CLAP row should take a step");
-		// double-tap a name clears the row; SELECT+L-style undo brings it back
+		// tapping a name (even twice) only plays it: the steps stay
 		drumGridTouch(10, DG_TOP + 5, 1); drumGridTouch(10, DG_TOP + 5, 1);
-		for (int i = 0; i < 16; i++) if (gMyDrum[0][i]) { fail("DRUM GRID: double-tapping KICK should clear it"); break; }
-		histStep(1); if (!gMyDrum[0][0]) fail("DRUM GRID: undo should bring the cleared kick back");
+		if (!gMyDrum[0][0]) fail("DRUM GRID: tapping KICK twice shouldn't clear it");
 		// CLR twice clears everything; undo restores
 		drumGridTouch(200, DG_Y + 5, 1); drumGridTouch(200, DG_Y + 5, 1);
 		if (gDrumX[1][0] || gMyDrum[0][0]) fail("DRUM GRID: CLR twice should clear every drum");
 		histStep(1); if (!gDrumX[1][0]) fail("DRUM GRID: undo should bring the CLR back");
 		// MIC: on, onto the picked row; leaving the page turns it off
 		drumGridTouch(10, DG_TOP + 3 * DG_RH + 5, 1); drumGridTouch(240, DG_Y + 5, 1); if (gTapRow != 3) fail("MIC: should tap onto the picked row (OP HAT) (%d)", gTapRow); }
-	if (fr == 112 && gTapRow >= 0) {}
+	if (fr == 113) {   // CLR, then a name: clears just that row; BEAT pastes the whole kit; a factory KICK pattern is a paste
+		drumGridTouch(200, DG_Y + 5, 1); drumGridTouch(10, DG_TOP + 4 * DG_RH + 5, 1);
+		if (gDrumX[1][0]) fail("CLR + CLAP's name should clear the clap row");
+		if (!gMyDrum[0][0]) fail("CLR + a name shouldn't touch the other rows");
+		histStep(1); if (!gDrumX[1][0]) fail("undo should bring the clap row back");
+		beatPaste(0); if (!gMyDrum[0][4] || !gDrumX[0][2] || gMyDrum[1][4]) fail("BEAT HOUSE: kick on 2, open hat on the off-beat, no snare");
+		gDrumSel[0] = 3; drumPaste(0, 3, 1); if (gKickPat != 7 || !gMyDrum[0][10]) fail("KICK TRAP should paste into the grid and play as MINE (%d)", gKickPat);
+		drumCellSet(0, 1, 1); if (gDrumSel[0] != 7) fail("editing a pasted row should show MINE"); }
 	if (fr == 98 && gSeqMode != 1) fail("QUICK: down should PLAY");
 	// PATCH BROWSER (bottom screen): tap a style, tap a patch: it loads even after an edit, and undo brings the edit back
 	if (fr == 264) { gCurPage = 0; int s, i; findPreset("WARM FELT", &s, &i); presetLoad(s, i); gStyle = s; gPreset = i; gCutoff = 0.123f; gEdited = 1;
