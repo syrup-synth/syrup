@@ -9470,11 +9470,11 @@ int main(void) {
 				if (mode == 4) {   // piano roll: move, A = note, hold A = its step editor
 					if (ex) gRcS = (gRcS + ex + NSTEP) % NSTEP;
 					if (ey) { if (gVoiceMode >= 3) { int r = rollRow(gRcN) + ey; if (r < 0) r = 0; if (r > 9) r = 9; gRcN = rollNote(r); }
-						else { gRcN += ey; if (gRcN < gRollLow) gRollLow = gRcN; if (gRcN >= gRollLow + ROLL_ROWS) gRollLow = gRcN - ROLL_ROWS + 1; } audition(gRcN); }
+						else { gRcN += ey; if (gRcN < gRollLow) gRollLow = gRcN; if (gRcN >= gRollLow + ROLL_ROWS) gRollLow = gRcN - ROLL_ROWS + 1; } }   // (silent: moving the cursor doesn't play)
 					if (rollRow(gRcN) < 0) gRcN = gVoiceMode >= 3 ? rollNote(0) : gRollLow + 5;
 				} else if (mode == 2) {   // drum grid
 					if (ex) gDcI = (gDcI + ex + 16) % 16;
-					if (ey) { gDcR -= ey; if (gDcR < 0) gDcR = 0; if (gDcR > DG_ROWS - 1) gDcR = DG_ROWS - 1; gDgSel = gDcR; if (gCsndOK && gDrumBuilt == gKit) { if (gDrumCh[0] < 0) drumPickChannels(); drumHit(gDcR, 0.7f); csndExecCmds(false); } }
+					if (ey) { gDcR -= ey; if (gDcR < 0) gDcR = 0; if (gDcR > DG_ROWS - 1) gDcR = DG_ROWS - 1; gDgSel = gDcR; }   // (silent: moving the cursor doesn't play the drum)
 					if ((kDown & KEY_B) && curShown()) { kDown &= ~KEY_B; gDgEd = 2; gDgEdR = gDcR; gDgSelF = 0; gCurT = osGetTime(); botDirty = 1; }
 				} else if (mode == 1) {   // piano roll step editor: up / down = setting, left / right = value, B = done
 					if (ey) { int idx = 0, n = 0; for (int k = 0; k < 8; k++) if (SE_PAGE[gSeTab][k] >= 0) { if (SE_PAGE[gSeTab][k] == gSeSel) idx = n; n++; }
