@@ -90,7 +90,7 @@ static void fft(cpx* a, int n, int inv) {
 static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0, gGpuCopy = 1;
 static int gDrums, gKit, gKickPat, gSnarePat, gHatPat; static float gDrumLevel;
 // v12 patch fields live with the looper, CHIP > FX and the XY pad further down
-static int gLoopMode, gLoopBars, gXyMode, gThru, gTapeStop, gTapeKeys; static float gLoopSpeed, gLoopWow, gThruCut, gThruRes, gThruEnv, gThruLfo, gEchoWow;
+static int gTapeAlign; static int gLoopMode, gLoopBars, gXyMode, gThru, gTapeStop, gTapeKeys; static float gLoopSpeed, gLoopWow, gThruCut, gThruRes, gThruEnv, gThruLfo, gEchoWow;
 static void drumsChanged(void); static void drumRecChanged(void);
 static int gBeatFromPatch;   // the running beat came with the current patch (and stops when you leave it); touching a drum control makes it yours
 // chip quirks: DSP GRIT (the DSP's interpolation off), FILTER SCREAM (its biquad pushed past stable), MIX OVERDRIVE (its
@@ -3350,7 +3350,7 @@ static Param P_PLAY[] = {
 	PI_("BPM", &gBPM, 40, 240, 0), PE("SEQ", &gSeqMode, 3, SEQ_NAMES, D_SEQ), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
 	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE), PI_("SEQ LENGTH", &gSeqLen, 1, NSTEP, 0),
 	PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0), PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0),
-	PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PE("REC QUANT", &gRecQ, 3, RQ_NAMES, 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("REC CLICK", &gClick, 3, CLICK_NAMES, 0),
+	PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PE("REC QUANT", &gRecQ, 3, RQ_NAMES, 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("REC CLICK", &gClick, 3, CLICK_NAMES, 0), PI_("TAPE ALIGN", &gTapeAlign, -50, 50, 0),
 	PE("SHAKE QUANT", &gShakeQ, 3, SHQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
 	{"ADD REST", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_REST},
 	{"CLEAR SEQ", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CLEAR},
@@ -3865,7 +3865,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS; KICK = SIDECHAIN FROM THE DRUMS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM MACHINE ON / OFF"}, {"KIT", "DRUM SOUNDS"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -6085,10 +6085,24 @@ static int gTapeLen = 0, gTapeLenSel = 2, gTapeArm = 0, gTapeRec = -1, gTapeRecL
 static volatile int gTapeState = 0, gTapeSkip = 0;   // 1 waiting for the sequence, 2 dropping what came before it, 3 recording
 static int quickTapeRec(void) { return gTapeRec >= 0; }
 static int gTapeErase = -1; static u64 gTapeT0 = 0, gTapeEraseT = 0; static Ima gTpEnc[2];
+// TRACK SPEED: each track plays back at a musical ratio, so it stays on the bar grid: x2 / x3 / x4 repeat the
+// track 2 / 3 / 4 times over the tape, 1/2 / 1/3 / 1/4 stretch it (an octave down at 1/2), 2/3 3/4 4/3 3/2 in between
+#define NTSPD 11
+static const char* TSPD_NAMES[NTSPD] = {"1/4", "1/3", "1/2", "2/3", "3/4", "1X", "4/3", "3/2", "X2", "X3", "X4"};
+static const float TSPD[NTSPD] = {0.25f, 1 / 3.0f, 0.5f, 2 / 3.0f, 0.75f, 1, 4 / 3.0f, 1.5f, 2, 3, 4};
+static int gTpSpd[NTRK] = {5, 5, 5, 5};
 static const char* TLEN_NAMES[6] = {"4 BARS", "8 BARS", "16 BARS", "32 BARS", "64 BARS", "SONG"};
 static int tapeReserved(int c) { if (!gTapePlay) return 0; for (int i = 0; i < NTRK * 2; i++) if (gTapeCh[i] == c) return 1; return 0; }
+static void tapeStartPlay(int except);
+#define TAPE_LAT (160 * 2)   // samples between a frame being made and the capture seeing it
+static int gTapeAlign;   // TAPE ALIGN, ms: + moves new takes earlier, - later (fine trim if they sit late / early on hardware)
 static void tapeSeqStarted(void) {   // audio thread, the moment the sequence starts: everything captured before it is dropped
-	if (gTapeState == 1) { gTapeSkip = (int)gCapWB.offset; gTapeState = 2; }
+	if (gTapeState == 1) {
+		// the capture lags what's played by the DSP's output queue: drop that much more so the new take lines up with the
+		// tracks the second chip plays (which start right now, with the sequence, not when REC was pressed)
+		int sk = (int)gCapWB.offset + TAPE_LAT + gTapeAlign * 33; sk %= CAPRING; if (sk < 0) sk += CAPRING;
+		gTapeSkip = sk; gTapeState = 2; tapeStartPlay(gTapeRec);
+	}
 }
 static int tapeSteps(void) {
 	if (gTapeLenSel < 5) return (4 << gTapeLenSel) * 16;
@@ -6124,8 +6138,9 @@ static void tapeStartPlay(int except) {   // every track on tape (but the one re
 		u32 l = gTpMute[t] ? 0 : (u32)(gTpLevel[t] * 0x8000);
 		for (int k = 0; k < 2; k++) {
 			int c = gTapeCh[t * 2 + k]; stopCh(BK_CSND, c);
-			u32 flags = SOUND_FORMAT_ADPCM | SOUND_ONE_SHOT | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(c) | (CSND_TIMER(32728) << 16);
-			CSND_SetAdpcmState(c, 0, 0, 0); CSND_SetAdpcmState(c, 1, 0, 0); CSND_SetAdpcmReload(c, false);
+			float sp = TSPD[gTpSpd[t]];   // faster than 1X repeats, so a bar-multiple keeps landing on the bar
+			u32 flags = SOUND_FORMAT_ADPCM | (sp > 1.001f ? SOUND_REPEAT : SOUND_ONE_SHOT) | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(c) | (CSND_TIMER((int)lroundf(32728 * sp)) << 16);
+			CSND_SetAdpcmState(c, 0, 0, 0); CSND_SetAdpcmState(c, 1, 0, 0); CSND_SetAdpcmReload(c, sp > 1.001f);
 			CSND_SetChnRegs(flags, osConvertVirtToPhys(gTp[t][k]), osConvertVirtToPhys(gTp[t][k]), gTapeLen / 2, csMono(k ? l << 16 : l), 0);
 		}
 	}
@@ -6154,8 +6169,7 @@ static void tapeRecGo(void) {
 	memset(&gCapWB, 0, sizeof(gCapWB)); gCapWB.data_pcm16 = gCapBuf; gCapWB.nsamples = CAPRING; gCapWB.offset = 0; gCapLast = 0;
 	ndspSetCapture(&gCapWB);
 	gTapeRec = t; gTapeState = 1;
-	seqStop(); gSongPos = 0; gSeqMode = 1;   // the sequence (or song) from the top
-	tapeStartPlay(t);
+	seqStop(); gSongPos = 0; gSeqMode = 1;   // the sequence (or song) from the top; the tracks on tape start with it
 	char m[48]; snprintf(m, sizeof(m), "TAPE: RECORDING TRACK %d (%d S)", t + 1, gTapeRecLen / 32728); say(m);
 }
 
@@ -6288,7 +6302,7 @@ static void wavHdr(FILE* f, int n) {
 static void tapeExport(void) {   // each track and the mix, 16-bit WAV at the console's 32728 Hz
 	if (!gTapeLen) { say("THE TAPE IS EMPTY"); return; }
 	mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777); mkdir("sdmc:/3ds/syrup/tape", 0777);
-	FILE* f[NTRK + 1] = {0}; Ima st[NTRK][2]; memset(st, 0, sizeof(st));
+	FILE* f[NTRK + 1] = {0}; Ima st[NTRK][2]; memset(st, 0, sizeof(st)); long long rq[NTRK][2] = {{0}}; int rv[NTRK][2] = {{0}};
 	for (int t = 0; t < NTRK; t++) if (gTpHave[t]) { char p[48]; snprintf(p, sizeof(p), "sdmc:/3ds/syrup/tape/track%d.wav", t + 1); f[t] = fopen(p, "wb"); if (f[t]) wavHdr(f[t], gTapeLen); }
 	f[NTRK] = fopen("sdmc:/3ds/syrup/tape/mix.wav", "wb"); if (f[NTRK]) wavHdr(f[NTRK], gTapeLen);
 	static s16 tb[2048 * 2]; static float mx[2048 * 2];
@@ -6296,9 +6310,16 @@ static void tapeExport(void) {   // each track and the mix, 16-bit WAV at the co
 		int m = gTapeLen - p < 2048 ? gTapeLen - p : 2048; memset(mx, 0, sizeof(float) * m * 2);
 		for (int t = 0; t < NTRK; t++) {
 			if (!gTpHave[t]) continue;
-			float g = gTpMute[t] ? 0 : gTpLevel[t];
-			for (int k = 0; k < 2; k++) for (int i = 0; i < m; i++) {
-				int q = p + i, b = gTp[t][k][q >> 1], v = imaDec(&st[t][k], (q & 1) ? b >> 4 : b & 15);
+			float g = gTpMute[t] ? 0 : gTpLevel[t], sp = TSPD[gTpSpd[t]];
+			for (int k = 0; k < 2; k++) for (int i = 0; i < m; i++) {   // at its TRACK SPEED: read ahead / hold, faster ones wrap
+				double src = (double)(p + i) * sp; long long si = (long long)src;
+				if (sp > 1.001f) si %= gTapeLen;
+				int v = 0;
+				if (si < gTapeLen) {
+					if (si < rq[t][k]) { rq[t][k] = 0; st[t][k] = (Ima){0, 0}; rv[t][k] = 0; }   // wrapped: decode from the top
+					while (rq[t][k] <= si) { int q = (int)rq[t][k], b = gTp[t][k][q >> 1]; rv[t][k] = imaDec(&st[t][k], (q & 1) ? b >> 4 : b & 15); rq[t][k]++; }
+					v = rv[t][k];
+				}
 				tb[i * 2 + k] = (s16)v; mx[i * 2 + k] += v * g;
 			}
 			if (f[t]) fwrite(tb, 4, m, f[t]);
@@ -6329,11 +6350,13 @@ static void drawTapeView(void) {
 		rectP(4, y, 40, TP_RH - 4, rec ? TH->warn : arm ? TH->keyOn : TH->tab);
 		char nm[4]; snprintf(nm, sizeof(nm), "%d", t + 1); const u8* tc = (rec || arm) ? EGA[0] : TH->tabTxt; text(20, y + 4, nm, 1, tc[0], tc[1], tc[2]);
 		text(8, y + 15, rec ? "REC" : arm ? "ARM" : "", 1, tc[0], tc[1], tc[2]);
-		rectP(48, y, 116, TP_RH - 4, TH->pad);   // the strip of tape
-		if (gTpHave[t] && !rec) { rectP(48, y + 6, 116, TP_RH - 16, gTpMute[t] ? TH->grid : TH->val); }
-		else if (rec && head >= 0) rectP(48, y + 6, (int)(116 * head), TP_RH - 16, TH->warn);
-		else text(84, y + 10, "EMPTY", 1, RGB3(TH->dim));
-		if (head >= 0 && head <= 1) rectP(48 + (int)(115 * head), y, 1, TP_RH - 4, TH->keyOn);
+		rectP(48, y, 72, TP_RH - 4, TH->pad);   // the strip of tape
+		if (gTpHave[t] && !rec) { rectP(48, y + 6, 72, TP_RH - 16, gTpMute[t] ? TH->grid : TH->val); }
+		else if (rec && head >= 0) rectP(48, y + 6, (int)(72 * head), TP_RH - 16, TH->warn);
+		else text(64, y + 10, "EMPTY", 1, RGB3(TH->dim));
+		if (head >= 0 && head <= 1) rectP(48 + (int)(71 * head), y, 1, TP_RH - 4, TH->keyOn);
+		{ int on = gTpSpd[t] != 5; rectP(124, y, 40, TP_RH - 4, on ? TH->keyOn : TH->tab); const u8* c = on ? EGA[0] : TH->tabTxt;   // TRACK SPEED: left half slower, right half faster
+		  text(144 - (int)strlen(TSPD_NAMES[gTpSpd[t]]) * 4, y + 10, TSPD_NAMES[gTpSpd[t]], 1, c[0], c[1], c[2]); text(126, y + 1, "-", 1, c[0], c[1], c[2]); text(155, y + 1, "+", 1, c[0], c[1], c[2]); }
 		rectP(168, y, 40, TP_RH - 4, gTpMute[t] ? TH->warn : TH->tab); text(172, y + 10, "MUTE", 1, RGB3(gTpMute[t] ? EGA[0] : TH->tabTxt));
 		rectP(212, y + 11, 70, 3, TH->tab); rectP(212, y + 10, (int)(70 * gTpLevel[t]), 5, TH->val); rectP(212 + (int)(69 * gTpLevel[t]) - 1, y + 5, 3, 15, TH->keyOn);
 		int er = gTapeErase == t && osGetTime() - gTapeEraseT < 3000;
@@ -6365,6 +6388,10 @@ static int tapeTouch(int x, int y, int press, int release) {
 	if (y < TP_RY || t < 0 || t >= NTRK) return press;
 	if (press && x < 44) { if (gTapeRec < 0) gTapeArm = t; return 1; }
 	if (press && x >= 168 && x < 208) { gTpMute[t] = !gTpMute[t]; tapeVol(t); return 1; }
+	if (press && x >= 122 && x < 166) {   // TRACK SPEED: from the next play
+		int v = gTpSpd[t] + (x >= 144 ? 1 : -1); gTpSpd[t] = v < 0 ? 0 : v >= NTSPD ? NTSPD - 1 : v;
+		char m[40]; snprintf(m, sizeof(m), "TRACK %d SPEED %s", t + 1, TSPD_NAMES[gTpSpd[t]]); say(m); return 1;
+	}
 	if (press && x >= 286) {
 		if (gTapeRec == t) return 1;
 		if (gTapeErase == t && osGetTime() - gTapeEraseT < 3000) { gTapeErase = -1; tapeErase(t); }
