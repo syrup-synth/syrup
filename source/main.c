@@ -3927,7 +3927,7 @@ static void drawFooter(int page, int sel) {
 	rect(0, 226, 400, 1, LINE);
 	if (!gAudioOK) {   // no DSP firmware dump yet: say exactly how to make one (Luma's Rosalina menu works right here)
 		static const char* L[] = {"NO SOUND YET: ONE-TIME SETUP", "", "THE 3DS SOUND CHIP NEEDS ITS FIRMWARE", "COPIED TO THE SD CARD (NINTENDO'S, SO", "SYRUP CAN'T INCLUDE IT). TO MAKE IT:", "",
-			"1. PRESS L + DOWN + SELECT (ROSALINA)", "2. MISCELLANEOUS OPTIONS >", "   DUMP DSP FIRMWARE", "3. PRESS B, THEN QUIT AND REOPEN SYRUP", "", "(OR RUN THE DSP1 APP ONCE)"};
+			"1. PRESS L + DOWN + SELECT (ROSALINA)", "2. MISCELLANEOUS OPTIONS >", "   DUMP DSP FIRMWARE", "3. PRESS B, THEN QUIT AND REOPEN SYRUP", "", "(SYRUP TRIED TO DO THIS ITSELF AND COULDN'T)"};
 		int n = sizeof(L) / sizeof(L[0]), h = n * 12 + 16, y0 = 113 - h / 2;
 		rect(40, y0, 320, h, BG); rect(40, y0, 320, 1, WARN); rect(40, y0 + h - 1, 320, 1, WARN); rect(40, y0, 1, h, WARN); rect(359, y0, 1, h, WARN);
 		for (int i = 0; i < n; i++) text(200 - (int)strlen(L[i]) * 4, y0 + 8 + i * 12, L[i], 1, i == 0 ? WARN : TXT);
@@ -8777,6 +8777,76 @@ static void wakeTick(void) {   // main loop, after a wake: Wi-Fi MIDI and the IR
 	if (gLinkResume) { gLink = gLinkResume; gLinkResume = 0; linkChanged(); }
 }
 
+// ---- SOUND SETUP, automatic: the DSP firmware (sdmc:/3ds/dspfirm.cdc) is Nintendo's, so Syrup can't ship it, but it
+// sits inside the system's own Nintendo 3DS Sound app. On the first start without it, Syrup reads that app's code
+// from NAND, unpacks it, finds the firmware ("DSP1", 0x100 bytes into it) and writes the file - what Rosalina's
+// "Dump DSP firmware" and the DSP1 app do - so there's nothing to set up by hand. If it can't, the screen still
+// shows the Rosalina steps.
+static int gDspAuto = 0;   // 1 = made it this start, -1 = tried and couldn't
+static int blzDecompress(const u8* in, u32 inSize, u8* out, u32 outSize) {   // the 3DS ExeFS code compression (backwards LZSS)
+	if (inSize < 8) return 0;
+	const u8* foot = in + inSize - 8;
+	u32 tb = foot[0] | foot[1] << 8 | foot[2] << 16 | (u32)foot[3] << 24;
+	u32 index = inSize - ((tb >> 24) & 0xFF), stop = inSize - (tb & 0xFFFFFF), o = outSize;
+	if ((tb & 0xFFFFFF) > inSize || ((tb >> 24) & 0xFF) > inSize) return 0;
+	memset(out, 0, outSize); memcpy(out, in, inSize);
+	while (index > stop) {
+		u8 ctl = in[--index];
+		for (int j = 0; j < 8; j++) {
+			if (index <= stop || o == 0) break;
+			if (ctl & 0x80) {
+				if (index < 2) return 0;
+				index -= 2;
+				u32 so = in[index] | in[index + 1] << 8, sz = ((so >> 12) & 15) + 3; so = (so & 0x0FFF) + 2;
+				if (o < sz) return 0;
+				for (u32 k = 0; k < sz; k++) { if (o + so >= outSize) return 0; u8 d = out[o + so]; out[--o] = d; }
+			} else { if (o < 1) return 0; out[--o] = in[--index]; }
+			ctl <<= 1;
+		}
+	}
+	return 1;
+}
+static int dspFind(const u8* b, u32 n) {   // "DSP1" magic at +0x100 of the firmware: returns the firmware's offset, or -1
+	for (u32 i = 0x100; i + 8 <= n; i += 4) if (b[i] == 'D' && b[i + 1] == 'S' && b[i + 2] == 'P' && b[i + 3] == '1') {
+		u32 sz = b[i + 4] | b[i + 5] << 8 | b[i + 6] << 16 | (u32)b[i + 7] << 24;
+		if (sz > 0x200 && sz < 0x100000 && i - 0x100 + sz <= n) return (int)(i - 0x100);
+	}
+	return -1;
+}
+static int dspAutoDump(void) {
+#ifdef SYRUP_HOST
+	return 0;
+#else
+	static const u32 SOUND[] = {0x00021500, 0x00022500, 0x00020500, 0x00026500, 0x00027500, 0x00028500};   // Nintendo 3DS Sound: USA EUR JPN CHN KOR TWN
+	static const u32 CODE[5] = {0, 0, 2, 0x646F632E, 0x00000065};   // ExeFS ".code"
+	for (unsigned t = 0; t < sizeof(SOUND) / sizeof(SOUND[0]); t++) {
+		u32 ap[4] = {SOUND[t], 0x00040010, MEDIATYPE_NAND, 0};
+		FS_Path a = {PATH_BINARY, sizeof(ap), ap}, f = {PATH_BINARY, sizeof(CODE), CODE};
+		Handle h; if (R_FAILED(FSUSER_OpenFileDirectly(&h, ARCHIVE_SAVEDATA_AND_CONTENT, a, f, FS_OPEN_READ, 0))) continue;
+		u64 sz = 0; FSFILE_GetSize(h, &sz);
+		u8* code = sz > 16 && sz < 0x800000 ? (u8*)malloc((size_t)sz) : NULL; u32 rd = 0;
+		if (code) FSFILE_Read(h, &rd, 0, code, (u32)sz);
+		FSFILE_Close(h);
+		if (!code || rd != sz) { free(code); continue; }
+		u8* use = code; u32 n = (u32)sz; u8* big = NULL;
+		int at = dspFind(code, n);
+		if (at < 0) {   // compressed (the usual case): unpack, then look again
+			u32 extra = code[n - 4] | code[n - 3] << 8 | code[n - 2] << 16 | (u32)code[n - 1] << 24, out = n + extra;
+			if (extra && extra < 0x1000000 && (big = (u8*)malloc(out)) && blzDecompress(code, n, big, out)) { use = big; n = out; at = dspFind(big, n); }
+		}
+		int ok = 0;
+		if (at >= 0) {
+			u32 fsz = use[at + 0x104] | use[at + 0x105] << 8 | use[at + 0x106] << 16 | (u32)use[at + 0x107] << 24;
+			mkdir("sdmc:/3ds", 0777);
+			FILE* o = fopen("sdmc:/3ds/dspfirm.cdc.part", "wb");
+			if (o) { ok = fwrite(use + at, 1, fsz, o) == fsz; fclose(o); if (ok) { remove("sdmc:/3ds/dspfirm.cdc"); ok = rename("sdmc:/3ds/dspfirm.cdc.part", "sdmc:/3ds/dspfirm.cdc") == 0; } else remove("sdmc:/3ds/dspfirm.cdc.part"); }
+		}
+		free(big); free(code);
+		if (ok) return 1;
+	}
+	return -1;
+#endif
+}
 int main(void) {
 	gfxInitDefault();
 	gfxSetDoubleBuffering(GFX_TOP, true);     // draw into the hidden buffer, swap on vblank: no tearing
@@ -8828,7 +8898,9 @@ int main(void) {
 	}
 	buildSub(); buildNoise();
 
+	{ FILE* df = fopen("sdmc:/3ds/dspfirm.cdc", "rb"); if (df) fclose(df); else { crashMark("DSP SETUP"); gDspAuto = dspAutoDump(); } }   // no firmware yet: make it ourselves
 	gAudioOK = R_SUCCEEDED(ndspInit());
+	if (gAudioOK && gDspAuto == 1) { say("SOUND SET UP: DSP FIRMWARE SAVED TO THE SD CARD"); gMsgT = 6; }
 	if (gAudioOK) {
 		ndspSetOutputMode(NDSP_OUTPUT_STEREO);
 		ndspSetMasterVol(1.0f);
