@@ -4120,17 +4120,21 @@ static void drawHelp(void) {   // L / R flip the slides; any other button closes
 #define KEY_HOLD 3                   // a held key keeps the stylus until it is this far into another key
 #define WORK_B 118   // bottom of the work area; the PERF row sits under it, then the keyboard
 #define KB_Y  136
+#define KB_X  36    // the keys start here: OCT+ / OCT- / CHORD / LATCH stand in a column to their left
+#define KB_WW ((320.0f - KB_X) / 14)
+#define SIDE_H ((240 - KB_Y) / 4)
 #define NDRUM 10
 static volatile float gPadFlash[NDRUM];   // drum pads light when they're hit: taps, MIDI and the drum machine
 static const char* kitPadName(int d); static int kitPadNote(int d); static int kitPadOrder(int i);
 static int keyAt(int x, int y, int base) {
+	x -= KB_X;
 	if (gVoiceMode >= 3) {   // drum pads: 2 rows of 5
-		int c = x / 64, r = y < KB_Y + PAD_ROW ? 0 : 1; if (c > 4) c = 4; if (c < 0) c = 0;
+		int c = x / 57, r = y < KB_Y + PAD_ROW ? 0 : 1; if (c > 4) c = 4; if (c < 0) c = 0;
 		return kitPadNote(kitPadOrder(r * 5 + c));
 	}
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
-	float ww = 320.0f / 14;
+	float ww = KB_WW;
 	if (gScale) { int i = (int)(x / ww); if (i > 13) i = 13; if (i < 0) i = 0; gKeyDeg = i; return scaleNote(base + gRoot, i); }
 	if (y < KB_Y + BLK_H + 2)
 		for (int i = 0; i < 14; i++) {
@@ -4139,7 +4143,7 @@ static int keyAt(int x, int y, int base) {
 			// the touch area is wider than the drawn key (resistive screen + stylus): BLK_GRACE px into the white keys each side
 			if (x >= bx - BLK_GRACE && x < bx + (int)(ww * 0.6f) + BLK_GRACE) return base + (i / 7) * 12 + WN[i % 7] + 1;
 		}
-	int i = (int)(x / ww); if (i > 13) i = 13;
+	int i = (int)(x / ww); if (i > 13) i = 13; if (i < 0) i = 0;
 	return base + (i / 7) * 12 + WN[i % 7];
 }
 
@@ -5285,7 +5289,10 @@ static void drawXyPad(void) {
 }
 static int xyTouch(int x, int y, int press, int release) {   // 1 = redraw
 	int top = xyTop(), h = XY_Y + XY_H - top;
-	if (release) { int r = gSlDrag >= 0; gSlDrag = -1; return r; }
+	static int skip = 0;   // a touch that lands on the pad's bottom edge is someone reaching for the row below: it never moves the pad
+	if (release) { int r = gSlDrag >= 0; gSlDrag = -1; skip = 0; return r; }
+	if (press) skip = y >= XY_Y + XY_H - 8;
+	if (skip) return 0;
 	if (press && x >= 316 - XYB_W && y >= top && y < top + 14) { gXyMode = (gXyMode + 1) % NXY; gSlDrag = -1; say(XY_NAMES[gXyMode]); return 1; }
 	if (press && gXyMode == 6 && y < top) { gSlDrag = (x >= 160) + ((y - XY_Y) / 13 ? 2 : 0); }
 	if (gSlDrag >= 0) { float v = (x - (4 + (gSlDrag & 1) * 158 + 54)) / 96.0f; *SL_P[gSlDrag] = v < 0 ? 0 : v > 1 ? 1 : v; gEdited = 1; return 1; }
@@ -5373,15 +5380,15 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	}
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
-	float ww = 320.0f / 14;
+	float ww = KB_WW; const int X0 = KB_X;
 	rect(0, KB_Y, 320, 240 - KB_Y, RGB3(TH->kbBg));
 	if (TH->ega) rect(0, KB_Y, 320, 1, LINE);
 	if (gVoiceMode >= 3) {   // drum kit pads, lower on a pad = harder
 		for (int i = 0; i < 10; i++) {
-			int d = kitPadOrder(i), x = (i % 5) * 64, y = KB_Y + 2 + (i / 5) * PAD_ROW, note = kitPadNote(d), lit = (note < 128 && on[note]) || gPadFlash[d] > 0;
-			rect(x + 2, y, 60, PAD_ROW - 4, lit ? TH->keyOn[0] : TH->keyW[0], lit ? TH->keyOn[1] : TH->keyW[1], lit ? TH->keyOn[2] : TH->keyW[2]);
-			if (TH->ega) outline(x + 2, y, 60, PAD_ROW - 4, RGB3(TH->keyLine));
-			const char* nm = kitPadName(d); int tx = x + 32 - (int)strlen(nm) * 4;
+			int d = kitPadOrder(i), x = X0 + (i % 5) * 57, y = KB_Y + 2 + (i / 5) * PAD_ROW, note = kitPadNote(d), lit = (note < 128 && on[note]) || gPadFlash[d] > 0;
+			rect(x + 2, y, 54, PAD_ROW - 4, lit ? TH->keyOn[0] : TH->keyW[0], lit ? TH->keyOn[1] : TH->keyW[1], lit ? TH->keyOn[2] : TH->keyW[2]);
+			if (TH->ega) outline(x + 2, y, 54, PAD_ROW - 4, RGB3(TH->keyLine));
+			const char* nm = kitPadName(d); int tx = x + 29 - (int)strlen(nm) * 4;
 			if (lit) text(tx, y + PAD_ROW / 2 - 6, nm, 1, EC(0)); else text(tx, y + PAD_ROW / 2 - 6, nm, 1, TH->ega ? TH->keyLine[0] : 60, TH->ega ? TH->keyLine[1] : 40, TH->ega ? TH->keyLine[2] : 20);
 		}
 		return;
@@ -5389,7 +5396,7 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	if (gScale) {   // scale mode: 14 pads, one per scale degree
 		int n = scaleLen();
 		for (int i = 0; i < 14; i++) {
-			int note = scaleNote(base + gRoot, i), x = (int)(i * ww), root = i % n == 0;
+			int note = scaleNote(base + gRoot, i), x = X0 + (int)(i * ww), root = i % n == 0;
 			int lit = note < 128 && on[note];
 			if (lit) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyOn));
 			else if (root) rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->dim));
@@ -5397,38 +5404,48 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 			if (lit || root) text(x + (int)ww / 2 - (int)strlen(NOTE_NAMES[note % 12]) * 4, 226, NOTE_NAMES[note % 12], 1, EC(0));
 			else text(x + (int)ww / 2 - (int)strlen(NOTE_NAMES[note % 12]) * 4, 226, NOTE_NAMES[note % 12], 1, TH->ega ? TH->keyLine[0] : 60, TH->ega ? TH->keyLine[1] : 40, TH->ega ? TH->keyLine[2] : 20);
 		}
-		char c[24]; snprintf(c, sizeof(c), "%s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); text(4, KB_Y + 5, c, 1, VAL);
+		char c[24]; snprintf(c, sizeof(c), "%s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); text(X0 + 4, KB_Y + 5, c, 1, VAL);
 		return;
 	}
 	for (int i = 0; i < 14; i++) {
-		int n = base + (i / 7) * 12 + WN[i % 7], x = (int)(i * ww); u8 c[3];
+		int n = base + (i / 7) * 12 + WN[i % 7], x = X0 + (int)(i * ww); u8 c[3];
 		if (on[n]) { keyColor(TH->keyW, TH->keyOn, 0.45f + 0.55f * gNoteVel[n], c); rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, c[0], c[1], c[2]); }   // harder = brighter
 		else if (gKeyFade[n] > 0) { keyColor(TH->keyW, TH->keyOn, gKeyFade[n] * 0.6f, c); rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, c[0], c[1], c[2]); if (TH->ega) outline(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyLine)); }
 		else { rect(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyW)); if (TH->ega) outline(x + 1, KB_Y + 2, (int)ww - 2, 240 - KB_Y - 4, RGB3(TH->keyLine)); }
 	}
 	for (int i = 0; i < 14; i++) {
 		if (!BL[i % 7]) continue;
-		int n = base + (i / 7) * 12 + WN[i % 7] + 1, bx = (int)((i + 1) * ww - ww * 0.3f);
+		int n = base + (i / 7) * 12 + WN[i % 7] + 1, bx = X0 + (int)((i + 1) * ww - ww * 0.3f);
 		u8 c[3];
 		if (on[n]) { keyColor(TH->keyB, TH->keyOnB, 0.45f + 0.55f * gNoteVel[n], c); rect(bx, KB_Y + 2, (int)(ww * 0.6f), BLK_H, c[0], c[1], c[2]); }
 		else if (gKeyFade[n] > 0) { keyColor(TH->keyB, TH->keyOnB, gKeyFade[n] * 0.6f, c); rect(bx, KB_Y + 2, (int)(ww * 0.6f), BLK_H, c[0], c[1], c[2]); }
 		else { rect(bx, KB_Y + 2, (int)(ww * 0.6f), BLK_H, RGB3(TH->keyB)); if (TH->ega) outline(bx, KB_Y + 2, (int)(ww * 0.6f), BLK_H, RGB3(TH->keyLine)); }
 	}
 	char c[8]; snprintf(c, sizeof(c), "C%d", base / 12 - 1);
-	if (on[base] || !TH->ega) text(4, 228, c, 1, TH->ega ? 0 : 120, TH->ega ? 0 : 90, TH->ega ? 0 : 50); else text(4, 228, c, 1, RGB3(TH->keyLine));
+	if (on[base] || !TH->ega) text(X0 + 3, 228, c, 1, TH->ega ? 0 : 120, TH->ega ? 0 : 90, TH->ega ? 0 : 50); else text(X0 + 3, 228, c, 1, RGB3(TH->keyLine));
 }
 // PERF row, between the work area and the keyboard: the things you reach for while playing
 static int gScaleLast = 2, gChordLast = 1; static float gOctFlash[2];   // OCT- / OCT+ light for a moment when hit
-static void drawPerfRow(int latch) {
-	static const char* PB[7] = {"OCT-", "OCT+", "SCALE", "LATCH", "CHORD", "PLAY", "PANIC"};
+#define NPERF 3
+static void drawPerfRow(int latch) {   // the row above the keys: SCALE, PLAY, PANIC. Its top 6 px are a gap: reaching for it doesn't drag the XY pad
+	static const char* PB[NPERF] = {"SCALE", "PLAY", "PANIC"};
 	rect(0, WORK_B, 320, KB_Y - WORK_B, BG);
-	for (int i = 0; i < 7; i++) {
-		int x = i * 320 / 7, bw = 320 / 7 - 3, w = (int)strlen(PB[i]) * 8;
-		int lit = (i < 2 && gOctFlash[i] > 0) || (i == 2 && gScale) || (i == 3 && latch) || (i == 4 && gChord) || (i == 5 && gSeqMode == 1);
-		const char* lb = i == 5 && gSeqMode == 1 ? "STOP" : PB[i]; if (i == 5) w = (int)strlen(lb) * 8;
-		if (lit) { rect(x + 2, WORK_B + 1, bw, KB_Y - WORK_B - 3, HI); text(x + 160 / 7 + 1 - w / 2, WORK_B + 5, lb, 1, HITXT); }
-		else if (TH->ega) { outline(x + 2, WORK_B + 1, bw, KB_Y - WORK_B - 3, LINE); text(x + 160 / 7 + 1 - w / 2, WORK_B + 5, lb, 1, TXT); }
-		else { rect(x + 2, WORK_B + 1, bw, KB_Y - WORK_B - 3, RGB3(TH->tab)); text(x + 160 / 7 + 1 - w / 2, WORK_B + 5, lb, 1, RGB3(TH->tabTxt)); }
+	for (int i = 0; i < NPERF; i++) {
+		int x = i * 320 / NPERF, bw = 320 / NPERF - 4;
+		int lit = (i == 0 && gScale) || (i == 1 && gSeqMode == 1);
+		const char* lb = i == 1 && gSeqMode == 1 ? "STOP" : PB[i]; int w = (int)strlen(lb) * 8, tx = x + 160 / NPERF - w / 2;
+		if (lit) { rect(x + 2, WORK_B + 1, bw, KB_Y - WORK_B - 3, HI); text(tx, WORK_B + 5, lb, 1, HITXT); }
+		else if (TH->ega) { outline(x + 2, WORK_B + 1, bw, KB_Y - WORK_B - 3, LINE); text(tx, WORK_B + 5, lb, 1, TXT); }
+		else { rect(x + 2, WORK_B + 1, bw, KB_Y - WORK_B - 3, RGB3(TH->tab)); text(tx, WORK_B + 5, lb, 1, RGB3(TH->tabTxt)); }
+	}
+	// the column left of the keys: OCT+ over OCT-, then CHORD and LATCH
+	static const char* SB[4] = {"OCT+", "OCT-", "CHRD", "LTCH"};
+	rect(0, KB_Y, KB_X, 240 - KB_Y, RGB3(TH->kbBg));
+	for (int i = 0; i < 4; i++) {
+		int y = KB_Y + i * SIDE_H, lit = (i == 0 && gOctFlash[1] > 0) || (i == 1 && gOctFlash[0] > 0) || (i == 2 && gChord) || (i == 3 && latch);
+		if (lit) { rect(1, y + 1, KB_X - 3, SIDE_H - 2, HI); text(KB_X / 2 - 16, y + SIDE_H / 2 - 4, SB[i], 1, HITXT); }
+		else if (TH->ega) { outline(1, y + 1, KB_X - 3, SIDE_H - 2, LINE); text(KB_X / 2 - 16, y + SIDE_H / 2 - 4, SB[i], 1, TXT); }
+		else { rect(1, y + 1, KB_X - 3, SIDE_H - 2, RGB3(TH->tab)); text(KB_X / 2 - 16, y + SIDE_H / 2 - 4, SB[i], 1, RGB3(TH->tabTxt)); }
 	}
 }
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
@@ -5440,7 +5457,7 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	if (gHwOnB && !gGridOn && !gAddEdit) { if (gGrains) drawGrainEd(); else drawHwView(); }
 	if (!gGridOn && !gAddEdit) drawSeqStrip();
 	drawPerfRow(latch);
-	if (latch) { outline(0, KB_Y, 320, 240 - KB_Y, HI); outline(1, KB_Y + 1, 318, 238 - KB_Y, HI); }   // LATCH: notes hold, and the keyboard says so
+	if (latch) { outline(KB_X, KB_Y, 320 - KB_X, 240 - KB_Y, HI); outline(KB_X + 1, KB_Y + 1, 318 - KB_X, 238 - KB_Y, HI); }   // LATCH: notes hold, and the keyboard says so
 	if (gChordKey >= 0 && gVoiceMode < 3 && !((gVoiceMode == 1 || gVoiceMode == 2) && !gArp) && !gGridOn && !gAddEdit && !gShapeOn) {   // chord mode: the chord you're holding, by name
 		char t[24]; snprintf(t, sizeof(t), "%s %s", NOTE_NAMES[gChordKey % 12], CHORD_NAMES[gChord]);
 		int w = (int)strlen(t) * 8 + 8; rect(6, WORK_B - 20, w, 12, RGB3(TH->tab)); text(10, WORK_B - 18, t, 1, RGB3(TH->tabTxt));
@@ -8809,15 +8826,10 @@ int main(void) {
 				}
 			} else if (t.py >= WORK_B && t.py < KB_Y && !gModOn && !gGridOn && !(gPads && !gGridOn)) {
 				if (!prevTouch) {
-					int b = t.px * 7 / 320;
-					if (b <= 1) gOctFlash[b] = 1;
-					if (b == 0 && oct > -3) { oct--; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
-					if (b == 1 && oct < 3) { oct++; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
-					if (b == 2) { if (gScale) { gScaleLast = gScale; gScale = 0; } else gScale = gScaleLast; char m[40]; snprintf(m, sizeof(m), "SCALE: %s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); say(m); }
-					if (b == 3) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } }
-					if (b == 4) { if (gChord) { gChordLast = gChord; gChord = 0; } else gChord = gChordLast; char m[32]; snprintf(m, sizeof(m), "CHORD: %s", gChord ? CHORD_NAMES[gChord] : "OFF"); say(m); }
-					if (b == 5) { gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0); if (gSeqMode == 0) seqStop(); }
-					if (b == 6) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; panicRest(); say("PANIC: EVERYTHING STOPPED"); }
+					int b = t.px * NPERF / 320;
+					if (b == 0) { if (gScale) { gScaleLast = gScale; gScale = 0; } else gScale = gScaleLast; char m[40]; snprintf(m, sizeof(m), "SCALE: %s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); say(m); }
+					if (b == 1) { gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0); if (gSeqMode == 0) seqStop(); }
+					if (b == 2) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; panicRest(); say("PANIC: EVERYTHING STOPPED"); }
 					topDirty = botDirty = 1;
 				}
 			} else if (gModOn && !gPads) {
@@ -8844,6 +8856,16 @@ int main(void) {
 				if (!prevTouch && visTilesTouch(t.px, t.py)) { botDirty = 1; topDirty = 1; }
 			} else if (gHwOnB && t.py < WORK_B && t.py >= TAB_H) {
 				if (gGrains && grainEdTouch(t.px, t.py, !prevTouch, 0)) { botDirty = 1; gEdited = 1; }
+			} else if (t.py >= KB_Y && t.px < KB_X && !gModOn && !gGridOn && !(gPads && !gGridOn)) {   // the column left of the keys
+				if (!prevTouch) {
+					int b = (t.py - KB_Y) / SIDE_H; if (b > 3) b = 3;
+					if (b == 0 && oct < 3) { oct++; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
+					if (b == 1 && oct > -3) { oct--; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
+					if (b <= 1) gOctFlash[b == 0] = 1;
+					if (b == 2) { if (gChord) { gChordLast = gChord; gChord = 0; } else gChord = gChordLast; char m[32]; snprintf(m, sizeof(m), "CHORD: %s", gChord ? CHORD_NAMES[gChord] : "OFF"); say(m); }
+					if (b == 3) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } }
+					topDirty = botDirty = 1;
+				}
 			} else if (t.py >= KB_Y) {
 				int deg0 = gKeyDeg;   // (keyAt sets the scale degree; a kept key keeps its own)
 				key = keyAt(t.px, t.py, base);

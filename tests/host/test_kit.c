@@ -27,7 +27,7 @@ static void SCRIPT(int fr) {
 		int hb = 0; drumHit(2, 1); drumHit(2, 1); drumHit(3, 1); csndExecCmds(false); for (int i = 0; i < 32; i++) hb += CS[i].on;
 		if (hb != on2 + 1) fail("drum poly: open hat should choke both closed-hat channels (%d vs %d)", hb, on2 + 1);
 	}
-	if (fr == tp || fr == tp + 1 || fr == tp + 2) { TOUCH = 1; TX = 30; TY = KB_Y + 61 + 40; }
+	if (fr == tp || fr == tp + 1 || fr == tp + 2) { TOUCH = 1; TX = KB_X + 20; TY = KB_Y + 61 + 40; }
 	if (fr == tp + 2) { char n[64]; snprintf(n, sizeof n, "shots/kit%d_pads.ppm", KIT); shotBot(n); padHit = 1; }
 	if (KIT == 4 && fr >= tp + 20 && fr < tp + 32) TILTX = (fr & 1) ? 1.5f : -1.5f;   // shake it
 	if (KIT == 4 && fr == tp + 32) TILTX = 0;

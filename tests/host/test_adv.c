@@ -51,15 +51,15 @@ static void SCRIPT(int fr) {
 	if (fr == 186) { shotBot("shots/hw_view.ppm"); if (!gHwOnB) fail("HARDWARE page: sensor view should be up"); }
 	// keyboard hit areas: black keys reach BLK_GRACE px past their drawn edge; D keeps a strip at the top
 	if (fr == 187) {
-		int sc = gScale, vm = gVoiceMode; gScale = 0; gVoiceMode = 0; float ww = 320.0f / 14; int bx = (int)(ww - ww * 0.3f), y = KB_Y + 10;
+		int sc = gScale, vm = gVoiceMode; gScale = 0; gVoiceMode = 0; float ww = KB_WW; int bx = KB_X + (int)(ww - ww * 0.3f), y = KB_Y + 10;
 		if (keyAt(bx - 2, y, 48) != 49) fail("keys: 2 px left of C# should still be C# (%d)", keyAt(bx - 2, y, 48));
 		if (keyAt(bx - BLK_GRACE - 2, y, 48) != 48) fail("keys: further left should be C");
-		int dmid = (int)(1.5f * ww); if (keyAt(dmid, y, 48) != 50) fail("keys: the top middle of D should still be D (%d)", keyAt(dmid, y, 48));
+		int dmid = KB_X + (int)(1.5f * ww); if (keyAt(dmid, y, 48) != 50) fail("keys: the top middle of D should still be D (%d)", keyAt(dmid, y, 48));
 		if (keyAt(bx - 2, KB_Y + BLK_H + 6, 48) != 48) fail("keys: below the black keys it's the white key");
 		gScale = sc; gVoiceMode = vm;
 	}
 	// a held key survives a small slip: touch C# then drift 2 px out of its area
-	if (fr >= 188 && fr < 194) { TOUCH = 1; TY = KB_Y + 10; TX = (int)(320.0f / 14 * 0.7f) - BLK_GRACE + (fr >= 191 ? -2 : 1); gScale = 0; }
+	if (fr >= 188 && fr < 194) { TOUCH = 1; TY = KB_Y + 10; TX = KB_X + (int)(KB_WW * 0.7f) - BLK_GRACE + (fr >= 191 ? -2 : 1); gScale = 0; }
 	if (fr == 195) {   // edits that patchCapture saves must mark the patch edited
 		gEdited = 0; gModView = 4; motionTouch(150, MOT_Y + 10, 1, 0); if (!gEdited) fail("edited: drawing a motion lane");
 		gEdited = 0; gModView = 2; modViewTouch(100, 100, 1, 0); if (!gEdited) fail("edited: drawing LFO 3");
@@ -71,7 +71,7 @@ static void SCRIPT(int fr) {
 	// LATCH on, tap the same key twice: the second tap restrikes it (a released voice + a new one)
 	if (fr == 200) { int st, ix; if (findPreset("WARM FELT", &st, &ix)) presetLoad(st, ix); gPads = 0; gVoiceMode = 0; gArp = 0; gSeqMode = 0; gChord = 0; gScale = 0; gEdited = 0; }
 	if (fr == 201) HD = KEY_B;   // LATCH
-	if (fr == 204 || fr == 205 || fr == 210 || fr == 211) { TOUCH = 1; TX = 30; TY = KB_Y + 80; }
+	if (fr == 204 || fr == 205 || fr == 210 || fr == 211) { TOUCH = 1; TX = KB_X + 10; TY = KB_Y + 80; }
 	{ static int rel0; if (fr == 209 || fr == 214) {
 		int rel = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage == 4) rel++;
 		if (fr == 209) rel0 = rel; else if (rel <= rel0) fail("keys: with LATCH, tapping the held key again should restrike it");
