@@ -3327,7 +3327,15 @@ static int pageLen(int pg) { int n = 0; while (PAGES[pg][n].name) n++; return n;
 static void paramFmt(const Param* p, char* out, int len) {
 	if (p->type == PT_E) {
 		int v = *(int*)p->p;
-		if (p->names == TABLE_NAME_DUMMY) snprintf(out, len, "%.16s", p->p == &gOsc[0].table ? gOsc[0].tb.name : gOsc[1].tb.name);
+		if (p->names == TABLE_NAME_DUMMY) {   // name it from the index just picked: tb.name only catches up once the table loads (it read one behind)
+			const Osc* o = p->p == &gOsc[0].table ? &gOsc[0] : &gOsc[1];
+			if (v >= 0 && v < T_BUILTIN) snprintf(out, len, "%.16s", BUILTIN_NAMES[v]);
+			else if (v >= T_BUILTIN && v < gTableCount) {
+				char nm[64]; snprintf(nm, sizeof(nm), "%s", gFiles[v - T_BUILTIN]); size_t n = strlen(nm); if (n > 4) nm[n - 4] = 0;
+				for (char* c = nm; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
+				snprintf(out, len, "%.16s", nm);
+			} else snprintf(out, len, "%.16s", o->tb.name);   // live / additive tables keep their own name
+		}
 		else if (p->names == PRESET_DUMMY) snprintf(out, len, "%.16s", presetName(gStyle, gPreset));
 		else if (p->names == PRESS_RIGHT) snprintf(out, len, "PRESS >");
 		else if (!p->names || v < (int)p->mn || v > (int)p->mx) snprintf(out, len, "%d", v);   // out of range: show the number, never read past the list
