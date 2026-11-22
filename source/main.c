@@ -90,6 +90,7 @@ static void fft(cpx* a, int n, int inv) {
 static int gGpuOK = 0, gGpuFx = 1, gGpuHung = 0, gGpuFrames = 0, gGpuCopy = 1;
 static int gDrums, gKit, gKickPat, gSnarePat, gHatPat; static float gDrumLevel;
 // v12 patch fields live with the looper, CHIP > FX and the XY pad further down
+static int gSeqRate = 0;   // SEQ RATE (see seqDiv)
 static int gTapeAlign; static int gXyMode, gThru, gTapeKeys; static float gThruCut, gThruRes, gThruEnv, gThruLfo, gEchoWow;
 static void drumsChanged(void); static void drumRecChanged(void);
 static int gBeatFromPatch;   // the running beat came with the current patch (and stops when you leave it); touching a drum control makes it yours
@@ -2213,7 +2214,7 @@ static int rowSlotFor(int nt) {   // the rhythm row for this pitch, or a free on
 }
 static int noteOnCustomRow(int nt) { return rowOfNote(nt) >= 0; }
 // SEQ RATE: what one sequencer step is. 1/32 runs the steps twice as fast (a 16-step pattern is half a bar), 1/8 half
-static int gSeqRate = 0; static const char* SEQRATE_NAMES[3] = {"1/16", "1/32", "1/8"};
+static const char* SEQRATE_NAMES[3] = {"1/16", "1/32", "1/8"};
 static float seqDiv(void) { return gSeqRate == 1 ? 0.5f : gSeqRate == 2 ? 2.0f : 1.0f; }   // a step, in 16ths
 static float stepLen(int i) { return ((i & 1) ? 1.0f - gSwing : 1.0f + gSwing) * seqDiv(); }   // in 16ths
 static void seqFireAt(int idx, unsigned clock, int early, float off0) {
