@@ -77,18 +77,18 @@ static void SCRIPT(int fr) {
 	if (fr == 261) { if (gVoiceMode != 3) fail("ONE KIT: the drum machine's KIT should move the keys' kit (%d)", gVoiceMode); if (gDrumBuilt != 0) fail("ONE KIT: kit 808 should be built (%d)", gDrumBuilt); gVoiceMode = 0; gDrums = 0; drumsChanged(); }
 	// QUICK SELECT bars: SELECT + circle pad. UP = pages (lean right = further along), RIGHT / LEFT = this page's
 	// choices, DOWN = transport
-	if (fr >= 70 && fr < 76) { HD |= KEY_SELECT; CX = -29; CY = 150; }   // up, leaning a little left: the 5th page (FILT)
+	if (fr >= 70 && fr < 76) { HD |= KEY_SELECT; CX = (short)((4 / 11.0f * 1.7f - 0.85f) * 150); CY = 140; }   // up, leaning a little left: the 5th page (FILT)
 	if (fr == 73) shotTop("shots/quick_bars.ppm");
 	if (fr == 78 && gCurPage != 4) fail("QUICK: up, leaning left, should land on FILT+ENV (%d)", gCurPage);
 	if (fr == 80) gFiltType = 0;
-	if (fr >= 82 && fr < 88) { HD |= KEY_SELECT; CX = -150; CY = -60; }   // left bar on FILT+ENV: FILTER type, lean down = further
+	if (fr >= 82 && fr < 88) { HD |= KEY_SELECT; CX = fr < 84 ? -150 : -60; CY = fr < 84 ? 0 : -140; }   // left bar (locked), then lean down: FILTER type scrolls
 	if (fr == 86) shotTop("shots/quick_side.ppm");
 	if (fr == 90 && gSeqMode == 1) fail("QUICK: a pick shouldn't toggle PLAY");
 	if (fr == 90 && gFiltType == 0) fail("QUICK: the left bar should pick another FILTER type (%d)", gFiltType);
 	if (fr >= 92 && fr < 96) { HD |= KEY_SELECT; CX = 0; CY = -150; }   // down, centre: PLAY
 	// DRUMS page step grid: go there with QUICK (up, far right = DRM), tap the kick's step 3, check MINE
 	if (fr >= 100 && fr < 104) { HD |= KEY_SELECT; CX = 0; CY = 150; }
-	if (fr >= 100 && fr < 104) { for (int i = 0; i < NPAGES; i++) if (NAV[i] == 11) { float along = i / (float)(NPAGES - 1) * 2 - 1; CX = (short)(along / 1.4f * 150); } }
+	if (fr >= 100 && fr < 104) { for (int i = 0; i < NPAGES; i++) if (NAV[i] == 11) { float t = i / (float)(NPAGES - 1); CX = (short)((t * 1.7f - 0.85f) * 150); CY = 140; } }
 	if (fr == 106) { if (gCurPage != 11) fail("QUICK: should reach DRUMS (%d)", gCurPage); gKickPat = 1; }
 	if (fr == 108 || fr == 109) { TOUCH = 1; TX = DG_LX + (int)(2.5f * (320 - DG_LX - 2) / 16.0f); TY = DG_TOP + 6; }
 	if (fr == 111) { shotBot("shots/drum_grid.ppm"); if (gKickPat != 7) fail("DRUM GRID: tapping a step should make the kick row MINE (%d)", gKickPat);

@@ -9013,33 +9013,53 @@ int main(void) {
 		{   // SELECT: tap = PLAY / STOP (sequencer and drums together). Held, it's a modifier:
 			// SELECT+L undo, SELECT+R redo, SELECT+DOWN panic. The tap acts on release, only if nothing was combined.
 			static u32 prevHeld = 0; static int selCombo = 0, drumsWas = 0; u32 kUp = prevHeld & ~kHeld; prevHeld = kHeld;
-			static int qBar = -1, qIdx = 0;
-			if (kDown & KEY_SELECT) { selCombo = 0; qBar = -1; }
+			static int qBar = -1, qIdx = 0, qHold = -1;   // qHold: the bar still lit after the pad went back to the middle
+			if (kDown & KEY_SELECT) { selCombo = 0; qBar = -1; qHold = -1; }
 			if (selSwallow) { selCombo = 1; if (!(kHeld & KEY_SELECT)) selSwallow = 0; }   // the press that closed HELP isn't PLAY
 			gQuickBar = -1;
 			if (kHeld & KEY_SELECT) {
-				circlePosition qp; hidCircleRead(&qp); float qx = qp.dx / 150.0f, qy = qp.dy / 150.0f;
-				if (qx * qx + qy * qy > 0.5f * 0.5f) {   // a bar: the main direction; the other axis slides along it
+				// QUICK SELECT feel: the first firm push picks a bar and LOCKS it until the pad comes back near the middle, so
+				// leaning along it can't flip to the next bar. Along the page / transport rows the lean is a position with
+				// hysteresis (an option has to be clearly passed before the next lights); along the long side lists it's a
+				// speed (lean a little = slow, a lot = fast). The D-pad steps one at a time on any bar.
+				circlePosition qp; hidCircleRead(&qp); float qx = qp.dx / 150.0f, qy = qp.dy / 150.0f, mag = sqrtf(qx * qx + qy * qy);
+				static float qPos = 0, qAcc = 0;
+				if (qBar >= 0 && mag < 0.25f) { qHold = qBar; qBar = -1; }   // back to the middle: free to pick another bar (what's lit stays lit)
+				if (qBar < 0 && mag > 0.55f) { qHold = -1; }
+				if (qBar < 0 && mag > 0.55f) {
 					int bar = fabsf(qy) >= fabsf(qx) ? (qy > 0 ? 0 : 2) : (qx > 0 ? 1 : 3);
 					int n = bar == 0 ? NPAGES : bar == 2 ? 3 : quickCount(page, bar == 1 ? 1 : 0);
-					float along = (bar == 0 || bar == 2) ? qx : -qy;   // across: left -> right; side bars: top -> bottom
-					along = along * 1.4f; if (along > 1) along = 1; if (along < -1) along = -1;
-					if (n > 0) {
-						if (bar != qBar) qIdx = bar == 0 ? 0 : bar == 2 ? 1 : quickCur(page, bar == 1 ? 1 : 0);   // a side bar starts on what's picked
-						int i = (bar == 1 || bar == 3) ? (int)lroundf(quickCur(page, bar == 1 ? 1 : 0) + along * 6) : (int)lroundf((along + 1) * 0.5f * (n - 1));
-						if (bar == 0 || bar == 2) i = (int)lroundf((along + 1) * 0.5f * (n - 1));
-						qIdx = i < 0 ? 0 : i >= n ? n - 1 : i; qBar = bar; selCombo = 1;
-					}
+					if (n > 0) { qBar = bar; selCombo = 1; qAcc = 0;
+						qIdx = bar == 0 ? 0 : bar == 2 ? 1 : quickCur(page, bar == 1 ? 1 : 0); if (bar == 0) for (int i = 0; i < NPAGES; i++) if (NAV[i] == page) qIdx = i;
+						qPos = (float)qIdx; }
 				}
-				if (qBar >= 0) { gQuickBar = qBar; gQuickIdx = qIdx; topDirty = 1; kDown &= ~(KEY_A | KEY_B | KEY_X | KEY_Y | KEY_DUP | KEY_DDOWN); }
+				if (qBar >= 0) {
+					int n = qBar == 0 ? NPAGES : qBar == 2 ? 3 : quickCount(page, qBar == 1 ? 1 : 0);
+					float along = (qBar == 0 || qBar == 2) ? qx : -qy;
+					if (qBar == 0 || qBar == 2) {   // a position across the row, with hysteresis
+						float t = (along + 0.85f) / 1.7f; t = t < 0 ? 0 : t > 1 ? 1 : t; float want = t * (n - 1);
+						if (fabsf(want - qIdx) > 0.65f) qIdx = (int)lroundf(want);
+					} else {   // a speed down the list
+						float a = fabsf(along) < 0.2f ? 0 : (fabsf(along) - 0.2f) / 0.8f; a = a * a * 18.0f;   // up to 18 a second
+						qAcc += (along > 0 ? a : -a) / 60.0f;
+						while (qAcc >= 1) { qAcc -= 1; qIdx++; } while (qAcc <= -1) { qAcc += 1; qIdx--; }
+					}
+					if (qIdx < 0) qIdx = 0; if (qIdx >= n) qIdx = n - 1;
+				}
+				{ int lit = qBar >= 0 ? qBar : qHold;   // the D-pad: one step along the lit bar
+				  if (lit >= 0 && (kDown & (KEY_DLEFT | KEY_DRIGHT | KEY_DUP | KEY_DDOWN))) {
+					int n = lit == 0 ? NPAGES : lit == 2 ? 3 : quickCount(page, lit == 1 ? 1 : 0);
+					if (kDown & (KEY_DLEFT | KEY_DUP)) qIdx--; if (kDown & (KEY_DRIGHT | KEY_DDOWN)) qIdx++;
+					if (qIdx < 0) qIdx = 0; if (n > 0 && qIdx >= n) qIdx = n - 1; } }
+				{ int lit = qBar >= 0 ? qBar : qHold; if (lit >= 0) { gQuickBar = lit; gQuickIdx = qIdx; topDirty = 1; kDown &= ~(KEY_A | KEY_B | KEY_X | KEY_Y | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT); } }
 				if (kDown & KEY_L) { selCombo = 1; int r = histStep(1); say(r == 1 ? "UNDO: PATTERN" : r == 2 ? "UNDO: PATCH EDIT" : "NOTHING TO UNDO"); topDirty = botDirty = 1; }
 				if (kDown & KEY_R) { selCombo = 1; int r = histStep(0); say(r == 1 ? "REDO: PATTERN" : r == 2 ? "REDO: PATCH EDIT" : "NOTHING TO REDO"); topDirty = botDirty = 1; }
 				if (kDown & KEY_DDOWN) { selCombo = 1; startAct = 2; }   // PANIC, below
 				if (kDown & (KEY_DUP | KEY_DLEFT | KEY_DRIGHT)) selCombo = 1;
 				kDown &= ~(KEY_L | KEY_R | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT); kHeld &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT);
 			}
-			if ((kUp & KEY_SELECT) && qBar >= 0) {   // take what's lit
-				int b = qBar; qBar = -1; topDirty = botDirty = 1;
+			if ((kUp & KEY_SELECT) && (qBar >= 0 || qHold >= 0)) {   // take what's lit
+				int b = qBar >= 0 ? qBar : qHold; qBar = -1; qHold = -1; topDirty = botDirty = 1;
 				if (b == 0) { page = NAV[qIdx]; gPads = 0; }
 				else if (b == 2) { if (qIdx == 0) liveRecToggle(); else if (qIdx == 2) { if (gTapeRec >= 0) tapeRecStop(0); else tapeRecStart(); } else selCombo = 0; }   // PLAY / STOP: below
 				else if (page == 0) {
