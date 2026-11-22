@@ -7412,6 +7412,19 @@ static size_t upWrite(void* d, size_t sz, size_t nm, void* u) {
 	k->off += w; gUpGot = (u32)k->off; return w;
 }
 static int upProgress(void* c, curl_off_t dlt, curl_off_t dl, curl_off_t ult, curl_off_t ul) { (void)c; (void)dl; (void)ult; (void)ul; if (dlt > 0) gUpTotal = (u32)dlt; return 0; }
+static Result ciaInstallFile(const char* path) {   // AM from a file on the SD card, 256 KB at a time
+	FILE* f = fopen(path, "rb"); if (!f) return -1;
+	Result rr = amInit(); Handle h = 0;
+	if (R_SUCCEEDED(rr)) rr = AM_StartCiaInstall(MEDIATYPE_SD, &h);
+	if (R_SUCCEEDED(rr)) {
+		static u8 buf[256 * 1024]; u64 off = 0; size_t n;
+		fseek(f, 0, SEEK_END); gUpTotal = (u32)ftell(f); fseek(f, 0, SEEK_SET);
+		while (R_SUCCEEDED(rr) && (n = fread(buf, 1, sizeof(buf), f)) > 0) { u32 w = 0; rr = FSFILE_Write(h, &w, off, buf, (u32)n, 0); off += n; gUpGot = (u32)off; }
+		if (R_SUCCEEDED(rr)) rr = AM_FinishCiaInstall(h); else AM_CancelCIAInstall(h);
+	}
+	amExit(); fclose(f);
+	return rr;
+}
 static void upMain(void* arg) {
 	(void)arg;
 	if (!netUp()) { snprintf(gDlErr, sizeof(gDlErr), "WI-FI NOT AVAILABLE"); gUpState = 5; return; }
@@ -7423,48 +7436,35 @@ static void upMain(void* arg) {
 		if (!strncmp(gUpVer, SYRUP_VER, 7)) gUpState = 4;
 		else {
 			gUpState = 2; gUpGot = gUpTotal = 0;
-			int hb = envIsHomebrew();   // .3dsx from the Homebrew Launcher: replace the file; installed CIA: reinstall through AM
-			for (int attempt = 0; attempt < 2; attempt++) {   // attempt 1 (CIA only): save the CIA to SD for FBI
-				int toSd = hb || attempt == 1;
-				UpSink k = {0}; ok = 1; gUpGot = gUpTotal = 0;
-				char hbTmp[300]; snprintf(hbTmp, sizeof(hbTmp), "%s.part", selfPath());
-				const char* tmp = hb ? hbTmp : "sdmc:/cias/syrup.cia.part";
-				if (toSd) { mkdir("sdmc:/cias", 0777); k.f = fopen(tmp, "wb"); if (!k.f) { snprintf(gDlErr, sizeof(gDlErr), "CAN'T WRITE TO SD"); ok = 0; } }
-				else {
-					Result rr = amInit(); if (R_SUCCEEDED(rr)) rr = AM_StartCiaInstall(MEDIATYPE_SD, &k.cia);
-					mkdir("sdmc:/cias", 0777); k.copy = fopen("sdmc:/cias/syrup.cia.part", "wb");
-					if (R_FAILED(rr)) { snprintf(gDlErr, sizeof(gDlErr), "INSTALLER REFUSED %08lX", (unsigned long)rr); ok = 0; }
-				}
-				if (ok) {
-					CURL* c = curl_easy_init();
-					curl_easy_setopt(c, CURLOPT_URL, hb ? REL_URL "syrup.3dsx" : REL_URL "syrup.cia");
-					curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L);
-					curl_easy_setopt(c, CURLOPT_USERAGENT, "Syrup-3DS"); curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 20L); curl_easy_setopt(c, CURLOPT_TIMEOUT, 600L);
-					curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 65536L);
-					curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, upWrite); curl_easy_setopt(c, CURLOPT_WRITEDATA, &k);
-					curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, upProgress); curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
-					CURLcode r = curl_easy_perform(c); long code = 0; curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
-					curl_easy_cleanup(c);
-					ok = r == CURLE_OK && code == 200 && k.off > 1024;
-					if (!ok) {
-						if (k.err) snprintf(gDlErr, sizeof(gDlErr), "INSTALL WRITE %08lX", (unsigned long)k.err);
-						else if (r != CURLE_OK) snprintf(gDlErr, sizeof(gDlErr), "%s (%d)", curlWords((int)r), (int)r);
-						else snprintf(gDlErr, sizeof(gDlErr), "SERVER SAID %ld", code);
-					}
-				}
-				if (toSd) {
-					const char* fin = hb ? selfPath() : "sdmc:/cias/syrup.cia";
-					if (k.f) fclose(k.f);
-					if (ok) { remove(fin); rename(tmp, fin); } else remove(tmp);
-					if (ok && !hb) gUpSd = 1;
-				} else if (k.cia) {
-					if (ok) { Result rr = AM_FinishCiaInstall(k.cia); if (R_FAILED(rr)) { snprintf(gDlErr, sizeof(gDlErr), "INSTALL FAILED %08lX", (unsigned long)rr); ok = 0; } }
-					else AM_CancelCIAInstall(k.cia);
-				}
-				if (k.copy) { fclose(k.copy); if (ok) { remove("sdmc:/cias/syrup.cia"); rename("sdmc:/cias/syrup.cia.part", "sdmc:/cias/syrup.cia"); } else remove("sdmc:/cias/syrup.cia.part"); }
-				if (!toSd) amExit();
-				if (ok || hb) break;
-				// direct install failed: keep the reason, then fall back to saving the CIA for FBI
+			int hb = envIsHomebrew();   // .3dsx from the Homebrew Launcher: replace the file; installed CIA: download, then install it
+			// CIA: the whole file goes to the SD card first, then AM installs it from there in big blocks - the way FBI does.
+			// (Installing straight from the download, the AM handle sat open for the whole transfer and the install failed,
+			// leaving only the copy for FBI.) If AM still refuses, the CIA stays on the SD card for FBI and its error shows.
+			UpSink k = {0}; ok = 1; gUpGot = gUpTotal = 0;
+			char hbTmp[300]; snprintf(hbTmp, sizeof(hbTmp), "%s.part", selfPath());
+			const char* tmp = hb ? hbTmp : "sdmc:/cias/syrup.cia.part";
+			mkdir("sdmc:/cias", 0777); k.f = fopen(tmp, "wb"); if (!k.f) { snprintf(gDlErr, sizeof(gDlErr), "CAN'T WRITE TO SD"); ok = 0; }
+			if (ok) {
+				CURL* c = curl_easy_init();
+				curl_easy_setopt(c, CURLOPT_URL, hb ? REL_URL "syrup.3dsx" : REL_URL "syrup.cia");
+				curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L); curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L);
+				curl_easy_setopt(c, CURLOPT_USERAGENT, "Syrup-3DS"); curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 20L); curl_easy_setopt(c, CURLOPT_TIMEOUT, 600L);
+				curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 65536L);
+				curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, upWrite); curl_easy_setopt(c, CURLOPT_WRITEDATA, &k);
+				curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, upProgress); curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+				CURLcode r = curl_easy_perform(c); long code = 0; curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
+				curl_easy_cleanup(c);
+				ok = r == CURLE_OK && code == 200 && k.off > 1024;
+				if (!ok) { if (r != CURLE_OK) snprintf(gDlErr, sizeof(gDlErr), "%s (%d)", curlWords((int)r), (int)r); else snprintf(gDlErr, sizeof(gDlErr), "SERVER SAID %ld", code); }
+			}
+			const char* fin = hb ? selfPath() : "sdmc:/cias/syrup.cia";
+			if (k.f) fclose(k.f);
+			if (ok) { remove(fin); rename(tmp, fin); } else remove(tmp);
+			if (ok && !hb) {   // install the CIA from the SD card
+				gUpState = 6; gUpGot = 0;
+				Result rr = ciaInstallFile(fin);
+				if (R_FAILED(rr)) { snprintf(gDlErr, sizeof(gDlErr), "%08lX", (unsigned long)rr); gUpSd = 1; }   // stays on SD for FBI
+				else remove(fin);
 			}
 			gUpState = ok ? 3 : 5;
 			if (ok) { mkdir("sdmc:/3ds/syrup", 0777); FILE* e = fopen(UP_EXPECT, "w"); if (e) { fprintf(e, "%s\n", gUpVer); fclose(e); } }
@@ -7542,7 +7542,8 @@ static void upTick(void) {
 	switch (gUpState) {
 	case 1: say("CHECKING FOR AN UPDATE..."); break;
 	case 2: if (gUpTotal) snprintf(m, sizeof(m), "DOWNLOADING %s  %d%%", gUpVer, (int)(gUpGot * 100.0f / gUpTotal)); else snprintf(m, sizeof(m), "DOWNLOADING %s  %dK", gUpVer, (int)(gUpGot / 1024)); say(m); break;
-	case 3: if (gUpSd) snprintf(m, sizeof(m), "%s SAVED: FBI > SD > cias > syrup.cia", gUpVer); else if (envIsHomebrew()) snprintf(m, sizeof(m), "UPDATED %.20s - CLOSE + REOPEN", strrchr(selfPath(), '/') ? strrchr(selfPath(), '/') + 1 : selfPath()); else snprintf(m, sizeof(m), "UPDATED TO %s - CLOSE AND REOPEN SYRUP", gUpVer); say(m); gMsgT = 30; gUpState = 0; gUpSd = 0; break;
+	case 6: if (gUpTotal) snprintf(m, sizeof(m), "INSTALLING %s  %d%%", gUpVer, (int)(gUpGot * 100.0f / gUpTotal)); else snprintf(m, sizeof(m), "INSTALLING %s", gUpVer); say(m); break;
+	case 3: if (gUpSd) { snprintf(m, sizeof(m), "AM SAID %.8s: FBI > cias > syrup.cia", gDlErr); gMsgT = 30; } else if (envIsHomebrew()) snprintf(m, sizeof(m), "UPDATED %.20s - CLOSE + REOPEN", strrchr(selfPath(), '/') ? strrchr(selfPath(), '/') + 1 : selfPath()); else snprintf(m, sizeof(m), "UPDATED TO %s - CLOSE AND REOPEN SYRUP", gUpVer); say(m); gMsgT = 30; gUpState = 0; gUpSd = 0; break;
 	case 4: snprintf(m, sizeof(m), "UP TO DATE (BUILD %.7s)", SYRUP_VER); say(m); gUpState = 0; break;
 	case 5: snprintf(m, sizeof(m), "UPDATE FAILED: %.30s", gDlErr[0] ? gDlErr : "?"); say(m); gMsgT = 30; gUpState = 0; break;
 	}
