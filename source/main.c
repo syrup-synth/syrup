@@ -735,7 +735,7 @@ static const char* FILT2_NAMES[3] = {"OFF", "+6DB SLOPE", "LOW CUT"};
 static const char* LOWCUT_NAMES[6] = {"30HZ", "60HZ", "120HZ", "250HZ", "500HZ", "1KHZ"};
 static const float LOWCUT_HZ[6] = {30, 60, 120, 250, 500, 1000};
 static int masterActive(void);
-static u8 gScreamFlush[24];   // CONTAINMENT: one tick of a zero filter clears a voice's stale self-oscillation before its next note
+static u8 gScreamFlush[24]; static volatile int gDspStalled = 0;   // CONTAINMENT: one tick of a zero filter clears a voice's stale self-oscillation before its next note
 static void filterSet(int ch, float hz, float res) {
 	if (hz < 40) hz = 40;
 	if (hz > 15000) hz = 15000;
@@ -748,11 +748,15 @@ static void filterSet(int ch, float hz, float res) {
 			ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, 0, 0, 0, 0, 0); ndspChnIirBiquadSetEnable(ch, true); ndspChnIirMonoSetEnable(ch, false);
 			return;
 		}
-		float w = TWO_PI * hz / DSPRATE, cw = cosf(w), r = 0.985f + gQScream * 0.03f + res * 0.004f;
+		// Poles stay just INSIDE the unit circle (r < 1). Past 1 the DSP's filter saturated on its own and, on hardware,
+		// could lock the DSP up: no sound, PANIC dead, the app unable to close (Matt: only a power-off cleared it). At
+		// r = 0.999 it still rings like mad off every note (a Q in the hundreds) but always dies away.
+		float w = TWO_PI * hz / DSPRATE, cw = cosf(w), r = 0.975f + gQScream * 0.022f + res * 0.002f;
+		if (r > 0.999f) r = 0.999f;
 		float rmax = 0.9995f / (cw > 0.5f ? cw : 0.5f);   // ceiling: keep a1 inside the DSP's Q14 range (past it the coefficient wraps and the filter latches)
 		if (r > rmax) r = rmax;
 		float a1 = -2.0f * r * cw, a2 = r * r;
-		float b0 = (1.0f + a1 + a2) * 0.6f + 0.002f;
+		float b0 = (1.0f + a1 + a2) * 0.9f + 0.003f;   // (+3.5 dB: makes up the level the old unstable ring added)
 		ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, a1, a2, b0, 0, 0);
 		ndspChnIirBiquadSetEnable(ch, true);
 		ndspChnIirMonoSetEnable(ch, false);
@@ -8351,6 +8355,17 @@ int main(void) {
 #endif
 	if (gSplash) for (int k = 0; k < 2; k++) { splashBottomReady(); gfxFlushBuffers(); gfxSwapBuffers(); gspWaitForVBlank(); }
 	while (aptMainLoop()) {
+#ifndef SYRUP_HOST
+		{   // DSP watchdog: if the DSP stops answering, turn SCREAM off and don't wait on it at exit (that wait never returned)
+			extern u16 ndspFrameId; static u16 lastFid; static u64 lastFidT = 0; u64 nowT = osGetTime();
+			static u64 lastLoopT = 0; if (nowT - lastLoopT > 300) lastFidT = 0;   // back from HOME / sleep: start counting again
+			lastLoopT = nowT;
+			if (ndspFrameId != lastFid || !lastFidT) { lastFid = ndspFrameId; lastFidT = nowT; }
+			int st = gAudioOK && nowT - lastFidT > 800;
+			if (st && !gDspStalled) { gQScream = 0; say("SOUND CHIP STOPPED ANSWERING: RESTART SYRUP"); topDirty = 1; }
+			gDspStalled = st;
+		}
+#endif
 		hidScanInput();
 		u32 kDown = hidKeysDown(), kHeld = hidKeysHeld();
 		if (gSplash) {   // the logo stays up a few seconds after loading, or until a tap / button
@@ -8821,7 +8836,7 @@ int main(void) {
 	}
 	LightLock_Unlock(&gVoiceLock);
 	gFxCore2 = 0; svcSleepThread(20000000); fxCore2Stop();   // effects back on the DSP thread before it goes away
-	if (gAudioOK) { ndspSetCapture(NULL); for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }
+	if (gAudioOK && !gDspStalled) { ndspSetCapture(NULL); for (int ch = 0; ch < NCH; ch++) ndspChnWaveBufClear(ch); ndspExit(); }   // a stalled DSP never answers ndspExit: skip it so the app can still close
 	if (!gSafeMode) { extrasExit(); sensorsExit(); }
 	myDrumSave();
 	seqSave();
