@@ -656,7 +656,7 @@ static float gMpeRange = 48;
 static int gDspOwner[NCH], gCsOwner[NCS];
 static unsigned gAge = 0, gIdc = 0;
 static ndspWaveBuf gWB[NCH];
-static int gAudioOK = 0, gCsndOK = 0, gNoiseOn = 0;
+static int gAudioOK = 0, gCsndOK = 0, gNoiseOn = 0; static int gDspAuto;
 static float gStick = 0, gXYmod = 0, gChorusPh = 0;
 static float gAutoGain = 1.0f;
 static float gRevSize = 0.5f, gRevDamp = 0.5f, gFxMix = 0.5f, gFxMixMod = 0;   // gFxMixMod: what the matrix adds (FX MIX dest)
@@ -3928,7 +3928,7 @@ static void drawFooter(int page, int sel) {
 	if (!gAudioOK) {   // no DSP firmware dump yet: say exactly how to make one (Luma's Rosalina menu works right here)
 		static const char* L[] = {"NO SOUND YET: ONE-TIME SETUP", "", "THE 3DS SOUND CHIP NEEDS ITS FIRMWARE", "COPIED TO THE SD CARD (NINTENDO'S, SO", "SYRUP CAN'T INCLUDE IT). TO MAKE IT:", "",
 			"1. PRESS L + DOWN + SELECT (ROSALINA)", "2. MISCELLANEOUS OPTIONS >", "   DUMP DSP FIRMWARE", "3. PRESS B, THEN QUIT AND REOPEN SYRUP", "", "(SYRUP TRIED TO DO THIS ITSELF AND COULDN'T)"};
-		int n = sizeof(L) / sizeof(L[0]), h = n * 12 + 16, y0 = 113 - h / 2;
+		int n = sizeof(L) / sizeof(L[0]) - (gDspAuto == -1 ? 0 : 2), h = n * 12 + 16, y0 = 113 - h / 2;   // the last line only if Syrup tried
 		rect(40, y0, 320, h, BG); rect(40, y0, 320, 1, WARN); rect(40, y0 + h - 1, 320, 1, WARN); rect(40, y0, 1, h, WARN); rect(359, y0, 1, h, WARN);
 		for (int i = 0; i < n; i++) text(200 - (int)strlen(L[i]) * 4, y0 + 8 + i * 12, L[i], 1, i == 0 ? WARN : TXT);
 		text(4, 230, "NO SOUND - DSP FIRMWARE NOT DUMPED (SEE ABOVE)", 1, WARN); return; }
@@ -8847,6 +8847,30 @@ static int dspAutoDump(void) {
 	return -1;
 #endif
 }
+static int dspAsk(void) {   // the first start without the firmware: say what Syrup will do, and let the user choose
+#ifdef SYRUP_HOST
+	return 0;
+#else
+	static const char* L[] = {"ONE-TIME SOUND SETUP", "", "THE 3DS SOUND CHIP NEEDS ITS FIRMWARE", "ON THE SD CARD. IT'S NINTENDO'S, SO", "SYRUP DOESN'T INCLUDE IT - BUT YOUR", "CONSOLE HAS IT IN ITS OWN SOUND APP.", "",
+		"SYRUP CAN COPY IT FROM THERE TO", "SD:/3DS/DSPFIRM.CDC (IT STAYS ON", "THIS CONSOLE; NOTHING IS SENT).", "", "A: COPY IT NOW", "B: I'LL DO IT MYSELF (ROSALINA)"};
+	int n = sizeof(L) / sizeof(L[0]);
+	while (aptMainLoop()) {
+		hidScanInput(); u32 k = hidKeysDown();
+		if (k & KEY_A) return 1;
+		if (k & (KEY_B | KEY_START)) return 0;
+		for (int b = 0; b < 2; b++) {
+			fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
+			rect(0, 0, 400, 240, 10, 6, 2);
+			int h = n * 13 + 16, y0 = 120 - h / 2;
+			rect(30, y0, 340, h, 0, 0, 0); outline(30, y0, 340, h, 255, 140, 0);
+			for (int i = 0; i < n; i++) text(200 - (int)strlen(L[i]) * 4, y0 + 8 + i * 13, L[i], 1, i == 0 || i >= n - 2 ? 255 : 220, i == 0 || i >= n - 2 ? 140 : 200, i == 0 || i >= n - 2 ? 0 : 160);
+			fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320; rect(0, 0, 320, 240, 10, 6, 2);
+			gfxFlushBuffers(); gfxSwapBuffers(); gspWaitForVBlank();
+		}
+	}
+	return 0;
+#endif
+}
 int main(void) {
 	gfxInitDefault();
 	gfxSetDoubleBuffering(GFX_TOP, true);     // draw into the hidden buffer, swap on vblank: no tearing
@@ -8898,7 +8922,7 @@ int main(void) {
 	}
 	buildSub(); buildNoise();
 
-	{ FILE* df = fopen("sdmc:/3ds/dspfirm.cdc", "rb"); if (df) fclose(df); else { crashMark("DSP SETUP"); gDspAuto = dspAutoDump(); } }   // no firmware yet: make it ourselves
+	{ FILE* df = fopen("sdmc:/3ds/dspfirm.cdc", "rb"); if (df) fclose(df); else if (dspAsk()) { crashMark("DSP SETUP"); gDspAuto = dspAutoDump(); } }   // no firmware yet: ask, then make it
 	gAudioOK = R_SUCCEEDED(ndspInit());
 	if (gAudioOK && gDspAuto == 1) { say("SOUND SET UP: DSP FIRMWARE SAVED TO THE SD CARD"); gMsgT = 6; }
 	if (gAudioOK) {
