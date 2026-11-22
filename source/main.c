@@ -2079,7 +2079,8 @@ static void playSet(const int* notes, int n, float vel) {
 // ---- 16-step sequencer (step record, keys transpose while playing)
 // fl: 1 accent, 2 slide into the next step. Per-step locks (0 = none): gate % (0 = SEQ GATE), skip = chance in % that
 // the step doesn't play, cut / res -100..100 on top of the patch, pitch in semitones, nudge -50..50 % of a step
-typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; u8 gate, skip; s8 cut, res, pitch, nudge; u8 len[4]; u8 rat; } Step;   // len: steps each note lasts (0 = 1); rat: hits in the step (0/1 = one, 2-4 = a roll)
+typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; u8 gate, skip; s8 cut, res, pitch, nudge; u8 len[4]; u8 rat; } StepV2;   // seq.bin before conditions
+typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; u8 gate, skip; s8 cut, res, pitch, nudge; u8 len[4]; u8 rat; u8 cond; } Step;   // cond: an Elektron-style trig condition (COND_NAMES)   // len: steps each note lasts (0 = 1); rat: hits in the step (0/1 = one, 2-4 = a roll)
 typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; u8 gate, skip; s8 cut, res, pitch, nudge; } StepV1;   // seq.bin before note lengths
 #define NSTEP 16
 static const char* SEQ_NAMES[3] = {"OFF", "PLAY", "REC"};
@@ -2091,7 +2092,8 @@ static int gSeqPlaying = 0;
 // Rows of the grid can run their own length (polymeter) or an euclid rhythm instead of the steps.
 #define NPAT 16
 #define NSONG 64
-typedef struct { Step st[NSTEP]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8], rowNote[8]; } SeqPat;   // rowNote: the pitch a rhythm row plays
+typedef struct { Step st[NSTEP]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8], rowNote[8]; } SeqPat;
+typedef struct { StepV2 st[NSTEP]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8], rowNote[8]; } SeqPatV2;   // rowNote: the pitch a rhythm row plays
 typedef struct { StepV1 st[NSTEP]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8]; } SeqPatV1;
 static SeqPat gPat[NPAT];
 static int gPatCur = 0, gPatNext = -1;
@@ -2145,6 +2147,12 @@ static void seqLoad(void) {
 	u32 m = 0; int hdr[4]; static SeqPat tmp[NPAT]; static SeqPatV1 old[NPAT]; u8 song[NSONG]; int ok = 0;
 	if (fread(&m, 4, 1, f) == 1 && m == SEQ_MAGIC && fread(hdr, sizeof(hdr), 1, f) == 1) {
 		if (hdr[3] == (int)sizeof(SeqPat)) ok = fread(tmp, sizeof(tmp), 1, f) == 1;
+		else if (hdr[3] == (int)sizeof(SeqPatV2)) {   // before trig conditions: the same steps, every one ALWAYS
+			static SeqPatV2 v2[NPAT];
+			if (fread(v2, sizeof(v2), 1, f) == 1) { memset(tmp, 0, sizeof(tmp)); ok = 1;
+				for (int p = 0; p < NPAT; p++) { for (int k = 0; k < NSTEP; k++) memcpy(&tmp[p].st[k], &v2[p].st[k], sizeof(StepV2));
+					tmp[p].len = v2[p].len; tmp[p].base = v2[p].base; memcpy(tmp[p].rowLen, v2[p].rowLen, 8); memcpy(tmp[p].rowHits, v2[p].rowHits, 8); memcpy(tmp[p].rowRot, v2[p].rowRot, 8); memcpy(tmp[p].rowNote, v2[p].rowNote, 8); } }
+		}
 		else if (hdr[3] == (int)sizeof(SeqPatV1) && fread(old, sizeof(old), 1, f) == 1) {   // before note lengths: every note one step, rows keep their pitch
 			static const int MAJ[8] = {0, 2, 4, 5, 7, 9, 11, 12};
 			memset(tmp, 0, sizeof(tmp));
@@ -2221,11 +2229,33 @@ static int noteOnCustomRow(int nt) { return rowOfNote(nt) >= 0; }
 static const char* SEQRATE_NAMES[3] = {"1/16", "1/32", "1/8"};
 static float seqDiv(void) { return gSeqRate == 1 ? 0.5f : gSeqRate == 2 ? 2.0f : 1.0f; }   // a step, in 16ths
 static float stepLen(int i) { return ((i & 1) ? 1.0f - gSwing : 1.0f + gSwing) * seqDiv(); }   // in 16ths
+// trig conditions, shared by the sequencer and the drums: 0 ALWAYS, 1-5 chance, 6-14 A:B (loop A of every B), FILL,
+// !FILL, PRE / !PRE (the last condition here), NEI / !NEI (the neighbour's), 1ST / !1ST (the first loop after start)
+#define NCOND 23
+static int gDrFill;
+static int condTest(int c, int cyc, int* pre, int nei) {
+	int ok = 1;
+	switch (c) {
+	case 0: return 1;
+	case 1: ok = rand() % 100 < 90; break; case 2: ok = rand() % 100 < 75; break; case 3: ok = rand() % 100 < 50; break; case 4: ok = rand() % 100 < 25; break; case 5: ok = rand() % 100 < 10; break;
+	case 6: case 7: ok = cyc % 2 == c - 6; break;
+	case 8: case 9: case 10: ok = cyc % 3 == c - 8; break;
+	case 11: case 12: case 13: case 14: ok = cyc % 4 == c - 11; break;
+	case 15: ok = gDrFill; break; case 16: ok = !gDrFill; break;
+	case 17: ok = *pre; break; case 18: ok = !*pre; break;
+	case 19: ok = nei; break; case 20: ok = !nei; break;
+	case 21: ok = cyc == 0; break; default: ok = cyc != 0; break;
+	}
+	if (c < 17 || c > 20) *pre = ok;   // PRE / NEI look at the last condition that wasn't itself PRE / NEI
+	return ok;
+}
+static int gSeqPre = 0;
 static void seqFireAt(int idx, unsigned clock, int early, float off0) {
 	Step* s = &gSeq[idx];
 	gLockCut = s->cut * 0.006f; gLockRes = s->res * 0.01f;
 	float g = s->gate ? s->gate * 0.01f : gSeqGate; gStepGate = g;
 	int notes[8], lens[8], n = 0, skip = s->skip && rand() % 100 < s->skip;
+	if (!skip && s->cond && s->n) { int L = gSeqLen < 1 ? 1 : gSeqLen; skip = !condTest(s->cond, (int)(clock / L), &gSeqPre, gSeqPre); }   // IF: the step's condition
 	if (!skip) {
 		for (int i = 0; i < s->n && n < 8; i++) { if (noteOnCustomRow(s->note[i])) continue; lens[n] = noteLen(s, i); notes[n++] = snapScale(s->note[i] + gSeqTr + s->pitch); }
 		for (int r = 0; r < 8 && n < 8; r++) if (rowCustom(r) && rowCellOn(r, clock % rowLenOf(r))) { lens[n] = 1; notes[n++] = snapScale(gRowNote[r] + gSeqTr + s->pitch); }
@@ -4414,12 +4444,12 @@ static void drawGrid(void) {
 			if (p->fl & 2) rectP(x + w, y + ROLL_RH / 2 - 2, 3, 2, TH->keyOn);   // slide into the next note
 			{   // the step's locks as letters inside the note, tracker-style: C cutoff, R res, P pitch, G gate, N nudge, % chance
 				char lk[8]; int n = 0;
-				if (p->cut) lk[n++] = 'C'; if (p->res) lk[n++] = 'R'; if (p->pitch) lk[n++] = 'P'; if (p->gate) lk[n++] = 'G'; if (p->nudge) lk[n++] = 'N'; if (p->skip) lk[n++] = '%';
+				if (p->cond) lk[n++] = '?'; if (p->cut) lk[n++] = 'C'; if (p->res) lk[n++] = 'R'; if (p->pitch) lk[n++] = 'P'; if (p->gate) lk[n++] = 'G'; if (p->nudge) lk[n++] = 'N'; if (p->skip) lk[n++] = '%';
 				int lx = x + (p->fl & 1 ? 7 : 3), fit = (x + w - lx) / 8; if (n > fit) n = fit; lk[n] = 0;
 				if (n > 0) { rectP(lx, y, n * 8, ROLL_RH - 3, TH->txt); text(lx, y + 1, lk, 1, RGB3(TH->bg)); }
 			}
 		}
-		if (p->gate || p->skip || p->cut || p->res || p->pitch || p->nudge || p->rat > 1) rectP(rollX(st) + (int)ROLL_CW / 2 - 1, ROLL_TOP - 2, 3, 2, TH->keyOn);   // the step has locks
+		if (p->gate || p->skip || p->cut || p->res || p->pitch || p->nudge || p->rat > 1 || p->cond) rectP(rollX(st) + (int)ROLL_CW / 2 - 1, ROLL_TOP - 2, 3, 2, TH->keyOn);   // the step has locks
 		if (p->rat > 1) for (int k = 0; k < p->rat; k++) rectP(rollX(st) + 2 + k * 4, ROLL_TOP - 5, 2, 2, TH->warn);   // ratchet dots
 	}
 	for (int r = 0; r < 8; r++) if (rowCustom(r) && rollRow(gRowNote[r]) >= 0) {   // rhythm rows: their own length and hits
@@ -4546,14 +4576,16 @@ static void patViewTouch(int x, int y) {   // on press
 	}
 }
 // step editor (hold a step): the step's locks, and the rhythm of the row you held
-#define SE_N 14
-static const char* SE_NAMES[SE_N] = {"VEL", "GATE", "PROB", "CUTOFF", "RES", "PITCH", "NUDGE", "ACCENT", "ROW LEN", "ROW EUCL", "ROW ROT", "SLIDE", "RATCHET", "LENGTH"};
-static const int SE_MIN[SE_N] = {1, 0, 0, -100, -100, -24, -50, 0, 0, 0, 0, 0, 1, 1}, SE_MAX[SE_N] = {127, 100, 100, 100, 100, 24, 50, 1, 16, 16, 15, 1, 4, 16};
+#define SE_N 15
+static const char* SE_NAMES[SE_N] = {"VEL", "GATE", "PROB", "CUTOFF", "RES", "PITCH", "NUDGE", "ACCENT", "ROW LEN", "ROW EUCL", "ROW ROT", "SLIDE", "RATCHET", "LENGTH", "IF"};
+static const int SE_MIN[SE_N] = {1, 0, 0, -100, -100, -24, -50, 0, 0, 0, 0, 0, 1, 1, 0}, SE_MAX[SE_N] = {127, 100, 100, 100, 100, 24, 50, 1, 16, 16, 15, 1, 4, 16, NCOND - 1};
+static const char* COND_NAMES[NCOND];
 static int seGet(int k) {
 	Step* s = &gSeq[gStepEd]; int r = rowOfNote(gStepEdRow);   // gStepEdRow: the pitch you held
 	switch (k) { case 0: return (s->vel + 1) / 2; case 1: return s->gate; case 2: return 100 - s->skip; case 3: return s->cut; case 4: return s->res;
 	case 5: return s->pitch; case 6: return s->nudge; case 7: return s->fl & 1; case 11: return (s->fl >> 1) & 1; case 12: return s->rat ? s->rat : 1;
 	case 13: { for (int i = 0; i < s->n; i++) if (s->note[i] == gStepEdRow) return noteLen(s, i); return 1; }
+	case 14: return s->cond;
 	case 8: return r < 0 ? 0 : gRowLen[r]; case 9: return r < 0 ? 0 : gRowHits[r]; default: return r < 0 ? 0 : gRowRot[r]; }
 }
 static void stepSetLen(int st, int nt, int L);
@@ -4563,13 +4595,14 @@ static void seSet(int k, int v) {
 	switch (k) { case 0: s->vel = (u8)(v * 2 > 255 ? 255 : v * 2); return; case 1: s->gate = (u8)(v && v < 5 ? 5 : v); return; case 2: s->skip = (u8)(100 - v); return;
 	case 3: s->cut = (s8)v; return; case 4: s->res = (s8)v; return; case 5: s->pitch = (s8)v; return; case 6: s->nudge = (s8)v; return;
 	case 7: s->fl = (u8)((s->fl & ~1) | v); return; case 11: s->fl = (u8)((s->fl & ~2) | (v << 1)); return; case 12: s->rat = (u8)v; return;
-	case 13: stepSetLen(gStepEd, gStepEdRow, v); return; }
+	case 13: stepSetLen(gStepEd, gStepEdRow, v); return;
+	case 14: if (v == 19 || v == 20) v = v > s->cond ? 21 : 18; s->cond = (u8)v; return; }   // (NEI is for the drum rows: skipped here)
 	int r = v ? rowSlotFor(gStepEdRow) : rowOfNote(gStepEdRow);   // a rhythm row is made for this pitch when you give it one
 	if (r < 0) { if (v) say("ALL 8 RHYTHM ROWS ARE IN USE"); return; }
 	if (k == 8) gRowLen[r] = (u8)v; else if (k == 9) gRowHits[r] = (u8)v; else gRowRot[r] = (u8)v;
 }
 static void seFmt(int k, int v, char* o, int n) {
-	if (k == 7 || k == 11) snprintf(o, n, v ? "ON" : "OFF"); else if (k == 1 && !v) snprintf(o, n, "SEQ"); else if (k == 8 && !v) snprintf(o, n, "PAT"); else if (k == 9 && !v) snprintf(o, n, "OFF");
+	if (k == 14) snprintf(o, n, "%s", COND_NAMES[v < 0 || v >= NCOND ? 0 : v]); else if (k == 7 || k == 11) snprintf(o, n, v ? "ON" : "OFF"); else if (k == 1 && !v) snprintf(o, n, "SEQ"); else if (k == 8 && !v) snprintf(o, n, "PAT"); else if (k == 9 && !v) snprintf(o, n, "OFF");
 	else if (k == 1 || k == 2) snprintf(o, n, "%d%%", v); else if (k >= 3 && k <= 6 && v) snprintf(o, n, "%+d", v); else snprintf(o, n, "%d", v);
 }
 #define SE_Y (XY_Y + 16)
@@ -4579,8 +4612,8 @@ static void seFmt(int k, int v, char* o, int n) {
 #define SE_RH 18
 #define SE_TX 88                       // slider track: x and width
 #define SE_TW 172
-static const int SE_PAGE[2][8] = {{0, 1, 2, 6, 7, 11, 12, 13}, {3, 4, 5, 8, 9, 10, -1, -1}};
-static const char* SE_TABN[2] = {"NOTE", "LOCKS + ROW"};
+static const int SE_PAGE[2][8] = {{0, 1, 2, 6, 7, 11, 12, 13}, {3, 4, 5, 8, 9, 10, 14, -1}};   // IF: the trig condition, on the second tab
+static const char* SE_TABN[2] = {"NOTE", "LOCKS + ROW + IF"};
 static int gSeTab = 0, gSeSel = 0;     // gSeSel: the selected setting (SE index), the circle pad moves it
 static int gClipOk = 0; static Step gClip;
 #define SE_CP_Y (SE_RY + 8 * SE_RH + 4)
@@ -7663,7 +7696,6 @@ static u8 gMyDrum[3][16];
 // Per step and per row on the DRUMS grid (all 10 drums, row = drum):
 // RATCHET 1-4 hits in the step, a CONDITION (Elektron-style trig conditions), and each row's own RATE and LENGTH
 // (PICO's PAD TIME: polymeter and half / double / dotted time). DRUM VOICE: each drum's own sound settings.
-#define NCOND 23
 static const char* COND_NAMES[NCOND] = {"ALWAYS", "90%", "75%", "50%", "25%", "10%", "1:2", "2:2", "1:3", "2:3", "3:3", "1:4", "2:4", "3:4", "4:4", "FILL", "!FILL", "PRE", "!PRE", "NEI", "!NEI", "1ST", "!1ST"};
 #define NDRATE 7
 static const char* DRATE_NAMES[NDRATE] = {"X1", "1/2", "X2", "3/4", "3/2", "1/4", "1/8"};
@@ -8020,20 +8052,7 @@ static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the
 		if (n == last[r]) continue;
 		last[r] = n; int i = (int)(n % L), cyc = (int)(n / L); gDrIdx[r] = i; ratLeft[r] = 0;
 		int v = r < 3 ? gMyDrum[r][i] : gDrumX[r - 3][i]; if (!v) continue;
-		int c = gDrCond[r][i], ok = 1;
-		if (c) {
-			switch (c) {
-			case 1: ok = rand() % 100 < 90; break; case 2: ok = rand() % 100 < 75; break; case 3: ok = rand() % 100 < 50; break; case 4: ok = rand() % 100 < 25; break; case 5: ok = rand() % 100 < 10; break;
-			case 6: case 7: ok = cyc % 2 == c - 6; break;
-			case 8: case 9: case 10: ok = cyc % 3 == c - 8; break;
-			case 11: case 12: case 13: case 14: ok = cyc % 4 == c - 11; break;
-			case 15: ok = gDrFill; break; case 16: ok = !gDrFill; break;
-			case 17: ok = pre[r]; break; case 18: ok = !pre[r]; break;
-			case 19: ok = pre[r ? r - 1 : 9]; break; case 20: ok = !pre[r ? r - 1 : 9]; break;
-			case 21: ok = cyc == 0; break; default: ok = cyc != 0; break;
-			}
-			if (c < 17 || c > 20) pre[r] = ok;   // PRE / NEI look at the last condition that wasn't itself PRE / NEI
-		}
+		int c = gDrCond[r][i], ok = c ? condTest(c, cyc, &pre[r], pre[r ? r - 1 : 9]) : 1;
 		if (!ok) continue;
 		float vel = v / 255.0f;
 		if (r < 3) rowHit(r, vel); else drumHit(r, vel); any = 1;

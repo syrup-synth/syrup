@@ -96,6 +96,10 @@ static void SCRIPT(int fr) {
 		memset(gSeq, 0, sizeof gSeq); gVoiceMode = 0; gRollLow = 48; stepSetNote(3, 50, 1); gSeq[3].vel = 200; gPatView = 0; gStepEd = -1;
 		int x = rollX(3) + 3, y = rollY(50) + 4; gridTouch(x, y, 1, 0); gridTouch(x, y + 15, 0, 0); gridTouch(x, y + 30, 0, 0); gridTouch(x, y + 30, 0, 1);
 		if (gSeq[3].vel >= 200 || !stepHasNote(3, 50)) fail("VELOCITY: dragging a note down should soften it and keep its pitch (vel %d)", gSeq[3].vel); }
+	if (fr == 2106) {   // IF on sequencer steps: 1:2 plays on loops 0, 2, ...; 2:2 on 1, 3; the step editor skips NEI
+		int pre = 0, a = 0, c = 0; for (int cy = 0; cy < 4; cy++) { a += condTest(6, cy, &pre, 0); c += condTest(7, cy, &pre, 0); }
+		if (a != 2 || c != 2 || !condTest(6, 0, &pre, 0) || condTest(6, 1, &pre, 0)) fail("IF: 1:2 / 2:2 should alternate loops");
+		memset(gSeq, 0, sizeof gSeq); stepSetNote(0, 60, 1); gStepEd = 0; gStepEdRow = 60; seSet(14, 18); seSet(14, 19); if (gSeq[0].cond != 21) fail("IF: the step editor should step over NEI (%d)", gSeq[0].cond); gStepEd = -1; }
 	if (fr == 2104) { fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320; splashDraw(); shotBot("shots/loading_tip.ppm"); }
 }
 int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 2110; app_main(); printf("drum2: ratchets, conditions, row rate / length, sound editor, holds, beats\n"); return gFails ? 1 : 0; }
