@@ -462,8 +462,8 @@ static const char* LFO_SHAPES[NLFOSH] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "S
 static const char* SYNC_NAMES[NSYNC] = {"OFF", "4 BARS", "2 BARS", "1 BAR", "1/2", "1/4", "1/8", "1/16", "1/8T", "1/16T"};
 static const float SYNC_BEATS[NSYNC] = {0, 16, 8, 4, 2, 1, 0.5f, 0.25f, 1.0f / 3, 1.0f / 6};
 static const char* LFO_MODES[2] = {"FREE", "TRIG"};
-enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_TWIST, SRC_SHAKE, SRC_CAML, SRC_CAMC, SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_RAND, SRC_NOTE, SRC_LFO3, SRC_LFO4, SRC_SPINX, SRC_SPINY, SRC_MICBRT, SRC_CAMMOVE, SRC_COUNT };
-static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y", "TILT L/R", "TILT F/B", "BREATH", "TWIST", "SHAKE", "CAM LIGHT", "CAM COLOR", "MACRO 1", "MACRO 2", "MACRO 3", "MACRO 4", "CHAOS X", "CHAOS Y", "RANDOM", "NOTE", "LFO 3", "LFO 4", "SPIN F/B", "SPIN L/R", "VOICE BRIGHT", "CAM MOTION"};
+enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_TWIST, SRC_SHAKE, SRC_CAML, SRC_CAMC, SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_RAND, SRC_NOTE, SRC_LFO3, SRC_LFO4, SRC_SPINX, SRC_SPINY, SRC_MICBRT, SRC_CAMMOVE, SRC_PRESS, SRC_MSLIDE, SRC_COUNT };
+static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y", "TILT L/R", "TILT F/B", "BREATH", "TWIST", "SHAKE", "CAM LIGHT", "CAM COLOR", "MACRO 1", "MACRO 2", "MACRO 3", "MACRO 4", "CHAOS X", "CHAOS Y", "RANDOM", "NOTE", "LFO 3", "LFO 4", "SPIN F/B", "SPIN L/R", "VOICE BRIGHT", "CAM MOTION", "PRESSURE", "MPE SLIDE"};   // PRESSURE: aftertouch (per note with poly AT / MPE); MPE SLIDE: CC 74 per note
 // LFO 3 and 4 are drawn: 64 points you paint with the stylus on the MOD page
 static float gDl[2][64]; static float gDlRate[2] = {1.0f, 0.5f}, gDlPh[2], gDlVal[2]; static int gDlSync[2] = {0, 0};
 static float gChaosX = 0, gChaosY = 0, gChaosRate = 0.3f;   // a Lorenz attractor, slowly wandering, never repeating
@@ -645,8 +645,13 @@ typedef struct {
 	int chipCh;   // PSG square channel for the CHIP layer, -1 if none
 	int slide;    // 303 slide: glide to the new pitch quickly, no retrigger
 	float rnd;    // RANDOM mod source, set per note
+	int mch;      // the MIDI channel the note came in on (-1: not MIDI) - MPE sends each note on its own
+	float mbend, press, mslide;   // per note: MPE bend (semitones), pressure (aftertouch), slide (CC 74), 0..1
 } SVoice;
 static SVoice gV[NVS];
+static float gPressAll = 0, gSlideAll = 0;   // the latest channel pressure / CC 74 (for notes not on their own channel)
+static int gMidiChNow = -1, gMpe = 0;   // the channel of the MIDI note being started; MPE mode (VOICE+FX)
+static float gMpeRange = 48;
 static int gDspOwner[NCH], gCsOwner[NCS];
 static unsigned gAge = 0, gIdc = 0;
 static ndspWaveBuf gWB[NCH];
@@ -892,7 +897,7 @@ static void initVoice(SVoice* v) {
 	v->chipCh = -1;
 	for (int i = 0; i < R_COUNT; i++) v->ch[i] = -1;
 	v->active = 1; v->stage = 1; v->stage2 = 1; v->age = gAge++; v->id = ++gIdc; v->gate = -1;
-	v->gain = 1; v->cutMul = 1; v->relMul = 1;
+	v->gain = 1; v->cutMul = 1; v->relMul = 1; v->mch = -1;
 }
 
 static void lfoTrig(void) { for (int i = 0; i < 2; i++) if (gLfo[i].mode == 1) gLfo[i].ph = 0; }
@@ -939,13 +944,13 @@ static void voiceOn(int note, float vel) {
 		float from = m ? m->cur : 0;
 		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho) { gV[i].stage = gV[i].stage2 = 4; gV[i].relMul = 0.05f / (gEnv1.r + 0.0005f); }   // the old note fades out over 50 ms (cutting it dead clicked; volumes move at 60 Hz)
 		SVoice* v = newVoice(); initVoice(v);
-		v->note = note; v->freq = mtof((float)note); v->cur = (from > 0 && gGlide > 0) ? from : v->freq; v->vel = vel;
+		v->note = note; v->freq = mtof((float)note); v->cur = (from > 0 && gGlide > 0) ? from : v->freq; v->vel = vel; v->mch = gMidiChNow;
 		lfoTrig(); startVoice(v - gV);
 		if (v->active) addTaps(v);
 		return;
 	}
 	SVoice* v = newVoice(); initVoice(v);
-	v->note = note; v->freq = mtof((float)note); v->cur = v->freq; v->vel = vel; v->rnd = (rand() % 2001) / 1000.0f - 1;
+	v->note = note; v->freq = mtof((float)note); v->cur = v->freq; v->vel = vel; v->rnd = (rand() % 2001) / 1000.0f - 1; v->mch = gMidiChNow;
 	lfoTrig();
 	startVoice(v - gV);
 	if (v->active) addTaps(v);
@@ -1022,6 +1027,8 @@ static float srcValue(int src, const SVoice* v) {
 	case SRC_SPINY: return gSpinY;
 	case SRC_MICBRT: return gMicBright;
 	case SRC_CAMMOVE: return gCamMove;
+	case SRC_PRESS: return v && v->mch >= 0 ? (v->press > gPressAll ? v->press : gPressAll) : gPressAll;
+	case SRC_MSLIDE: return v && v->mch >= 0 ? v->mslide : gSlideAll;
 	}
 	return 0;
 }
@@ -1114,7 +1121,7 @@ static void voicesUpdate(float dt, float bend) {
 		if (v->stage == 3 && gEnv1.s <= 0.001f) { freeVoice(v); continue; }
 		v->cur += (v->freq - v->cur) * (v->slide ? 1.0f - expf(-dt / 0.03f) : gl);
 
-		float pitch = bend * gBendRange + modSum(DST_PITCH, v) * 12.0f;
+		float pitch = (gMpe && v->mch > 0 ? 0 : bend * gBendRange) + v->mbend + modSum(DST_PITCH, v) * 12.0f;   // MPE: each note bends on its own channel
 		float pm = powf(2.0f, pitch / 12.0f);
 		float cutoff = baseCutoff() * powf(2.0f, modSum(DST_CUTOFF, v) * 5.0f);
 		cutoff *= powf(v->cur / 261.6f, gKeytrack) * v->cutMul;
@@ -3282,7 +3289,7 @@ static Param P_MOD[] = {
 	PEND};
 static const char* BEND_NAMES[13] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"};
 static Param P_VOICE[] = {
-	PE("MODE", &gVoiceMode, 9, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0),
+	PE("MODE", &gVoiceMode, 9, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0), PE("MPE", &gMpe, 2, ONOFF, 0),
 	PE("BEND RANGE", &gBendRange, 13, BEND_NAMES, 0), PE("CHORD", &gChord, 5, CHORD_NAMES, 0),
 	PE("GATE", &gGatePat, NGATE, GATE_NAMES, 0), PE("GATE RATE", &gGateRate, 3, GRATE_NAMES, 0), PF("GATE DEPTH", &gGateDepth, 0, 1, 0.05f, "%", 0),
 	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("GPU VISUALS", &gGpuFx, 2, ONOFF, 0), PE("FX", &gFx, 4, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
@@ -3794,7 +3801,7 @@ static const char* paramHelp(const char* n) {
 		{"3 SOURCE", "MOD SLOT 3: WHAT MOVES IT"}, {"3 DEST", "MOD SLOT 3: WHAT IT MOVES"}, {"3 AMOUNT", "MOD SLOT 3: HOW MUCH"},
 		{"4 SOURCE", "MOD SLOT 4: WHAT MOVES IT"}, {"4 DEST", "MOD SLOT 4: WHAT IT MOVES"}, {"4 AMOUNT", "MOD SLOT 4: HOW MUCH"},
 		{"MODE", "POLY, MONO OR LEGATO"}, {"GLIDE", "SLIDE TIME BETWEEN NOTES"}, {"BEND RANGE", "CIRCLE PAD BEND IN SEMITONES"},
-		{"CHORD", "CHORD PLAYED BY ONE KEY (ALSO A)"}, {"GATE", "TRANCE GATE: CHOPS THE SOUND TO THE BEAT"}, {"GATE RATE", "STEP LENGTH OF THE GATE PATTERN"}, {"GATE DEPTH", "HOW FAR THE GATE CLOSES"}, {"CHORUS", "STEREO CHORUS AMOUNT"}, {"GPU VISUALS", "GRAPHICS CHIP VISUALS ON THE LEFT"},
+		{"CHORD", "CHORD PLAYED BY ONE KEY (ALSO A)"}, {"GATE", "TRANCE GATE: CHOPS THE SOUND TO THE BEAT"}, {"MPE", "EACH NOTE ITS OWN BEND, PRESSURE, SLIDE (CH 2-16)"}, {"GATE RATE", "STEP LENGTH OF THE GATE PATTERN"}, {"GATE DEPTH", "HOW FAR THE GATE CLOSES"}, {"CHORUS", "STEREO CHORUS AMOUNT"}, {"GPU VISUALS", "GRAPHICS CHIP VISUALS ON THE LEFT"},
 		{"FX", "ECHO, SPACE OR REVERB"}, {"ECHO TIME", "DELAY TIME"}, {"ECHO FDBK", "NUMBER OF REPEATS"}, {"OUTPUT", "STEREO OR VIRTUAL SURROUND"},
 		{"SURROUND", "SURROUND DEPTH"}, {"TILT CENTER", "PRESS > TO RE-CENTRE THE TILT"}, {"REV SIZE", "REVERB ROOM SIZE"},
 		{"REV DAMP", "DARKER REVERB TAIL"}, {"FX MIX", "HOW MUCH EFFECT"}, {"DRIVE", "DISTORTION TYPE"}, {"DRIVE AMT", "HOW MUCH DISTORTION"},
@@ -4862,9 +4869,9 @@ static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 matr
 // MATRIX view: the 8 mod slots as two columns, source on the left, destination on the right, a line between them.
 // Tap a box to pick from a list; drag along the line to set the amount (centre 0, right +100, left -100).
 // The dot on each line rides the source's live value.
-static const int MX_SRCS[28] = {SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_VEL, SRC_NOTE, SRC_RAND, SRC_STICK, SRC_XY,
+static const int MX_SRCS[30] = {SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_VEL, SRC_NOTE, SRC_RAND, SRC_STICK, SRC_XY,
 	SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_TILTX, SRC_TILTY, SRC_TWIST, SRC_SPINX, SRC_SPINY, SRC_SHAKE,
-	SRC_MIC, SRC_MICBRT, SRC_CAML, SRC_CAMC, SRC_CAMMOVE};
+	SRC_MIC, SRC_MICBRT, SRC_CAML, SRC_CAMC, SRC_CAMMOVE, SRC_PRESS, SRC_MSLIDE};
 static const u8 MX_COL[8] = {13, 11, 14, 10, 12, 9, 6, 15};   // EGA colours per slot
 #define MX_Y 40
 #define MX_PITCH 25
@@ -4882,7 +4889,7 @@ static void drawMatrix(void) {
 	if (gMxPick >= 0) {   // picker: sources in 3 x 10, destinations in 3 x 5
 		snprintf(t, sizeof(t), "SLOT %d %s", gMxPick + 1, gMxPickDst ? "DESTINATION" : "SOURCE"); text(6, 40, t, 1, RGB3(TH->val));
 		rect(256, 37, 60, 13, RGB3(TH->tab)); text(262, 40, "CANCEL", 1, RGB3(TH->tabTxt));
-		int n = gMxPickDst ? DST_COUNT : 28, bh = gMxPickDst ? 30 : 17, pitch = bh + 2, cur = gMxPickDst ? gMod[gMxPick].dst : gMod[gMxPick].src;
+		int n = gMxPickDst ? DST_COUNT : 30, bh = gMxPickDst ? 30 : 15, pitch = bh + 2, cur = gMxPickDst ? gMod[gMxPick].dst : gMod[gMxPick].src;
 		for (int i = 0; i < n; i++) {
 			int x = 4 + (i % 3) * 105, y = 53 + (i / 3) * pitch, v = gMxPickDst ? i : MX_SRCS[i];
 			const char* nm = gMxPickDst ? DST_NAMES[i] : SRC_NAMES[v]; int on = v == cur;
@@ -4927,7 +4934,7 @@ static int matrixTouch(int x, int y, int press, int release) {
 	if (gMxPick >= 0) {
 		if (!press) return 0;
 		if (y < 52) { if (x >= 256) { gMxPick = -1; return 1; } return 0; }
-		int bh = gMxPickDst ? 30 : 17, c = (x - 4) / 105, r = (y - 53) / (bh + 2), i = r * 3 + c, n = gMxPickDst ? DST_COUNT : 28;
+		int bh = gMxPickDst ? 30 : 15, c = (x - 4) / 105, r = (y - 53) / (bh + 2), i = r * 3 + c, n = gMxPickDst ? DST_COUNT : 30;
 		if (c < 0 || c > 2 || i < 0 || i >= n) return 0;
 		ModSlot* ms = &gMod[gMxPick];
 		if (gMxPickDst) ms->dst = i;
@@ -7198,14 +7205,27 @@ static void acidGen(void);
 static int midiApply(u8 st, u8 a, u8 b, int inTick) {
 	int ch = 0;
 	if (inTick && ((st & 0xF0) == 0xC0 || ((st & 0xF0) == 0xB0 && ((a >= 102 && a <= 104) || gLearnP)))) { mainQPush(st, a, b); return 0; }
+	int mc = st & 15;
 	switch (st & 0xF0) {
-	case 0x90: if (b) { midiNoteOn(a, 0.25f + 0.75f * b / 127.0f); break; } /* fall through: velocity 0 = off */
+	case 0xD0: {   // channel pressure (aftertouch): MPE - that channel's note; else every note
+		float pr = a / 127.0f; int hit = 0;
+		if (gMpe && mc > 0) for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].mch == mc) { gV[i].press = pr; hit = 1; }
+		if (!hit) gPressAll = pr;
+		break; }
+	case 0xA0: { float pr = b / 127.0f; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].note == a) gV[i].press = pr; break; }   // poly aftertouch
+	case 0x90: if (b) { gMidiChNow = mc; midiNoteOn(a, 0.25f + 0.75f * b / 127.0f); gMidiChNow = -1; break; } /* fall through: velocity 0 = off */
 	case 0x80: midiNoteOff(a); break;
-	case 0xE0: gMidiBend = (((b << 7) | a) - 8192) / 8192.0f; break;
+	case 0xE0: {
+		float bv = (((b << 7) | a) - 8192) / 8192.0f;
+		if (gMpe && mc > 0) { for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].mch == mc) gV[i].mbend = bv * gMpeRange; }   // MPE: this note only, +-48 semitones
+		else gMidiBend = bv;
+		break; }
 	case 0xC0: { int c = presetCount(gStyle); if (c > 0) { gPreset = a % c; presetLoad(gStyle, gPreset); ch = 1; } break; }
 	case 0xB0: {
 		float v = b / 127.0f; ch = 1;
 		if (learnApply(a, b)) break;   // learned bindings first
+		if (a == 74 && gMpe && mc > 0) { for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].mch == mc) gV[i].mslide = v; break; }   // MPE slide (Y axis): that note's own
+		if (a == 74) gSlideAll = v;
 		if (a == 74) gCutoff = v; else if (a == 71) gRes = v; else if (a == 70) { gOsc[0].pos = v; }
 		else if (a == 1) gMacro[0] = v; else if (a >= 16 && a <= 19) gMacro[a - 16] = v;
 		else if (a == 102 && b) { int c = presetCount(gStyle); if (c > 0) { gPreset = (gPreset + c - 1) % c; presetLoad(gStyle, gPreset); } }

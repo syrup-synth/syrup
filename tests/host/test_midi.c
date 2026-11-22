@@ -39,6 +39,18 @@ static void SCRIPT(int fr) {
 		if (gLearnP) fail("LEARN: the CC should have been learned"); gRes = 0; midiApply(0xB0, 21, 127, 0); if (gRes < 0.99f) fail("LEARN: CC 21 should now set RES (%.2f)", gRes);
 		midiApply(0xB0, 21, 0, 0); if (gRes > 0.01f) fail("LEARN: CC 21 at 0 (%.2f)", gRes);
 		memset(gLearnMap, 0, sizeof(gLearnMap)); }
+	// MPE: notes on their own channels bend and press on their own; aftertouch without MPE reaches every note
+	if (fr == 5) {
+		gMpe = 1; midiApply(0x91, 60, 100, 0); midiApply(0x92, 64, 100, 0); midiApply(0xE1, 0x7F, 0x7F, 0); midiApply(0xD2, 100, 0, 0); midiApply(0xB2, 74, 127, 0);
+		SVoice *a = NULL, *b = NULL; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho) { if (gV[i].note == 60) a = &gV[i]; if (gV[i].note == 64) b = &gV[i]; }
+		if (!a || !b) fail("MPE: both notes should sound"); else {
+			if (a->mbend < 40 || b->mbend != 0) fail("MPE: bend on ch 2 should move only its note (%.1f, %.1f)", a->mbend, b->mbend);
+			if (b->press < 0.7f || a->press != 0) fail("MPE: pressure on ch 3 should press only its note (%.2f, %.2f)", a->press, b->press);
+			if (b->mslide < 0.99f || a->mslide != 0) fail("MPE: CC 74 on ch 3 should slide only its note");
+			if (srcValue(SRC_PRESS, b) < 0.7f) fail("PRESSURE source should read the note's own pressure"); }
+		midiApply(0x81, 60, 0, 0); midiApply(0x82, 64, 0, 0); gMpe = 0;
+		midiApply(0xD0, 90, 0, 0); if (gPressAll < 0.7f) fail("AFTERTOUCH: channel pressure without MPE should reach every note (%.2f)", gPressAll); midiApply(0xD0, 0, 0, 0);
+	}
 	static MidiIn fz;
 	if (fr >= 6 && fr < 900) {   // the fuzz
 		u8 b[24]; int n = rnd(24);

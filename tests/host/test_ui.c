@@ -30,7 +30,7 @@ static void SCRIPT(int fr) {
 	if (fr == 226) shotBot("shots/matrix.ppm");
 	tap(fr, 230, 50, MX_Y + 2 * MX_PITCH + 8);    // slot 3 source box
 	if (fr == 236) { if (gMxPick != 2 || gMxPickDst) fail("matrix: tapping a source box should open the source list"); shotBot("shots/matrix_sources.ppm"); }
-	tap(fr, 240, 160, 53 + 8 * 19 + 5);           // CAM LIGHT (row 9, middle column)
+	tap(fr, 240, 160, 53 + 8 * 17 + 5);           // CAM LIGHT (row 9, middle column; rows are 17 px now)
 	if (fr == 246 && gMod[2].src != SRC_CAML) fail("matrix: picking CAM LIGHT gave %s", SRC_NAMES[gMod[2].src]);
 	tap(fr, 250, 260, MX_Y + 2 * MX_PITCH + 8);   // slot 3 destination box
 	tap(fr, 256, 50, 60);                         // A WT POS
