@@ -4639,7 +4639,9 @@ static int gPads = 0, gPadSel = -1, gPadN = 0, gPadNotes[4], gStrumZone = -1;
 static struct { int note; float t; } gStrumOff[24]; static int gStrumOffN = 0;
 #define PAD_Y (TAB_H + 2)
 #define PAD_H 120
-#define STRUM_Y (PAD_Y + PAD_H + 4)
+#define PROG_Y (PAD_Y + PAD_H + 4)   // the PROGRESSION row between the pads and the strum strip
+#define PROG_H 22
+#define STRUM_Y (PROG_Y + PROG_H + 2)
 static const int MAJ7[7] = {0, 2, 4, 5, 7, 9, 11};
 static int padDeg(int base, int d) {   // scale degree -> note, using the scale when it has 7 notes, else major
 	if (gScale && scaleLen() == 7) return scaleNote(base + gRoot, d);
@@ -4662,7 +4664,13 @@ static void padName(int base, int pad, char* o, int len) {
 	if (a == 3) for (char* c = rn; *c; c++) *c = (char)(*c - 'A' + 'a');   // minor chords in lower case, the usual way
 	snprintf(o, len, "%s|%s%s", rn, NOTE_NAMES[r % 12], q);
 }
+#define NPROG 8
+static int gPadBase = 48;
+static int gProg = 0, gProgAt = -1, gProgAuto = 0, gProgDirty = 0; static float gProgBar = 0;
+static const char* PROG_NAMES[NPROG] = {"PROG: OFF", "I V vi IV", "vi IV I V", "I vi IV V", "ii V I I", "I IV V IV", "i VI III VII", "i iv v i"};
+static const int PROGS[NPROG][4] = {{0, 0, 0, 0}, {0, 4, 5, 3}, {5, 3, 0, 4}, {0, 5, 3, 4}, {1, 4, 0, 0}, {0, 3, 4, 3}, {0, 5, 2, 6}, {0, 3, 4, 0}};   // scale degrees (pads)
 static void drawPads(int base) {
+	gPadBase = base;
 	rect(0, TAB_H, 320, 240 - TAB_H, RGB3(TH->bg));
 	for (int i = 0; i < 7; i++) {
 		int x = 2 + i * 45, w = 43, lit = i == gPadSel;
@@ -4675,19 +4683,43 @@ static void drawPads(int base) {
 		text(x + w / 2 - (int)strlen(bar + 1) * 4, PAD_Y + PAD_H - 14, bar + 1, 1, tc[0], tc[1], tc[2]);
 		text(x + 4, PAD_Y + PAD_H / 6 - 4, "9", 1, RGB3(TH->dim)); text(x + 4, PAD_Y + PAD_H / 2 - 4, "7", 1, RGB3(TH->dim));
 	}
+	{   // PROGRESSION: pick one, tap its chords in order, or AUTO plays a chord a bar with the clock
+		rect(2, PROG_Y, 316, PROG_H, RGB3(TH->kbBg));
+		char t[24]; snprintf(t, sizeof(t), "%s", PROG_NAMES[gProg]);
+		rect(4, PROG_Y + 2, 96, PROG_H - 4, RGB3(TH->tab)); text(52 - (int)strlen(t) * 4, PROG_Y + 7, t, 1, RGB3(TH->tabTxt));
+		if (gProg) {
+			for (int k = 0; k < 4; k++) {
+				int x = 104 + k * 44, lit = gProgAt == k && (gProgAuto || gPadSel == PROGS[gProg][k]);
+				char nm[24]; padName(base, PROGS[gProg][k], nm, sizeof(nm)); char* bar = strchr(nm, '|'); *bar = 0;
+				rect(x, PROG_Y + 2, 42, PROG_H - 4, lit ? TH->keyOn[0] : TH->pad[0], lit ? TH->keyOn[1] : TH->pad[1], lit ? TH->keyOn[2] : TH->pad[2]);
+				const u8* c = lit ? EGA[0] : TH->val; text(x + 21 - (int)strlen(nm) * 4, PROG_Y + 7, nm, 1, c[0], c[1], c[2]);
+			}
+			const u8* ac = gProgAuto ? TH->keyOn : TH->tab; rect(281, PROG_Y + 2, 37, PROG_H - 4, RGB3(ac));
+			const u8* atc = gProgAuto ? EGA[0] : TH->tabTxt; text(284, PROG_Y + 7, "AUTO", 1, atc[0], atc[1], atc[2]);
+		} else text(108, PROG_Y + 7, "< TAP FOR A PROGRESSION", 1, RGB3(TH->dim));
+	}
 	int sh = 240 - STRUM_Y - 2;
 	rect(2, STRUM_Y, 316, sh, RGB3(TH->kbBg));
 	for (int z = 0; z < 24; z++) { int x = 2 + z * 316 / 24; rect(x + 6, STRUM_Y + 2, 1, sh - 4, z == gStrumZone ? TH->keyOn[0] : TH->line[0], z == gStrumZone ? TH->keyOn[1] : TH->line[1], z == gStrumZone ? TH->keyOn[2] : TH->line[2]); }
 	text(6, STRUM_Y + 3, "STRUM", 1, RGB3(TH->dim));
 }
 static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 = screen changed
-	if (y < STRUM_Y - 2) {
+	if (y < PROG_Y - 2) {
 		if (!press) return 0;
 		int i = (x - 2) / 45; if (i < 0 || i > 6) return 0;
 		int ly = y - PAD_Y, band = ly < PAD_H / 3 ? 2 : ly < 2 * PAD_H / 3 ? 1 : 0, lx = x - 2 - i * 45, side = lx < 10 ? 0 : lx > 33 ? 2 : 1;
 		gPadSel = i; gPadN = padChord(base, i, band, side, gPadNotes);
 		*velOut = 0.55f + 0.45f * (1 - ly / (float)PAD_H) * 0.5f + 0.2f;
 		playSet(gPadNotes, gPadN, *velOut);
+		return 1;
+	}
+	if (y < STRUM_Y - 1) {   // the PROGRESSION row
+		if (!press) return 0;
+		if (x < 102) { gProg = (gProg + 1) % NPROG; gProgAt = -1; if (!gProg && gProgAuto) { gProgAuto = 0; playSet(NULL, 0, 0.8f); } return 1; }
+		if (!gProg) return 0;
+		if (x >= 280) { gProgAuto = !gProgAuto; gProgAt = -1; gProgBar = 1; if (!gProgAuto) playSet(NULL, 0, 0.8f); return 1; }
+		int k = (x - 104) / 44; if (k < 0 || k > 3) return 0;
+		gProgAt = k; gPadSel = PROGS[gProg][k]; gPadN = padChord(base, gPadSel, 0, 1, gPadNotes); playSet(gPadNotes, gPadN, 0.8f); *velOut = 0.8f;
 		return 1;
 	}
 	if (gPadSel < 0) { gPadSel = 0; gPadN = padChord(base, 0, 0, 1, gPadNotes); }
@@ -4701,6 +4733,12 @@ static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 
 	return 1;
 }
 static void padsTick(float dt) {   // strummed notes ring for a moment, then let go
+	if (gProg && gProgAuto) {   // AUTO: the next chord on every bar (on the sequencer's bar line when it plays)
+		static int lastPos = -1; int next = 0;
+		if (gSeqPlaying) { if (gSeqPos == 0 && lastPos != 0) next = 1; lastPos = gSeqPos; }
+		else { gProgBar += dt * gBPM / 60.0f / 4.0f; if (gProgBar >= 1) { gProgBar -= 1; next = 1; } }
+		if (next) { gProgAt = (gProgAt + 1) % 4; gPadSel = PROGS[gProg][gProgAt]; gPadN = padChord(gPadBase, gPadSel, 0, 1, gPadNotes); playSet(gPadNotes, gPadN, 0.8f); gProgDirty = 1; }
+	}
 	for (int i = 0; i < gStrumOffN; i++) if ((gStrumOff[i].t -= dt) <= 0) { voiceOff(gStrumOff[i].note); gStrumOff[i] = gStrumOff[--gStrumOffN]; i--; }
 }
 
@@ -7742,12 +7780,13 @@ static void drumsChanged(void) {   // main thread
 }
 // PANIC, after the notes, sequencer and arp: the loop (kept recorded: LOOPER PLAY brings it back), live REC, the tape,
 // the chip echo's tail, the drum machine, a held shake, and anything still ringing on the second chip
+static int gProgAuto;
 static void panicRest(void) {
 	if (gLoopMode) { gLoopMode = 0; loopModeChanged(); }
 	if (gLiveRec || gPreFor == 2) liveRecStop();
 	tapeStopPlay(); echoStop();
 	if (gDrums) { gDrums = 0; drumsChanged(); }
-	gShakePend = 0;
+	gShakePend = 0; gProgAuto = 0;
 	if (gCsndOK) { for (int c = 0; c < NCS; c++) if ((csndChannels & BIT(c)) && gCsOwner[c] < 0) CSND_SetPlayState(c, 0); csndExecCmds(false); }
 }
 // ---- DRUM KIT patches (voice MODE 808 KIT .. CHIP KIT): every key is a drum. Notes follow General MIDI from C1 (36)
@@ -9053,7 +9092,7 @@ int main(void) {
 		{ static int gT = 0; if (xyShown() && ++gT % 3 == 0 && xyModulated()) botDirty = 1; }   // the ghost follows the modulation
 		if (prevTouch && !touching && grainEdTouch(0, 0, 0, 1)) botDirty = 1;   // let go of the grain editor: SCAN carries on from there
 		if (gPads && prevTouch && !touching) { gStrumZone = -1; if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
-		padsTick(dt);
+		padsTick(dt); if (gProgDirty) { gProgDirty = 0; if (gPads) botDirty = 1; }
 		int freshPress = touching && !prevTouch;   // a new tap restrikes the key even if it's the one still held (LATCH, drum pads)
 		prevTouch = touching;
 		{ static int f = 0; if (gAddDirty && (++f % 6 == 0 || !touching)) { gAddDirty = 0; addApply(); topDirty = 1; } }   // additive editor: rebuild a few times a second while drawing
