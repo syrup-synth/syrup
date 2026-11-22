@@ -4055,6 +4055,7 @@ static void drawHelp(void) {
 #define WORK_B 118   // bottom of the work area; the PERF row sits under it, then the keyboard
 #define KB_Y  136
 #define NDRUM 10
+static volatile float gPadFlash[NDRUM];   // drum pads light when they're hit: taps, MIDI and the drum machine
 static const char* kitPadName(int d); static int kitPadNote(int d); static int kitPadOrder(int i);
 static int keyAt(int x, int y, int base) {
 	if (gVoiceMode >= 3) {   // drum pads: 2 rows of 5
@@ -5219,7 +5220,7 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	if (TH->ega) rect(0, KB_Y, 320, 1, LINE);
 	if (gVoiceMode >= 3) {   // drum kit pads, lower on a pad = harder
 		for (int i = 0; i < 10; i++) {
-			int d = kitPadOrder(i), x = (i % 5) * 64, y = KB_Y + 2 + (i / 5) * PAD_ROW, note = kitPadNote(d), lit = note < 128 && on[note];
+			int d = kitPadOrder(i), x = (i % 5) * 64, y = KB_Y + 2 + (i / 5) * PAD_ROW, note = kitPadNote(d), lit = (note < 128 && on[note]) || gPadFlash[d] > 0;
 			rect(x + 2, y, 60, PAD_ROW - 4, lit ? TH->keyOn[0] : TH->keyW[0], lit ? TH->keyOn[1] : TH->keyW[1], lit ? TH->keyOn[2] : TH->keyW[2]);
 			if (TH->ega) outline(x + 2, y, 60, PAD_ROW - 4, RGB3(TH->keyLine));
 			const char* nm = kitPadName(d); int tx = x + 32 - (int)strlen(nm) * 4;
@@ -7361,6 +7362,7 @@ static void drumPickChannels(void) {
 	for (int c = 16; c < NCS && n < NDCH; c++) if (gCsndOK && (csndChannels & BIT(c)) && c != gLoopCh[0] && c != gLoopCh[1] && !chipReserved(c) && !echoReserved(c)) gDrumCh[n++] = c;
 }
 static void drumHit(int d, float vel) {   // from the audio thread (voice lock held)
+	if (d >= 0 && d < NDRUM && vel > 0.05f) gPadFlash[d] = 1;
 	static const int DCH[NDRUM] = {0, 1, 2, 2, 3, 1, 4, 4, 5, 6};   // open hat chokes the closed hat (same channel), rim cuts the snare
 	static const int PCH[NDRUM] = {0, 1, 2, 3, 4, 5, 6, 6, 5, 1};   // PERC: each shaker on its own channel; the drums share
 	int perc = gKit == 4, ch = perc ? PCH[d] : DCH[d];
@@ -7497,6 +7499,7 @@ static void shakeQTick(void) {   // audio thread, after the clocks: a held shake
 	if (gShakePend > 0 && (gShakeQ != 2 || !(pos & 1))) { kitHitSound(0, gShakePend); gShakePend = 0; }
 }
 static void kitHitSound(int d, float vel) {   // voice lock held
+	if (d >= 0 && d < NDRUM) gPadFlash[d] = 1;
 	if (!gCsndOK || gDrumBuilt != gVoiceMode - 3) return;
 	drumHit(d, vel * gMaster * 1.25f);
 	csndExecCmds(false);
@@ -8708,6 +8711,7 @@ int main(void) {
 
 		memset(on, 0, sizeof(on));
 		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note >= 0 && gV[i].note < 128) on[gV[i].note] = 1;
+		if (gVoiceMode >= 3) { static int was = 0; int any = 0; for (int d = 0; d < NDRUM; d++) if (gPadFlash[d] > 0) { gPadFlash[d] -= 6.0f / 60; any = 1; } if (any || was) botDirty = 1; was = any; }   // pad flashes fade over ~1/6 s
 		{ int fading = 0;   // a key let go keeps a short glow: slides leave a trail
 			for (int n = 0; n < 128; n++) { if (onPrev[n] && !on[n]) gKeyFade[n] = 1; if (on[n]) gKeyFade[n] = 0; if (gKeyFade[n] > 0) { gKeyFade[n] -= 1.0f / 60 * 3.5f; if (gKeyFade[n] < 0) gKeyFade[n] = 0; fading = 1; } }
 			if (fading) botDirty = 1; }
