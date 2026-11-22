@@ -3205,8 +3205,10 @@ static int askName(const char* cur, char* out, int len) {   // the system keyboa
 	out[n] = 0; return n > 0;
 }
 static int gBrowseDefer = 0, gBrowsePend = 0;
+static void patchMark(const void* ctl);
 static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound changed
-	if (gEdited && !gGuard) { if (!fresh) return 0; gGuard = 1; say("PATCH EDITED: AGAIN TO LEAVE IT, A SAVES IT"); return 0; }
+	(void)fresh;
+	if (gEdited) patchMark(&gEdited);   // leaving an edited patch: SELECT + L brings it back
 	int u = NSTYLES - 1;
 	if (ds) {
 		gStyle = (gStyle + NSTYLES + ds) % NSTYLES; gPreset = 0;
@@ -3233,7 +3235,7 @@ static void browseSave(void) {
 	u64 t = osGetTime();
 	if (gSaveArm != slot || t - gSaveArmT > 3000) {
 		gSaveArm = slot; gSaveArmT = t; char m[52];
-		snprintf(m, sizeof(m), "A AGAIN: SAVE TO USER %d%s", slot + 1, gUser[slot].magic == PATCH_MAGIC ? " (REPLACES IT)" : "");
+		snprintf(m, sizeof(m), "AGAIN: SAVE TO USER %d%s", slot + 1, gUser[slot].magic == PATCH_MAGIC ? " (REPLACES IT)" : "");
 		say(m); return;
 	}
 	gSaveArm = -1; gSaveSlot = slot;
@@ -3963,7 +3965,7 @@ static void drawFooter(int page, int sel) {
 		text(4, 230, "NO SOUND - DSP FIRMWARE NOT DUMPED (SEE ABOVE)", 1, WARN); return; }
 	if (gSafeMode) { char m[60]; snprintf(m, sizeof(m), "SAFE MODE - LAST RUN CRASHED AT %.24s", gCrashStage); text(4, 230, m, 1, WARN); return; }
 	if (gMsgT > 0) { text(4, 230, gMsg, 1, VAL); return; }
-	if (page == 0) { text(4, 230, "< > STYLE   ^ v PATCH   A TWICE: SAVE + NAME", 1, DIM); return; }
+	if (page == 0) { text(4, 230, "TAP A PATCH BELOW   D-PAD WORKS TOO", 1, DIM); return; }
 	const char* h = paramHelp(PAGES[page][sel].name);
 	char m[52]; snprintf(m, sizeof(m), "%.49s", *h ? h : "D-PAD: PICK / CHANGE   X/Y: PAGES");
 	text(4, 230, m, 1, DIM);
@@ -4077,15 +4079,14 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		text(212, 52, gPatchName, sc, VAL);
 		char s2[40]; snprintf(s2, sizeof(s2), "%s  %d / %d", STYLE_NAMES[gStyleCur], gPresetCur + 1, presetCount(gStyleCur));
 		text(212, 76, s2, 1, TXT);
-		if (gEdited) text(212, 88, "* EDITED - A TO SAVE IT", 1, WARN);
+		if (gEdited) text(212, 88, "* EDITED - SAVE KEEPS IT", 1, WARN);
 		rect(208, 104, 186, 1, LINE);
-		text(212, 112, "< >  STYLE", 1, TXT);
-		text(212, 126, "^ v  PATCH", 1, TXT);
-		text(212, 140, "A A  SAVE + NAME", 1, TXT);
-		text(212, 162, "HOLD ^ v TO SCROLL.", 1, DIM);
-		text(212, 176, "USER: PICK A SLOT,", 1, DIM);
-		text(212, 188, "A A SAVES OR RENAMES.", 1, DIM);
-		text(212, 204, "INIT PATCH IS LAST.", 1, DIM);
+		text(212, 112, "TAP A PATCH BELOW", 1, TXT);
+		text(212, 126, "TAP A STYLE TO SEE IT", 1, TXT);
+		text(212, 140, "SAVE TWICE: KEEP IT", 1, TXT);
+		text(212, 162, "LEFT AN EDIT BY MISTAKE?", 1, DIM);
+		text(212, 176, "SELECT + L UNDOES IT.", 1, DIM);
+		text(212, 192, "D-PAD: < > STYLE ^ v PATCH", 1, DIM);
 		drawFooter(page, sel);
 		if (!visActive(page)) scanlines();
 		return;
@@ -5435,6 +5436,54 @@ static int xyTop(void) { return gXyMode == 6 ? XY_Y + 28 : XY_Y; }
 static float* const SL_P[4] = {&gCutoff, &gRes, &gOsc[0].pos, &gFxMix};
 static const char* SL_N[4] = {"CUTOFF", "RES", "WT POS", "FX MIX"};
 static int gSlDrag = -1;
+// PATCH page, bottom screen: the browser. A strip of styles (tap one to see its patches; the strip re-centres on it,
+// so the styles either side are always one tap away), the style's patches below (tap one: it loads, edits or not; SELECT + L brings back what you had),
+// SAVE on the right (tap twice: saves to a USER slot and asks for a name).
+#define BR_Y (XY_Y + 1)
+#define BR_SH 16
+#define BR_GY (BR_Y + BR_SH + 3)
+#define BR_RH 13
+#define BR_COLS 3
+#define BR_ROWS 6
+static int gBrStyle = -1;   // the style shown (-1 = the one playing)
+static const char* STYLE_SHORT[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQ", "TEXTUR", "CHIP", "SPACE", "CHPSET", "MOTION", "QUIRKS", "RAVE", "DRUMS", "GROOVE", "USER"};
+static int brStyle(void) { return gBrStyle >= 0 ? gBrStyle : gStyle; }
+static int brCount(int st) { return presetCount(st) + (st == NSTYLES - 1); }   // USER: the slots, then INIT PATCH
+static int brFirst(void) { int f = brStyle() - 2; if (f < 0) f = 0; if (f > NSTYLES - 5) f = NSTYLES - 5; return f; }
+static void drawBrowser(void) {
+	rectP(0, XY_Y, 320, WORK_B - XY_Y, TH->bg);
+	int bs = brStyle(), f = brFirst();
+	for (int k = 0; k < 5; k++) {   // the style strip
+		int st = f + k, x = 2 + k * 52, lit = st == bs, here = st == gStyleCur;
+		rectP(x, BR_Y, 50, BR_SH, lit ? TH->keyOn : TH->tab);
+		const u8* c = lit ? EGA[0] : here ? TH->val : TH->tabTxt; text(x + 25 - (int)strlen(STYLE_SHORT[st]) * 4, BR_Y + 4, STYLE_SHORT[st], 1, c[0], c[1], c[2]);
+	}
+	{ int arm = gSaveArm >= 0 && osGetTime() - gSaveArmT < 3000; rectP(264, BR_Y, 54, BR_SH, arm ? TH->warn : TH->tab); text(291 - (arm ? 5 : 4) * 4, BR_Y + 4, arm ? "AGAIN" : "SAVE", 1, RGB3(TH->tabTxt)); }
+	int n = brCount(bs), cw = 320 / BR_COLS;
+	for (int i = 0; i < n && i < BR_COLS * BR_ROWS; i++) {
+		int x = (i % BR_COLS) * cw + 2, y = BR_GY + (i / BR_COLS) * BR_RH, cur = bs == gStyleCur && i == gPresetCur;
+		char nm[16]; const char* src = bs == NSTYLES - 1 && i == NUSER ? "INIT PATCH" : bs == NSTYLES - 1 && gUser[i].magic != PATCH_MAGIC ? "- EMPTY -" : presetName(bs, i);
+		snprintf(nm, sizeof(nm), "%.12s", src);
+		rectP(x, y, cw - 4, BR_RH - 1, cur ? TH->keyOn : (i / BR_COLS) & 1 ? TH->pad : TH->grid);
+		const u8* c = cur ? EGA[0] : TH->txt; text(x + 3, y + 2, nm, 1, c[0], c[1], c[2]);
+		if (cur && gEdited) text(x + cw - 14, y + 2, "*", 1, c[0], c[1], c[2]);
+	}
+}
+static int browseStep(int ds, int dp, int fresh);
+static void browseSave(void);
+static int browserTouch(int x, int y) {   // 1 = the sound changed
+	if (y >= BR_Y && y < BR_Y + BR_SH) {
+		if (x >= 262) { browseSave(); return 0; }
+		int k = (x - 2) / 52; if (k < 0) k = 0; if (k > 4) k = 4;
+		int st = brFirst() + k;
+		gBrStyle = st; return 0;
+	}
+	if (y < BR_GY || y >= BR_GY + BR_ROWS * BR_RH) return 0;
+	int i = ((y - BR_GY) / BR_RH) * BR_COLS + x / (320 / BR_COLS), bs = brStyle();
+	if (i >= brCount(bs)) return 0;
+	gStyle = bs; gPreset = i - 1; gBrStyle = -1;
+	return browseStep(0, 1, 1);
+}
 static void drawXyPad(void) {
 	int top = xyTop(), h = XY_Y + XY_H - top;
 	rect(0, XY_Y, 320, WORK_B - XY_Y, RGB3(TH->bg));
@@ -5561,7 +5610,7 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	if (gModOn) { drawModView(); return; }               // MOD page: route / drawn LFOs / motion
 	if (gGridOn) { drawGrid(); return; }   // the piano roll takes the whole screen under the tabs
 	if (gDrumOnB) { drawDrumGrid(); return; }   // so does the drum sequencer
-	if (gAddEdit) drawAdd(); else {
+	if (gAddEdit) drawAdd(); else if (gCurPage == 0) drawBrowser(); else {
 	drawXyPad();
 	}
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
@@ -9198,6 +9247,8 @@ int main(void) {
 					}
 					topDirty = botDirty = 1;
 				}
+			} else if (page == 0 && !gPads && t.py < WORK_B) {   // PATCH page: the browser
+				if (!prevTouch) { if (browserTouch(t.px, t.py)) { curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
 			} else if (gDrumOnB && !gPads) {   // DRUMS page: the drum sequencer has the whole screen
 				if (drumGridTouch(t.px, t.py, !prevTouch)) topDirty = botDirty = 1;
 			} else if (t.py >= WORK_B && t.py < KB_Y && !gModOn && !gGridOn && !(gPads && !gGridOn)) {

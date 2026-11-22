@@ -104,9 +104,17 @@ static void SCRIPT(int fr) {
 		drumGridTouch(10, DG_TOP + 3 * DG_RH + 5, 1); drumGridTouch(240, DG_Y + 5, 1); if (gTapRow != 3) fail("MIC: should tap onto the picked row (OP HAT) (%d)", gTapRow); }
 	if (fr == 112 && gTapRow >= 0) {}
 	if (fr == 98 && gSeqMode != 1) fail("QUICK: down should PLAY");
+	// PATCH BROWSER (bottom screen): tap a style, tap a patch: it loads even after an edit, and undo brings the edit back
+	if (fr == 264) { gCurPage = 0; int s, i; findPreset("WARM FELT", &s, &i); presetLoad(s, i); gStyle = s; gPreset = i; gCutoff = 0.123f; gEdited = 1;
+		gBrStyle = 0; int r = browserTouch(2 + 1 * (320 / BR_COLS) + 5, BR_GY + 3);   // BASS, 2nd patch
+		if (!r || gStyleCur != 0 || gPresetCur != 1) fail("BROWSER: a tap should load BASS #2 (style %d patch %d)", gStyleCur, gPresetCur);
+		if (gEdited) fail("BROWSER: the new patch shouldn't be marked edited");
+		histStep(1); if (fabsf(gCutoff - 0.123f) > 0.001f) fail("BROWSER: undo should bring the edited sound back (cutoff %.3f)", gCutoff);
+		gBrStyle = -1; browserTouch(10, BR_Y + 4); if (gBrStyle < 0) fail("BROWSER: tapping a style should show it");
+		fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320; drawBrowser(); shotBot("shots/browser_bot.ppm"); }
 }
 int main(void) {
-	mkdir("sd", 0777); loadFont(); FRMAX = 264; app_main();
+	mkdir("sd", 0777); loadFont(); FRMAX = 268; app_main();
 	printf("b1: SELECT transport + combos, undo/redo, L/R octave, MONO chord, RIFF octave\n");
 	return gFails ? 1 : 0;
 }
