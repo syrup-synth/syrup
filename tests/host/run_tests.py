@@ -12,7 +12,7 @@ def sh(cmd, **k): return subprocess.run(cmd, cwd=BUILD, capture_output=True, tex
 os.makedirs(BUILD, exist_ok=True)
 subprocess.run([os.path.join(HERE, 'gen.sh'), BUILD], check=True)
 for f in ('fake3ds.h', 'fakecitro.h', 'harness.h', 'default_font.bin'): shutil.copy(os.path.join(HERE, f), BUILD)
-for t in ('test_patch', 'test_buzz', 'test_timing', 'test_ui', 'test_kit', 'test_chip', 'test_vis', 'test_format', 'test_screens', 'test_seq', 'test_adv', 'test_tape', 'test_loop', 'test_scream', 'test_b1', 'test_midi', 'test_drum2'):
+for t in ('test_patch', 'test_buzz', 'test_timing', 'test_ui', 'test_kit', 'test_chip', 'test_vis', 'test_format', 'test_screens', 'test_seq', 'test_adv', 'test_tape', 'test_loop', 'test_scream', 'test_b1', 'test_midi', 'test_drum2', 'test_net'):
     shutil.copy(os.path.join(HERE, t + '.c'), BUILD)
     r = sh(['gcc', '-O1', '-w', '-I', os.path.join(ROOT, 'source'), t + '.c', '-o', t, '-lm', '-lpthread', '-lcurl'])
     if r.returncode: print(r.stderr[-3000:]); sys.exit('build failed: ' + t)
@@ -39,6 +39,7 @@ run('test_seq', [])
 run('test_scream', [], timeout=300)
 run('test_b1', [])
 run('test_drum2', [], timeout=300)
+run('test_net', [], timeout=120)
 run('test_midi', [], timeout=300)
 run('test_adv', [])
 run('test_tape', [])

@@ -6994,7 +6994,7 @@ static void cliWs(Cli* c) {   // parse as many frames as are complete
 		u8* d = p + hl;
 		if (masked) for (u32 i = 0; i < len; i++) d[i] ^= p[hl - 4 + (i & 3)];
 		if (op == 8) { u8 cl[2] = {0x88, 0}; sendAll(c->s, cl, 2); cliClose(c); gNetClients--; return; }
-		if (op == 9) { u8 hd[2] = {0x8A, (u8)len}; if (len < 126) { sendAll(c->s, hd, 2); sendAll(c->s, d, len); } }
+		if (op == 9 && len < 126) { u8 pg[2 + 125]; pg[0] = 0x8A; pg[1] = (u8)len; memcpy(pg + 2, d, len); sendAll(c->s, pg, 2 + len); }   // pong, in one write
 		if (op == 1 || op == 2) midiParse(d, len, &c->run);
 		int used = hl + len; memmove(c->buf, c->buf + used, c->n - used); c->n -= used;
 	}
