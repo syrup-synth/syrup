@@ -4252,6 +4252,19 @@ static int noteCover(int st, int nt, int* k0) {   // the step whose note nt cove
 	for (int s0 = st; s0 >= 0; s0--) { const Step* p = &gSeq[s0]; for (int k = 0; k < p->n; k++) if (p->note[k] == nt && s0 + noteLen(p, k) > st) { if (k0) *k0 = k; return s0; } }
 	return -1;
 }
+static int gLane = 0;
+static const char* LANE_NAMES[5] = {"VEL", "GATE", "PROB", "ACC", "SLD"};
+static void outlineP(int x, int y, int w, int h, const u8* c) { outline(x, y, w, h, c[0], c[1], c[2]); }
+static int laneGet(const Step* sp, int lane) {   // 0..255
+	if (lane == 0) return sp->vel;
+	if (lane == 1) { int g = sp->gate ? sp->gate : (int)(gSeqGate * 100); return g * 255 / 100; }
+	return (100 - sp->skip) * 255 / 100;
+}
+static void laneSet(Step* sp, int lane, int v) {   // v 0..255
+	if (lane == 0) sp->vel = (u8)(v < 10 ? 10 : v);
+	else if (lane == 1) { int g = v * 100 / 255; sp->gate = (u8)(g < 5 ? 5 : g > 100 ? 100 : g); }
+	else { int pr = v * 100 / 255; if (pr < 1) pr = 1; sp->skip = (u8)(100 - pr); }
+}
 static void drawGrid(void) {
 	rectP(0, XY_Y, 320, 240 - XY_Y, TH->bg);
 	char pb[8]; snprintf(pb, sizeof(pb), "PAT%c", 'A' + gPatCur);
@@ -4310,13 +4323,22 @@ static void drawGrid(void) {
 	}
 	if (above) { int x = 312; rectP(x, ROLL_TOP + 1, 5, 2, TH->warn); rectP(x + 1, ROLL_TOP, 3, 1, TH->warn); }   // more notes up there
 	if (below) { int x = 312, y = ROLL_TOP + ROLL_ROWS * ROLL_RH - 4; rectP(x, y, 5, 2, TH->warn); rectP(x + 1, y + 2, 3, 1, TH->warn); }
-	{   // VELOCITY: one straight bar per step (drag up / down across the lane)
+	{   // THE LANE under the notes: VEL / GATE / PROB as bars (drag up / down, or across), ACCENT / SLIDE as switches.
+		// Tap its name to step through them.
 		rectP(0, VEL_Y - 2, 320, 240 - VEL_Y + 2, TH->bg);
-		text(2, VEL_Y + VEL_H / 2 - 4, "VEL", 1, RGB3(TH->dim));
+		rectP(0, VEL_Y, ROLL_KW - 1, VEL_H, TH->tab); text(ROLL_KW / 2 - (int)strlen(LANE_NAMES[gLane]) * 4, VEL_Y + VEL_H / 2 - 4, LANE_NAMES[gLane], 1, RGB3(TH->tabTxt));
 		for (int st = 0; st < NSTEP; st++) {
-			int x = rollX(st) + 1, w = (int)ROLL_CW - 2, has = gSeq[st].n > 0, h = has ? (VEL_H - 2) * gSeq[st].vel / 255 : 0;
+			const Step* sp = &gSeq[st]; int x = rollX(st) + 1, w = (int)ROLL_CW - 2, has = sp->n > 0, at = gSeqPlaying && gSeqPos == st;
 			rectP(x, VEL_Y, w, VEL_H, st < gSeqLen ? TH->pad : TH->bg);
-			if (has) rectP(x, VEL_Y + VEL_H - h, w, h, gSeqPlaying && gSeqPos == st ? TH->keyOn : TH->val);
+			if (!has) continue;
+			if (gLane >= 3) {   // switches
+				int on = gLane == 3 ? (sp->fl & 1) : (sp->fl & 2) != 0;
+				if (on) rectP(x + 2, VEL_Y + 6, w - 4, VEL_H - 12, at ? TH->keyOn : TH->val); else outlineP(x + 2, VEL_Y + 6, w - 4, VEL_H - 12, TH->grid);
+			} else {
+				int v = laneGet(sp, gLane), h = (VEL_H - 2) * v / 255;
+				if (gLane == 1 && !sp->gate) outlineP(x, VEL_Y + VEL_H - h, w, h, TH->grid);   // GATE unset: the pattern's SEQ GATE, hollow
+				else rectP(x, VEL_Y + VEL_H - h, w, h, at ? TH->keyOn : TH->val);
+			}
 		}
 	}
 }
@@ -4572,13 +4594,21 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (press && y < XY_Y + 15) { gridButtons(x); return 1; }
 	if (gPatView == 2) return tapeTouch(x, y, press, release);
 	if (gPatView) { if (press) patViewTouch(x, y); return press; }
-	if (y >= VEL_Y - 2 && x >= ROLL_KW && !gGtKeys && (press || gGtSt == -2)) {   // the velocity lane
+	if (press && y >= VEL_Y - 2 && x < ROLL_KW) { gLane = (gLane + 1) % 5; return 1; }   // the lane's name: the next lane
+	if (y >= VEL_Y - 2 && x >= ROLL_KW && !gGtKeys && (press || gGtSt == -2)) {   // the lane
+		static int paint = -1;
 		int st = (int)((x - ROLL_KW) / ROLL_CW); if (st < 0 || st >= NSTEP) return 0;
-		if (press) { undoMark(); gGtSt = -2; }
+		if (press) { undoMark(); gGtSt = -2; paint = -1; }
 		if (release) { gGtSt = -1; return 0; }
-		if (!gSeq[st].n) return 0;
-		int v = (VEL_Y + VEL_H - y) * 255 / (VEL_H - 2); v = v < 10 ? 10 : v > 255 ? 255 : v;
-		if (gSeq[st].vel != v) { gSeq[st].vel = (u8)v; return 1; }
+		Step* sp = &gSeq[st]; if (!sp->n) return 0;
+		if (gLane >= 3) {   // ACCENT / SLIDE: a tap flips it, a drag paints the same
+			u8 bit = gLane == 3 ? 1 : 2; int on = (sp->fl & bit) != 0;
+			if (paint < 0) paint = !on;
+			if (on != paint) { if (paint) sp->fl |= bit; else sp->fl &= (u8)~bit; return 1; }
+			return 0;
+		}
+		int v = (VEL_Y + VEL_H - y) * 255 / (VEL_H - 2); v = v < 0 ? 0 : v > 255 ? 255 : v;
+		if (laneGet(sp, gLane) != v) { laneSet(sp, gLane, v); return 1; }
 		return 0;
 	}
 	if (gGtSt == -2) { if (release) gGtSt = -1; return 0; }

@@ -53,6 +53,12 @@ static void SCRIPT(int fr) {
 		if (gSeq[5].vel > 60) fail("VEL lane: a touch near its bottom should make the step soft (%d)", gSeq[5].vel);
 		gridTouch(rollX(5) + 3, VEL_Y + 2, 1, 0); gridTouch(rollX(5) + 3, VEL_Y + 2, 0, 1);
 		if (gSeq[5].vel < 230) fail("VEL lane: near its top should be loud (%d)", gSeq[5].vel);
+		gLane = 0; gridTouch(4, VEL_Y + 5, 1, 0); gridTouch(4, VEL_Y + 5, 0, 1); if (gLane != 1) fail("LANE: tapping its name should go to GATE (%d)", gLane);
+		gridTouch(rollX(5) + 3, VEL_Y + VEL_H - 8, 1, 0); gridTouch(rollX(5) + 3, VEL_Y + VEL_H - 8, 0, 1); if (!gSeq[5].gate || gSeq[5].gate > 30) fail("GATE lane: low should set a short gate (%d)", gSeq[5].gate);
+		gLane = 3; gSeq[5].fl = 0; gridTouch(rollX(5) + 3, VEL_Y + 10, 1, 0); gridTouch(rollX(5) + 3, VEL_Y + 10, 0, 1); if (!(gSeq[5].fl & 1)) fail("ACC lane: a tap should accent the step");
+		gLane = 4; gridTouch(rollX(5) + 3, VEL_Y + 10, 1, 0); gridTouch(rollX(5) + 3, VEL_Y + 10, 0, 1); if (!(gSeq[5].fl & 2)) fail("SLD lane: a tap should slide the step");
+		gLane = 2; gridTouch(rollX(5) + 3, VEL_Y + VEL_H / 2, 1, 0); gridTouch(rollX(5) + 3, VEL_Y + VEL_H / 2, 0, 1); if (gSeq[5].skip < 30 || gSeq[5].skip > 70) fail("PROB lane: middle = about 50%% (skip %d)", gSeq[5].skip);
+		gLane = 0;
 	}
 	// TRANCE GATE: a held note gets chopped on the 16ths
 	{ static int g0; if (fr == 68) { gGatePat = 1; gGateDepth = 1; gGateRate = 0; gBPM = 120; midiPush(0x90, 57, 110); g0 = ON; }
