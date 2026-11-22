@@ -94,9 +94,9 @@ static void SCRIPT(int fr) {
 	{ static int pg[3]; int xo = 0 * 320 / 7 + 20;
 	  if (fr == 276 || fr == 279 || fr == 282) { TOUCH = 1; TX = xo; TY = 8; }
 	  if (fr == 278) pg[0] = gCurPage; if (fr == 281) pg[1] = gCurPage; if (fr == 284) pg[2] = gCurPage;
-	  if (fr == 285) { HD = KEY_R; if (pg[0] != 1 || pg[1] != 2 || pg[2] != 3) fail("OSC chip should step OSC A / OSC B / SUB (%d %d %d)", pg[0], pg[1], pg[2]); }
-	  if (fr == 288 && gCurPage != 4) fail("R from SUB+NOISE should go to FILT+ENV (%d)", gCurPage);
-	  if (fr == 289) HD = KEY_R; if (fr == 292 && gCurPage != 5) fail("R from FILT+ENV should go to LFO+MOD (%d)", gCurPage); }
+	  if (fr == 285) { HD = KEY_X; if (pg[0] != 1 || pg[1] != 2 || pg[2] != 3) fail("OSC chip should step OSC A / OSC B / SUB (%d %d %d)", pg[0], pg[1], pg[2]); }
+	  if (fr == 288 && gCurPage != 4) fail("X from SUB+NOISE should go to FILT+ENV (%d)", gCurPage);
+	  if (fr == 289) HD = KEY_X; if (fr == 292 && gCurPage != 5) fail("X from FILT+ENV should go to LFO+MOD (%d)", gCurPage); }
 	if (fr == 197) {   // the browser: a GROOVE patch's beat and a DRUMS kit stop when you move on, also into USER
 		gStyle = 14; gPreset = 0; presetLoad(14, 0); gEdited = 0; gGuard = 0;
 		if (gVoiceMode < 3) fail("browser: a DRUMS kit should play the kit");
@@ -135,19 +135,19 @@ static void SCRIPT(int fr) {
 		if (abs(gLoopSkip - want) > 200) fail("LOOP START NEXT BAR: one beat in at 120 should wait 1.5 s (%d, want %d)", gLoopSkip, want);
 		gLoopMode = 0; loopModeChanged(); gLoopQuant = 0; gLoopSkip = 0; }
 	if (fr == 310) gSeqMode = 0;
-	press(fr, 311, KEY_SELECT);
-	if (fr == 313 && gSeqMode != 1) fail("SELECT should start the sequencer");
-	press(fr, 314, KEY_SELECT);
-	if (fr == 316 && gSeqMode == 1) fail("SELECT again should stop the sequencer");
-	press(fr, 316, KEY_START); press(fr, 319, KEY_DUP); press(fr, 322, KEY_A);
-	if (fr == 321) shotTop("shots/start_menu.ppm");
+	press(fr, 311, KEY_SELECT);   // SELECT acts on release
+	if (fr == 314 && gSeqMode != 1) fail("SELECT should start the sequencer");
+	press(fr, 315, KEY_SELECT);
+	if (fr == 318 && gSeqMode == 1) fail("SELECT again should stop the sequencer");
+	press(fr, 319, KEY_START); press(fr, 322, KEY_DUP); press(fr, 325, KEY_A);
+	if (fr == 324) shotTop("shots/start_menu.ppm");
 	if (fr == 193 && !(gHeldN && (gHeld[0] % 12) == 1)) fail("keys: a 2 px slip off C# shouldn't change the note (held %d)", gHeldN ? gHeld[0] : -1);
 }
 int main(void) {
 	mkdir("shots", 0777); mkdir("sd", 0777);
 	FILE* f = fopen("sd/settings.bin", "wb"); int d[4] = {0x53455431, 1, 0, 0}; fwrite(d, sizeof(d), 1, f); fclose(f);
 	loadFont(); FRMAX = 340; app_main();
-	if (FR > 330) fail("menu: QUIT should leave the app (frame %d)", FR);
+	if (FR > 333) fail("menu: QUIT should leave the app (frame %d)", FR);
 	remove("sd/settings.bin");
 	printf("adv: last page, XY modes, PERF, circle pad, matrix hold, HUD ghost, vis tiles, hardware view\n");
 	return gFails ? 1 : 0;

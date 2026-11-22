@@ -131,7 +131,7 @@ static void SCRIPT(int fr) {
 		gPatView = 1; patViewTouch(150, PV_TOOLS_Y + 6);
 		if (!stepHasNote(6, 60) || !stepHasNote(4, 64) || gSeq[6].len[0] != 2) fail("REV: the long note should end where it started (step 7), step 4 -> 5");
 		patViewTouch(20, PV_TOOLS_Y + 6); if (!stepHasNote(0, 60) || !stepHasNote(3, 64)) fail("UNDO after REV should restore");
-		patViewTouch(20, PV_TOOLS_Y + 6); patViewTouch(20, PV_TOOLS_Y + 6);   // redo, undo again
+		histStep(0); if (!stepHasNote(6, 60)) fail("REDO (SELECT+R) should bring REV back"); histStep(1); if (!stepHasNote(0, 60)) fail("UNDO again should restore");
 		patViewTouch(212, PV_TOOLS_Y + 6); if (!stepHasNote(1, 60) || !stepHasNote(4, 64) || gSeq[0].n) fail("ROT: everything one step later");
 		gSeq[7] = gSeq[4]; memset(&gSeq[4], 0, sizeof(Step)); patViewTouch(212, PV_TOOLS_Y + 6); if (!stepHasNote(0, 64)) fail("ROT should wrap the last step to step 1");
 		{ int v0 = gSeq[0].vel; int ch = 0; for (int k = 0; k < 6; k++) { patViewTouch(274, PV_TOOLS_Y + 6); if (gSeq[0].vel != v0) ch = 1; if (gSeq[0].nudge < -50 || gSeq[0].nudge > 50) fail("HUM nudge out of range"); }

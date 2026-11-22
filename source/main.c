@@ -1864,9 +1864,11 @@ static int inScale(int note) { int pc = ((note - gRoot) % 12 + 12) % 12; for (in
 static int snapScale(int note) { if (!gScale) return note; for (int d = 0; d < 6; d++) { if (inScale(note - d)) return note - d; if (inScale(note + d)) return note + d; } return note; }
 static int gKeyDeg = 0;   // degree of the last pad pressed in scale mode
 
+static int gArp;   // (set below with the arp)
 // chord tones: chromatic chords, or chords stacked inside the scale when a scale is on
 static int chordNotes(int key, int* out) {
 	if (gVoiceMode >= 3) { out[0] = key; return 1; }   // drum kit: one hit per key
+	if ((gVoiceMode == 1 || gVoiceMode == 2) && !gArp) { out[0] = key; return 1; }   // MONO / LEGATO: one voice can't hold a chord - play the key you hit (an arp still walks the chord)
 	int n = 0;
 	if (!gScale || gChord == 3) { for (int i = 0; i < 4; i++) if (CHORDS[gChord][i] >= 0) out[n++] = key + CHORDS[gChord][i]; return n; }
 	static const s8 DEG[5][4] = {{0, -1, -1, -1}, {0, 2, 4, 6}, {0, 2, 4, -1}, {0, -1, -1, -1}, {0, 3, 4, -1}};
@@ -2701,7 +2703,7 @@ static void q_screamsolo(SPatch* p) {   // the ring is the note: cutoff tracks t
 	p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 2; OA.detune = 5; p->voiceMode = 2; p->glide = 0.04f;
 	p->cutoff = 0.55f; p->res = 0.6f; p->keytrack = 1.0f; p->qScream = 0.75f; ENV1(0.015f, 0, 0.5f, 0.85f, 0.25f);
 	ENV2(0.0f, 0, 0.12f, 0.0f, 0.1f); MOD(2, SRC_ENV2, DST_CUTOFF, 0.25f); MOD(3, SRC_M1, DST_RES, 0.4f); DLYS(0.12f, S8D, DL_TAPE); }
-static void q_acidscream(SPatch* p) {   // mid-register 303 line; press ACID on the SEQ page for a pattern
+static void q_acidscream(SPatch* p) {   // mid-register 303 line; press RIFF on the SEQ page for a pattern
 	p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; p->voiceMode = 1; ARP(1, 3, 1, 0.45f);
 	p->cutoff = 0.3f; p->res = 0.5f; p->keytrack = 0.6f; p->qScream = 0.45f; ENV1(0.002f, 0, 0.2f, 0.3f, 0.08f);
 	ENV2(0.0f, 0, 0.18f, 0.0f, 0.1f); MOD(2, SRC_ENV2, DST_CUTOFF, 0.5f); MOD(3, SRC_VEL, DST_RES, 0.3f); DLYS(0.2f, S8D, DL_DUB); }
@@ -4024,35 +4026,67 @@ static void drawTop(int page, int sel, int oct, int latch) {
 	if (!visActive(page)) scanlines();
 }
 
-static void drawHelp(void) {
+static int gHelpSlide = 0;
+#define NHELP 4
+static void drawHelp(void) {   // L / R flip the slides; any other button closes
 	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
 	rect(0, 0, 400, 240, BG);
-	text(4, 3, "SYRUP", 1, TXT); text(58, 3, "HELP", 1, TXT); rect(0, 13, 400, 1, LINE);
-	text(200, 3, "ANY BUTTON TO CLOSE", 1, DIM);
-	static const char* L[] = {
-		"PAGES",
-		"  X / Y ........ NEXT / PREVIOUS PAGE",
-		"  D-PAD U/D .... PICK A CONTROL",
-		"  D-PAD L/R .... CHANGE IT (HOLD = FAST)",
-		"TOUCH",
-		"  XY PAD ....... X = OSC A WT POS, Y = CUTOFF",
-		"  KEYS ......... PLAY; LOWER ON A KEY = LOUDER",
-		"  TABS ......... HELP, PAGE, OCT-/OCT+, LATCH",
-		"BUTTONS",
-		"  A ............ CHORD MODE",
-		"  B ............ LATCH (NOTES KEEP RINGING)",
-		"  L / R ........ PREVIOUS / NEXT PAGE",
-		"  CIRCLE PAD ... L/R BEND, U/D = STICK SOURCE",
-		"  START ........ QUIT",
-		"NOTES",
-		"  MOD SOURCES: TILT L/R, TILT F/B, BREATH (MIC)",
-		"  SCALE ON: KEYS BECOME SCALE PADS",
-		"  SEQ REC: KEYS WRITE STEPS; PLAY: KEYS TRANSPOSE",
-		"  OWN WAVETABLES: SERUM .WAV IN /3DS/SYRUP/",
+	static const char* T[NHELP] = {"BUTTONS", "TOUCH", "SEQUENCER", "SOUND"};
+	char h[40]; snprintf(h, sizeof(h), "HELP %d/%d: %s", gHelpSlide + 1, NHELP, T[gHelpSlide]);
+	text(4, 3, h, 1, TXT); rect(0, 13, 400, 1, LINE);
+	text(400 - 8 * 21, 3, "L/R: MORE  ANY: CLOSE", 1, DIM);
+	static const char* S[NHELP][18] = {
+		{"PAGES",
+		 "  X / Y ........ NEXT / PREVIOUS PAGE",
+		 "  D-PAD U/D .... PICK A CONTROL",
+		 "  D-PAD L/R .... CHANGE IT (HOLD = FAST)",
+		 "BUTTONS",
+		 "  A ............ CHORD MODE",
+		 "  B ............ LATCH (NOTES KEEP RINGING)",
+		 "  L / R ........ OCTAVE DOWN / UP",
+		 "  CIRCLE PAD ... BEND + THE STICK SOURCE",
+		 "  START ........ MENU (SAVE, PRESETS, QUIT)",
+		 "SELECT",
+		 "  TAP .......... PLAY / STOP (SEQ + DRUMS)",
+		 "  + L / + R .... UNDO / REDO",
+		 "  + DOWN ....... PANIC: EVERYTHING STOPS", NULL},
+		{"BOTTOM SCREEN",
+		 "  TABS ......... OSC FILT MOD VOICE FX SEQ PADS",
+		 "                 (TAP AGAIN FOR THE NEXT VIEW)",
+		 "  XY PAD ....... WHAT IT MOVES IS WRITTEN ON IT",
+		 "  ROW .......... OCT- OCT+ SCALE LATCH CHORD",
+		 "                 PLAY PANIC",
+		 "  KEYS ......... PLAY; LOWER ON A KEY = LOUDER",
+		 "PADS",
+		 "  LOW = TRIAD, MIDDLE = 7TH, TOP = 9TH",
+		 "  LEFT EDGE = INVERSION, RIGHT EDGE = SUS4",
+		 "  STRUM STRIP: SLIDE TO STRUM THE CHORD", NULL},
+		{"PIANO ROLL (SEQ TAB)",
+		 "  TAP .......... A NOTE IN / OUT",
+		 "  DRAG ......... A LONGER NOTE",
+		 "  HOLD ......... STEP LOCKS + RHYTHM ROWS",
+		 "  KEYS (LEFT) .. DRAG TO SCROLL; L/R = OCTAVE",
+		 "  RIFF ......... A NEW LINE IN THIS OCTAVE",
+		 "  REC .......... KEYS WRITE STEPS",
+		 "  PAT .......... PATTERNS, SONG, TOOLS, UNDO",
+		 "MENU",
+		 "  CLEAR ........ PRESS > TWICE",
+		 "  WHILE IT PLAYS: KEYS TRANSPOSE", NULL},
+		{"SOUND",
+		 "  OWN WAVETABLES: SERUM .WAV IN /3DS/SYRUP/",
+		 "  MOD SOURCES: TILT, SPIN, BREATH (MIC), CAMERA",
+		 "  DRUMS + LOOPER PLAY ON THE SECOND SOUND CHIP",
+		 "  TAPE REC TURNS CHIP > FX ON SO DRUMS RECORD",
+		 "NO SOUND?",
+		 "  THE DSP FIRMWARE: HOLD L + DOWN + SELECT,",
+		 "  MISCELLANEOUS OPTIONS, DUMP DSP FIRMWARE",
+		 "STUCK NOTES",
+		 "  SELECT + DOWN, OR PANIC ON THE BOTTOM ROW", NULL},
 	};
 	int y = 22;
-	for (unsigned i = 0; i < sizeof(L) / sizeof(L[0]); i++, y += 11) {
-		if (L[i][0] != ' ') text(8, y, L[i], 1, VAL); else text(8, y, L[i], 1, TXT);
+	for (int i = 0; S[gHelpSlide][i]; i++, y += 11) {
+		const char* l = S[gHelpSlide][i];
+		if (l[0] != ' ') text(8, y, l, 1, VAL); else text(8, y, l, 1, TXT);
 	}
 	scanlines();
 }
@@ -4107,8 +4141,35 @@ static int gridNote(int row) {   // row 0 = bottom; follows the scale (major ste
 static void rectP(int x, int y, int w, int h, const u8* c) { rect(x, y, w, h, c[0], c[1], c[2]); }
 #define GRID_BTNS 8
 static int gPatView = 0, gStepEd = -1, gStepEdRow = 0;
-static SeqPat gUndoPat; static int gUndoOk = 0, gUndoIdx = 0;   // one step back for ACID and CLEAR
-static void undoMark(void) { patStore(); gUndoPat = gPat[gPatCur]; gUndoIdx = gPatCur; gUndoOk = 1; }
+static int gUndoOk = 0, gUndoIdx = 0;   // the UNDO button on PAT: the newest history step is a pattern edit
+// HISTORY: SELECT+L undo, SELECT+R redo. Pattern edits (notes, RIFF, CLEAR, the tools) and patch edits
+// (a run of turns on one control is one step) go on one list, newest last.
+#define HIST 12
+typedef struct { int kind, idx; union { SeqPat pat; SPatch patch; } u; } HistE;   // kind 0: pattern idx, 1: the patch
+static HistE gUndoH[HIST], gRedoH[HIST], gHistTmp; static int gUndoN = 0, gRedoN = 0;
+static void histPush(HistE* st, int* n, const HistE* e) { if (*n == HIST) { memmove(st, st + 1, sizeof(HistE) * (HIST - 1)); (*n)--; } st[(*n)++] = *e; }
+static void histSnap(HistE* e, int kind, int idx) { e->kind = kind; e->idx = idx; if (!kind) { patStore(); e->u.pat = gPat[idx]; } else patchCapture(&e->u.patch); }
+static void histFlags(void) { gUndoOk = gUndoN > 0 && gUndoH[gUndoN - 1].kind == 0; if (gUndoOk) gUndoIdx = gUndoH[gUndoN - 1].idx; }
+static void undoMark(void) { static HistE e; histSnap(&e, 0, gPatCur); histPush(gUndoH, &gUndoN, &e); gRedoN = 0; histFlags(); }
+static void patchMark(const void* ctl) {   // before a patch edit; turns of the same control within 1.5 s are one step
+	static const void* lastCtl = NULL; static u64 lastT = 0; u64 t = osGetTime();
+	if (ctl != lastCtl || t - lastT > 1500) { static HistE e; histSnap(&e, 1, 0); histPush(gUndoH, &gUndoN, &e); gRedoN = 0; histFlags(); }
+	lastCtl = ctl; lastT = t;
+}
+static void patApplyWorking(int i) {   // pattern i becomes the working pattern (no store first)
+	gPatCur = i; SeqPat* p = &gPat[i]; memcpy(gSeq, p->st, sizeof(gSeq)); gSeqLen = p->len < 1 ? 16 : p->len > NSTEP ? NSTEP : p->len; gSeqBase = p->base;
+	memcpy(gRowLen, p->rowLen, 8); memcpy(gRowHits, p->rowHits, 8); memcpy(gRowRot, p->rowRot, 8); memcpy(gRowNote, p->rowNote, 8);
+	if (gSeqPos >= gSeqLen) gSeqPos = 0;
+}
+static void patchApply(const SPatch* p);
+static int histStep(int undo) {   // 0 nothing to do, 1 pattern, 2 patch
+	HistE *from = undo ? gUndoH : gRedoH, *to = undo ? gRedoH : gUndoH; int *fn = undo ? &gUndoN : &gRedoN, *tn = undo ? &gRedoN : &gUndoN;
+	if (!*fn) return 0;
+	static HistE e; e = from[--*fn];
+	histSnap(&gHistTmp, e.kind, e.idx); histPush(to, tn, &gHistTmp);
+	if (!e.kind) { gPat[e.idx] = e.u.pat; patApplyWorking(e.idx); } else patchApply(&e.u.patch);
+	histFlags(); return 1 + e.kind;
+}
 static void liveRecToggle(void); static void liveRecStop(void); static void liveDown(const int* notes, int n, float vel); static void liveUp(void);
 static void drawPatView(void); static void drawTapeView(void); static int tapeTouch(int x, int y, int press, int release); static void tapeSeqStarted(void);
 static void drawStepEd(void);
@@ -4132,7 +4193,7 @@ static void drawGrid(void) {
 	rectP(0, XY_Y, 320, 240 - XY_Y, TH->bg);
 	char pb[8]; snprintf(pb, sizeof(pb), "PAT%c", 'A' + gPatCur);
 	char rb[8]; if (gPreFor == 2) snprintf(rb, sizeof(rb), "IN %d", (int)(gPreBeats - gPreDone) + 1); else snprintf(rb, sizeof(rb), "REC");
-	const char* B[GRID_BTNS] = {gSeqMode == 1 ? "STOP" : "PLAY", pb, "<LEN", "LEN>", "OCT-", "OCT+", "ACID", rb};
+	const char* B[GRID_BTNS] = {gSeqMode == 1 ? "STOP" : "PLAY", pb, "<LEN", "LEN>", "OCT-", "OCT+", "RIFF", rb};
 	for (int i = 0; i < GRID_BTNS; i++) {
 		int x = i * 320 / GRID_BTNS, lit = (i == 0 && gSeqMode == 1) || (i == 1 && gPatView) || i == 6 || (i == 7 && (gLiveRec || gPreFor == 2));
 		rectP(x + 2, XY_Y, 320 / GRID_BTNS - 4, 14, i == 7 && (gLiveRec || gPreFor == 2) ? TH->warn : lit ? TH->keyOn : TH->tab);
@@ -4259,10 +4320,8 @@ static void patViewTouch(int x, int y) {   // on press
 		patStore(); return;
 	}
 	if (gUndoOk && y >= PV_TOOLS_Y && y < PV_TOOLS_Y + 14 && x < 126) {
-		patStore(); SeqPat cur = gPat[gUndoIdx]; gPat[gUndoIdx] = gUndoPat; gUndoPat = cur;   // swap: UNDO again redoes
-		int c = gPatCur; gPatCur = -1; { gPatCur = gUndoIdx; SeqPat* p = &gPat[gPatCur]; memcpy(gSeq, p->st, sizeof(gSeq)); gSeqLen = p->len < 1 ? 16 : p->len; gSeqBase = p->base;
-			memcpy(gRowLen, p->rowLen, 8); memcpy(gRowHits, p->rowHits, 8); memcpy(gRowRot, p->rowRot, 8); memcpy(gRowNote, p->rowNote, 8); }
-		if (c != gUndoIdx) say("UNDO: BACK ON THAT PATTERN"); else say("UNDO (TAP AGAIN TO REDO)");
+		int c = gPatCur, ui = gUndoIdx; histStep(1);
+		if (c != ui) say("UNDO: BACK ON THAT PATTERN"); else say("UNDO (SELECT+R REDOES)");
 		return;
 	}
 	if (y >= PV_Y + 28 && y < PV_Y + 42) {
@@ -4390,7 +4449,7 @@ static int stepEdTouch(int x, int y, int press, int release) {
 }
 // 303-style line: 16ths, root-heavy, octave jumps, rests, accents, slides; notes from the grid's rows
 static void acidGen(void) {
-	static const int W[8] = {34, 6, 12, 8, 10, 6, 8, 16};   // weights per grid row (row 7 = octave up)
+	static const int W[8] = {38, 7, 14, 9, 12, 8, 12, 0};   // weights per grid row: RIFF stays inside the octave you're on (row 7, the octave up, never)
 	memset(gSeq, 0, sizeof(gSeq));
 	int prev = 0;
 	for (int st = 0; st < 16; st++) {
@@ -4418,7 +4477,7 @@ static void gridButtons(int x) {
 	if (b == 3 && gSeqLen < NSTEP) gSeqLen++;
 	if (b == 4 && gRollLow > 12) gRollLow -= 12;
 	if (b == 5 && gRollLow < 96) gRollLow += 12;
-	if (b == 6) { undoMark(); if (gGridOct > -1) gGridOct = -1; acidGen(); gPatView = 0; gStepEd = -1; gRollLow = gridNote(0) - 2; say("ACID LINE: TAP ACID AGAIN FOR A NEW ONE"); }
+	if (b == 6) { undoMark(); acidGen(); gPatView = 0; gStepEd = -1; gRollLow = gridNote(0) - 2; say("RIFF: TAP RIFF AGAIN FOR A NEW ONE"); }
 }
 static void stepSetNote(int st, int nt, int on) {
 	Step* sp = &gSeq[st];
@@ -4457,12 +4516,12 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 		int s0 = gGtSt; gGtSt = -1;
 		if (gGtDrag || gGtLong) return gGtDrag;
 		if (rowOfNote(gGtNote) >= 0) { say("RHYTHM ROW: HOLD A STEP TO CHANGE IT (ROW LEN / EUCL)"); return 0; }
-		if (gGtHit >= 0) { stepSetNote(gGtHit, gGtNote, 0); return 1; }   // tap a note: gone
+		if (gGtHit >= 0) { undoMark(); stepSetNote(gGtHit, gGtNote, 0); return 1; }   // tap a note: gone
 		if (gSeq[s0].n >= 4) { say("4 NOTES PER STEP"); return 0; }
-		stepSetNote(s0, gGtNote, 1); gTapNote = gGtNote; audition(gGtNote); return 1;
+		undoMark(); stepSetNote(s0, gGtNote, 1); gTapNote = gGtNote; audition(gGtNote); return 1;
 	}
 	if (!gGtLong && ok && st != gGtSt) {   // a drag along the row: length
-		if (!gGtDrag) { gGtDrag = 1; if (gGtHit < 0) { if (gSeq[gGtSt].n >= 4 || rowOfNote(gGtNote) >= 0) { gGtSt = -1; return 0; } stepSetNote(gGtSt, gGtNote, 1); gGtHit = gGtSt; } }
+		if (!gGtDrag) { gGtDrag = 1; undoMark(); if (gGtHit < 0) { if (gSeq[gGtSt].n >= 4 || rowOfNote(gGtNote) >= 0) { gGtSt = -1; return 0; } stepSetNote(gGtSt, gGtNote, 1); gGtHit = gGtSt; } }
 		stepSetLen(gGtHit, gGtNote, st - gGtHit + 1); return 1;
 	}
 	if (!gGtDrag && !gGtLong && svcGetSystemTick() - gGtT0 > SYSCLOCK_ARM11 * 2 / 5) {
@@ -5272,13 +5331,13 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	if (on[base] || !TH->ega) text(4, 228, c, 1, TH->ega ? 0 : 120, TH->ega ? 0 : 90, TH->ega ? 0 : 50); else text(4, 228, c, 1, RGB3(TH->keyLine));
 }
 // PERF row, between the work area and the keyboard: the things you reach for while playing
-static int gScaleLast = 2, gChordLast = 1;
+static int gScaleLast = 2, gChordLast = 1; static float gOctFlash[2];   // OCT- / OCT+ light for a moment when hit
 static void drawPerfRow(int latch) {
 	static const char* PB[7] = {"OCT-", "OCT+", "SCALE", "LATCH", "CHORD", "PLAY", "PANIC"};
 	rect(0, WORK_B, 320, KB_Y - WORK_B, BG);
 	for (int i = 0; i < 7; i++) {
 		int x = i * 320 / 7, bw = 320 / 7 - 3, w = (int)strlen(PB[i]) * 8;
-		int lit = (i == 2 && gScale) || (i == 3 && latch) || (i == 4 && gChord) || (i == 5 && gSeqMode == 1);
+		int lit = (i < 2 && gOctFlash[i] > 0) || (i == 2 && gScale) || (i == 3 && latch) || (i == 4 && gChord) || (i == 5 && gSeqMode == 1);
 		const char* lb = i == 5 && gSeqMode == 1 ? "STOP" : PB[i]; if (i == 5) w = (int)strlen(lb) * 8;
 		if (lit) { rect(x + 2, WORK_B + 1, bw, KB_Y - WORK_B - 3, HI); text(x + 160 / 7 + 1 - w / 2, WORK_B + 5, lb, 1, HITXT); }
 		else if (TH->ega) { outline(x + 2, WORK_B + 1, bw, KB_Y - WORK_B - 3, LINE); text(x + 160 / 7 + 1 - w / 2, WORK_B + 5, lb, 1, TXT); }
@@ -5295,7 +5354,7 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	if (!gGridOn && !gAddEdit) drawSeqStrip();
 	drawPerfRow(latch);
 	if (latch) { outline(0, KB_Y, 320, 240 - KB_Y, HI); outline(1, KB_Y + 1, 318, 238 - KB_Y, HI); }   // LATCH: notes hold, and the keyboard says so
-	if (gChordKey >= 0 && gVoiceMode < 3 && !gGridOn && !gAddEdit && !gShapeOn) {   // chord mode: the chord you're holding, by name
+	if (gChordKey >= 0 && gVoiceMode < 3 && !((gVoiceMode == 1 || gVoiceMode == 2) && !gArp) && !gGridOn && !gAddEdit && !gShapeOn) {   // chord mode: the chord you're holding, by name
 		char t[24]; snprintf(t, sizeof(t), "%s %s", NOTE_NAMES[gChordKey % 12], CHORD_NAMES[gChord]);
 		int w = (int)strlen(t) * 8 + 8; rect(6, WORK_B - 20, w, 12, RGB3(TH->tab)); text(10, WORK_B - 18, t, 1, RGB3(TH->tabTxt));
 	}
@@ -5777,11 +5836,13 @@ static void tapeRecStop(int keep) {
 		for (int i = 1; i <= NTRK; i++) if (!gTpHave[(t + i) % NTRK]) { gTapeArm = (t + i) % NTRK; break; }   // the next empty track is armed
 	} else say("TAPE: STOPPED, NOTHING KEPT");
 }
+static int gThru;
 static void tapeRecGo(void) {
 	int t = gTapeArm;
 	if (!gCapBuf) gCapBuf = (s16*)linearAlloc(CAPRING * 4);
 	if (!gCapBuf || !tapeAlloc(t)) { say("NOT ENOUGH MEMORY FOR THE TAPE"); return; }
 	if (gLoopMode) { gLoopMode = 0; loopModeChanged(); }   // the looper shares the recorder
+	if (gDrums && !gThru) { gThru = 1; say("TAPE: CHIP > FX ON SO THE DRUMS RECORD"); }   // the tape records the DSP mix; this brings the second chip into it
 	gTapeRecLen = gTapeLen ? gTapeLen : tapeSamples(); gTapePos = 0; gTpEnc[0] = gTpEnc[1] = (Ima){0, 0};
 	memset(&gCapWB, 0, sizeof(gCapWB)); gCapWB.data_pcm16 = gCapBuf; gCapWB.nsamples = CAPRING; gCapWB.offset = 0; gCapLast = 0;
 	ndspSetCapture(&gCapWB);
@@ -7359,6 +7420,7 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 			if (kit == 2) {   // LOFI: every drum through an old sampler: ~8 kHz, 6-bit
 				static float hold; if (i % 4 == 0) hold = v; v = roundf(hold * 32) / 32;
 			}
+			if (kit == 3) v *= 0.6f;   // CHIP: square waves are all edge - as loud by peak, much louder to the ear (-4.4 dB)
 			if (v > 1) v = 1;
 			if (v < -1) v = -1;
 			gDrumSmp[d][i] = (s16)(v * 30000);
@@ -8412,19 +8474,39 @@ int main(void) {
 		u64 now = osGetTime(); float dt = (now - last) / 1000.0f; last = now; if (dt > 0.1f) dt = 0.1f;
 		sensorsUpdate(dt);
 
-		if (helpOn && (kDown & ~KEY_TOUCH)) { helpOn = 0; topDirty = botDirty = 1; kDown &= KEY_TOUCH; }   // any button closes help
-		if (kDown & KEY_SELECT) {   // SELECT: PLAY / STOP (PANIC lives in the START menu)
-			gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0);
-			if (gSeqMode == 0) { seqStop(); if (gLiveRec || gPreFor == 2) liveRecStop(); }
-			say(gSeqMode == 1 ? "PLAY" : "STOP"); topDirty = botDirty = 1;
+		static int selSwallow = 0;
+		if (helpOn && (kDown & (KEY_L | KEY_R))) { gHelpSlide = (gHelpSlide + ((kDown & KEY_R) ? 1 : NHELP - 1)) % NHELP; topDirty = 1; kDown &= KEY_TOUCH; }   // L / R: the other slides
+		if (helpOn && (kDown & ~KEY_TOUCH)) { if (kDown & KEY_SELECT) selSwallow = 1; helpOn = 0; topDirty = botDirty = 1; kDown &= KEY_TOUCH; }   // any other button closes help
+		{   // SELECT: tap = PLAY / STOP (sequencer and drums together). Held, it's a modifier:
+			// SELECT+L undo, SELECT+R redo, SELECT+DOWN panic. The tap acts on release, only if nothing was combined.
+			static u32 prevHeld = 0; static int selCombo = 0, drumsWas = 0; u32 kUp = prevHeld & ~kHeld; prevHeld = kHeld;
+			if (kDown & KEY_SELECT) selCombo = 0;
+			if (selSwallow) { selCombo = 1; if (!(kHeld & KEY_SELECT)) selSwallow = 0; }   // the press that closed HELP isn't PLAY
+			if (kHeld & KEY_SELECT) {
+				if (kDown & KEY_L) { selCombo = 1; int r = histStep(1); say(r == 1 ? "UNDO: PATTERN" : r == 2 ? "UNDO: PATCH EDIT" : "NOTHING TO UNDO"); topDirty = botDirty = 1; }
+				if (kDown & KEY_R) { selCombo = 1; int r = histStep(0); say(r == 1 ? "REDO: PATTERN" : r == 2 ? "REDO: PATCH EDIT" : "NOTHING TO REDO"); topDirty = botDirty = 1; }
+				if (kDown & KEY_DDOWN) { selCombo = 1; startAct = 2; }   // PANIC, below
+				if (kDown & (KEY_DUP | KEY_DLEFT | KEY_DRIGHT)) selCombo = 1;
+				kDown &= ~(KEY_L | KEY_R | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT); kHeld &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT);
+			}
+			if ((kUp & KEY_SELECT) && !selCombo) {
+				gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0);
+				if (gSeqMode == 0) { seqStop(); if (gLiveRec || gPreFor == 2) liveRecStop(); drumsWas = gDrums; if (gDrums) { gDrums = 0; drumsChanged(); } }
+				else if (drumsWas && !gDrums) { gDrums = 1; drumsChanged(); }   // PLAY brings back the drums STOP stopped
+				say(gSeqMode == 1 ? "PLAY" : "STOP"); topDirty = botDirty = 1;
+			}
 		}
-		if (startAct == 3) { helpOn = 1; topDirty = botDirty = 1; }
+		if (startAct == 3) { helpOn = 1; gHelpSlide = 0; topDirty = botDirty = 1; }
 		if (kDown & KEY_X) { page = navStep(page, 1); topDirty = 1; }
 		if (kDown & KEY_Y) { page = navStep(page, -1); topDirty = 1; }
 		if (kDown & KEY_A) { if (page == 0) browseSave(); else gChord = (gChord + 1) % 5; topDirty = 1; }
 		if (kDown & KEY_B) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
-		if (kDown & KEY_L) { page = coreStep(page, -1); topDirty = 1; }   // shoulders: the main pages only (X / Y go through all of them)
-		if (kDown & KEY_R) { page = coreStep(page, 1); topDirty = 1; }
+		if (kDown & (KEY_L | KEY_R)) {   // shoulders: OCT- / OCT+ (X / Y step the pages)
+			int d = (kDown & KEY_R) ? 1 : -1;
+			if (gGridOn && !gPatView) { gRollLow += 12 * d; if (gRollLow < 12) gRollLow = 12; if (gRollLow > 108) gRollLow = 108; }   // the piano roll scrolls an octave
+			else if (oct + d >= -3 && oct + d <= 3) { oct += d; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
+			gOctFlash[d > 0] = 1; char m[24]; snprintf(m, sizeof(m), "OCTAVE %+d", oct); if (!gGridOn) say(m); topDirty = botDirty = 1;
+		}
 		if (startAct == 0) { browseSave(); if (gSaveArm >= 0) browseSave(); }   // one press from the menu: no "A again"
 		if (startAct == 1) page = 0;
 		if (startAct == 2) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0;
@@ -8479,7 +8561,10 @@ int main(void) {
 			}
 			else if ((p->dirty & D_TILT) && dir > 0 && !fast) { tiltRecenter(); topDirty = 1; }
 			else if ((p->dirty & (D_REST | D_CLEAR)) && dir > 0 && !fast) {
-				if (p->dirty & D_REST) seqRest(); else seqClear();
+				static u64 clrArm = 0;   // CLEAR takes two presses of RIGHT, so a slip doesn't wipe the pattern
+				if (p->dirty & D_REST) seqRest();
+				else if (osGetTime() - clrArm > 2500) { clrArm = osGetTime(); say("PRESS > AGAIN TO CLEAR THE PATTERN"); }
+				else { clrArm = 0; undoMark(); seqClear(); say("PATTERN CLEARED (SELECT+L UNDOES)"); }
 				topDirty = 1;
 			} else if ((p->dirty & (D_SAVE | D_INIT)) && dir > 0 && !fast) {
 				if (p->dirty & D_SAVE) { patchCapture(&gUser[gSaveSlot]); userSave(); gStyle = NSTYLES - 1; gPreset = gSaveSlot; }
@@ -8487,7 +8572,7 @@ int main(void) {
 				curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = 1;
 			} else if ((p->dirty & (D_PRESET | D_STYLE)) && gEdited && !gGuard && !fast) {
 				gGuard = 1; say("PATCH EDITED: PRESS AGAIN TO LEAVE IT (SAVE IT IN USER)"); topDirty = 1;
-			} else if (paramChange(p, dir, fast)) {
+			} else if ((page != 0 && p->names != PRESS_RIGHT ? patchMark(p) : (void)0), paramChange(p, dir, fast)) {
 				if (page != 0 && p->names != PRESS_RIGHT) {   // VALUE HUD: the new value, big, for a moment
 					snprintf(gCallCtx, sizeof(gCallCtx), "%s > %s", PAGE_NAMES[page], p->name);   // which control this is
 					paramFmt(p, gCallTxt, sizeof(gCallTxt));   // (paramFmt knows the TABLE / PRESET name stand-ins; indexing names[] directly read past them)
@@ -8582,7 +8667,7 @@ int main(void) {
 			if (t.py < TAB_H) {
 				if (!prevTouch) {
 					int b = t.px * NCHIP / 320, again = !gPads && chipOfPage(page) == b;
-					if (b == 6) { gPads = !gPads; gPadSel = -1; if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: LOW = TRIAD, MID = 7TH, TOP = 9TH; EDGES = INVERSION / SUS4"); }
+					if (b == 6) { gPads = !gPads; gPadSel = -1; if (gPads && page == 7) page = 1; /* the piano roll owns the whole screen: leave it for the pads */ if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: LOW = TRIAD, MID = 7TH, TOP = 9TH; EDGES = INVERSION / SUS4"); }
 					else {
 						gPads = 0;
 						if (b == 0) page = again ? (page % 3) + 1 : 1;   // OSC A -> OSC B -> SUB+NOISE
@@ -8597,6 +8682,7 @@ int main(void) {
 			} else if (t.py >= WORK_B && t.py < KB_Y && !gModOn && !gGridOn && !(gPads && !gGridOn)) {
 				if (!prevTouch) {
 					int b = t.px * 7 / 320;
+					if (b <= 1) gOctFlash[b] = 1;
 					if (b == 0 && oct > -3) { oct--; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 					if (b == 1 && oct < 3) { oct++; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 					if (b == 2) { if (gScale) { gScaleLast = gScale; gScale = 0; } else gScale = gScaleLast; char m[40]; snprintf(m, sizeof(m), "SCALE: %s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); say(m); }
@@ -8734,6 +8820,7 @@ int main(void) {
 
 		memset(on, 0, sizeof(on));
 		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note >= 0 && gV[i].note < 128) on[gV[i].note] = 1;
+		for (int i = 0; i < 2; i++) if (gOctFlash[i] > 0) { gOctFlash[i] -= 5.0f / 60; botDirty = 1; }
 		if (gVoiceMode >= 3) { static int was = 0; int any = 0; for (int d = 0; d < NDRUM; d++) if (gPadFlash[d] > 0) { gPadFlash[d] -= 6.0f / 60; any = 1; } if (any || was) botDirty = 1; was = any; }   // pad flashes fade over ~1/6 s
 		{ int fading = 0;   // a key let go keeps a short glow: slides leave a trail
 			for (int n = 0; n < 128; n++) { if (onPrev[n] && !on[n]) gKeyFade[n] = 1; if (on[n]) gKeyFade[n] = 0; if (gKeyFade[n] > 0) { gKeyFade[n] -= 1.0f / 60 * 3.5f; if (gKeyFade[n] < 0) gKeyFade[n] = 0; fading = 1; } }

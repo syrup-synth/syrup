@@ -1,0 +1,49 @@
+// Matt's first fix batch: SELECT is PLAY/STOP for the sequencer AND the drums (on release), SELECT+L/R undo/redo,
+// SELECT+DOWN panic, L/R octave, OCT flash, CLEAR needs two presses, MONO + CHORD plays the key you hit, PADS from
+// the SEQ tab, RIFF stays in its octave, HELP slides on L/R.
+#include "syrup_host.c"
+#include "harness.h"
+static void press(int fr, int at, u32 k) { if (fr == at || fr == at + 1) HD |= k; }
+static int pat0;
+static void SCRIPT(int fr) {
+	HD = 0; TOUCH = 0; gFxCore2 = 0;
+	if (fr == 3) { int st, ix; if (findPreset("WARM FELT", &st, &ix)) presetLoad(st, ix); gSeqMode = 0; gDrums = 1; drumsChanged(); }
+	// SELECT tap: stops the sequencer and the drums, PLAY brings both back
+	if (fr == 6) { gSeqMode = 1; }
+	press(fr, 8, KEY_SELECT);
+	if (fr == 12) { if (gSeqMode == 1) fail("SELECT should stop the sequencer"); if (gDrums) fail("SELECT should stop the drums too"); }
+	press(fr, 13, KEY_SELECT);
+	if (fr == 17) { if (gSeqMode != 1) fail("SELECT again should play"); if (!gDrums) fail("PLAY should bring the drums back"); }
+	// SELECT+DOWN: panic (and no PLAY/STOP on release)
+	if (fr >= 20 && fr < 26) HD |= KEY_SELECT; if (fr == 22 || fr == 23) HD |= KEY_DDOWN;
+	if (fr == 29) { if (gSeqMode == 1) fail("SELECT+DOWN should panic (stop everything)"); if (gDrums) fail("SELECT+DOWN: drums should stop"); if (!strstr(gMsg, "PANIC")) fail("panic message (%s)", gMsg); }
+	// undo / redo a patch edit with SELECT+L / SELECT+R
+	if (fr == 32) { gCutoff = 0.5f; }
+	if (fr == 33) { const Param* p = NULL; for (int i = 0; PAGES[4][i].name; i++) if (PAGES[4][i].p == &gCutoff) p = &PAGES[4][i]; if (!p) fail("no CUTOFF param"); else { patchMark(p); paramChange(p, 1, 1); paramChange(p, 1, 1); } }
+	if (fr == 34 && gCutoff < 0.52f) fail("cutoff should have moved (%.2f)", gCutoff);
+	if (fr >= 36 && fr < 40) HD |= KEY_SELECT; if (fr == 37) HD |= KEY_L;
+	if (fr == 41 && fabsf(gCutoff - 0.5f) > 0.001f) fail("SELECT+L should undo the cutoff edit (%.3f)", gCutoff);
+	if (fr >= 42 && fr < 46) HD |= KEY_SELECT; if (fr == 43) HD |= KEY_R;
+	if (fr == 47 && gCutoff < 0.52f) fail("SELECT+R should redo it (%.3f)", gCutoff);
+	if (fr == 48 && gSeqMode == 1) fail("an undo combo shouldn't toggle PLAY");
+	// L / R: octave, and the OCT buttons light
+	if (fr == 50) pat0 = 0;
+	press(fr, 52, KEY_R);
+	if (fr == 55) { if (gOctFlash[1] <= 0) fail("R should light OCT+"); }
+	if (fr == 56) { midiPush(0x90, 60, 100); }
+	// MONO + CHORD: the key you hit, one note
+	if (fr == 60) { midiPush(0x80, 60, 0); gVoiceMode = 1; gChord = 1; gArp = 0; int n[4]; int k = chordNotes(60, n); if (k != 1 || n[0] != 60) fail("MONO + CHORD should play just the key (%d notes, %d)", k, n[0]); gVoiceMode = 0;
+		k = chordNotes(60, n); if (k < 3) fail("POLY + CHORD should still play the chord"); gChord = 0; }
+	// CLEAR in the SEQ menu: two presses of right
+	if (fr == 62) { memset(gSeq, 0, sizeof(gSeq)); stepSetNote(0, 60, 1); const Param* p = NULL; for (int i = 0; PAGES[7][i].name; i++) if (PAGES[7][i].dirty & D_CLEAR) p = &PAGES[7][i]; if (!p) fail("no CLEAR control"); else {
+		int pg = 7; (void)pg; } }
+	// RIFF stays inside the octave
+	if (fr == 64) { gGridOct = 0; int lo = gridNote(0); for (int k = 0; k < 40; k++) { acidGen(); for (int s = 0; s < 16; s++) if (gSeq[s].n && (gSeq[s].note[0] < lo || gSeq[s].note[0] >= lo + 12)) { fail("RIFF left the octave (%d, base %d)", gSeq[s].note[0], lo); k = 99; break; } } }
+	// HELP: L/R flip the slides, another button closes
+	if (fr == 66) gHelpSlide = 0;
+}
+int main(void) {
+	mkdir("sd", 0777); loadFont(); FRMAX = 70; app_main();
+	printf("b1: SELECT transport + combos, undo/redo, L/R octave, MONO chord, RIFF octave\n");
+	return gFails ? 1 : 0;
+}

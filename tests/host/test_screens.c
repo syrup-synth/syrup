@@ -25,13 +25,13 @@ static void SCRIPT(int fr) {
 	if (fr >= 90 && fr < 100) { TOUCH = 1; TX = 60; TY = 230; }        // low on the key: loud
 	if (fr >= 100 && fr < 108) { TOUCH = 1; TX = 60 + (fr - 100) * 12; TY = 230; }   // slide right
 	if (fr == 108) shotBot("shots/keys_chord_latch_seq.ppm");
-	if (fr == 112) press(fr, 112, KEY_R);   // next page: LFO+MOD
+	if (fr == 112) press(fr, 112, KEY_X);   // next page: LFO+MOD
 	if (fr == 116) { gModView = 1; }
-	if (fr == 120) { shotBot("shots/lfo12.ppm"); if (!gModOn) fail("L/R: R from FILT+ENV should reach LFO+MOD"); }
+	if (fr == 120) { shotBot("shots/lfo12.ppm"); if (!gModOn) fail("X from FILT+ENV should reach LFO+MOD"); }
 	if (fr == 122 || fr == 123) { TOUCH = 1; TX = 40; TY = 44; }   // LFO 1 shape box: the list opens
 	if (fr == 126) { shotBot("shots/lfo12_pick.ppm"); if (gLfPick != 0) fail("LFO 1+2: tapping the shape box should open the list"); }
 	// MASTER FX: FX ORDER. Drag LOFI past three blocks, check the order, save it in a patch, reset
-	press(fr, 130, KEY_R); press(fr, 136, KEY_R);   // VOICE+FX, MASTER FX
+	press(fr, 130, KEY_X); press(fr, 136, KEY_X);   // VOICE+FX, MASTER FX
 	if (fr == 142) { gLofiBits = 2; gOtt = 0.4f; shotBot("shots/fx_order.ppm"); if (!gChainOn) fail("FX ORDER: the view should be up on MASTER FX"); }
 	if (fr >= 144 && fr < 156) { TOUCH = 1; TX = CH_X(0) + 20 + (fr - 144) * 14; TY = CH_Y + 10; }
 	if (fr == 150) shotBot("shots/fx_order_drag.ppm");
