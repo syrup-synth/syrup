@@ -3183,8 +3183,8 @@ static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound
 }
 // START: a quick menu over the top screen (no more quitting by accident)
 static int gStartMenu = 0, gStartSel = 0;
-#define NSTART 6
-static const char* START_NAMES[NSTART] = {"SAVE PATCH", "BROWSER", "PANIC", "HELP", "THEME", "QUIT"};
+#define NSTART 7
+static const char* START_NAMES[NSTART] = {"SAVE PATCH", "BROWSER", "PANIC", "HELP", "THEME", "MIDI LEARN", "QUIT"};
 static void browseSave(void) {
 	int slot = (gStyle == NSTYLES - 1 && gPreset < NUSER) ? gPreset : -1;
 	if (slot < 0) { for (int i = 0; i < NUSER; i++) if (gUser[i].magic != PATCH_MAGIC) { slot = i; break; } if (slot < 0) slot = gSaveSlot; }
@@ -4136,7 +4136,9 @@ static void drawHelp(void) {   // L / R flip the slides; any other button closes
 		 "  THE DSP FIRMWARE: HOLD L + DOWN + SELECT,",
 		 "  MISCELLANEOUS OPTIONS, DUMP DSP FIRMWARE",
 		 "STUCK NOTES",
-		 "  SELECT + DOWN, OR PANIC ON THE BOTTOM ROW", NULL},
+		 "  SELECT + DOWN, OR PANIC ON THE BOTTOM ROW",
+		 "MIDI LEARN",
+		 "  PICK A CONTROL, START > MIDI LEARN, TURN A KNOB", NULL},
 	};
 	int y = 22;
 	for (int i = 0; S[gHelpSlide][i]; i++, y += 11) {
@@ -7122,11 +7124,50 @@ static void midiNoteOff(int n) {
 	if (gLiveRec && gLvN && gLvNote[0] == n) liveUp();
 	if (gArp) arpSetPool(gMidiHeld, gMidiHeldN, gMidiVel); else voiceOff(n);
 }
+// MIDI LEARN (START menu): the control picked on the page you're on follows the next CC that moves. Up to 16
+// bindings, any channel, kept on the SD card. A CC already used by Syrup (74, 71, 70, 1, 16-19, 102-104) is taken
+// over by a binding. Learning the same CC or control again replaces it.
+#define NLEARN 16
+static struct { u8 cc, page, idx, used; } gLearnMap[NLEARN];
+static const Param* gLearnP = NULL; static int gLearnPage = 0, gLearnIdx = 0, gLearnLoaded = 0;
+static const char* LEARN_PATH = "sdmc:/3ds/syrup/midilearn.bin";
+static void learnLoad(void) { if (gLearnLoaded) return; gLearnLoaded = 1; FILE* f = safeRead(LEARN_PATH); if (f) { if (fread(gLearnMap, sizeof(gLearnMap), 1, f) != 1) memset(gLearnMap, 0, sizeof(gLearnMap)); fclose(f); } }
+static void learnSave(void) { mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777); FILE* f = safeOpen(LEARN_PATH); if (f) safeClose(f, LEARN_PATH, fwrite(gLearnMap, sizeof(gLearnMap), 1, f) == 1); }
+static int gLearnSaveDue = 0;
+static int learnable(const Param* p) { return p && p->names != PRESS_RIGHT && p->names != TABLE_NAME_DUMMY && p->names != PRESET_DUMMY && (p->type != PT_E || p->dirty == 0); }
+static void learnArm(int page, int idx) {
+	learnLoad();
+	Param* p = page > 0 && idx >= 0 ? &PAGES[page][idx] : NULL;
+	if (!learnable(p)) { say("MIDI LEARN: PICK A CONTROL ON A PAGE FIRST (D-PAD), THEN LEARN"); return; }
+	gLearnP = p; gLearnPage = page; gLearnIdx = idx;
+	char m[56]; snprintf(m, sizeof(m), "MIDI LEARN: MOVE A KNOB FOR %s", p->name); say(m); gMsgT = 6;
+}
+static int learnApply(u8 cc, u8 val) {   // 1 = the CC was learned or is bound
+	if (gLearnP && cc != 120 && cc != 123) {
+		int slot = -1;
+		for (int i = 0; i < NLEARN; i++) if (gLearnMap[i].used && (gLearnMap[i].cc == cc || (gLearnMap[i].page == gLearnPage && gLearnMap[i].idx == gLearnIdx))) { slot = i; break; }
+		if (slot < 0) for (int i = 0; i < NLEARN; i++) if (!gLearnMap[i].used) { slot = i; break; }
+		if (slot < 0) slot = 0;
+		gLearnMap[slot].cc = cc; gLearnMap[slot].page = (u8)gLearnPage; gLearnMap[slot].idx = (u8)gLearnIdx; gLearnMap[slot].used = 1;
+		char m[56]; snprintf(m, sizeof(m), "CC %d -> %s", cc, gLearnP->name); say(m); gMsgT = 4; gLearnP = NULL; gLearnSaveDue = 1;
+		return 1;
+	}
+	int hit = 0;
+	for (int i = 0; i < NLEARN; i++) if (gLearnMap[i].used && gLearnMap[i].cc == cc && gLearnMap[i].page < NPAGES) {
+		Param* p = &PAGES[gLearnMap[i].page][gLearnMap[i].idx]; if (!learnable(p)) continue;
+		float t = val / 127.0f;
+		if (p->type == PT_F) *(float*)p->p = p->mn + t * (p->mx - p->mn);
+		else if (p->type == PT_I) *(int*)p->p = (int)lroundf(p->mn + t * (p->mx - p->mn));
+		else { int n = (int)p->mx - (int)p->mn + 1; int k = (int)(t * n); if (k >= n) k = n - 1; *(int*)p->p = (int)p->mn + k; }
+		gEdited = 1; hit = 1;
+	}
+	return hit;
+}
 static void acidGen(void);
 // one MIDI message: inTick = from the audio tick (only light work there; patch changes etc. go to the main loop)
 static int midiApply(u8 st, u8 a, u8 b, int inTick) {
 	int ch = 0;
-	if (inTick && ((st & 0xF0) == 0xC0 || ((st & 0xF0) == 0xB0 && a >= 102 && a <= 104))) { mainQPush(st, a, b); return 0; }
+	if (inTick && ((st & 0xF0) == 0xC0 || ((st & 0xF0) == 0xB0 && ((a >= 102 && a <= 104) || gLearnP)))) { mainQPush(st, a, b); return 0; }
 	switch (st & 0xF0) {
 	case 0x90: if (b) { midiNoteOn(a, 0.25f + 0.75f * b / 127.0f); break; } /* fall through: velocity 0 = off */
 	case 0x80: midiNoteOff(a); break;
@@ -7134,6 +7175,7 @@ static int midiApply(u8 st, u8 a, u8 b, int inTick) {
 	case 0xC0: { int c = presetCount(gStyle); if (c > 0) { gPreset = a % c; presetLoad(gStyle, gPreset); ch = 1; } break; }
 	case 0xB0: {
 		float v = b / 127.0f; ch = 1;
+		if (learnApply(a, b)) break;   // learned bindings first
 		if (a == 74) gCutoff = v; else if (a == 71) gRes = v; else if (a == 70) { gOsc[0].pos = v; }
 		else if (a == 1) gMacro[0] = v; else if (a >= 16 && a <= 19) gMacro[a - 16] = v;
 		else if (a == 102 && b) { int c = presetCount(gStyle); if (c > 0) { gPreset = (gPreset + c - 1) % c; presetLoad(gStyle, gPreset); } }
@@ -8691,7 +8733,7 @@ int main(void) {
 	tableSelect(&A->tb, A->table); tableSelect(&B->tb, B->table);
 	LightLock_Init(&gMipsLock);
 	LightLock_Init(&gVoiceLock); LightLock_Init(&gNetLock);
-	userLoad();
+	userLoad(); learnLoad();   // MIDI LEARN bindings
 	upCheckTook();
 	seqDefault();
 	seqLoad();
@@ -8765,7 +8807,7 @@ int main(void) {
 			if (!gStartMenu) topDirty = topAgain = botDirty = 1;
 			kDown &= KEY_TOUCH; kHeld &= KEY_TOUCH;
 		}
-		if (startAct == 5) break;   // QUIT
+		if (startAct == 6) break;   // QUIT
 		wakeTick();
 		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
@@ -8848,6 +8890,7 @@ int main(void) {
 			}
 		}
 		if (startAct == 3) { helpOn = 1; gHelpSlide = 0; topDirty = botDirty = 1; }
+		if (startAct == 5) { learnArm(page, sel[page]); topDirty = 1; }
 		if (kDown & KEY_X) { page = navStep(page, 1); topDirty = 1; }
 		if (kDown & KEY_Y) { page = navStep(page, -1); topDirty = 1; }
 		if (kDown & KEY_A) { if (page == 0) browseSave(); else gChord = (gChord + 1) % 5; topDirty = 1; }
@@ -9192,6 +9235,7 @@ int main(void) {
 		if (gMainJobDue) { gMainJobDue = 0; LightLock_Lock(&gMipsLock); doRebuild(&gMainJob); LightLock_Unlock(&gMipsLock); ASET(gJobDone, 1); }
 		drumService();
 		if (gDrumSaveDue) { gDrumSaveDue = 0; myDrumSave(); }
+		if (gLearnSaveDue) { gLearnSaveDue = 0; learnSave(); }
 		if (gSeqSaveDue) { gSeqSaveDue = 0; LightLock_Lock(&gVoiceLock); seqSnap(); LightLock_Unlock(&gVoiceLock); seqWriteSnap(); }
 		{ static int sk = 0; int now = skipRecent(); if (now != sk) { sk = now; topDirty = 1; } }
 

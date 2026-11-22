@@ -34,6 +34,11 @@ static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0; gFxCore2 = 0;
 	if (fr == 2) parserTests();
 	if (fr == 4) { int st, ix; if (findPreset("WARM FELT", &st, &ix)) presetLoad(st, ix); }
+	// MIDI LEARN: arm it on FILT+ENV's RES row, move CC 21, then CC 21 drives RES
+	if (fr == 5) { int ri = -1; for (int i = 0; PAGES[4][i].name; i++) if (PAGES[4][i].p == &gRes) ri = i; learnArm(4, ri); midiApply(0xB0, 21, 64, 0);
+		if (gLearnP) fail("LEARN: the CC should have been learned"); gRes = 0; midiApply(0xB0, 21, 127, 0); if (gRes < 0.99f) fail("LEARN: CC 21 should now set RES (%.2f)", gRes);
+		midiApply(0xB0, 21, 0, 0); if (gRes > 0.01f) fail("LEARN: CC 21 at 0 (%.2f)", gRes);
+		memset(gLearnMap, 0, sizeof(gLearnMap)); }
 	static MidiIn fz;
 	if (fr >= 6 && fr < 900) {   // the fuzz
 		u8 b[24]; int n = rnd(24);
