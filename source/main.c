@@ -495,6 +495,7 @@ static float gSubLevel = 0.0f, gNoiseLevel = 0.0f;
 static float gCutoff = 0.75f, gRes = 0.1f, gKeytrack = 0.3f;
 static AHDSR gEnv1 = {0.005f, 0.0f, 0.6f, 0.7f, 0.35f}, gEnv2 = {0.002f, 0.0f, 0.45f, 0.2f, 0.4f};
 static LFO gLfo[2] = {{0, 0, 0.6f, 0, 0, 0}, {1, 1, 4.0f, 0, 0, 0}};
+static int gLfoCC[2] = {0, 0};   // LFO1/2 CC OUT: send the LFO as this CC (0 = off) to the Network MIDI session, channel 1
 static ModSlot gMod[8] = {{SRC_ENV2, DST_CUTOFF, 0.35f}, {SRC_STICK, DST_APOS, 0.5f}, {SRC_LFO1, DST_BPOS, 0.0f}, {SRC_OFF, DST_PITCH, 0.0f}};
 static int gVoiceMode = 0, gChord = 0, gFx = 0, gEchoT = 1, gDrive = 0, gBendRange = 2;
 static float gGlide = 0.0f, gChorus = 0.3f, gDriveAmt = 0.4f, gMaster = 0.8f;
@@ -3274,6 +3275,7 @@ static Param P_MOD[] = {
 	PF("MACRO 1", &gMacro[0], 0, 1, 0.02f, "%", 0), PF("MACRO 2", &gMacro[1], 0, 1, 0.02f, "%", 0), PF("MACRO 3", &gMacro[2], 0, 1, 0.02f, "%", 0), PF("MACRO 4", &gMacro[3], 0, 1, 0.02f, "%", 0),
 	PE("XY PAD", &gXyMode, NXY, XY_NAMES, D_THEME), PF("CHAOS RATE", &gChaosRate, 0, 1, 0.02f, "%", 0),
 	PF("LFO3 RATE", &gDlRate[0], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO3 SYNC", &gDlSync[0], NSYNC, SYNC_NAMES, 0), PF("LFO4 RATE", &gDlRate[1], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO4 SYNC", &gDlSync[1], NSYNC, SYNC_NAMES, 0),
+	PI_("LFO1 CC OUT", &gLfoCC[0], 0, 127, 0), PI_("LFO2 CC OUT", &gLfoCC[1], 0, 127, 0),
 	PE("LFO1 SHAPE", &gLfo[0].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO1 RATE", &gLfo[0].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO1 SYNC", &gLfo[0].sync, NSYNC, SYNC_NAMES, 0),
 	PE("LFO1 MODE", &gLfo[0].mode, 2, LFO_MODES, 0), PE("LFO1 TABLE", &gLfo[0].table, T_BUILTIN, BUILTIN_NAMES, 0), PF("LFO1 WT POS", &gLfo[0].pos, 0, 1, 0.02f, "%", 0),
 	PE("LFO2 SHAPE", &gLfo[1].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO2 RATE", &gLfo[1].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO2 SYNC", &gLfo[1].sync, NSYNC, SYNC_NAMES, 0),
@@ -3801,7 +3803,7 @@ static const char* paramHelp(const char* n) {
 		{"3 SOURCE", "MOD SLOT 3: WHAT MOVES IT"}, {"3 DEST", "MOD SLOT 3: WHAT IT MOVES"}, {"3 AMOUNT", "MOD SLOT 3: HOW MUCH"},
 		{"4 SOURCE", "MOD SLOT 4: WHAT MOVES IT"}, {"4 DEST", "MOD SLOT 4: WHAT IT MOVES"}, {"4 AMOUNT", "MOD SLOT 4: HOW MUCH"},
 		{"MODE", "POLY, MONO OR LEGATO"}, {"GLIDE", "SLIDE TIME BETWEEN NOTES"}, {"BEND RANGE", "CIRCLE PAD BEND IN SEMITONES"},
-		{"CHORD", "CHORD PLAYED BY ONE KEY (ALSO A)"}, {"GATE", "TRANCE GATE: CHOPS THE SOUND TO THE BEAT"}, {"MPE", "EACH NOTE ITS OWN BEND, PRESSURE, SLIDE (CH 2-16)"}, {"GATE RATE", "STEP LENGTH OF THE GATE PATTERN"}, {"GATE DEPTH", "HOW FAR THE GATE CLOSES"}, {"CHORUS", "STEREO CHORUS AMOUNT"}, {"GPU VISUALS", "GRAPHICS CHIP VISUALS ON THE LEFT"},
+		{"CHORD", "CHORD PLAYED BY ONE KEY (ALSO A)"}, {"GATE", "TRANCE GATE: CHOPS THE SOUND TO THE BEAT"}, {"MPE", "EACH NOTE ITS OWN BEND, PRESSURE, SLIDE (CH 2-16)"}, {"LFO1 CC OUT", "SEND LFO 1 AS THIS CC OVER NETWORK MIDI (0 = OFF)"}, {"LFO2 CC OUT", "SEND LFO 2 AS THIS CC OVER NETWORK MIDI (0 = OFF)"}, {"GATE RATE", "STEP LENGTH OF THE GATE PATTERN"}, {"GATE DEPTH", "HOW FAR THE GATE CLOSES"}, {"CHORUS", "STEREO CHORUS AMOUNT"}, {"GPU VISUALS", "GRAPHICS CHIP VISUALS ON THE LEFT"},
 		{"FX", "ECHO, SPACE OR REVERB"}, {"ECHO TIME", "DELAY TIME"}, {"ECHO FDBK", "NUMBER OF REPEATS"}, {"OUTPUT", "STEREO OR VIRTUAL SURROUND"},
 		{"SURROUND", "SURROUND DEPTH"}, {"TILT CENTER", "PRESS > TO RE-CENTRE THE TILT"}, {"REV SIZE", "REVERB ROOM SIZE"},
 		{"REV DAMP", "DARKER REVERB TAIL"}, {"FX MIX", "HOW MUCH EFFECT"}, {"DRIVE", "DISTORTION TYPE"}, {"DRIVE AMT", "HOW MUCH DISTORTION"},
@@ -7021,9 +7023,18 @@ static void cliWs(Cli* c) {   // parse as many frames as are complete
 // ---- AppleMIDI / RTP-MIDI (Network MIDI on Mac, iOS apps, rtpMIDI on Windows, many DAWs)
 static u32 gSsrc = 0x53595255;
 static u64 netNow(void) { return osGetTime() * 10; }   // 100 us units
+static int gUdData = -1; static volatile int gPeerOk = 0; static struct sockaddr_in gPeerData;   // the session's data socket + who invited us
+// MIDI OUT over the same session: an RTP-MIDI packet with one message (no journal)
+static void rtpSend(u8 st, u8 a, u8 b) {
+	if (!gPeerOk || gUdData < 0) return;
+	static u16 seq = 0; u32 ts = (u32)netNow();
+	u8 r[16] = {0x80, 0x61, (u8)(seq >> 8), (u8)seq, (u8)(ts >> 24), (u8)(ts >> 16), (u8)(ts >> 8), (u8)ts, (u8)(gSsrc >> 24), (u8)(gSsrc >> 16), (u8)(gSsrc >> 8), (u8)gSsrc, 3, st, a, b};
+	seq++; sendto(gUdData, r, 16, 0, (struct sockaddr*)&gPeerData, sizeof(gPeerData));
+}
 static void amReply(int s, struct sockaddr_in* a, const u8* pk, int n) {
 	if (n < 4) return;
 	if (pk[2] == 'I' && pk[3] == 'N' && n >= 16) {   // invitation -> accept
+		if (s == gUdData) { gPeerData = *a; gPeerOk = 1; }   // the data port's invitation: where MIDI OUT goes
 		u8 r[32] = {0xFF, 0xFF, 'O', 'K'}; memcpy(r + 4, pk + 4, 8); r[12] = gSsrc >> 24; r[13] = gSsrc >> 16; r[14] = gSsrc >> 8; r[15] = gSsrc; memcpy(r + 16, "Syrup 2DS", 10);
 		sendto(s, r, 26, 0, (struct sockaddr*)a, sizeof(*a));
 		if (n > 16) snprintf(gNetPeer, sizeof(gNetPeer), "%.20s", (const char*)pk + 16);
@@ -7034,7 +7045,7 @@ static void amReply(int s, struct sockaddr_in* a, const u8* pk, int n) {
 		int off = cnt == 0 ? 20 : 28; r[8] = cnt + 1;
 		for (int j = 0; j < 8; j++) r[off + j] = (u8)(t >> (56 - 8 * j));
 		sendto(s, r, 36, 0, (struct sockaddr*)a, sizeof(*a));
-	} else if (pk[2] == 'B' && pk[3] == 'Y') gNetPeer[0] = 0;
+	} else if (pk[2] == 'B' && pk[3] == 'Y') { gNetPeer[0] = 0; gPeerOk = 0; }
 }
 static void rtpMidi(const u8* p, int n) {
 	if (n < 13 || (p[0] & 0xC0) != 0x80) return;
@@ -7071,7 +7082,7 @@ static void netMain(void* arg) {
 	int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 	if (ls < 0 || bind(ls, (struct sockaddr*)&a, sizeof(a)) < 0 || listen(ls, 4) < 0) { snprintf(gNetAddr, sizeof(gNetAddr), "PORT 8080 BUSY"); if (ls >= 0) close(ls); netDown(); gNetRun = 0; return; }
 	fcntl(ls, F_SETFL, fcntl(ls, F_GETFL, 0) | O_NONBLOCK);
-	int uc = udpOpen(5004), ud = udpOpen(5005), ur = udpOpen(5008);   // 5008: plain MIDI bytes (FM-1 LINK and friends)
+	int uc = udpOpen(5004), ud = udpOpen(5005), ur = udpOpen(5008); gUdData = ud;   // 5008: plain MIDI bytes (FM-1 LINK and friends)
 	int ub = socket(AF_INET, SOCK_DGRAM, 0); u64 beaconT = 0; MidiIn rawRun = {0};
 	if (ub >= 0) { int on = 1; setsockopt(ub, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)); }
 	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; memset(&cl[i].run, 0, sizeof(MidiIn)); cl[i].closing = 0; cl[i].t = 0; }
@@ -9295,6 +9306,12 @@ int main(void) {
 		if (gPageMarkDue) { gPageMarkDue = 0; settingsSave(page); char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
 		if (gTblDue) { int t = gTblDue; gTblDue = 0; LightLock_Lock(&gMipsLock); if (t & 1) tableSelect(&A->tb, A->table); if (t & 2) tableSelect(&B->tb, B->table); LightLock_Unlock(&gMipsLock); gForceBuild |= t; topDirty = 1; }
 		if (gMainJobDue) { gMainJobDue = 0; LightLock_Lock(&gMipsLock); doRebuild(&gMainJob); LightLock_Unlock(&gMipsLock); ASET(gJobDone, 1); }
+		{   // LFO CC OUT: 30 times a second, only when the value moved
+			static int div = 0, last[2] = {-1, -1};
+			if (++div >= 2) { div = 0; for (int l = 0; l < 2; l++) if (gLfoCC[l] > 0 && gPeerOk) {
+				int v = (int)lroundf((gLfo[l].val + 1) * 63.5f); v = v < 0 ? 0 : v > 127 ? 127 : v;
+				if (v != last[l]) { last[l] = v; rtpSend(0xB0, (u8)gLfoCC[l], (u8)v); } } }
+		}
 		kitSync();
 		drumService();
 		if (gDrumSaveDue) { gDrumSaveDue = 0; myDrumSave(); }
