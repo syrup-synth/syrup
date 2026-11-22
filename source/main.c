@@ -3267,11 +3267,12 @@ static Param P_PRESET[] = {
 	{"INIT PATCH", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_INIT},
 	PEND};
 static Param P_PLAY[] = {
-	PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
-	PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ), PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0),
-	PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0), PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PI_("BPM", &gBPM, 40, 240, 0),
-	PE("SEQ", &gSeqMode, 3, SEQ_NAMES, D_SEQ), PI_("SEQ LENGTH", &gSeqLen, 1, NSTEP, 0), PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0),
-	PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("REC CLICK", &gClick, 3, CLICK_NAMES, 0), PE("REC QUANT", &gRecQ, 3, RQ_NAMES, 0), PE("SHAKE QUANT", &gShakeQ, 3, SHQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
+	// most-reached first: tempo and the transport, then the arp, the key, then the details
+	PI_("BPM", &gBPM, 40, 240, 0), PE("SEQ", &gSeqMode, 3, SEQ_NAMES, D_SEQ), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
+	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE), PI_("SEQ LENGTH", &gSeqLen, 1, NSTEP, 0),
+	PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0), PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0),
+	PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PE("REC QUANT", &gRecQ, 3, RQ_NAMES, 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("REC CLICK", &gClick, 3, CLICK_NAMES, 0),
+	PE("SHAKE QUANT", &gShakeQ, 3, SHQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
 	{"ADD REST", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_REST},
 	{"CLEAR SEQ", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CLEAR},
 	PEND};
