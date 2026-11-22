@@ -17,7 +17,7 @@ for t in ('test_patch', 'test_buzz', 'test_timing', 'test_ui', 'test_kit', 'test
     r = sh(['gcc', '-O1', '-w', '-I', os.path.join(ROOT, 'source'), t + '.c', '-o', t, '-lm', '-lpthread', '-lcurl'])
     if r.returncode: print(r.stderr[-3000:]); sys.exit('build failed: ' + t)
 def run(name, args, timeout=120):
-    for f in ('seq.bin', 'settings.bin'):   # every test starts from defaults: first page, default pattern
+    for f in ('seq.bin', 'settings.bin', 'mydrums.bin'):   # every test starts from defaults: first page, default pattern, empty MINE
         try: os.remove(os.path.join(BUILD, 'sd', f))
         except OSError: pass
     try: r = sh(['./' + name] + args, timeout=timeout)
