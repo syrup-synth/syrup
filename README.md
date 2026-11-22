@@ -35,7 +35,7 @@ No Luma3DS menu? Run the DSP1 app once instead. If the file is missing, Syrup sh
 - **Grains:** play a loop, a wavetable or the mic as grains. The HARDWARE page has a waveform editor for it.
 - **Second sound chip:** chip voices, chip echo and CHIP > FX.
 - **Presets:** about 200 factory patches in styles, plus 8 user slots.
-- **Extras:** Wi-Fi MIDI (and a phone remote page), chord PADS with a strum strip, a visualizer, and themes.
+- **Extras:** Wi-Fi and IR MIDI (MPE, aftertouch, MIDI LEARN, LFOs out as CCs), a phone remote page, chord PADS with progressions and a strum strip, a trance gate, a visualizer, and themes.
 
 The full list of every page, parameter and control is in [docs/REFERENCE.md](docs/REFERENCE.md).
 
@@ -43,15 +43,19 @@ The full list of every page, parameter and control is in [docs/REFERENCE.md](doc
 
 | Input | Action |
 |---|---|
-| L / R, X / Y | Change page |
+| X / Y | Next / previous page |
+| L / R | Octave down / up |
 | D-pad up / down | Pick a parameter |
 | D-pad left / right | Change it (hold to repeat) |
 | Circle pad | Default: edits the selected value. HARDWARE > CIRCLE PAD switches it to pitch bend + mod, page values or macros |
-| Touch keyboard | Play (lower on a key = louder, slide to glide) |
-| XY pad | Wavetable position and cutoff (the corner button changes what it controls) |
-| SELECT | Play / stop the sequencer |
-| START | Quick menu: SAVE PATCH, BROWSER, PANIC, HELP, THEME, QUIT |
+| SELECT (tap) | Play / stop the sequencer and drums |
+| SELECT + circle pad | Quick select: up = any page, left / right = the page's main lists, down = REC / PLAY / TAPE |
+| SELECT + L / R | Undo / redo |
+| SELECT + D-pad down | Panic |
+| START | Menu: SAVE PATCH, BROWSER, PANIC, HELP, THEME, MIDI LEARN, QUIT |
 | A / B | Chord mode / latch |
+| Touch keyboard | Play (lower on a key = louder, slide to glide); OCT / CHORD / LATCH to its left |
+| XY pad | Wavetable position and cutoff (the corner button changes what it controls) |
 
 ## Files on the SD card
 

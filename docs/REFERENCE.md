@@ -18,7 +18,7 @@ Waveform rebuilds run on the 3DS's second CPU core (a worker thread on core 1, w
 - **ROOT / SCALE:** 14 scales (major, minor, modes, pentatonics, blues, whole tone, Japanese, Arabic). With a scale on, the keyboard becomes 14 pads, one per scale note, root pads highlighted, and chords stack inside the scale.
 - **ARP:** up, down, up+down, random, as played, chord repeat; rate 1/4 to 1/32 incl. triplets; 1-4 octaves; gate. Works with latch.
 - **SEQ:** 16 steps. REC: each key (or chord) you play writes the next step; ADD REST inserts a rest; the pattern length follows what you record. PLAY: keys transpose the pattern live. SEQ GATE, SWING and BPM. With ARP on, each step is arpeggiated.
-- **OCT- / OCT+** tabs on the touch screen shift the keyboard. **L / R** step through the pages (as do Y / X).
+- **OCT+ / OCT-** (the column left of the keys) and **L / R** shift the keyboard an octave. **X / Y** step through the pages.
 
 ## Hardware effects and sensors
 
@@ -138,10 +138,13 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | Input | Action |
 |---|---|
 | Start | A splash screen shows the logo while Syrup loads (tap or press any button to skip; it moves on by itself after 4 s). Syrup opens on the page you were on last time (first run: the browser). CIRCLE PAD and SPEAKER EQ are kept with it in settings.bin |
-| L / R | The main pages: PATCH, OSC A, FILT+ENV, LFO+MOD, VOICE+FX, MASTER FX, SEQ (OSC B, SUB+NOISE, DRUMS, VIS, HW are a chip tap or X / Y away) |
+| L / R | Octave down / up (on the piano roll: scroll an octave) |
+| SELECT + circle pad | QUICK SELECT, drawn over the page: push UP for the row of every page, LEFT / RIGHT for the page's two main lists (style + patch, the table, filter types, the kit, the arp ...), DOWN for REC / PLAY-STOP / TAPE REC. Lean along a bar to slide, let go of SELECT to take what's lit |
+| SELECT + L / R | Undo / redo: pattern edits (notes, RIFF, CLEAR, the PAT tools) and patch edits, 12 steps |
+| SELECT + D-pad down | PANIC |
 | X / Y | Next / previous page, all of them (OSC A, OSC B, SUB+NOISE, FILT+ENV, LFO+MOD, VOICE+FX) |
 | Bottom top row | Jump chips: OSC, FILT, MOD, VOICE, FX, SEQ, PADS. One tap goes to that part of the synth; tapping the lit chip again steps inside it (OSC A, OSC B, SUB+NOISE; ENV 1 / ENV 2 / FILTER; the MOD views). PADS lays the chord pads over any page |
-| Bottom PERF row | Above the keys: OCT-, OCT+, SCALE (scale on/off, back to the last one), LATCH, CHORD (on/off, last chord), PLAY/STOP (sequencer), PANIC (all notes off, latch and sequencer stop) |
+| PERF row + key column | Above the keys: SCALE (scale on/off, back to the last one), PLAY/STOP (sequencer), PANIC. Left of the keys: OCT+, OCT-, CHRD (chord on/off, last chord), LTCH (latch). A touch that starts on the XY pad's bottom edge never moves the pad |
 | XY pad mode button | Top right of the XY pad steps through WT + CUTOFF, MACRO 1+2, MACRO 3+4, CUTOFF + RES, WT A + WT B, FX MIX + COLOR and PERF (four sliders: CUTOFF, RES, WT POS, FX MIX over a smaller pad that plays macros 1 + 2). When modulation is moving an axis, a ghost square shows where the sound really is, with a line back to your finger |
 | Circle pad | HARDWARE > CIRCLE PAD: DATA (default): left / right edits the value selected on the top screen (push further for faster), up / down stays the STICK mod source. BEND + MOD: pitch bend and STICK. PAGE: pushes two values on the page you're on. MACROS: M1 / M2 |
 | Keyboard touch | Black keys answer 3 px past their drawn edges (the resistive screen and stylus wander); a key you hold keeps the note until the stylus is 3 px into the next key, so a slip doesn't retrigger |
@@ -154,9 +157,9 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | Keyboard | Play; lower on a key = louder; slide to glide |
 | A | Chord mode |
 | B | Latch |
-| L / R | Previous / next page |
+| L / R | Octave down / up |
 | Circle pad | Left/right pitch bend, up/down = STICK mod source |
-| SELECT | PLAY / STOP the sequencer (PANIC and HELP are in the START menu) |
+| SELECT | Tap: PLAY / STOP the sequencer and the drums (on release). Held: QUICK SELECT, undo / redo, panic (above) |
 | START | Quick menu over the top screen: SAVE PATCH, BROWSER, PANIC, HELP, THEME, QUIT (D-pad + A; B or START closes it). The touch screen keeps playing while it's open. |
 
 ## Wavetables
@@ -202,23 +205,23 @@ FBI > Remote Install > Scan QR Code, and scan [`install-qr.png`](../install-qr.p
 - **3D ORBIT / ORBIT RATE** (MASTER FX): with OUTPUT set to SURROUND, the sound circles around you.
 - **New visualizer modes**: TUNNEL, KALEIDO and RIPPLES.
 
-## Step grid and ACID lines (PLAY page)
+## Step grid and RIFF lines (PLAY page)
 
 On the PLAY page the bottom screen's XY pad becomes a 16-step grid. Each of the 8 rows is a note of the current scale; with SCALE off the rows are a major scale.
 
 - **Placing notes:** tap a cell to place a note, and you'll hear it. Tap it again to cycle through accent (dark dot), slide (tail into the next step), accent + slide, then off. Up to 4 notes per step.
-- **Piano roll:** the SEQ page's bottom screen is a piano roll: pitch up the side with a keyboard, the 16 steps across. Tap an empty cell for a note; drag from it for a longer note; tap a note to remove it; hold a cell for the step editor. Drag the keys up or down to scroll, OCT- / OCT+ jump an octave. How much of a note's bar is lit shows its velocity; dots over a step = ratchet. A note with step locks shows them as letters inside it, tracker-style: C cutoff, R res, P pitch, G gate, N nudge, % chance (as many as fit; a one-step note shows the first). The keyboard and play row are hidden on this page (PLAY / STOP is in the roll's button row).
+- **Piano roll:** the SEQ page's bottom screen is a piano roll: pitch up the side with a keyboard, the 16 steps across. Tap an empty cell for a note; drag from it for a longer note; tap a note to remove it; hold a cell for the step editor. One octave shows at a time; drag the keys up or down to scroll, L / R or OCT- / OCT+ jump an octave, and the side keys light while their notes play. Drag a note's head (or up / down) to move it; drag its tail to stretch it. The LANE under the notes edits every step: VEL, GATE, PROB as bars (drag up / down, or across the steps), ACC and SLD as switches; tap the lane's name to switch. How much of a note's bar is lit shows its velocity; dots over a step = ratchet. A note with step locks shows them as letters inside it, tracker-style: C cutoff, R res, P pitch, G gate, N nudge, % chance (as many as fit; a one-step note shows the first). The keyboard and play row are hidden on this page (PLAY / STOP is in the roll's button row).
 - **Step editor:** VEL, GATE, PROB, CUTOFF / RES locks, PITCH, NUDGE, ACCENT, SLIDE, RATCHET (2-4 hits in the step), LENGTH (of the note you held), and for that pitch ROW LEN / EUCL / ROT (its own rhythm, up to 8 pitches a pattern). <ST / ST> walk the steps; RND loosens the step (velocity, timing, a little chance to skip). Two tabs of full-width sliders: NOTE (VEL, GATE, PROB, NUDGE, ACCENT, SLIDE, RATCHET, LENGTH) and LOCKS + ROW (CUTOFF, RES, PITCH, ROW LEN / EUCL / ROT). A slider keeps the row you pressed on, so slipping up or down while dragging doesn't change another setting. Tap a name to select it without moving it; ACCENT and SLIDE flip with a tap. The circle pad nudges the selected setting one notch at a time (faster the further you push), whatever CIRCLE PAD is set to.
-- **UNDO** (in PAT, after ACID, CLEAR, REV, ROT, HUM or a PASTE): takes it back; tap again to redo.
+- **UNDO** (in PAT, or SELECT + L anywhere): takes back RIFF, CLEAR, REV, ROT, HUM, a PASTE, note edits; SELECT + R redoes. CLEAR in the menu takes two presses of right.
 - **REV / ROT / HUM** (in PAT): REV plays the pattern back to front (a long note ends where it used to start); ROT moves everything one step later, the last step wrapping to the first; HUM nudges each note's velocity (±20%) and timing (±10% of a step).
 - **COPY / PASTE** (step editor, under the sliders): copies a whole step, notes, lengths and locks, onto another step.
-- **TAPE** (PAT > TAPE >>>): bounce the sequence to 4 tracks. Pick the length (4 to 64 bars, or SONG: the song chain), ARM a track, press REC: the sequence (or song) starts from the top and Syrup's output is recorded to that track; the tracks already on tape play along on the second sound chip, so change the patch and bounce the next part over them. The next empty track arms itself. Each track has MUTE, a level slider and X (tap twice to erase). PLAY plays the tape; WAV saves track1-4.wav and mix.wav to /3ds/syrup/tape on the SD card. The first track sets the length (up to 2 minutes); erase every track to change it. The recorder hears the DSP, so the drums (second chip) only go on tape with CHIP > FX on. The tape is in memory: it's gone when you quit unless you save the WAVs. PREROLL (OFF / 1 BAR / 2 BARS) counts in before REC; REC CLICK: OFF, COUNT-IN, or ALWAYS (keeps clicking while recording). The click plays on the second chip, so it never lands on tape. Both are on the tape view and the ARP+SEQ page.
+- **TAPE** (PAT > TAPE >>>): bounce the sequence to 4 tracks. Pick the length (4 to 64 bars, or SONG: the song chain), ARM a track, press REC: the sequence (or song) starts from the top and Syrup's output is recorded to that track; the tracks already on tape play along on the second sound chip, so change the patch and bounce the next part over them. The next empty track arms itself. Each track has MUTE, a level slider and X (tap twice to erase). PLAY plays the tape; WAV saves track1-4.wav and mix.wav to /3ds/syrup/tape on the SD card. The first track sets the length (up to 2 minutes); erase every track to change it. The recorder hears the DSP; the drums play on the second chip, so tape REC turns CHIP > FX on by itself when they're running. The tape is in memory: it's gone when you quit unless you save the WAVs. PREROLL (OFF / 1 BAR / 2 BARS) counts in before REC; REC CLICK: OFF, COUNT-IN, or ALWAYS (keeps clicking while recording). The click plays on the second chip, so it never lands on tape. Both are on the tape view and the ARP+SEQ page.
 - **Live REC** (REC on the roll's button row): counts in (PREROLL), then the pattern plays from the top and whatever you play on the keys (any page with keys) or over MIDI is written to the nearest 16th, as long as you hold it; it keeps overdubbing as the pattern loops. REC again stops; UNDO in PAT takes the whole take back. The keys play instead of transposing while it records. REC QUANT (ARP+SEQ page): 16TH, 8TH, or OFF (your exact timing, kept as the step's NUDGE).
 - **WAVE kit** (DRUMS > KIT, or the WAVE KIT patch / voice MODE): every drum is made from OSC A's wavetable at its WT POS. The kick and toms sweep down from the table's bright end with a falling pitch; the snare is a table tone plus "table noise" (the table read at random phases); hats and crash are that noise ring-modulated by the table up high; rim is a short table ping, clap bursts of table noise, bell two table voices ring-modulated. Change OSC A's table or move WT POS and the kit rebuilds a moment later, so the drums follow the sound.
 - **Drum shaping** (DRUMS page): KICK / SNARE / HAT TUNE move each row's pitch ±12 semitones live, applied to every hit (SNARE TUNE also moves clap and rim, HAT TUNE the open hat and crash). KICK / SNARE / HAT CHANCE: how often each pattern hit of that row plays (lower = looser, ghostlier grooves). MUTE silences rows (any combination) without touching the patterns; the kit pads still play. The kicks also have a short 1.2 kHz beater click now, so they read on the 2DS speaker.
 - **TAP REC** (ARP+SEQ page, works during live REC): knock on the table near the 2DS and the mic hears it; harder = louder, onto the grid by REC QUANT. NOTES writes the last pitch you played or put on the roll (you hear it at once); VELOCITY only re-sets the velocity of what's already on that step (a hard knock also sets ACCENT), so you can tap the dynamics into a pattern. Off while the drums' MIC TAP is on.
 - **Patterns and song (PAT):** 16 patterns, A to P. Tap one to switch; while playing, it waits for the end of the current pattern. COPY> copies the pattern into the next one and moves there (for variations), CLEAR empties it. +ADD puts the current pattern at the end of the song chain, <DEL removes the last one; SONG plays the chain (tap a slot to jump to it). Patterns and song are saved on the SD card when you leave the page and when you quit (START > QUIT).
-- **ACID:** writes a random 303-style bassline. It favours the root, adds octave jumps, rests, accents and slides, and sits in the bass octave. Tap it again for a new line. Try it with the BASS > ACID patch.
+- **RIFF:** writes a random 303-style line inside the octave on screen. It favours the root, adds rests, accents and slides. Tap it again for a new one.
 - **While it plays:** the keys transpose the pattern.
 
 ## Reverb and delay types (MASTER FX page)
@@ -236,7 +239,11 @@ When it starts, Syrup shows an address such as `http://192.168.1.23:8080`. Your 
 - **Web MIDI:** the remote page also forwards a USB MIDI keyboard plugged into the computer. Browsers only allow Web MIDI on secure pages. In desktop Chrome, add the Syrup address under `chrome://flags/#unsafely-treat-insecure-origin-as-secure`. iPhone Safari has no Web MIDI.
 - **Network MIDI (AppleMIDI / RTP-MIDI):** connect from macOS Audio MIDI Setup (Network), from rtpMIDI on Windows, or from iOS apps that support network MIDI sessions. Use the 2DS's IP address on port 5004.
 - **MIDI handled:** notes (and the arpeggiator), pitch bend, program change, mod wheel, start/stop and clock (tempo follows).
-- **CC map:** 74 cutoff, 71 resonance, 70 WT position, 1 and 16-19 macros, 102/103 previous/next patch, 104 ACID line, 120/123 all notes off.
+- **CC map:** 74 cutoff, 71 resonance, 70 WT position, 1 and 16-19 macros, 102/103 previous/next patch, 104 RIFF line, 120/123 all notes off.
+- **MIDI LEARN** (START menu): pick a control on a page with the D-pad, choose MIDI LEARN, turn a knob. Up to 16 bindings, kept on the SD card; a learned CC takes over the fixed map.
+- **Aftertouch / MPE:** channel pressure and poly aftertouch drive the PRESSURE mod source. With MPE on (VOICE+FX), notes on channels 2-16 each get their own bend (+-48 semitones), pressure and slide (CC 74, the MPE SLIDE source).
+- **LFO1 / LFO2 CC OUT** (LFO+MOD page): send the LFO as that CC (channel 1) back over the Network MIDI session. 0 = off.
+- **IR MIDI** reads byte by byte now: notes, running status, clock in the middle of a message.
 
 ## Video wavetables (HARDWARE page)
 
@@ -364,3 +371,14 @@ SPIN F/B and SPIN L/R (gyro: how fast you tip or roll it, not where it sits), VO
 Run it locally with `python3 tests/host/run_tests.py` (needs gcc, libcurl headers, Python; Pillow for PNGs). After an intended sound change, `python3 tests/host/run_tests.py --update` accepts the new levels; commit `tests/baseline/levels.txt` with it.
 
 It can't check what only the hardware does: real chip quirks, CPU load on a 2DS, Wi-Fi, IR, camera and the system keyboard.
+
+## New in the later beta builds
+
+- **DRUMS page:** a KICK / SNARE / HAT step grid where the XY pad was. Tap or drag across steps (the row becomes MINE, starting from the pattern it was playing); tap a row's name for its next pattern; DRUMS ON/OFF and KIT along the top.
+- **One kit:** kit patches (MODE 808 KIT .. WAVE KIT) and the drum machine share one kit: change either and the other follows.
+- **TRANCE GATE** (VOICE+FX): GATE picks a 16-step pattern (16THS, 8THS, OFFBEAT, TRANCE 1 / 2, HALF, STUTTER), GATE RATE 1/16, 1/8 or 1/32, GATE DEPTH how far it closes. Locks to the sequencer's steps; saved in the patch.
+- **PADS > PROGRESSION:** pick a progression (I V vi IV, vi IV I V, I vi IV V, ii V I, I IV V IV, i VI III VII, i iv v i), tap its chords in order, or AUTO plays one a bar with the clock.
+- **GRAIN POS** is a matrix destination: an LFO (or anything) sweeps where the grains read. The GRAINSCAN patch (SPACE) shows it off.
+- **OUTPUT: MONO** (VOICE+FX) for one speaker or a mono cable.
+- **HELP** has four slides; L / R flip them.
+- **FILTER SCREAM** stays just inside the filter's stable limit (it could lock up the sound chip), and a watchdog turns it off if the chip ever stops answering.
