@@ -1,0 +1,58 @@
+// DRUMS grid, round 2: RATCHETS, CONDITIONS (1:2, FILL, PRE), each row's RATE and LENGTH, the drum SOUND editor
+// (DECAY / TUNE / PITCH ENV baked or live), HOLD to open the editors, BEAT presets with their own length and rate.
+#include "syrup_host.c"
+#include "harness.h"
+static int base[NDRUM];
+static void mark(void) { memcpy(base, gDrumHitN, sizeof(base)); }
+static int hits(int d) { return gDrumHitN[d] - base[d]; }
+static void only(int r, int i, int rat, int cond) {   // one hit on row r, nothing else on the grid
+	myDrumLoad(); memset(gMyDrum, 0, sizeof(gMyDrum)); memset(gDrumX, 0, sizeof(gDrumX)); memset(gDrRat, 0, sizeof(gDrRat)); memset(gDrCond, 0, sizeof(gDrCond));
+	for (int k = 0; k < 10; k++) { gDrLen[k] = 16; gDrRate[k] = 0; }
+	gKickPat = 7; gSnarePat = 6; gHatPat = 6;
+	if (r < 3) gMyDrum[r][i] = 230; else gDrumX[r - 3][i] = 230; gDrRat[r][i] = (u8)rat; gDrCond[r][i] = (u8)cond;
+}
+static int len0, len2, timer0, timerUp;
+static void SCRIPT(int fr) {
+	HD = 0; TOUCH = 0; gFxCore2 = 0;
+	// 120 BPM: a 16th = 7.5 frames, a bar = 120 frames
+	if (fr == 3) { SPatch p; patchInit(&p); patchApply(&p); gBPM = 120; gSwing = 0; gSeqMode = 0; gDrums = 1; drumsChanged(); }
+	if (fr == 20) { only(0, 0, 3, 0); gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); mark(); }   // RATCHET 4 on the kick's first step
+	if (fr == 20 + 240) { if (hits(0) != 8) fail("RATCHET 4: two bars should give 8 kicks (%d)", hits(0)); }
+	if (fr == 262) { only(0, 0, 0, 6); gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); mark(); }   // 1:2
+	if (fr == 262 + 480) { if (hits(0) != 2) fail("1:2: four bars should give 2 kicks (%d)", hits(0)); }
+	if (fr == 744) { only(4, 0, 0, 15); gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); mark(); }   // FILL: none until held
+	if (fr == 744 + 240) { if (hits(4)) fail("FILL: no claps without FILL (%d)", hits(4)); gDrFill = 1; mark(); }
+	if (fr == 984 + 240) { if (hits(4) != 2) fail("FILL held: a clap a bar (%d)", hits(4)); gDrFill = 0; }
+	if (fr == 1226) { only(5, 0, 0, 0); gDrLen[5] = 3; gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); mark(); }   // LENGTH 3: every 3 16ths
+	if (fr == 1226 + 118) { if (hits(5) != 6) fail("LENGTH 3: one bar should give 6 rims (%d)", hits(5)); }
+	if (fr == 1346) { only(6, 0, 0, 0); gDrRate[6] = 1; gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); mark(); }   // RATE 1/2: once every 2 bars
+	if (fr == 1346 + 238) { if (hits(6) != 1) fail("RATE 1/2: two bars should give 1 tom (%d)", hits(6)); }
+	if (fr == 1346 + 478) { if (hits(6) != 2) fail("RATE 1/2: four bars should give 2 toms (%d)", hits(6)); }
+	// SOUND: DECAY 200 makes the kick about twice as long, 50 half; TUNE +12 doubles the playback rate
+	if (fr == 1830) { len0 = gDrumLen[0]; gDV[0].decay = 200; gDrumWant = gKit + 100; }
+	if (fr == 1834) { len2 = gDrumLen[0]; if (len2 < len0 * 1.8f) fail("DECAY 200: the kick should get about twice as long (%d -> %d)", len0, len2);
+		gDV[0].decay = 50; gDrumWant = gKit + 100; }
+	if (fr == 1838) { if (gDrumLen[0] > len0 * 0.6f) fail("DECAY 50: the kick should get about half as long (%d -> %d)", len0, gDrumLen[0]);
+		gDV[0].decay = 100; gDV[0].penv = 12; gDrumWant = gKit + 100; }
+	if (fr == 1842) { if (gDrumLen[0] >= len0) fail("P.ENV +12: the pitched-up start should shorten the kick (%d -> %d)", len0, gDrumLen[0]); gDV[0] = DV_DEF; gDrumWant = gKit + 100;
+		drumHit(0, 1); timer0 = CS[gDrumCh[0]].timer; gDV[0].tune = 12; drumHit(0, 1); timerUp = CS[gDrumCh[0]].timer; gDV[0].tune = 0;
+		if (abs((int)timerUp * 2 - timer0) > 4) fail("TUNE +12 should halve the timer (%d -> %d)", timer0, timerUp); }
+	// HOLD a step: the step editor; HOLD a name: the SOUND editor
+	if (fr >= 1844 && fr < 1848) { HD |= KEY_SELECT; CX = -150; CY = 0; }   // QUICK: left = DRUMS
+	if (fr >= 1852 && fr < 1890) { TOUCH = 1; TX = DG_LX + 3; TY = DG_TOP + 5; }
+	if (fr == 1891) { if (gDgEd != 1 || gDgEdR != 0 || gDgEdI != 0) fail("HOLD a step: its editor should open (%d %d %d)", gDgEd, gDgEdR, gDgEdI);
+		fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320; drawDgEd(); shotBot("shots/drum_step_ed.ppm"); gDgEd = 0; }
+	if (fr >= 1895 && fr < 1935) { TOUCH = 1; TX = 10; TY = DG_TOP + 5; }
+	if (fr == 1936) { if (gDgEd != 2) fail("HOLD a name: the SOUND editor should open (%d)", gDgEd);
+		fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320; drawDgEd(); shotBot("shots/drum_sound_ed.ppm"); gDgEd = 0; }
+	// a quick tap on a lit step still turns it off
+	if (fr == 1940) { only(1, 4, 0, 0); }
+	if (fr == 1942 || fr == 1943) { TOUCH = 1; TX = DG_LX + (int)(4.5f * (320 - DG_LX - 2) / 16.0f); TY = DG_TOP + DG_RH + 5; }
+	if (fr == 1946 && gMyDrum[1][4]) fail("a quick tap on a lit step should turn it off");
+	// BEATS: WALTZ is 12 steps; SLOW ROCK 12 at 3/4; CUMBIA has its guacharaca
+	if (fr == 1950) { beatPaste(25); if (gDrLen[0] != 12) fail("WALTZ: rows should be 12 steps (%d)", gDrLen[0]);
+		beatPaste(24); if (gDrLen[2] != 12 || gDrRate[2] != 3) fail("SLOW ROCK: 12 steps at 3/4 (%d %d)", gDrLen[2], gDrRate[2]);
+		beatPaste(14); if (gDrLen[0] != 16 || gDrRate[0] || !gMyDrum[2][2]) fail("CUMBIA: 16 steps, the guacharaca on the hat");
+		histStep(1); if (gDrRate[2] != 3) fail("undo should bring back SLOW ROCK's rate"); }
+}
+int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 1960; app_main(); printf("drum2: ratchets, conditions, row rate / length, sound editor, holds, beats\n"); return gFails ? 1 : 0; }
