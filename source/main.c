@@ -4975,39 +4975,63 @@ static int quickCur(int page, int side) {
 	if (page == 0) return side == 0 ? gStyle : gPreset;
 	Param* p = quickParam(page, side); return p ? *(int*)p->p - (int)p->mn : 0;
 }
-static void drawQuick(int page) {
+static void blendRect(int x0, int y0, int w, int h, const u8* c, int a) {   // a / 256 of c over what's there
+	for (int x = x0; x < x0 + w; x++) for (int y = y0; y < y0 + h; y++) {
+		if (x < 0 || x >= fbW || y < 0 || y >= 240) continue;
+		u8* p = fb + (x * 240 + (239 - y)) * 3;
+		p[0] = (u8)((p[0] * (256 - a) + c[2] * a) >> 8); p[1] = (u8)((p[1] * (256 - a) + c[1] * a) >> 8); p[2] = (u8)((p[2] * (256 - a) + c[0] * a) >> 8);
+	}
+}
+static void quickPanel(int x, int y, int w, int h, int lit) {   // a floating card: shadow, glassy fill, a bright edge
+	static const u8 K[3] = {0, 0, 0};
+	blendRect(x + 3, y + 3, w, h, K, 140);
+	blendRect(x, y, w, h, TH->bg, 232);
+	if (lit) blendRect(x, y, w, h, TH->keyOn, 60);
+	outline(x, y, w, h, RGB3(lit ? TH->keyOn : TH->line)); rect(x + 1, y + 1, w - 2, 1, RGB3(TH->grid));
+}
+static void drawQuick(int page) {   // a layer over the page you're on: the page shows through, dimmed
 	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
-	rect(0, 14, 400, 226, RGB3(TH->bg)); outline(2, 16, 396, 222, RGB3(TH->line));
+	static const u8 K[3] = {0, 0, 0};
+	blendRect(0, 0, 400, 240, K, 150);
 	const u8* on = TH->keyOn; char t[24];
 	// UP: every page
+	quickPanel(4, 4, 392, 20, gQuickBar == 0);
 	for (int i = 0; i < NPAGES; i++) {
-		int pg = NAV[i], x = 6 + i * 33, lit = gQuickBar == 0 && gQuickIdx == i, here = pg == page;
-		if (lit) rect(x - 1, 20, 33, 12, RGB3(on)); else if (here) outline(x - 1, 20, 33, 12, RGB3(TH->line));
-		const u8* c = lit ? EGA[0] : TH->tabTxt; text(x + 16 - (int)strlen(QPAGE[pg]) * 4, 22, QPAGE[pg], 1, c[0], c[1], c[2]);
+		int pg = NAV[i], x = 8 + i * 32, lit = gQuickBar == 0 && gQuickIdx == i, here = pg == page;
+		if (lit) rect(x, 7, 30, 14, RGB3(on)); else if (here) outline(x, 7, 30, 14, RGB3(TH->line));
+		const u8* c = lit ? EGA[0] : here ? TH->val : TH->tabTxt; text(x + 15 - (int)strlen(QPAGE[pg]) * 4, 10, QPAGE[pg], 1, c[0], c[1], c[2]);
 	}
 	// DOWN: the transport
+	quickPanel(70, 214, 260, 22, gQuickBar == 2);
 	for (int i = 0; i < 3; i++) {
 		const char* nm = i == 1 ? (gSeqMode == 1 ? "STOP" : "PLAY") : QTRANS[i];
-		int w = (int)strlen(nm) * 8, x = 200 + (i - 1) * 120 - w / 2, lit = gQuickBar == 2 && gQuickIdx == i;
-		if (lit) rect(x - 5, 218, w + 10, 14, RGB3(on));
-		const u8* c = lit ? EGA[0] : TH->tabTxt; text(x, 221, nm, 1, c[0], c[1], c[2]);
+		int w = (int)strlen(nm) * 8, x = 200 + (i - 1) * 84 - w / 2, lit = gQuickBar == 2 && gQuickIdx == i;
+		if (lit) rect(x - 5, 217, w + 10, 16, RGB3(on));
+		const u8* c = lit ? EGA[0] : i == 0 && gLiveRec ? TH->warn : TH->tabTxt; text(x, 221, nm, 1, c[0], c[1], c[2]);
 	}
 	// LEFT / RIGHT: this page's two choices, a window of the list around what's picked
 	for (int side = 0; side < 2; side++) {
-		int n = quickCount(page, side); int bar = side ? 1 : 3, x = side ? 270 : 10;
-		const char* hd = page == 0 ? (side ? "PATCH" : "STYLE") : (quickParam(page, side) ? quickParam(page, side)->name : "");
-		text(x, 40, hd, 1, RGB3(TH->dim));
+		int n = quickCount(page, side), bar = side ? 1 : 3, x = side ? 262 : 6;
 		if (!n) continue;
-		int sel = gQuickBar == bar ? gQuickIdx : quickCur(page, side), first = sel - 6; if (first > n - 12) first = n - 12; if (first < 0) first = 0;
-		for (int i = first, row = 0; i < n && row < 12; i++, row++) {
-			int y = 54 + row * 12, lit = gQuickBar == bar && gQuickIdx == i, cur = i == quickCur(page, side);
+		int rows = n < 12 ? n : 12;
+		quickPanel(x, 32, 132, 20 + rows * 13, gQuickBar == bar);
+		const char* hd = page == 0 ? (side ? "PATCH" : "STYLE") : quickParam(page, side)->name;
+		text(x + 6, 37, hd, 1, RGB3(TH->dim));
+		int sel = gQuickBar == bar ? gQuickIdx : quickCur(page, side), first = sel - 6; if (first > n - rows) first = n - rows; if (first < 0) first = 0;
+		for (int i = first, row = 0; i < n && row < rows; i++, row++) {
+			int y = 50 + row * 13, lit = gQuickBar == bar && gQuickIdx == i, cur = i == quickCur(page, side);
 			quickName(page, side, i, t, sizeof(t));
-			if (lit) rect(x - 3, y - 2, 124, 12, RGB3(on)); else if (cur) outline(x - 3, y - 2, 124, 12, RGB3(TH->line));
-			const u8* c = lit ? EGA[0] : TH->tabTxt; text(x, y, t, 1, c[0], c[1], c[2]);
+			if (lit) rect(x + 3, y - 2, 126, 12, RGB3(on)); else if (cur) outline(x + 3, y - 2, 126, 12, RGB3(TH->line));
+			const u8* c = lit ? EGA[0] : TH->tabTxt; text(x + 7, y, t, 1, c[0], c[1], c[2]);
 		}
 	}
-	char h[48]; snprintf(h, sizeof(h), "%s: LEAN ALONG A BAR, LET GO", gQuickBar == 0 ? PAGE_NAMES[NAV[gQuickIdx]] : "SELECT");
-	text(200 - (int)strlen(h) * 4, 205, h, 1, RGB3(TH->dim));
+	// the stick, in the middle: where you're pushing
+	{ int cx = 200, cy = 128; outline(cx - 22, cy - 22, 45, 45, RGB3(TH->grid));
+	  static const s8 DXY[4][2] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+	  if (gQuickBar >= 0) { int dx = DXY[gQuickBar][0] * 14, dy = DXY[gQuickBar][1] * 14; rect(cx - 4 + dx, cy - 4 + dy, 9, 9, RGB3(on)); }
+	  else rect(cx - 3, cy - 3, 7, 7, RGB3(TH->line));
+	  const char* h = gQuickBar == 0 ? PAGE_NAMES[NAV[gQuickIdx]] : "LET GO OF SELECT";
+	  text(cx - (int)strlen(h) * 4, cy + 30, h, 1, RGB3(TH->val)); }
 }
 #define ENV_X0 16                // inset from the edge: a stylus can't reach the last pixels under the bezel
 #define ENV_TOP (SH_Y + 14)       // clear of the tabs above and the A/D/S/R readout
