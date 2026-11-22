@@ -23,7 +23,11 @@ typedef struct{ThreadFunc f;void*a;}TA; static void* tramp(void* x){TA* t=x; t->
 /* FAKE_SYNC_WORKER (default): no thread on core 1, so Syrup rebuilds wavetables inline on the main loop and every
    run renders the same audio whatever the machine's speed. Tests of the core-1 worker / effects hand-over turn it off. */
 static int FAKE_SYNC_WORKER = 1;
-static Thread threadCreate(ThreadFunc f,void*a,size_t st,int pr,int core,bool det){(void)st;(void)pr;(void)det; if(core==1&&FAKE_SYNC_WORKER) return NULL; pthread_t* t=malloc(sizeof(pthread_t)); TA* ta=malloc(sizeof(TA)); ta->f=f;ta->a=a; pthread_create(t,NULL,tramp,ta); return t;}
+static Thread threadCreate(ThreadFunc f,void*a,size_t st,int pr,int core,bool det){(void)st;(void)pr;(void)det; if(core==1&&FAKE_SYNC_WORKER) return NULL;
+#ifdef FAKE_WEB
+ (void)f;(void)a; return NULL;   /* the web build has one thread: everything runs on the main loop */
+#endif
+ pthread_t* t=malloc(sizeof(pthread_t)); TA* ta=malloc(sizeof(TA)); ta->f=f;ta->a=a; pthread_create(t,NULL,tramp,ta); return t;}
 static int threadJoin(Thread t,unsigned long long to){(void)to;pthread_join(*t,NULL);return 0;} static void threadFree(Thread t){free(t);}
 
 typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32; typedef uint64_t u64; typedef int16_t s16; typedef int32_t Result;
@@ -106,7 +110,14 @@ static void CSND_CapSetTimer(u32 u,u32 t){(void)u;(void)t;} static void CSND_Cap
 static void CSND_SetPlayState(u32 c,u32 v){ CS[c].on=v; }
 static void CSND_SetTimer(u32 c,u32 t){ CS[c].timer=t; }
 static void CSND_SetVol(u32 c,u32 vol,u32 cap){ CS[c].l=(vol&0xffff)/32768.0f; CS[c].r=(vol>>16)/32768.0f; CS[c].cl=(cap&0xffff)/32768.0f; CS[c].cr=(cap>>16)/32768.0f; }
-static s16 OUT[32728*160*2]; static int ON=0;
+#ifdef FAKE_WEB
+#define OUTMAX 1
+static float WRING[65536*2]; static unsigned WRW=0, WRR=0;   /* the web build: the mix goes to a ring the page's audio pulls from */
+static unsigned long long WSAMP=0;
+#else
+#define OUTMAX (32728*160)
+#endif
+static s16 OUT[OUTMAX*2]; static int ON=0;
 typedef void (*ndspCallback)(void*); typedef void (*ndspAuxCallback)(void*,int,void*[4]);
 static ndspCallback NCB; static ndspAuxCallback AUXCB[2]; static int AUXEN[2], AUXDEAD=0;
 static float AXS[2][2][160], RET[2][2][160]; static int FPOS=0;
@@ -120,12 +131,18 @@ static float TILTX=0; static void hidAccelRead(accelVector* a){a->x=(s16)(TILTX*
 enum{MICU_ENCODING_PCM16_SIGNED=3, MICU_SAMPLE_RATE_16360=1};
 static u32 MICN; static Result micInit(u8* b,u32 n){(void)b;MICN=n;return 0;} static void micExit(void){} static u32 micGetSampleDataSize(void){return MICN-4;} static u32 micGetLastSampleOffset(void){return 0;}
 static Result MICU_StartSampling(int a,int b,u32 c,u32 d,bool e){(void)a;(void)b;(void)c;(void)d;(void)e;return 0;} static Result MICU_StopSampling(void){return 0;}
+#ifndef FAKE_WEB
 static void* memalign(size_t a,size_t n){(void)a;return malloc(n);}
+#endif
 #define R_FAILED(r) ((r)<0)
 /* simulated clock: the tick follows the audio rendered so far, so tests are repeatable and run faster than real time.
    A test can take the clock over with SIMTICK_SET. */
 static int SIMTICK_SET=0; static unsigned long long SIMTICK=0;
+#ifdef FAKE_WEB
+static unsigned long long svcGetSystemTick(void){ return WSAMP*268111856ULL/32728ULL; }
+#else
 static unsigned long long svcGetSystemTick(void){ if(SIMTICK_SET) return SIMTICK; return (unsigned long long)ON*268111856ULL/32728ULL; }
+#endif
 enum{SOUND_ONE_SHOT=2<<10};
 static void osSetSpeedupEnable(bool e){(void)e;} static Result CSND_FlushDataCache(const void* p,u32 n){(void)p;(void)n;return 0;}
 enum{GSPLCD_SCREEN_TOP=1,GSPLCD_SCREEN_BOTTOM=2};
@@ -176,8 +193,19 @@ static void renderFrame(void){ int n=32728/60; for(int s=0;s<n;s++){ float L=0,R
   float CL=0,CR=0;
   for(int c=0;c<32;c++){ CsCh* h=&CS[c]; if(!h->on||(!h->d&&h->fmt!=3)) continue; float x=csNext(h); L+=x*h->l; R+=x*h->r; CL+=x*h->cl; CR+=x*h->cr; }
   for(int u=0;u<2;u++) if(CAPU[u].on&&CAPU[u].b){ float v=u?CR:CL; if(v>1)v=1; if(v<-1)v=-1; CAPU[u].b[CAPU[u].pos]=(s16)(v*32767); if(++CAPU[u].pos>=CAPU[u].n) CAPU[u].pos=0; }
-  if(L>1)L=1; if(L<-1)L=-1; if(R>1)R=1; if(R<-1)R=-1; if(ON<32728*160){OUT[ON*2]=L*32767;OUT[ON*2+1]=R*32767;ON++;} } }
+  if(L>1)L=1; if(L<-1)L=-1; if(R>1)R=1; if(R<-1)R=-1;
+#ifdef FAKE_WEB
+  WRING[(WRW&65535)*2]=L; WRING[(WRW&65535)*2+1]=R; WRW++; WSAMP++;
+#else
+  if(ON<OUTMAX){OUT[ON*2]=L*32767;OUT[ON*2+1]=R*32767;ON++;}
+#endif
+ } }
+#ifdef FAKE_WEB
+static void webVBlank(void);
+static void gspWaitForVBlank(void){ renderFrame(); webVBlank(); }
+#else
 static void gspWaitForVBlank(void){ renderFrame(); }
+#endif
 static void SCRIPT(int fr);
 static bool aptMainLoop(void){ HDPREV=HD; SCRIPT(FR); FR++; return FR<FRMAX; }
 static Result IRU_SetBitRate(u8 v){(void)v;return 0;}

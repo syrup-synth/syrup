@@ -9336,8 +9336,8 @@ int main(void) {
 	u64 last = osGetTime();
 	aptHook(&gSleepCookie, sleepHook, NULL);
 
-#ifdef SYRUP_HOST
-	gSplash = 0;   // tests start straight on the instrument
+#if defined(SYRUP_HOST) && !defined(FAKE_WEB)
+	gSplash = 0;   // tests start straight on the instrument (the web build keeps the logo and a tip)
 #endif
 	if (gSplash) for (int k = 0; k < 2; k++) { splashBottomReady(); gfxFlushBuffers(); gfxSwapBuffers(); gspWaitForVBlank(); }
 	while (aptMainLoop()) {
@@ -9853,12 +9853,14 @@ int main(void) {
 		if (gPageMarkDue) { gPageMarkDue = 0; settingsSave(page); char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
 		if (gTblDue) { int t = gTblDue; gTblDue = 0; LightLock_Lock(&gMipsLock); if (t & 1) tableSelect(&A->tb, A->table); if (t & 2) tableSelect(&B->tb, B->table); LightLock_Unlock(&gMipsLock); gForceBuild |= t; topDirty = 1; }
 		if (gMainJobDue) { gMainJobDue = 0; LightLock_Lock(&gMipsLock); doRebuild(&gMainJob); LightLock_Unlock(&gMipsLock); ASET(gJobDone, 1); }
+#ifndef SYRUP_NO_NET
 		{   // LFO CC OUT: 30 times a second, only when the value moved
 			static int div = 0, last[2] = {-1, -1};
 			if (++div >= 2) { div = 0; for (int l = 0; l < 2; l++) if (gLfoCC[l] > 0 && gPeerOk) {
 				int v = (int)lroundf((gLfo[l].val + 1) * 63.5f); v = v < 0 ? 0 : v > 127 ? 127 : v;
 				if (v != last[l]) { last[l] = v; rtpSend(0xB0, (u8)gLfoCC[l], (u8)v); } } }
 		}
+#endif
 		kitSync();
 		drumService();
 		if (gDrumSaveDue) { gDrumSaveDue = 0; myDrumSave(); }
