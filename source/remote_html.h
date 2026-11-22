@@ -28,7 +28,7 @@ static const char REMOTE_HTML[] =
 	"</style></head><body><div id=\"app\">\n"
 	"<div class=\"bar\"><div class=\"st\" id=\"st\">SYRUP REMOTE <b>connecting…</b></div>\n"
 	"<button id=\"pp\">&lt; PATCH</button><button id=\"pn\">PATCH &gt;</button>\n"
-	"<button id=\"seq\">PLAY</button><button id=\"acid\">ACID</button></div>\n"
+	"<button id=\"seq\">PLAY</button><button id=\"acid\">RIFF</button></div>\n"
 	"<div id=\"mid\"><div id=\"xy\"><div class=\"lab\">WT POS → / ↑ CUTOFF</div><div class=\"dot\" id=\"dot\"></div></div>\n"
 	"<div id=\"sl\"></div></div>\n"
 	"<div class=\"bar\"><button id=\"od\">OCT-</button><button id=\"ou\">OCT+</button><span class=\"st\" id=\"oct\">C3</span>\n"
