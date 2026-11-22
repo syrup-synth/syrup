@@ -112,7 +112,7 @@ static void CSND_SetTimer(u32 c,u32 t){ CS[c].timer=t; }
 static void CSND_SetVol(u32 c,u32 vol,u32 cap){ CS[c].l=(vol&0xffff)/32768.0f; CS[c].r=(vol>>16)/32768.0f; CS[c].cl=(cap&0xffff)/32768.0f; CS[c].cr=(cap>>16)/32768.0f; }
 #ifdef FAKE_WEB
 #define OUTMAX 1
-static float WRING[65536*2]; static unsigned WRW=0, WRR=0;   /* the web build: the mix goes to a ring the page's audio pulls from */
+static float WRING[65536*2]; static unsigned WRW=0, WRR=0; static int TTOUCH=0, TTX=0, TTY=0;   /* the web page lets you touch the top screen too */   /* the web build: the mix goes to a ring the page's audio pulls from */
 static unsigned long long WSAMP=0;
 #else
 #define OUTMAX (32728*160)

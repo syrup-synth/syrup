@@ -15,6 +15,8 @@ EMSCRIPTEN_KEEPALIVE void web_input(u32 keys, int touch, int tx, int ty, int cx,
 	W_LATCH |= keys & ~W_KEYS; if (touch && !W_TOUCH) W_TLATCH = 1;
 	W_KEYS = keys; W_TOUCH = touch; W_TX = tx; W_TY = ty; W_CX = (short)cx; W_CY = (short)cy;
 }
+static int W_TT = 0, W_TTX = 0, W_TTY = 0, W_TTL = 0;
+EMSCRIPTEN_KEEPALIVE void web_top_input(int t, int x, int y) { if (t && !W_TT) W_TTL = 1; W_TT = t; W_TTX = x; W_TTY = y; }
 EMSCRIPTEN_KEEPALIVE void web_midi(int st, int a, int b) { midiPush((u8)st, (u8)a, (u8)b); }
 EMSCRIPTEN_KEEPALIVE void web_audio_on(int on) { W_AUDIO = on; }
 EMSCRIPTEN_KEEPALIVE int web_audio_avail(void) { return (int)(WRW - WRR); }
@@ -33,7 +35,7 @@ static void webVBlank(void) {   // after each frame: show it, then wait until it
 	if (W_AUDIO) { int guard = 0; while (WRW - WRR > 32728 / 10 && guard++ < 200) emscripten_sleep(4); }   // keep ~100 ms of sound queued
 	else { static double next = 0; double now = emscripten_get_now(); if (next < now - 100) next = now; next += 1000.0 / 60; double w = next - now; emscripten_sleep(w > 0 ? (unsigned)w : 0); }
 }
-static void SCRIPT(int fr) { (void)fr; HD = W_KEYS | W_LATCH; W_LATCH = 0; TOUCH = W_TOUCH || W_TLATCH; W_TLATCH = 0; TX = W_TX; TY = W_TY; CX = W_CX; CY = W_CY; }
+static void SCRIPT(int fr) { (void)fr; HD = W_KEYS | W_LATCH; W_LATCH = 0; TOUCH = W_TOUCH || W_TLATCH; W_TLATCH = 0; TX = W_TX; TY = W_TY; CX = W_CX; CY = W_CY; TTOUCH = W_TT || W_TTL; W_TTL = 0; TTX = W_TTX; TTY = W_TTY; }
 int main(void) {
 	FILE* f = fopen("default_font.bin", "rb"); if (f) { if (fread(FONT, 1, 2048, f) != 2048) {} fclose(f); }
 	mkdir("sd", 0777);

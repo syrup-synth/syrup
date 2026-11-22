@@ -2,21 +2,26 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Syrup">
+<meta name="theme-color" content="#120d08">
 <title>Syrup — web</title>
 <style>
   :root { --bg: #120d08; --panel: #1d150d; --line: #3a2a18; --txt: #e8c48a; --dim: #8a6a44; --hot: #f5a623; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; background: var(--bg); color: var(--txt); font: 13px/1.35 ui-monospace, Menlo, Consolas, monospace; }
   body { touch-action: none; user-select: none; -webkit-user-select: none; overscroll-behavior: none; }
-  .wrap { max-width: 520px; margin: 0 auto; padding: 8px 8px 16px; }
+  .wrap { max-width: 520px; margin: 0 auto; padding: calc(8px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left)); }
   .bar { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
   .bar .t { font-weight: 700; letter-spacing: .08em; color: var(--hot); margin-right: auto; }
   button.b { background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; font: inherit; }
   button.b.on { background: var(--hot); color: #120d08; border-color: var(--hot); }
   .screens { display: flex; flex-direction: column; align-items: center; gap: 6px; }
   canvas { image-rendering: pixelated; image-rendering: crisp-edges; display: block; background: #000; border-radius: 4px; }
-  #top { width: 100%; aspect-ratio: 400 / 240; }
+  #top { width: 100%; aspect-ratio: 400 / 240; cursor: ew-resize; }
   #bot { width: 80%; aspect-ratio: 320 / 240; cursor: crosshair; }
   .pad { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
   .shoulders { display: flex; justify-content: space-between; margin-top: 10px; }
@@ -41,6 +46,7 @@
     <button class="b" id="snd">SOUND ON</button>
     <button class="b" id="midi">MIDI</button>
     <button class="b" id="dpadmode">D-PAD</button>
+    <button class="b" id="full">FULL</button>
   </div>
   <div id="msg">Loading…</div>
   <div class="screens">
@@ -65,7 +71,7 @@
   </div>
   <div class="mid"><button class="b" data-k="4">SELECT</button><button class="b" data-k="8">START</button></div>
   <div class="note">
-    <b>Bottom screen</b> = the touch screen. <b>Circle pad</b> on the left (D-PAD switches it to the four arrows).<br>
+    <b>Both screens</b> take taps: on the top one, tap a setting to pick it and drag sideways to change it. <b>Circle pad</b> on the left (D-PAD switches it to the four arrows).<br>
     Keyboard: arrows = D-pad, <b>I J K L</b> = circle pad, <b>X</b> = A, <b>Z</b> = B, <b>S</b> = X, <b>A</b> = Y, <b>Q / W</b> = L / R, <b>Shift</b> = SELECT, <b>Enter</b> = START.<br>
     <b>MIDI</b> plays it from a controller (Chrome / Edge on a computer, or the Web MIDI Browser app on iPhone). Your sounds and drum grid are kept in this browser.
   </div>
@@ -113,6 +119,12 @@ function touchAt(e) { var r = bot.getBoundingClientRect(); TX = Math.max(0, Math
 bot.addEventListener('pointerdown', function (e) { e.preventDefault(); bot.setPointerCapture(e.pointerId); touchAt(e); TOUCH = 1; send(); });
 bot.addEventListener('pointermove', function (e) { if (!TOUCH) return; touchAt(e); send(); });
 ['pointerup', 'pointercancel'].forEach(function (t) { bot.addEventListener(t, function () { TOUCH = 0; send(); }); });
+// ---- the top screen: touchable too in the web version (tap a setting, drag along it to change it)
+var topc = document.getElementById('top'), TT = 0;
+function topAt(e, t) { var r = topc.getBoundingClientRect(); var x = Math.round((e.clientX - r.left) * 400 / r.width), y = Math.round((e.clientY - r.top) * 240 / r.height); if (ready) Module._web_top_input(t, x, y); }
+topc.addEventListener('pointerdown', function (e) { e.preventDefault(); topc.setPointerCapture(e.pointerId); TT = 1; topAt(e, 1); });
+topc.addEventListener('pointermove', function (e) { if (TT) topAt(e, 1); });
+['pointerup', 'pointercancel'].forEach(function (t) { topc.addEventListener(t, function (e) { TT = 0; topAt(e, 0); }); });
 // ---- the circle pad (or a D-pad, for the arrows)
 var stick = document.getElementById('stick'), nub = document.getElementById('nub'), dpadMode = false;
 document.querySelectorAll('#left .k').forEach(function (b) { b.style.display = 'none'; });
@@ -149,6 +161,14 @@ document.getElementById('snd').onclick = function () {
   node.connect(actx.destination); actx.resume(); Module._web_audio_on(1);
   this.textContent = 'SOUND OFF'; this.classList.add('on'); msg.textContent = '';
 };
+// ---- full screen: the Fullscreen API where there is one; on iPhone, Share > Add to Home Screen (no Safari bars)
+document.getElementById('full').onclick = function () {
+  var d = document.documentElement, rq = d.requestFullscreen || d.webkitRequestFullscreen;
+  if (document.fullscreenElement || document.webkitFullscreenElement) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+  if (rq) { try { var p = rq.call(d); if (p && p.catch) p.catch(function () { msg.textContent = 'On iPhone: Share > Add to Home Screen, then open Syrup from there for full screen.'; }); } catch (e) { msg.textContent = 'On iPhone: Share > Add to Home Screen, then open Syrup from there for full screen.'; } }
+  else msg.textContent = 'On iPhone: Share > Add to Home Screen, then open Syrup from there for full screen.';
+};
+if (navigator.standalone || matchMedia('(display-mode: standalone)').matches) document.getElementById('full').style.display = 'none';   // already full screen
 // ---- Web MIDI in
 document.getElementById('midi').onclick = function () {
   var btn = this;

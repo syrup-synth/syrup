@@ -142,6 +142,10 @@ static void crashCheck(void) {
 	if (!fgets(gCrashStage, sizeof(gCrashStage), f)) snprintf(gCrashStage, sizeof(gCrashStage), "START");
 	if (!strncmp(gCrashStage, "GPU COPY", 8) && strncmp(gCrashStage, "GPU COPY OK", 11)) { FILE* n = fopen("sdmc:/3ds/syrup/nogpucopy", "w"); if (n) fclose(n); }   // hung in the GPU copy: CPU copies from now on
 	fclose(f);
+	remove(CRASH_PATH);   // one safe start after a crash or a power-off, not every start from then on
+#ifdef FAKE_WEB
+	return;   // the web page never "exits": closing the tab isn't a crash
+#endif
 	gSafeMode = 1;
 }        // set while the audio thread runs the arp/seq clock (it holds gMipsLock)
 static LightLock gMipsLock; static volatile int gTickNoMips = 0;   // audio tick running without gMipsLock (a rebuild holds it)   // guards the shared FFT buffers (worker on core 1 vs main core)
@@ -4014,7 +4018,7 @@ static void drawFooter(int page, int sel) {
 		rect(40, y0, 320, h, BG); rect(40, y0, 320, 1, WARN); rect(40, y0 + h - 1, 320, 1, WARN); rect(40, y0, 1, h, WARN); rect(359, y0, 1, h, WARN);
 		for (int i = 0; i < n; i++) text(200 - (int)strlen(L[i]) * 4, y0 + 8 + i * 12, L[i], 1, i == 0 ? WARN : TXT);
 		text(4, 230, "NO SOUND - DSP FIRMWARE NOT DUMPED (SEE ABOVE)", 1, WARN); return; }
-	if (gSafeMode) { char m[60]; snprintf(m, sizeof(m), "SAFE MODE - LAST RUN CRASHED AT %.24s", gCrashStage); text(4, 230, m, 1, WARN); return; }
+	if (gSafeMode) { char m[60]; snprintf(m, sizeof(m), "SAFE MODE (THIS START ONLY): LAST RUN STOPPED AT %.14s", gCrashStage); text(4, 230, m, 1, WARN); return; }
 	if (gMsgT > 0) { text(4, 230, gMsg, 1, VAL); return; }
 	if (page == 0) { text(4, 230, "TAP A PATCH BELOW   D-PAD WORKS TOO", 1, DIM); return; }
 	const char* h = paramHelp(PAGES[page][sel].name);
@@ -9538,6 +9542,18 @@ int main(void) {
 			if (gBrowsePend && !(kHeld & (KEY_DUP | KEY_DDOWN))) { gBrowsePend = 0; presetLoad(gStyle, gPreset); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = botDirty = 1; }
 			kDown &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT); kHeld &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT);
 		}
+#ifdef FAKE_WEB
+		{   // the web version's top screen is a touch screen too: tap a setting to pick it, drag along it to change it
+			static int was = 0, ax = 0;
+			if (TTOUCH && page != 0 && TTX >= 204 && TTY >= 30 && TTY < 214) {
+				int np = pageLen(page), first = sel[page] - 14; if (first < 0) first = 0;
+				int r = first + (TTY - 31) / 12;
+				if (!was) { if (r < np) { sel[page] = r; topDirty = 1; } ax = TTX; }
+				else { int d = (TTX - ax) / 10; if (d && !gQuickDir) { gQuickDir = d > 0 ? 1 : -1; ax += gQuickDir * 10; } }
+			}
+			was = TTOUCH;
+		}
+#endif
 		// parameter editing
 		int n = pageLen(page);
 		if (kDown & KEY_DUP)   { sel[page] = (sel[page] + n - 1) % n; topDirty = 1; }
