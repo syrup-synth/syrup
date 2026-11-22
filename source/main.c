@@ -9631,6 +9631,11 @@ int main(void) {
 #ifdef FAKE_WEB
 		{   // the web version's top screen is a touch screen too: tap a setting to pick it, drag along it to change it
 			static int was = 0, ax = 0;
+			if (TTOUCH && !was && page == 0 && TTY >= 32 && TTY < 222) {   // the PATCH page's lists: a style shows its patches, a patch loads
+				if (TTX >= 6 && TTX < 84) { int i = (TTY - 32) / 10; if (i < NSTYLES && i != gStyle) { gStyle = i; gPreset = 0; gBrStyle = -1; topDirty = botDirty = 1; } }
+				else if (TTX >= 86 && TTX < 200) { int i = (TTY - 32) / 11, n = presetCount(gStyle) + (gStyle == NSTYLES - 1);
+					if (i < n) { gPreset = i - 1; if (browseStep(0, 1, 1)) { curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; } }
+			}
 			if (TTOUCH && page != 0 && TTX >= 204 && TTY >= 30 && TTY < 214) {
 				int np = pageLen(page), first = sel[page] - 14; if (first < 0) first = 0;
 				int r = first + (TTY - 31) / 12;

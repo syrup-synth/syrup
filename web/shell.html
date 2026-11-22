@@ -19,21 +19,41 @@
   .bar .t { font-weight: 700; letter-spacing: .08em; color: var(--hot); margin-right: auto; }
   button.b { background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; font: inherit; }
   button.b.on { background: var(--hot); color: #120d08; border-color: var(--hot); }
+  /* portrait: screens, then L | SELECT START | R, then D-pad | circle pad | ABXY. Wide: controls either side of the screens */
+  .g { display: grid; gap: 8px; grid-template-columns: 1fr 1fr 1fr;
+       grid-template-areas: "bar bar bar" "screens screens screens" "shl mid shr" "dpad stick abxy"; }
   .screens { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-  canvas { image-rendering: pixelated; image-rendering: crisp-edges; display: block; background: #000; border-radius: 4px; }
+  canvas { image-rendering: pixelated; image-rendering: crisp-edges; display: block; background: #000; border-radius: 4px; touch-action: none; }
   #top { width: 100%; aspect-ratio: 400 / 240; cursor: ew-resize; }
   #bot { width: 80%; aspect-ratio: 320 / 240; cursor: crosshair; }
-  .pad { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
-  .shoulders { display: flex; justify-content: space-between; margin-top: 10px; }
-  .shoulders button { width: 30%; }
-  .cluster { position: relative; height: 150px; }
-  .k { position: absolute; width: 46px; height: 46px; border-radius: 50%; background: var(--panel); border: 1px solid var(--line); color: var(--txt); font: inherit; font-weight: 700; }
+  .sh { height: 40px; }
+  .mid { display: flex; justify-content: center; gap: 6px; }
+  .mid button { flex: 1; min-width: 0; padding: 7px 4px; font-size: 12px; }
+  .cluster { position: relative; height: 126px; }
+  .k { position: absolute; width: 40px; height: 40px; border-radius: 50%; background: var(--panel); border: 1px solid var(--line); color: var(--txt); font: inherit; font-weight: 700; }
   .k.sq { border-radius: 8px; }
-  .k.down { background: var(--hot); color: #120d08; }
-  .stick { position: absolute; left: 50%; top: 50%; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; background: var(--panel); border: 1px solid var(--line); }
-  .nub { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; background: #3a2a18; border: 1px solid var(--dim); }
-  .mid { display: flex; justify-content: center; gap: 10px; margin-top: 8px; }
-  .mid button { min-width: 84px; }
+  .k.down, button.b.down { background: var(--hot); color: #120d08; }
+  .stick { position: absolute; left: 50%; top: 50%; width: 108px; height: 108px; margin: -54px 0 0 -54px; border-radius: 50%; background: var(--panel); border: 1px solid var(--line); }
+  .nub { position: absolute; left: 50%; top: 50%; width: 50px; height: 50px; margin: -25px 0 0 -25px; border-radius: 50%; background: #3a2a18; border: 1px solid var(--dim); }
+  @media (orientation: landscape) and (min-aspect-ratio: 5/4) {
+    .wrap { max-width: none; }
+    .wrap { padding-top: calc(4px + env(safe-area-inset-top)); padding-bottom: calc(4px + env(safe-area-inset-bottom)); }
+    .g { grid-template-columns: minmax(124px, 1fr) minmax(112px, 1fr) auto minmax(150px, 1.6fr); gap: 4px 8px;
+         grid-template-areas: "bar bar screens shr" "shl shl screens abxy" "dpad stick screens mid"; align-items: center; }
+    .top .bar { flex-wrap: wrap; justify-content: center; margin: 0; } .top .bar .t { display: none; } .top .bar button { padding: 5px 7px; font-size: 12px; }
+    #msg { text-align: center; font-size: 11px; }
+    .screens { width: min(56vw, calc((100vh - 44px) / 1.2)); gap: 4px; }
+    .cluster { height: 112px; } .sh { height: 34px; }
+    .mid { flex-direction: column; }
+    .note { display: none; }
+  }
+  /* the pointing finger (ANSI block art) until the sound is on */
+  .sndw { position: relative; margin-left: auto; display: inline-block; }
+  .finger { position: absolute; left: 50%; top: 100%; margin: 2px 0 0 -22px; pointer-events: none; z-index: 5; animation: poke .6s ease-in-out infinite alternate; }   /* the hand cursor, pointing up at SOUND ON */
+  .finger.gone { display: none; }
+  @keyframes poke { from { transform: translateY(8px); } to { transform: translateY(0); } }
+  @media (prefers-reduced-motion: reduce) { .finger { animation: none; } }
+  .bar .t { margin-right: 0; }
   .note { color: var(--dim); margin-top: 12px; font-size: 12px; }
   .note b { color: var(--txt); font-weight: 600; }
   #msg { color: var(--dim); font-size: 12px; min-height: 1.2em; }
@@ -41,39 +61,42 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="bar">
-    <span class="t">SYRUP</span>
-    <button class="b" id="snd">SOUND ON</button>
-    <button class="b" id="midi">MIDI</button>
-    <button class="b" id="dpadmode">D-PAD</button>
-    <button class="b" id="full">FULL</button>
-  </div>
-  <div id="msg">Loading…</div>
-  <div class="screens">
-    <canvas id="top" width="400" height="240"></canvas>
-    <canvas id="bot" width="320" height="240"></canvas>
-  </div>
-  <div class="shoulders"><button class="b" data-k="512">L</button><button class="b" data-k="256">R</button></div>
-  <div class="pad">
-    <div class="cluster" id="left">
-      <div class="stick" id="stick"><div class="nub" id="nub"></div></div>
-      <button class="k sq" data-k="64" style="left:calc(50% - 23px);top:0">▲</button>
-      <button class="k sq" data-k="128" style="left:calc(50% - 23px);bottom:0">▼</button>
-      <button class="k sq" data-k="32" style="left:calc(50% - 75px);top:52px">◀</button>
-      <button class="k sq" data-k="16" style="left:calc(50% + 29px);top:52px">▶</button>
+  <div class="g">
+    <div class="top" style="grid-area:bar">
+      <div class="bar">
+        <span class="t">SYRUP</span>
+        
+        <span class="sndw"><button class="b" id="snd">SOUND ON</button><svg class="finger" id="finger" width="54" height="57" viewBox="0 0 54 57" shape-rendering="crispEdges" aria-hidden="true"><rect x="18" y="0" width="3" height="3" fill="#55ffff"/><rect x="21" y="0" width="3" height="3" fill="#55ffff"/><rect x="15" y="3" width="3" height="3" fill="#55ffff"/><rect x="18" y="3" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="3" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="3" width="3" height="3" fill="#55ffff"/><rect x="15" y="6" width="3" height="3" fill="#55ffff"/><rect x="18" y="6" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="6" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="6" width="3" height="3" fill="#55ffff"/><rect x="15" y="9" width="3" height="3" fill="#55ffff"/><rect x="18" y="9" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="9" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="9" width="3" height="3" fill="#55ffff"/><rect x="15" y="12" width="3" height="3" fill="#55ffff"/><rect x="18" y="12" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="12" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="12" width="3" height="3" fill="#55ffff"/><rect x="27" y="12" width="3" height="3" fill="#55ffff"/><rect x="30" y="12" width="3" height="3" fill="#55ffff"/><rect x="15" y="15" width="3" height="3" fill="#55ffff"/><rect x="18" y="15" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="15" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="15" width="3" height="3" fill="#55ffff"/><rect x="27" y="15" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="15" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="15" width="3" height="3" fill="#55ffff"/><rect x="36" y="15" width="3" height="3" fill="#55ffff"/><rect x="39" y="15" width="3" height="3" fill="#55ffff"/><rect x="15" y="18" width="3" height="3" fill="#55ffff"/><rect x="18" y="18" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="18" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="18" width="3" height="3" fill="#55ffff"/><rect x="27" y="18" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="18" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="18" width="3" height="3" fill="#55ffff"/><rect x="36" y="18" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="18" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="18" width="3" height="3" fill="#55ffff"/><rect x="45" y="18" width="3" height="3" fill="#55ffff"/><rect x="48" y="18" width="3" height="3" fill="#55ffff"/><rect x="15" y="21" width="3" height="3" fill="#55ffff"/><rect x="18" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="21" width="3" height="3" fill="#55ffff"/><rect x="27" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="21" width="3" height="3" fill="#55ffff"/><rect x="36" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="21" width="3" height="3" fill="#55ffff"/><rect x="45" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="21" width="3" height="3" fill="#55ffff"/><rect x="6" y="24" width="3" height="3" fill="#55ffff"/><rect x="9" y="24" width="3" height="3" fill="#55ffff"/><rect x="15" y="24" width="3" height="3" fill="#55ffff"/><rect x="18" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="24" width="3" height="3" fill="#55ffff"/><rect x="27" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="24" width="3" height="3" fill="#55ffff"/><rect x="36" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="24" width="3" height="3" fill="#55ffff"/><rect x="45" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="24" width="3" height="3" fill="#55ffff"/><rect x="3" y="27" width="3" height="3" fill="#55ffff"/><rect x="6" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="9" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="12" y="27" width="3" height="3" fill="#55ffff"/><rect x="15" y="27" width="3" height="3" fill="#55ffff"/><rect x="18" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="27" width="3" height="3" fill="#55ffff"/><rect x="27" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="27" width="3" height="3" fill="#55ffff"/><rect x="36" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="27" width="3" height="3" fill="#55ffff"/><rect x="45" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="27" width="3" height="3" fill="#55ffff"/><rect x="3" y="30" width="3" height="3" fill="#55ffff"/><rect x="6" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="9" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="12" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="15" y="30" width="3" height="3" fill="#55ffff"/><rect x="18" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="30" width="3" height="3" fill="#55ffff"/><rect x="6" y="33" width="3" height="3" fill="#55ffff"/><rect x="9" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="12" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="15" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="18" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="33" width="3" height="3" fill="#55ffff"/><rect x="6" y="36" width="3" height="3" fill="#55ffff"/><rect x="9" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="12" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="15" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="18" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="36" width="3" height="3" fill="#55ffff"/><rect x="9" y="39" width="3" height="3" fill="#55ffff"/><rect x="12" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="15" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="18" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="39" width="3" height="3" fill="#55ffff"/><rect x="9" y="42" width="3" height="3" fill="#55ffff"/><rect x="12" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="15" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="18" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="42" width="3" height="3" fill="#55ffff"/><rect x="12" y="45" width="3" height="3" fill="#55ffff"/><rect x="15" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="18" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="45" width="3" height="3" fill="#55ffff"/><rect x="12" y="48" width="3" height="3" fill="#55ffff"/><rect x="15" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="18" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="48" width="3" height="3" fill="#55ffff"/><rect x="15" y="51" width="3" height="3" fill="#55ffff"/><rect x="18" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="51" width="3" height="3" fill="#55ffff"/><rect x="15" y="54" width="3" height="3" fill="#55ffff"/><rect x="18" y="54" width="3" height="3" fill="#55ffff"/><rect x="21" y="54" width="3" height="3" fill="#55ffff"/><rect x="24" y="54" width="3" height="3" fill="#55ffff"/><rect x="27" y="54" width="3" height="3" fill="#55ffff"/><rect x="30" y="54" width="3" height="3" fill="#55ffff"/><rect x="33" y="54" width="3" height="3" fill="#55ffff"/><rect x="36" y="54" width="3" height="3" fill="#55ffff"/><rect x="39" y="54" width="3" height="3" fill="#55ffff"/><rect x="42" y="54" width="3" height="3" fill="#55ffff"/><rect x="45" y="54" width="3" height="3" fill="#55ffff"/></svg></span>
+        <button class="b" id="midi">MIDI</button>
+        <button class="b" id="full">FULL</button>
+      </div>
+      <div id="msg">Loading…</div>
     </div>
-    <div class="cluster">
-      <button class="k" data-k="1024" style="left:calc(50% - 23px);top:0">X</button>
-      <button class="k" data-k="2048" style="left:calc(50% - 75px);top:52px">Y</button>
-      <button class="k" data-k="1" style="left:calc(50% + 29px);top:52px">A</button>
-      <button class="k" data-k="2" style="left:calc(50% - 23px);bottom:0">B</button>
+    <div class="screens" style="grid-area:screens">
+      <canvas id="top" width="400" height="240"></canvas>
+      <canvas id="bot" width="320" height="240"></canvas>
+    </div>
+    <button class="b sh" data-k="512" style="grid-area:shl">L</button>
+    <div class="mid" style="grid-area:mid"><button class="b" data-k="4">SELECT</button><button class="b" data-k="8">START</button></div>
+    <button class="b sh" data-k="256" style="grid-area:shr">R</button>
+    <div class="cluster" style="grid-area:dpad">
+      <button class="k sq" data-k="64" style="left:calc(50% - 20px);top:0">▲</button>
+      <button class="k sq" data-k="128" style="left:calc(50% - 20px);bottom:0">▼</button>
+      <button class="k sq" data-k="32" style="left:calc(50% - 60px);top:calc(50% - 20px)">◀</button>
+      <button class="k sq" data-k="16" style="left:calc(50% + 20px);top:calc(50% - 20px)">▶</button>
+    </div>
+    <div class="cluster" style="grid-area:stick"><div class="stick" id="stick"><div class="nub" id="nub"></div></div></div>
+    <div class="cluster" style="grid-area:abxy">
+      <button class="k" data-k="1024" style="left:calc(50% - 20px);top:0">X</button>
+      <button class="k" data-k="2048" style="left:calc(50% - 60px);top:calc(50% - 20px)">Y</button>
+      <button class="k" data-k="1" style="left:calc(50% + 20px);top:calc(50% - 20px)">A</button>
+      <button class="k" data-k="2" style="left:calc(50% - 20px);bottom:0">B</button>
     </div>
   </div>
-  <div class="mid"><button class="b" data-k="4">SELECT</button><button class="b" data-k="8">START</button></div>
   <div class="note">
-    <b>Both screens</b> take taps: on the top one, tap a setting to pick it and drag sideways to change it. <b>Circle pad</b> on the left (D-PAD switches it to the four arrows).<br>
+    <b>Both screens</b> take taps: on the top one, tap a setting to pick it and drag sideways to change it, or tap a style or patch in the browser.<br>
     Keyboard: arrows = D-pad, <b>I J K L</b> = circle pad, <b>X</b> = A, <b>Z</b> = B, <b>S</b> = X, <b>A</b> = Y, <b>Q / W</b> = L / R, <b>Shift</b> = SELECT, <b>Enter</b> = START.<br>
-    <b>Game controller</b> (Bluetooth or USB): buttons in Nintendo positions, left stick = circle pad, bumpers / triggers = L / R. <b>MIDI</b> plays it from a controller (Chrome / Edge on a computer, or the Web MIDI Browser app on iPhone). Your sounds and drum grid are kept in this browser.
+    <b>Game controller</b> (Bluetooth or USB): buttons in Nintendo positions, left stick = circle pad, bumpers / triggers = L / R. <b>MIDI</b> plays it from a controller (Chrome / Edge on a computer, or the Web MIDI Browser app on iPhone). Your sounds and drum grid are kept in this browser. Turn the phone sideways for the wide layout.
   </div>
 </div>
 <script>
@@ -126,12 +149,7 @@ topc.addEventListener('pointerdown', function (e) { e.preventDefault(); topc.set
 topc.addEventListener('pointermove', function (e) { if (TT) topAt(e, 1); });
 ['pointerup', 'pointercancel'].forEach(function (t) { topc.addEventListener(t, function (e) { TT = 0; topAt(e, 0); }); });
 // ---- the circle pad (or a D-pad, for the arrows)
-var stick = document.getElementById('stick'), nub = document.getElementById('nub'), dpadMode = false;
-document.querySelectorAll('#left .k').forEach(function (b) { b.style.display = 'none'; });
-document.getElementById('dpadmode').onclick = function () {
-  dpadMode = !dpadMode; this.classList.toggle('on', dpadMode); stick.style.display = dpadMode ? 'none' : '';
-  document.querySelectorAll('#left .k').forEach(function (b) { b.style.display = dpadMode ? '' : 'none'; });
-};
+var stick = document.getElementById('stick'), nub = document.getElementById('nub');
 function stickAt(e) { var r = stick.getBoundingClientRect(), dx = (e.clientX - r.left - r.width / 2) / (r.width / 2), dy = (e.clientY - r.top - r.height / 2) / (r.height / 2);
   var m = Math.hypot(dx, dy); if (m > 1) { dx /= m; dy /= m; }
   nub.style.transform = 'translate(' + dx * 34 + 'px,' + dy * 34 + 'px)'; CX = Math.round(dx * 150); CY = Math.round(-dy * 150); send(); }
@@ -159,7 +177,7 @@ document.getElementById('snd').onclick = function () {
     var used = Math.min(Math.floor(phase), avail); Module._web_audio_consume(used); phase -= used;
   };
   node.connect(actx.destination); actx.resume(); Module._web_audio_on(1);
-  this.textContent = 'SOUND OFF'; this.classList.add('on'); msg.textContent = '';
+  this.textContent = 'SOUND OFF'; this.classList.add('on'); msg.textContent = ''; document.getElementById('finger').classList.add('gone');
 };
 // ---- full screen: the Fullscreen API where there is one; on iPhone, Share > Add to Home Screen (no Safari bars)
 document.getElementById('full').onclick = function () {
