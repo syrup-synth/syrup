@@ -4091,7 +4091,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			if (cur) { rect(87, y - 2, 110, 11, HI); text(90, y, nm, 1, HITXT); }
 			else text(90, y, nm, 1, TXT);
 		}
-		char cnt[40]; snprintf(cnt, sizeof(cnt), "%d PATCHES%s", presetCount(gStyle), gEdited ? "  * EDITED" : "  BUILD " BUILD_STR); text(10, 212, cnt, 1, gEdited ? VAL : DIM);
+		char cnt[40]; snprintf(cnt, sizeof(cnt), "%d PATCHES%s", presetCount(gStyle), gEdited ? " *" : ""); text(10, 212, cnt, 1, gEdited ? VAL : DIM);   /* (the build number is on the start screen and in HELP) */
 	} else if (page == 7) {   // scale / arp / sequencer
 		char s[40];
 		frame(4, 30, 196, 194);
@@ -4164,14 +4164,14 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		text(212, 52, gPatchName, sc, VAL);
 		char s2[40]; snprintf(s2, sizeof(s2), "%s  %d / %d", STYLE_NAMES[gStyleCur], gPresetCur + 1, presetCount(gStyleCur));
 		text(212, 76, s2, 1, TXT);
-		if (gEdited) text(212, 88, "* EDITED - SAVE KEEPS IT", 1, WARN);
+		if (gEdited) text(212, 88, "* EDITED (SAVE IT?)", 1, WARN);
 		rect(208, 104, 186, 1, LINE);
 		text(212, 112, "TAP A PATCH BELOW", 1, TXT);
 		text(212, 126, "TAP A STYLE TO SEE IT", 1, TXT);
 		text(212, 140, "SAVE TWICE: KEEP IT", 1, TXT);
-		text(212, 162, "LEFT AN EDIT BY MISTAKE?", 1, DIM);
-		text(212, 176, "SELECT + L UNDOES IT.", 1, DIM);
-		text(212, 192, "D-PAD: < > STYLE ^ v PATCH", 1, DIM);
+		text(212, 162, "UNDO A PATCH CHANGE:", 1, DIM);
+		text(212, 176, "SELECT + L", 1, DIM);
+		text(212, 192, "D-PAD WORKS TOO", 1, DIM);
 		drawFooter(page, sel);
 		if (!visActive(page)) scanlines();
 		return;
@@ -8533,15 +8533,15 @@ static void drawMasterPanel(void) {
 	float cpu = gFxTicks / (268111856.0f * 160 / DSPRATE) * 100;
 	snprintf(s, sizeof(s), "FX CPU %d%%", (int)(cpu + 0.5f)); text(10, 186, s, 1, DIM);
 	rect(10, 198, 184, 6, RGB3(TH->pad)); rect(10, 198, (int)(184 * (cpu > 100 ? 1 : cpu / 100)), 6, cpu > 60 ? TH->warn[0] : TH->txt[0], cpu > 60 ? TH->warn[1] : TH->txt[1], cpu > 60 ? TH->warn[2] : TH->txt[2]);
-	text(10, 210, "SUB, DRUMS, TAPE STAY DRY", 1, DIM);
+	text(10, 210, "SUB / DRUMS / TAPE: DRY", 1, DIM);
 }
 static void drawDrumsPanel(void) {   // the top screen: what's playing and how to drive the grid (the sequencer itself is below)
 	frame(4, 30, 196, 194);
 	char s[40]; snprintf(s, sizeof(s), "%s KIT  %d BPM  %s", KIT_NAMES[gKit], gBPM, gDrums ? "ON" : "OFF"); text(10, 36, s, 1, gDrums ? TH->val[0] : TH->dim[0], gDrums ? TH->val[1] : TH->dim[1], gDrums ? TH->val[2] : TH->dim[2]);
 	int r = gDgSel; snprintf(s, sizeof(s), "%s: %s, %d STEPS", kitPadName(DG_DRUM[r]), DRATE_NAMES[gDrRate[r]], gDrLen[r]); text(10, 52, s, 1, TXT);
 	if (gSwing > 0.01f) { snprintf(s, sizeof(s), "SWING %d%%", (int)(gSwing * 100 + 0.5f)); text(10, 64, s, 1, DIM); }
-	static const char* G[] = {"THE GRID IS ON THE BOTTOM SCREEN", "(HERE, OR SEQ > DRUM)", "", "TAP: A STEP ON / OFF, DRAG TO PAINT", "HOLD A STEP: VEL, RATCHET, IF", "HOLD A NAME: ITS SOUND, RATE,", "  LENGTH AND EUCLID", "BEAT: A WHOLE RHYTHM PER TAP", "CLR THEN A NAME: CLEAR A ROW", "FILL (HOLD): FILL / !FILL STEPS"};
-	for (int i = 0; i < (int)(sizeof(G) / sizeof(G[0])); i++) text(10, 84 + i * 12, G[i], 1, i < 2 ? TH->val[0] : TH->dim[0], i < 2 ? TH->val[1] : TH->dim[1], i < 2 ? TH->val[2] : TH->dim[2]);
+	static const char* G[] = {"GRID: BOTTOM SCREEN", "(HERE OR SEQ > DRUM)", "TAP STEP: ON / OFF", "DRAG: PAINT, UP/DOWN", "  = VELOCITY", "HOLD STEP: VEL,", "  RATCHET, IF", "HOLD NAME: SOUND,", "  RATE, LEN, EUCLID", "BEAT: NEXT RHYTHM", "CLR+NAME: CLEAR ROW", "FILL (HOLD): FILLS"};   // 23 characters fit the panel
+	for (int i = 0; i < (int)(sizeof(G) / sizeof(G[0])); i++) text(10, 78 + i * 10, G[i], 1, i < 2 ? TH->val[0] : TH->dim[0], i < 2 ? TH->val[1] : TH->dim[1], i < 2 ? TH->val[2] : TH->dim[2]);
 	text(10, 210, gSeqPlaying ? "FOLLOWING THE SEQUENCER" : "OWN CLOCK (BPM, SWING)", 1, DIM);
 }
 
