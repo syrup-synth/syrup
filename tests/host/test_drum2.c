@@ -89,6 +89,13 @@ static void SCRIPT(int fr) {
 	if (fr == 2103) { if (!gMyDrum[1][6]) fail("SEQ DRUMS: a tap on the grid in the sequencer should set the step");
 		fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320; drawGrid(); shotBot("shots/seq_drums.ppm");
 		gridButtons(4 * 320 / GRID_BTNS + 5); if (gPatView != 0) fail("SEQ DRUMS: NOTES should go back to the piano roll"); }
+	// VELOCITY: drag a lit step down = softer (the step stays on); on the piano roll a note dragged down too
+	if (fr == 2105) { gDrumOnB = 0; only(1, 2, 0, 0); gMyDrum[1][2] = 230; gDgShift = 0; int cx = DG_LX + (int)(2.5f * (320 - DG_LX - 2) / 16.0f), cy = DG_TOP + DG_RH + 5;
+		drumGridTouch(cx, cy, 1); drumGridTouch(cx, cy + 20, 0); drumGridTouch(cx, cy + 40, 0); drumGridRelease();
+		if (!gMyDrum[1][2] || gMyDrum[1][2] > 160) fail("VELOCITY: dragging a hit down should soften it, not remove it (%d)", gMyDrum[1][2]);
+		memset(gSeq, 0, sizeof gSeq); gVoiceMode = 0; gRollLow = 48; stepSetNote(3, 50, 1); gSeq[3].vel = 200; gPatView = 0; gStepEd = -1;
+		int x = rollX(3) + 3, y = rollY(50) + 4; gridTouch(x, y, 1, 0); gridTouch(x, y + 15, 0, 0); gridTouch(x, y + 30, 0, 0); gridTouch(x, y + 30, 0, 1);
+		if (gSeq[3].vel >= 200 || !stepHasNote(3, 50)) fail("VELOCITY: dragging a note down should soften it and keep its pitch (vel %d)", gSeq[3].vel); }
 	if (fr == 2104) { fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320; splashDraw(); shotBot("shots/loading_tip.ppm"); }
 }
-int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 2108; app_main(); printf("drum2: ratchets, conditions, row rate / length, sound editor, holds, beats\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 2110; app_main(); printf("drum2: ratchets, conditions, row rate / length, sound editor, holds, beats\n"); return gFails ? 1 : 0; }

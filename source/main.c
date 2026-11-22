@@ -4703,6 +4703,7 @@ static void audition(int nt) { if (!gSeqPlaying) { playSet(&nt, 1, 0.8f); gAudit
 // tap empty = a note, tap a note = gone, drag a new note or a note's tail = length, drag a note's head (or up / down) = move it,
 // hold = step editor; the keys scroll
 static int gGtSt = -1, gGtNote = 0, gGtHit = -1, gGtDrag = 0, gGtLong = 0, gGtKeys = 0, gGtY0 = 0, gGtLow0 = 0; static u64 gGtT0;
+static int gGtX0 = 0, gGtVel = 0, gGtV0 = 0;   // drag up / down on a note: its VELOCITY
 static int gGtMove = 0, gMvSt = -1, gMvNt = 0, gMvLen = 1, gMvSt0 = 0, gMvNt0 = 0;   // dragging a note to a new step / pitch
 static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (gStepEd >= 0 && gPatView != 3 && !(press && y < XY_Y + 15)) return stepEdTouch(x, y, press, release);
@@ -4731,7 +4732,7 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	int st = (int)((x - ROLL_KW) / ROLL_CW), row = ROLL_ROWS - 1 - (y - ROLL_TOP) / ROLL_RH, nt = rollNote(row);
 	int ok = x >= ROLL_KW && st >= 0 && st < NSTEP && y >= ROLL_TOP && row >= 0 && row < ROLL_ROWS && nt >= 0;
 	if (press) {
-		gGtKeys = x < ROLL_KW && y >= ROLL_TOP; gGtY0 = y; gGtLow0 = gRollLow; gGtDrag = 0; gGtLong = 0; gGtT0 = svcGetSystemTick();
+		gGtKeys = x < ROLL_KW && y >= ROLL_TOP; gGtY0 = y; gGtX0 = x; gGtVel = 0; gGtLow0 = gRollLow; gGtDrag = 0; gGtLong = 0; gGtT0 = svcGetSystemTick();
 		if (gGtKeys) { if (row >= 0 && row < ROLL_ROWS && nt >= 0) audition(nt); gGtSt = -1; return 0; }
 		gGtSt = ok ? st : -1; gGtNote = nt; gGtHit = ok ? noteCover(st, nt, NULL) : -1; gGtMove = 0;
 		return 0;
@@ -4751,6 +4752,15 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 		if (gGtHit >= 0) { undoMark(); stepSetNote(gGtHit, gGtNote, 0); return 1; }   // tap a note: gone
 		if (gSeq[s0].n >= 4) { say("4 NOTES PER STEP"); return 0; }
 		undoMark(); stepSetNote(s0, gGtNote, 1); gTapNote = gGtNote; audition(gGtNote); return 1;
+	}
+	if (!gGtLong && gGtHit >= 0 && !gGtDrag) {   // first move on a note straight up or down: its VELOCITY (down = softer)
+		int dx = x - gGtX0, dy = y - gGtY0;
+		if (abs(dy) > 8 && abs(dy) > abs(dx) * 2) { gGtDrag = 1; gGtVel = 1; undoMark(); gGtV0 = gSeq[gGtHit].vel ? gSeq[gGtHit].vel : 190; }
+	}
+	if (gGtVel && gGtHit >= 0) {
+		int v = gGtV0 - (y - gGtY0) * 2; v = v < 8 ? 8 : v > 255 ? 255 : v;
+		if (gSeq[gGtHit].vel != v) { gSeq[gGtHit].vel = (u8)v; char m[24]; snprintf(m, sizeof(m), "VELOCITY %d", v * 127 / 255); say(m); return 1; }
+		return 0;
 	}
 	if (!gGtLong && ok && gGtHit >= 0 && !gGtDrag && (st != gGtSt || nt != gGtNote)) {   // first move on a note: move it, or stretch it?
 		int k0 = 0; noteCover(gGtSt, gGtNote, &k0); int L = noteLen(&gSeq[gGtHit], k0);
@@ -8382,10 +8392,19 @@ static void drumSnapGet(u8* o) { myDrumLoad(); memcpy(o, gMyDrum, 48); memcpy(o 
 static void drumSnapSet(const u8* in) { memcpy(gMyDrum, in, 48); memcpy(gDrumX, in + 48, 112); int p[3]; memcpy(p, in + 160, 12); gKickPat = p[0]; gSnarePat = p[1]; gHatPat = p[2];
 	memcpy(gDrRat, in + 172, 160); memcpy(gDrCond, in + 332, 160); memcpy(gDrRate, in + 492, 10); memcpy(gDrLen, in + 502, 10); gDrumSaveDue = 1; }
 static void drumGridMark(void) { static HistE e; histSnap(&e, 2, 0); histPush(gUndoH, &gUndoN, &e); gRedoN = 0; histFlags(); }
-static int gHoldR = -1, gHoldI = -1, gHoldOff = 0, gHoldMoved = 0; static u64 gHoldT = 0;   // a press waiting to become a HOLD
+static int gHoldR = -1, gHoldI = -1, gHoldOff = 0, gHoldMoved = 0, gHoldX0 = 0, gHoldY0 = 0, gHoldVel = 0, gHoldV0 = 0; static u64 gHoldT = 0;   // a press waiting to become a HOLD
 static int drumGridTouch(int x, int y, int press) {   // 1 = redraw
 	static int paint = -1;
 	if (gDgEd) return dgEdTouch(x, y, press);
+	if (!press && gHoldR >= 0 && gHoldI >= 0 && gHoldOff && !gHoldVel) {   // a lit step, dragged straight up or down: its VELOCITY
+		int dx = x - gHoldX0, dy = y - gHoldY0;
+		if (abs(dy) > 8 && abs(dy) > abs(dx) * 2) { gHoldVel = 1; gHoldOff = 0; int rr = gHoldR; gHoldV0 = rr < 3 ? gMyDrum[rr][gHoldI] : gDrumX[rr - 3][gHoldI]; }
+	}
+	if (gHoldVel && gHoldR >= 0) {
+		int v = gHoldV0 - (y - gHoldY0) * 2; v = v < 8 ? 8 : v > 255 ? 255 : v; u8* vp = gHoldR < 3 ? &gMyDrum[gHoldR][gHoldI] : &gDrumX[gHoldR - 3][gHoldI];
+		if (*vp != v) { *vp = (u8)v; gDrumSaveDue = 1; char m[24]; snprintf(m, sizeof(m), "VELOCITY %d", v * 127 / 255); say(m); return 1; }
+		return 0;
+	}
 	if (y < DG_TOP) {
 		if (x >= 270) { if (!gDrFill) { gDrFill = 1; return 1; } return 0; }   // FILL: while held
 		if (!press) return 0;
@@ -8417,14 +8436,14 @@ static int drumGridTouch(int x, int y, int press) {   // 1 = redraw
 	int i = (int)((x - DG_LX) / ((320 - DG_LX - 2) / 16.0f)); if (i < 0 || i > 15) return 0;
 	if (press) gDrumClrArm = 0;   // painting steps: CLR is off again
 	if (press) {   // an empty step goes on now; a lit one waits: let go = off, hold = its editor, drag = paint off along the row
-		drumGridMark(); gHoldR = r; gHoldI = i; gHoldT = osGetTime(); gHoldMoved = 0;
+		drumGridMark(); gHoldR = r; gHoldI = i; gHoldT = osGetTime(); gHoldMoved = 0; gHoldX0 = x; gHoldY0 = y; gHoldVel = 0;
 		if (drumCellOn(r, i)) { gHoldOff = 1; paint = -1; } else { gHoldOff = 0; paint = 1; drumCellSet(r, i, 1); }
 		return 1;
 	}
 	if (gHoldR >= 0 && gHoldI >= 0 && (r != gHoldR || i != gHoldI)) {   // moved off: it's a drag
 		gHoldMoved = 1; if (gHoldOff) { drumCellSet(gHoldR, gHoldI, 0); paint = 0; gHoldOff = 0; } gHoldR = -1;
 	}
-	if (gHoldR >= 0 && gHoldI >= 0 && !gHoldMoved && osGetTime() - gHoldT > 450) {   // HOLD: the step's editor
+	if (gHoldR >= 0 && gHoldI >= 0 && !gHoldMoved && !gHoldVel && osGetTime() - gHoldT > 450) {   // HOLD: the step's editor
 		if (!drumCellOn(gHoldR, gHoldI)) drumCellSet(gHoldR, gHoldI, 1);
 		gDgEd = 1; gDgEdR = gHoldR; gDgEdI = gHoldI; gHoldR = -1; gHoldOff = 0; paint = -1; gDgDrag = -1; return 1;
 	}
@@ -8436,7 +8455,7 @@ static int drumGridRelease(void) {   // the stylus came up
 	if (gDrFill) { gDrFill = 0; d = 1; }
 	if (gDgEd) return dgEdRelease() | d;
 	if (gHoldR >= 0 && gHoldI >= 0 && gHoldOff) { drumCellSet(gHoldR, gHoldI, 0); d = 1; }   // a quick tap on a lit step: off
-	gHoldR = -1; gHoldOff = 0;
+	gHoldR = -1; gHoldOff = 0; gHoldVel = 0;
 	return d;
 }
 static void drumTapTick(float dt) {   // main thread (inside the voice lock), 60 times a second
