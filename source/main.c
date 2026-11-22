@@ -4233,7 +4233,9 @@ static void drawStepEd(void);
 // Hold a cell: the step editor. Drag the keys up / down to scroll; OCT- / OCT+ jump an octave.
 #define ROLL_KW 24
 #define ROLL_TOP (XY_Y + 16)
-#define ROLL_RH 16
+#define ROLL_RH 13
+#define VEL_Y (ROLL_TOP + ROLL_ROWS * ROLL_RH + 3)   // the velocity lane under the roll: a bar per step, drag to set
+#define VEL_H (238 - VEL_Y)
 #define ROLL_ROWS 12   // one octave on screen, taller rows (the keys drag to scroll; L / R jump an octave)
 #define ROLL_CW ((320 - ROLL_KW) / (float)NSTEP)
 static int gRollLow = 45;   // lowest pitch on screen
@@ -4302,6 +4304,15 @@ static void drawGrid(void) {
 	}
 	if (above) { int x = 312; rectP(x, ROLL_TOP + 1, 5, 2, TH->warn); rectP(x + 1, ROLL_TOP, 3, 1, TH->warn); }   // more notes up there
 	if (below) { int x = 312, y = ROLL_TOP + ROLL_ROWS * ROLL_RH - 4; rectP(x, y, 5, 2, TH->warn); rectP(x + 1, y + 2, 3, 1, TH->warn); }
+	{   // VELOCITY: one straight bar per step (drag up / down across the lane)
+		rectP(0, VEL_Y - 2, 320, 240 - VEL_Y + 2, TH->bg);
+		text(2, VEL_Y + VEL_H / 2 - 4, "VEL", 1, RGB3(TH->dim));
+		for (int st = 0; st < NSTEP; st++) {
+			int x = rollX(st) + 1, w = (int)ROLL_CW - 2, has = gSeq[st].n > 0, h = has ? (VEL_H - 2) * gSeq[st].vel / 255 : 0;
+			rectP(x, VEL_Y, w, VEL_H, st < gSeqLen ? TH->pad : TH->bg);
+			if (has) rectP(x, VEL_Y + VEL_H - h, w, h, gSeqPlaying && gSeqPos == st ? TH->keyOn : TH->val);
+		}
+	}
 }
 // pattern + song view (PAT button): 16 patterns, COPY / CLEAR, and a song chain of up to 32 patterns
 #define PV_Y (XY_Y + 18)
@@ -4555,6 +4566,16 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (press && y < XY_Y + 15) { gridButtons(x); return 1; }
 	if (gPatView == 2) return tapeTouch(x, y, press, release);
 	if (gPatView) { if (press) patViewTouch(x, y); return press; }
+	if (y >= VEL_Y - 2 && x >= ROLL_KW && !gGtKeys && (press || gGtSt == -2)) {   // the velocity lane
+		int st = (int)((x - ROLL_KW) / ROLL_CW); if (st < 0 || st >= NSTEP) return 0;
+		if (press) { undoMark(); gGtSt = -2; }
+		if (release) { gGtSt = -1; return 0; }
+		if (!gSeq[st].n) return 0;
+		int v = (VEL_Y + VEL_H - y) * 255 / (VEL_H - 2); v = v < 10 ? 10 : v > 255 ? 255 : v;
+		if (gSeq[st].vel != v) { gSeq[st].vel = (u8)v; return 1; }
+		return 0;
+	}
+	if (gGtSt == -2) { if (release) gGtSt = -1; return 0; }
 	int st = (int)((x - ROLL_KW) / ROLL_CW), row = ROLL_ROWS - 1 - (y - ROLL_TOP) / ROLL_RH, nt = gRollLow + row;
 	int ok = x >= ROLL_KW && st >= 0 && st < NSTEP && y >= ROLL_TOP && row >= 0 && row < ROLL_ROWS;
 	if (press) {

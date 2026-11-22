@@ -49,6 +49,10 @@ static void SCRIPT(int fr) {
 		memset(gSeq, 0, sizeof(gSeq)); stepSetNote(5, 60, 1);
 		gridTouch(rollX(5) + 3, rollY(60) + 5, 1, 0); gridTouch(rollX(8) + 3, rollY(60) + 5, 0, 0); gridTouch(rollX(8) + 3, rollY(60) + 5, 0, 1);
 		if (!(gSeq[5].n == 1 && gSeq[5].len[0] == 4)) fail("ROLL: dragging a 1-step note along its row should stretch it (len %d)", gSeq[5].len[0]);
+		gSeq[5].vel = 190; gridTouch(rollX(5) + 3, VEL_Y + VEL_H - 5, 1, 0); gridTouch(rollX(5) + 3, VEL_Y + VEL_H - 5, 0, 1);
+		if (gSeq[5].vel > 60) fail("VEL lane: a touch near its bottom should make the step soft (%d)", gSeq[5].vel);
+		gridTouch(rollX(5) + 3, VEL_Y + 2, 1, 0); gridTouch(rollX(5) + 3, VEL_Y + 2, 0, 1);
+		if (gSeq[5].vel < 230) fail("VEL lane: near its top should be loud (%d)", gSeq[5].vel);
 	}
 	// TRANCE GATE: a held note gets chopped on the 16ths
 	{ static int g0; if (fr == 68) { gGatePat = 1; gGateDepth = 1; gGateRate = 0; gBPM = 120; midiPush(0x90, 57, 110); g0 = ON; }
