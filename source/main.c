@@ -474,8 +474,8 @@ static const char* CURVE_NAMES[4] = {"LINEAR", "EXP", "LOG", "S-CURVE"};
 static float gTiltX, gTiltY, gMicEnv, gTwist, gShake, gShakeD, gCamLight, gCamColor;
 static float gSpinX, gSpinY, gMicBright, gCamMove;   // gyro pitch/roll speed, voice brightness ("ss" vs "oo"), how much the picture changes
 static int gHeadphones;   // (0 until the first check)
-enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_FXMIX, DST_COUNT };
-static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF", "FX MIX"};   // VOLUME: when routed, the source IS the loudness (breath control)
+enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_FXMIX, DST_GRPOS, DST_COUNT };
+static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF", "FX MIX", "GRAIN POS"};   // GRAIN POS: an LFO sweeps where the grains read   // VOLUME: when routed, the source IS the loudness (breath control)
 static const char* VOICE_MODES[9] = {"POLY", "MONO", "LEGATO", "808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT", "PERC KIT", "WAVE KIT"};   // KIT: keys play the drum kit
 static const char* FX_NAMES[4] = {"OFF", "ECHO", "SPACE", "REVERB"};
 static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
@@ -2724,6 +2724,10 @@ static void m_liquidsync(SPatch* p) { p->master = 0.55f; OA.table = T_SYNC; OA.w
 static void m_drawndance(SPatch* p) { static const s8 M[8] = {0, 7, 12, 7, 3, 7, 10, 15}; p->master = 0.55f; OA.table = T_PWM; OA.pos = 0.4f; ENV1(0.002f, 0, 0.3f, 0.8f, 0.15f);
 	dshape(p, 0, 2, M); p->dlSync[0] = LY_HALF; MOD(2, SRC_LFO3, DST_PITCH, 1.0f); dshape(p, 1, 3, NULL); p->dlSync[1] = LY_HALF + 1; MOD(3, SRC_LFO4, DST_AMP, 0.5f);
 	lane(p, 0, 0, 2, 0.1f, 0.9f, 2); OUTF(OF_L24, 0.65f, 0.3f, 0.3f, 0); DLYS(0.25f, S8D, DL_PING); REVB(0.2f, RV_PLATE); }
+static void s_grainscan(SPatch* p) {   // the GRAINSCAN oscillator: grains of OSC A's table, pitched to the key, the read point
+	// walking forward (SCAN) while LFO 1 sweeps it (matrix -> GRAIN POS). OSC A itself is silent: only grains.
+	p->master = 0.7f; OA.table = T_VOWELS; OA.level = 0.0f; GRN(0.3f, 0.62f, 0.15f, 0, 1.0f); ENV1(0.05f, 0, 1.0f, 0.9f, 0.9f);
+	LFO(0, LS_SINE, 0, 0.15f); MOD(2, SRC_LFO1, DST_GRPOS, 0.6f); REVB(0.3f, RV_HALL); DLYS(0.18f, S8D, DL_PING); }
 static void m_graintide(SPatch* p) { p->master = 0.65f; OA.table = T_HARMONIX; OA.level = 0.25f; GRN(0.45f, 0.5f, 0.35f, 0, 0.9f); ENV1(0.3f, 0, 1.0f, 0.9f, 1.5f);
 	lane(p, 0, 11, 2, 0.0f, 1.0f, 3); lane(p, 1, 0, 3, 0.2f, 0.9f, 2); lane(p, 2, 10, 6, 0.15f, 0.5f, 3); ORBIT(0.5f, 0.1f); REVB(0.3f, RV_HALL); }
 
@@ -2954,7 +2958,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"GB WAVE", h_gbwave}, {"NES PULSE", h_nes}, {"C64 PWM", h_c64}, {"ARCADE ARP", h_arcade}, {"POWER UP", h_powerup}, {"LASER", h_laser},
 	 {"8-BIT BASS", h_bass8}, {"BIT ORGAN", h_bitorgan}, {"SQUARE CHOIR", h_squarechoir}, {"4-BIT GB", h_gb4}, {"CHIP SWEEP", h_chipsweep}, {"FILTER DRUMS", h_filtdrums}, {"OTT CHIP BASS", h_ottbass}},
 	{{"ORBIT PAD", s_orbitpad}, {"HELICOPTER", s_heli}, {"CIRCLE ARP", s_circlearp}, {"AROUND YOU", s_aroundyou}, {"3D BELLS", s_bells}, {"SPIRAL PLUCK", s_spiral},
-	 {"PASSING CAR", s_passing}, {"STEER ORBIT", s_tilt}, {"BREATH PAD", s_breathpad}},
+	 {"PASSING CAR", s_passing}, {"STEER ORBIT", s_tilt}, {"BREATH PAD", s_breathpad}, {"GRAINSCAN", s_grainscan}},
 	{{"PSG STACK", c_psgstack}, {"ECHO CANYON", c_canyon}, {"CRUSH BELL", c_crushbell}, {"8-BIT CHOIR", c_choir8}, {"CAPTURE DUB", c_capturedub},
 	 {"TWO CHIPS", c_twochips}, {"QUANT GRIT", c_quantgrit}, {"GB ORBIT", c_gborbit}, {"DOUBLE ECHO", c_doubleecho}, {"SUB CHIP", c_subchip},
 	 {"SCREAM LEAD", c_screamlead}, {"RAW SAMPLER", c_rawsampler}, {"HOT ORGAN", c_hotorgan}, {"GLITCH STORM", c_glitchstorm}, {"PITCH CANYON", c_pitchcanyon}},
@@ -6445,7 +6449,8 @@ static void grainsTick(void) {   // main thread, every frame
 		} else gGrPos += len * 0.5f * (gGrainScan * 2 - 1);   // SCAN: 50% = frozen, above = forwards, below = backwards
 		while (gGrPos < 0) gGrPos += L;
 		while (gGrPos >= L) gGrPos -= L;
-		int st = (int)gGrPos + (int)((rand() % 1000 / 1000.0f - 0.5f) * gGrainSpray * gGrSrcRate);
+		float gm = modSum(DST_GRPOS, (SVoice*)newestVoice());   // GRAIN POS in the matrix: an LFO (or anything) sweeps the read point, +-half the source
+		int st = (int)gGrPos + (int)(gm * 0.5f * L) + (int)((rand() % 1000 / 1000.0f - 0.5f) * gGrainSpray * gGrSrcRate);
 		st %= L; if (st < 0) st += L;
 		for (int i = 0; i < len; i++) {   // Hann window
 			float w = 0.5f - 0.5f * cosf(TWO_PI * i / len);
