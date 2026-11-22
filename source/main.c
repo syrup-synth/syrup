@@ -5228,8 +5228,9 @@ static int chainTouch(int x, int y, int press, int release) {   // 1 = redraw
 }
 static u16* gCamImg; static int gCamOn;   // (camera, further down)
 // ---- bottom views for pages that only had the XY pad: KNOBS (XY PAD mode), VISUALIZER tiles, HARDWARE sensors
-static int gVisOnB = 0, gHwOnB = 0;
-static int xyShown(void) { return !gPads && !gModOn && !gGridOn && !gAddEdit && !gShapeOn && !gChainOn && !gVisOnB && !gHwOnB; }
+static int gVisOnB = 0, gHwOnB = 0, gDrumOnB = 0;   // VIS / HW / DRUMS pages: their own view where the XY pad goes
+static void drawDrumGrid(void);
+static int xyShown(void) { return !gPads && !gModOn && !gGridOn && !gAddEdit && !gShapeOn && !gChainOn && !gVisOnB && !gHwOnB && !gDrumOnB; }
 // XY PAD modes: what the two axes move, and the matrix destination that can push them (for the ghost)
 static void xyAxes(float** xp, float** yp, int* xd, int* yd) {
 	switch (gXyMode) {
@@ -5473,6 +5474,7 @@ static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	if (gShapeOn && !gGridOn && !gAddEdit) drawShapeEditor();
 	if (gChainOn && !gGridOn && !gAddEdit) drawChainView();
 	if (gVisOnB && !gGridOn && !gAddEdit) drawVisTiles();
+	if (gDrumOnB && !gGridOn && !gAddEdit) drawDrumGrid();
 	if (gHwOnB && !gGridOn && !gAddEdit) { if (gGrains) drawGrainEd(); else drawHwView(); }
 	if (!gGridOn && !gAddEdit) drawSeqStrip();
 	drawPerfRow(latch);
@@ -7726,6 +7728,68 @@ static void drumRecChanged(void) {
 	if (!gDrums) { gDrums = 1; drumsChanged(); }
 	say("TAP THE 2DS NEAR THE MIC - HARDER = LOUDER");
 }
+// DRUMS page: a step grid where the XY pad goes. KICK / SNARE / HAT x 16 steps. Tap a step: on / off (the row
+// becomes MINE, starting from what it was playing); tap a row's name: its next pattern. The top bar: DRUMS on / off,
+// the kit (tap for the next one).
+#define DG_Y (XY_Y + 2)
+#define DG_LX 46
+#define DG_RH 26
+#define DG_TOP (DG_Y + 16)
+static int gDrumSaveDue = 0;
+static int drumCellOn(int r, int i) {
+	int pat = *DPAT[r];
+	if (pat == MINE_IDX[r]) return gMyDrum[r][i] != 0;
+	return drumRowOn(r, pat, i);
+}
+static void drawDrumGrid(void) {
+	rectP(0, XY_Y, 320, WORK_B - XY_Y, TH->bg);
+	char t[24];
+	snprintf(t, sizeof(t), "DRUMS %s", gDrums ? "ON" : "OFF"); rectP(4, DG_Y, 100, 13, gDrums ? TH->keyOn : TH->tab); { const u8* c = gDrums ? EGA[0] : TH->tabTxt; text(54 - (int)strlen(t) * 4, DG_Y + 3, t, 1, c[0], c[1], c[2]); }
+	snprintf(t, sizeof(t), "KIT %s >", KIT_NAMES[gKit]); rectP(110, DG_Y, 100, 13, TH->tab); text(160 - (int)strlen(t) * 4, DG_Y + 3, t, 1, RGB3(TH->tabTxt));
+	snprintf(t, sizeof(t), "%d BPM", gBPM); text(316 - (int)strlen(t) * 8, DG_Y + 3, t, 1, RGB3(TH->dim));
+	static const char* RN[3] = {"KICK", "SNARE", "HAT"};
+	int play = gSeqPlaying ? (gSeqPos & 15) : (gDrums ? gDrumStep : -1);
+	float cw = (320 - DG_LX - 2) / 16.0f;
+	for (int r = 0; r < 3; r++) {
+		int y = DG_TOP + r * DG_RH;
+		rectP(2, y, DG_LX - 4, DG_RH - 3, TH->tab); text(DG_LX / 2 - (int)strlen(RN[r]) * 4, y + 3, RN[r], 1, RGB3(TH->tabTxt));
+		const char* pn = r == 0 ? KICKP_NAMES[gKickPat] : r == 1 ? SNAREP_NAMES[gSnarePat] : HATP_NAMES[gHatPat];
+		char sh[6]; snprintf(sh, sizeof(sh), "%.5s", pn); text(DG_LX / 2 - (int)strlen(sh) * 4, y + 13, sh, 1, RGB3(TH->dim));
+		for (int i = 0; i < 16; i++) {
+			int x = DG_LX + (int)(i * cw), w = (int)cw - 2, on = drumCellOn(r, i), at = i == play;
+			const u8* c = on ? (at ? TH->keyOn : TH->val) : (at ? TH->line : (i & 3) == 0 ? TH->grid : TH->pad);
+			rectP(x, y, w, DG_RH - 3, c);
+			if (on && *DPAT[r] == MINE_IDX[r] && gMyDrum[r][i] < 200) rectP(x, y, w, (DG_RH - 3) * (255 - gMyDrum[r][i]) / 255, TH->grid);   // softer hits: a shorter bar
+		}
+	}
+}
+static void drumCellToggle(int r, int i) {
+	myDrumLoad();
+	if (*DPAT[r] != MINE_IDX[r]) { for (int k = 0; k < 16; k++) gMyDrum[r][k] = drumRowOn(r, *DPAT[r], k) ? (r == 2 ? HATVEL[k] : 230) : 0; *DPAT[r] = MINE_IDX[r]; }
+	gMyDrum[r][i] = gMyDrum[r][i] ? 0 : (r == 2 ? HATVEL[i] : 230);
+	gDrumSaveDue = 1;   // written after the voice lock is let go
+	if (!gDrums) { gDrums = 1; drumsChanged(); }
+	if (!gDrums || gSeqPlaying) return;
+	if (gMyDrum[r][i]) kitHitSound(r == 0 ? 0 : r == 1 ? 1 : 2, gMyDrum[r][i] / 255.0f);   // hear it
+}
+static int drumGridTouch(int x, int y, int press) {   // 1 = redraw
+	static int paint = -1;   // a drag paints the same on / off along the row
+	if (y < DG_TOP) {
+		if (!press) return 0;
+		if (x < 106) { gDrums = !gDrums; drumsChanged(); return 1; }
+		if (x < 212) { gKit = (gKit + 1) % 6; gDrumWant = gKit; return 1; }
+		return 0;
+	}
+	int r = (y - DG_TOP) / DG_RH; if (r > 2) return 0;
+	if (x < DG_LX) {
+		if (!press) return 0;
+		int n = r == 0 ? 9 : 8; *DPAT[r] = (*DPAT[r] + 1) % n; if (!gDrums) { gDrums = 1; drumsChanged(); } return 1;
+	}
+	int i = (int)((x - DG_LX) / ((320 - DG_LX - 2) / 16.0f)); if (i < 0 || i > 15) return 0;
+	if (press) { paint = !drumCellOn(r, i); drumCellToggle(r, i); return 1; }
+	if (paint >= 0 && drumCellOn(r, i) != paint) { drumCellToggle(r, i); return 1; }
+	return 0;
+}
 static void drumTapTick(float dt) {   // main thread (inside the voice lock), 60 times a second
 	if (!gDrumRec || !gDrums || !gMicOK || !gMicBuf || gDrumBuilt < 0) return;
 	u32 N = gMicSize / 2, end = micGetLastSampleOffset() / 2; const s16* m = (const s16*)gMicBuf;
@@ -8868,6 +8932,8 @@ int main(void) {
 			} else if (gGridOn) {
 				gLastTX = t.px; gLastTY = t.py;
 				if (gridTouch(t.px, t.py, !prevTouch, 0)) topDirty = botDirty = 1;
+			} else if (gDrumOnB && !gGridOn && !gPads && t.py < WORK_B && t.py >= XY_Y) {
+				if (drumGridTouch(t.px, t.py, !prevTouch)) topDirty = botDirty = 1;
 			} else if (xyShown() && t.py < WORK_B && t.py >= XY_Y) {
 				gLastTX = t.px; gLastTY = t.py;
 				if (xyTouch(t.px, t.py, !prevTouch, 0)) { botDirty = 1; topDirty = 1; }
@@ -8929,7 +8995,8 @@ int main(void) {
 		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }
 		{ int m = page == 4; if (m != gShapeOn) { gShapeOn = m; gShDrag = -1; botDirty = 1; } }
 		{ int m = page == 10; if (m != gChainOn) { gChainOn = m; gChDrag = -1; botDirty = 1; } }
-		{ int m = page == 8; if (m != gVisOnB) { gVisOnB = m; botDirty = 1; } m = page == 9; if (m != gHwOnB) { gHwOnB = m; botDirty = 1; } }
+		{ int m = page == 8; if (m != gVisOnB) { gVisOnB = m; botDirty = 1; } m = page == 9; if (m != gHwOnB) { gHwOnB = m; botDirty = 1; } m = page == 11; if (m != gDrumOnB) { gDrumOnB = m; botDirty = 1; }
+		  { static int ls = -2; int st = gSeqPlaying ? (gSeqPos & 15) : (gDrums ? gDrumStep : -1); if (gDrumOnB && st != ls) { ls = st; botDirty = 1; } } }
 		{ static int hwT = 0; if (gHwOnB && ++hwT % 6 == 0) botDirty = 1; }   // live sensor meters   // live matrix dots, drawn LFO / motion playheads
 		motTick(dt);
 		if (gAuditionT > 0 && (gAuditionT -= 1.0f / 60) <= 0 && !gSeqPlaying && curKey < 0) playSet(NULL, 0, 0.8f);
@@ -8996,6 +9063,7 @@ int main(void) {
 		if (gTblDue) { int t = gTblDue; gTblDue = 0; LightLock_Lock(&gMipsLock); if (t & 1) tableSelect(&A->tb, A->table); if (t & 2) tableSelect(&B->tb, B->table); LightLock_Unlock(&gMipsLock); gForceBuild |= t; topDirty = 1; }
 		if (gMainJobDue) { gMainJobDue = 0; LightLock_Lock(&gMipsLock); doRebuild(&gMainJob); LightLock_Unlock(&gMipsLock); ASET(gJobDone, 1); }
 		drumService();
+		if (gDrumSaveDue) { gDrumSaveDue = 0; myDrumSave(); }
 		if (gSeqSaveDue) { gSeqSaveDue = 0; LightLock_Lock(&gVoiceLock); seqSnap(); LightLock_Unlock(&gVoiceLock); seqWriteSnap(); }
 		{ static int sk = 0; int now = skipRecent(); if (now != sk) { sk = now; topDirty = 1; } }
 

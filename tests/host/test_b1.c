@@ -61,10 +61,17 @@ static void SCRIPT(int fr) {
 	if (fr == 90 && gSeqMode == 1) fail("QUICK: a pick shouldn't toggle PLAY");
 	if (fr == 90 && gFiltType == 0) fail("QUICK: the left bar should pick another FILTER type (%d)", gFiltType);
 	if (fr >= 92 && fr < 96) { HD |= KEY_SELECT; CX = 0; CY = -150; }   // down, centre: PLAY
+	// DRUMS page step grid: go there with QUICK (up, far right = DRM), tap the kick's step 3, check MINE
+	if (fr >= 100 && fr < 104) { HD |= KEY_SELECT; CX = 0; CY = 150; }
+	if (fr >= 100 && fr < 104) { for (int i = 0; i < NPAGES; i++) if (NAV[i] == 11) { float along = i / (float)(NPAGES - 1) * 2 - 1; CX = (short)(along / 1.4f * 150); } }
+	if (fr == 106) { if (gCurPage != 11) fail("QUICK: should reach DRUMS (%d)", gCurPage); gKickPat = 1; }
+	if (fr == 108 || fr == 109) { TOUCH = 1; TX = DG_LX + (int)(2.5f * (320 - DG_LX - 2) / 16.0f); TY = DG_TOP + 6; }
+	if (fr == 111) { shotBot("shots/drum_grid.ppm"); if (gKickPat != 7) fail("DRUM GRID: tapping a step should make the kick row MINE (%d)", gKickPat);
+		if (!gMyDrum[0][2] || !gMyDrum[0][0] || !gMyDrum[0][4]) fail("DRUM GRID: MINE should start from FOUR FLOOR plus the new step"); }
 	if (fr == 98 && gSeqMode != 1) fail("QUICK: down should PLAY");
 }
 int main(void) {
-	mkdir("sd", 0777); loadFont(); FRMAX = 114; app_main();
+	mkdir("sd", 0777); loadFont(); FRMAX = 116; app_main();
 	printf("b1: SELECT transport + combos, undo/redo, L/R octave, MONO chord, RIFF octave\n");
 	return gFails ? 1 : 0;
 }
