@@ -32,7 +32,7 @@ enum{GFX_TOP,GFX_BOTTOM}; enum{GFX_LEFT};
 enum{KEY_A=1,KEY_B=2,KEY_SELECT=4,KEY_START=8,KEY_DRIGHT=16,KEY_DLEFT=32,KEY_DUP=64,KEY_DDOWN=128,KEY_R=256,KEY_L=512,KEY_X=1024,KEY_Y=2048,KEY_TOUCH=1<<20};
 typedef struct{u16 px,py;}touchPosition; typedef struct{short dx,dy;}circlePosition;
 typedef struct{u8* gfx; u16 asciiOffset; u16 numChars;}ConsoleFont; typedef struct{ConsoleFont font;}PrintConsole;
-enum{NDSP_OUTPUT_STEREO=1, NDSP_OUTPUT_SURROUND=2, NDSP_CLIP_SOFT=1}; enum{NDSP_INTERP_POLYPHASE=0, NDSP_INTERP_LINEAR=1, NDSP_INTERP_NONE=2}; enum{NDSP_FORMAT_MONO_PCM16=5, NDSP_FORMAT_MONO_ADPCM=9};
+enum{NDSP_OUTPUT_MONO=0, NDSP_OUTPUT_STEREO=1, NDSP_OUTPUT_SURROUND=2, NDSP_CLIP_SOFT=1}; enum{NDSP_INTERP_POLYPHASE=0, NDSP_INTERP_LINEAR=1, NDSP_INTERP_NONE=2}; enum{NDSP_FORMAT_MONO_PCM16=5, NDSP_FORMAT_MONO_ADPCM=9};
 typedef struct{ u16 index; s16 history0, history1; } ndspAdpcmData;
 typedef struct{ union{const void* data_vaddr; s16* data_pcm16;}; u32 nsamples; ndspAdpcmData* adpcm_data; u32 offset; bool looping; u8 status; }ndspWaveBuf;
 // harness state

@@ -1043,6 +1043,8 @@ static float busSend(int bus);
 static int masterActive(void);
 static int chipRate(float f);
 static u32 csSend(float l, float r);
+static int gOutMode;
+static inline u32 csMono(u32 v) { if (gOutMode != 3) return v; u32 a = ((v & 0xFFFF) + (v >> 16)) / 2; return a | (a << 16); }   // OUTPUT MONO: the second chip's left / right averaged (the DSP does its own)
 static void voicesUpdate(float dt, float bend) {
 	for (int i = 0; i < 2; i++) {
 		LFO* l = &gLfo[i];
@@ -1179,7 +1181,7 @@ static void voicesUpdate(float dt, float bend) {
 		if (l > 1) l = 1;
 		if (r > 1) r = 1;
 		u32 vol = (u32)(l * 0x8000) | ((u32)(r * 0x8000) << 16);
-		CSND_SetVol(c, gThruOn ? 0 : vol, csSend(l, r)); any = 1;   // CHIP > FX: heard only through the DSP
+		CSND_SetVol(c, gThruOn ? 0 : csMono(vol), csSend(l, r)); any = 1;   // CHIP > FX: heard only through the DSP
 	}
 	if (gCsndOK && any) csndExecCmds(false);
 }
@@ -1808,12 +1810,12 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 
 // ---------------------------------------------------------------- output: surround + second filter stage
 static int gOutMode = 0, gSurDepth = 3;   // STEREO / SURROUND
-static const char* OUT_NAMES[3] = {"STEREO", "SURROUND", "AUTO"};   // AUTO: surround on headphones
+static const char* OUT_NAMES[4] = {"STEREO", "SURROUND", "AUTO", "MONO"};   // AUTO: surround on headphones; MONO: one speaker / a mono cable
 static const char* DEPTH_NAMES[4] = {"25%", "50%", "75%", "100%"};
 static void outputApply(void) {
 	if (!gAudioOK) return;
 	int sur = gOutMode == 1 || (gOutMode == 2 && gHeadphones);
-	ndspSetOutputMode(sur ? NDSP_OUTPUT_SURROUND : NDSP_OUTPUT_STEREO); gSurActive = sur;
+	ndspSetOutputMode(gOutMode == 3 ? NDSP_OUTPUT_MONO : sur ? NDSP_OUTPUT_SURROUND : NDSP_OUTPUT_STEREO); gSurActive = sur && gOutMode != 3;
 	ndspSurroundSetDepth((u16)((gSurDepth + 1) * 0x7FFF / 4));
 	ndspSetClippingMode(NDSP_CLIP_SOFT);
 }
@@ -3252,7 +3254,7 @@ static Param P_VOICE[] = {
 	PE("MODE", &gVoiceMode, 9, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0),
 	PE("BEND RANGE", &gBendRange, 13, BEND_NAMES, 0), PE("CHORD", &gChord, 5, CHORD_NAMES, 0),
 	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("GPU VISUALS", &gGpuFx, 2, ONOFF, 0), PE("FX", &gFx, 4, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
-	PF("ECHO FDBK", &gEchoFb, 0, 0.9f, 0.03f, "%", 0), PE("OUTPUT", &gOutMode, 3, OUT_NAMES, D_OUT), PE("SURROUND", &gSurDepth, 4, DEPTH_NAMES, D_OUT),
+	PF("ECHO FDBK", &gEchoFb, 0, 0.9f, 0.03f, "%", 0), PE("OUTPUT", &gOutMode, 4, OUT_NAMES, D_OUT), PE("SURROUND", &gSurDepth, 4, DEPTH_NAMES, D_OUT),
 	{"TILT CENTER", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_TILT},
 	PF("REV SIZE", &gRevSize, 0, 1, 0.02f, "%", 0), PF("REV DAMP", &gRevDamp, 0, 1, 0.02f, "%", 0), PF("FX MIX", &gFxMix, 0, 1, 0.02f, "%", 0),
 	PE("DRIVE", &gDrive, 15, DRIVE_TYPES, D_A | D_B), PF("DRIVE AMT", &gDriveAmt, 0, 1, 0.02f, "%", D_A | D_B),
@@ -5837,7 +5839,7 @@ static void loopStartPlay(void) {
 		CSND_SetAdpcmState(c, 0, gAdBlk[k][0].pred, gAdBlk[k][0].idx);
 		CSND_SetAdpcmState(c, 1, gAdBlk[k][0].pred, gAdBlk[k][0].idx);
 		CSND_SetAdpcmReload(c, true);
-		CSND_SetChnRegs(flags, osConvertVirtToPhys(gAd[k]), osConvertVirtToPhys(gAd[k]), gLoopLen / 2, vol, 0);
+		CSND_SetChnRegs(flags, osConvertVirtToPhys(gAd[k]), osConvertVirtToPhys(gAd[k]), gLoopLen / 2, csMono(vol), 0);
 	}
 	csndExecCmds(false);
 }
@@ -5887,7 +5889,7 @@ static void loopLevelTick(void) {   // keep the loop volume in step with LOOP LE
 	static float last = -1;
 	if (!gCsndOK || gLoopMode != 2 || !gLoopHave || gLoopCh[1] < 0 || last == gLoopLevel) return;
 	last = gLoopLevel; u32 l = (u32)(gLoopLevel * 0x8000);
-	CSND_SetVol(gLoopCh[0], l, 0); CSND_SetVol(gLoopCh[1], l << 16, 0); csndExecCmds(false);
+	CSND_SetVol(gLoopCh[0], csMono(l), 0); CSND_SetVol(gLoopCh[1], csMono(l << 16), 0); csndExecCmds(false);
 }
 static void loopModeChanged(void) {
 	if (gLoopMode == 1) loopRecStart();
@@ -5924,7 +5926,7 @@ static int tapeAlloc(int t) {
 static void tapeVol(int t) {
 	if (!gTapePlay || gTapeCh[t * 2 + 1] < 0) return;
 	u32 l = gTpMute[t] ? 0 : (u32)(gTpLevel[t] * 0x8000);
-	CSND_SetVol(gTapeCh[t * 2], l, 0); CSND_SetVol(gTapeCh[t * 2 + 1], l << 16, 0); csndExecCmds(false);
+	CSND_SetVol(gTapeCh[t * 2], csMono(l), 0); CSND_SetVol(gTapeCh[t * 2 + 1], csMono(l << 16), 0); csndExecCmds(false);
 }
 static void tapeStopPlay(void) {
 	if (gCsndOK) { for (int i = 0; i < NTRK * 2; i++) if (gTapeCh[i] >= 0) CSND_SetPlayState(gTapeCh[i], 0); csndExecCmds(false); }
@@ -5944,7 +5946,7 @@ static void tapeStartPlay(int except) {   // every track on tape (but the one re
 			int c = gTapeCh[t * 2 + k]; stopCh(BK_CSND, c);
 			u32 flags = SOUND_FORMAT_ADPCM | SOUND_ONE_SHOT | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(c) | (CSND_TIMER(32728) << 16);
 			CSND_SetAdpcmState(c, 0, 0, 0); CSND_SetAdpcmState(c, 1, 0, 0); CSND_SetAdpcmReload(c, false);
-			CSND_SetChnRegs(flags, osConvertVirtToPhys(gTp[t][k]), osConvertVirtToPhys(gTp[t][k]), gTapeLen / 2, k ? l << 16 : l, 0);
+			CSND_SetChnRegs(flags, osConvertVirtToPhys(gTp[t][k]), osConvertVirtToPhys(gTp[t][k]), gTapeLen / 2, csMono(k ? l << 16 : l), 0);
 		}
 	}
 	csndExecCmds(false); gTapeT0 = osGetTime();
@@ -6212,7 +6214,7 @@ static void loopVariTick(void) {   // main loop, voice lock held
 	u32 t = CSND_TIMER(rate < 1100 ? 1100 : rate); if (t < 0x42) t = 0x42; if (t > 0xFFFF) t = 0xFFFF;
 	CSND_SetTimer(gLoopCh[0], t); CSND_SetTimer(gLoopCh[1], t);
 	int muted = stopMul <= 0.031f;   // fully stopped: silent, like a stopped reel
-	if (muted != wasMuted) { u32 l = muted ? 0 : (u32)(gLoopLevel * 0x8000); CSND_SetVol(gLoopCh[0], l, 0); CSND_SetVol(gLoopCh[1], l << 16, 0); wasMuted = muted; }
+	if (muted != wasMuted) { u32 l = muted ? 0 : (u32)(gLoopLevel * 0x8000); CSND_SetVol(gLoopCh[0], csMono(l), 0); CSND_SetVol(gLoopCh[1], csMono(l << 16), 0); wasMuted = muted; }
 	csndExecCmds(false);
 }
 
@@ -7607,7 +7609,7 @@ static void drumHit(int d, float vel) {   // from the audio thread (voice lock h
 		CSND_SetChnRegsNoise(SOUND_FORMAT_PSG | SOUND_ENABLE | SOUND_CHANNEL(nc) | (t << 16), vol, csSend(l / 32768.0f, r / 32768.0f));
 		return;
 	}
-	CSND_SetChnRegs(flags, osConvertVirtToPhys(gDrumSmp[d]), osConvertVirtToPhys(gDrumSmp[d]), gDrumLen[d] * 2, gThruOn ? 0 : vol, csSend(l / 32768.0f, r / 32768.0f));
+	CSND_SetChnRegs(flags, osConvertVirtToPhys(gDrumSmp[d]), osConvertVirtToPhys(gDrumSmp[d]), gDrumLen[d] * 2, gThruOn ? 0 : csMono(vol), csSend(l / 32768.0f, r / 32768.0f));
 }
 static void rowHit(int r, float vel) {   // a pattern hit on row r (kick / snare / hat): MUTE and CHANCE first
 	if (gDrumMute & (1 << r)) return;
