@@ -713,7 +713,7 @@ static void gateTick(float dt, int seqStep) {   // audio tick, every 5 ms piece
 	if (!gGatePat) { gGateG = 1; return; }
 	float r = gGateRate == 1 ? 0.5f : gGateRate == 2 ? 2.0f : 1.0f;
 	gGatePh += dt * gBPM / 60.0f * 4.0f * r;
-	if (seqStep >= 0 && seqStep != lastSeq && gGateRate == 0) gGatePh = (float)seqStep;   // lock to the sequencer's steps
+	if (seqStep >= 0 && seqStep != lastSeq && gGateRate == 0 && gSeqRate == 0) gGatePh = (float)seqStep;   // lock to the sequencer's steps
 	lastSeq = seqStep;
 	if (gGatePh >= 16) gGatePh -= 16 * floorf(gGatePh / 16);
 	int st = (int)gGatePh; float fr = gGatePh - st;
@@ -2013,7 +2013,7 @@ static void arpTick(float dt) {
 static LightLock gVoiceLock;   // voices are touched by the main loop and by the audio thread
 static float gClockDebt = 0; static volatile int gClockSkips = 0;   // HARDWARE page shows skips
 static void arpTick(float dt);
-static void seqTick(float dt); static void tapeSeqStarted(void);
+static void seqTick(float dt); static void tapeSeqStarted(void); static void clickTick(void);
 static void drumTick(float dt); static void shakeQTick(void);
 static int tqDrain(int inTick); static int mqDrain(int inTick); static volatile int gTickMidi; static volatile int gTqUi;
 static void audioTick(void* data) {
@@ -2051,6 +2051,7 @@ static void audioTick(void* data) {
 		arpTick(d);
 		seqTick(d);
 		drumTick(d);
+		clickTick();
 		shakeQTick();
 		gateTick(d, seqStepNow());
 	}
@@ -2092,11 +2093,14 @@ static int gPatCur = 0, gPatNext = -1;
 static u8 gSong[NSONG]; static int gSongLen = 0, gSongPos = 0, gSongOn = 0;
 static u8 gRowLen[8], gRowHits[8], gRowRot[8], gRowNote[8];
 static unsigned gSeqClock = 0;   // steps since PLAY: polymeter rows count from this
-// PREROLL + REC CLICK: a count-in before TAPE REC and live sequencer REC (clicks on the second chip: never on tape)
-static const char* PRE_NAMES[3] = {"OFF", "1 BAR", "2 BARS"}; static const char* CLICK_NAMES[3] = {"OFF", "COUNT-IN", "ALWAYS"};
+// PREROLL + CLICK: a count-in before TAPE REC and live sequencer REC (clicks on the second chip: never on tape)
+static const char* PRE_NAMES[3] = {"OFF", "1 BAR", "2 BARS"}; static const char* CLICK_NAMES[4] = {"OFF", "COUNT-IN", "RECORDING", "ALWAYS"};
+// CLICK (the metronome): COUNT-IN only, RECORDING = the count-in and while the tape or live REC records, ALWAYS =
+// whenever the sequence or the drums run. It plays on the second chip's own output, so it is never on the tape.
+static float gClickLevel = 0.7f;
 static int gPreroll = 1, gClick = 1, gPreFor = 0, gLiveRec = 0; static float gPreBeats = 0, gPreDone = 0;
 // REC QUANT: where live notes land (16TH, 8TH, or OFF = your exact timing kept as the step's NUDGE); TAP REC: knocks on the table (mic) while live REC
-static const char* RQ_NAMES[3] = {"16TH", "8TH", "OFF (NUDGE)"}; static const char* TAPR_NAMES[3] = {"OFF", "NOTES", "VELOCITY"};
+static const char* RQ_NAMES[4] = {"16TH", "8TH", "OFF (NUDGE)", "32ND"}; static const char* TAPR_NAMES[3] = {"OFF", "NOTES", "VELOCITY"};
 static int gRecQ = 0, gTapRec = 0, gTapNote = -1;
 // SHAKE QUANT (PERC KIT's shaker): OFF plays as you shake; 16TH / 8TH holds the hit for the next step while the
 // sequencer or the drums are running (with nothing running it plays at once)
@@ -2208,7 +2212,10 @@ static int rowSlotFor(int nt) {   // the rhythm row for this pitch, or a free on
 	return -1;
 }
 static int noteOnCustomRow(int nt) { return rowOfNote(nt) >= 0; }
-static float stepLen(int i) { return (i & 1) ? 1.0f - gSwing : 1.0f + gSwing; }   // in 16ths
+// SEQ RATE: what one sequencer step is. 1/32 runs the steps twice as fast (a 16-step pattern is half a bar), 1/8 half
+static int gSeqRate = 0; static const char* SEQRATE_NAMES[3] = {"1/16", "1/32", "1/8"};
+static float seqDiv(void) { return gSeqRate == 1 ? 0.5f : gSeqRate == 2 ? 2.0f : 1.0f; }   // a step, in 16ths
+static float stepLen(int i) { return ((i & 1) ? 1.0f - gSwing : 1.0f + gSwing) * seqDiv(); }   // in 16ths
 static void seqFireAt(int idx, unsigned clock, int early, float off0) {
 	Step* s = &gSeq[idx];
 	gLockCut = s->cut * 0.006f; gLockRes = s->res * 0.01f;
@@ -3354,9 +3361,9 @@ static Param P_PRESET[] = {
 static Param P_PLAY[] = {
 	// most-reached first: tempo and the transport, then the arp, the key, then the details
 	PI_("BPM", &gBPM, 40, 240, 0), PE("SEQ", &gSeqMode, 3, SEQ_NAMES, D_SEQ), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
-	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE), PI_("SEQ LENGTH", &gSeqLen, 1, NSTEP, 0),
+	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE), PI_("SEQ LENGTH", &gSeqLen, 1, NSTEP, 0),
 	PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0), PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0),
-	PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PE("REC QUANT", &gRecQ, 3, RQ_NAMES, 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("REC CLICK", &gClick, 3, CLICK_NAMES, 0), PI_("TAPE ALIGN", &gTapeAlign, -50, 50, 0),
+	PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PE("REC QUANT", &gRecQ, 4, RQ_NAMES, 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("CLICK", &gClick, 4, CLICK_NAMES, 0), PF("CLICK LEVEL", &gClickLevel, 0, 1, 0.05f, "%", 0), PI_("TAPE ALIGN", &gTapeAlign, -50, 50, 0),
 	PE("SHAKE QUANT", &gShakeQ, 3, SHQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
 	{"ADD REST", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_REST},
 	{"CLEAR SEQ", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CLEAR},
@@ -3865,7 +3872,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS; KICK = SIDECHAIN FROM THE DRUMS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM MACHINE ON / OFF"}, {"KIT", "DRUM SOUNDS"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"CLICK", "METRONOME: COUNT-IN / RECORDING / ALWAYS (NEVER ON TAPE)"}, {"CLICK LEVEL", "METRONOME VOLUME"}, {"SEQ RATE", "A STEP IS A 16TH, A 32ND OR AN 8TH"}, {"REC QUANT", "16TH, 8TH, 32ND, OR OFF (KEEPS YOUR TIMING)"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -3898,13 +3905,14 @@ static int paramDst(const void* p) {   // the matrix destination that moves this
 	return -1;
 }
 static const char* SET_PATH = "sdmc:/3ds/syrup/settings.bin";
-static void settingsSave(int page) { FILE* f = safeOpen(SET_PATH); if (!f) return; int d[5] = {0x53455432, page, gStickMode, gSpkEq, gBright}; safeClose(f, SET_PATH, fwrite(d, sizeof(d), 1, f) == 1); }
+static void settingsSave(int page) { FILE* f = safeOpen(SET_PATH); if (!f) return; int d[6] = {0x53455432, page, gStickMode, gSpkEq, gBright, gSeqRate}; safeClose(f, SET_PATH, fwrite(d, sizeof(d), 1, f) == 1); }
 static int settingsLoad(void) {   // returns the page you were on last time
 	FILE* f = safeRead(SET_PATH); int d[4] = {0}, pg = 0; if (!f) return pg;   // first run: the browser
 	if (fread(d, sizeof(d), 1, f) == 1 && (d[0] == 0x53455431 || d[0] == 0x53455432)) {
 		if (d[1] >= 0 && d[1] < NPAGES && d[1] != 8) pg = d[1]; gSpkEq = d[3] >= 0 && d[3] < 3 ? d[3] : 2;
 		gStickMode = d[0] == 0x53455432 && d[2] >= 0 && d[2] < 4 ? d[2] : SM_DATA;   // older settings: the new default, DATA
 		int b = 0; if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 6) gBright = b;   // older settings: no brightness, SYSTEM
+		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 3) gSeqRate = b;
 	}
 	fclose(f); return pg;
 }
@@ -6054,7 +6062,7 @@ static int tapeSteps(void) {
 	if (gSongOn && gSongLen > 0) { int n = 0; for (int i = 0; i < gSongLen; i++) { int p = gSong[i], L = p == gPatCur ? gSeqLen : gPat[p].len; n += L < 1 ? 16 : L; } return n; }
 	return gSeqLen < 1 ? 16 : gSeqLen;
 }
-static int tapeSamples(void) { long long n = (long long)tapeSteps() * 32728LL * 60 / (gBPM * 4); if (n > TAPE_MAX) n = TAPE_MAX; return (int)(n - n % 2); }
+static int tapeSamples(void) { long long n = (long long)(tapeSteps() * (gTapeLenSel < 5 ? 1.0f : seqDiv()) * 32728.0 * 60 / (gBPM * 4)); if (n > TAPE_MAX) n = TAPE_MAX; return (int)(n - n % 2); }   /* bars are bars; a pattern / song is its steps */
 static int tapeMono(s16* out, int n) {   // the last recorded track (or the first one there is), mono, from the top
 	int t = gTapeLast >= 0 && gTpHave[gTapeLast] ? gTapeLast : -1;
 	for (int i = 0; i < NTRK && t < 0; i++) if (gTpHave[i]) t = i;
@@ -6129,6 +6137,7 @@ static void tapeRecGo(void) {
 
 // ---- count-in and click, and live recording into the sequencer
 static s16* gClickBuf[2];
+static int gClickN = 0, gClickCh = -1;   // (the tests count clicks and check the channel)
 static void clickNow(int acc) {   // a short tick on a free second-chip channel (the tape recorder hears only the DSP)
 	if (!gCsndOK) return;
 	if (!gClickBuf[0]) for (int k = 0; k < 2; k++) {
@@ -6138,7 +6147,8 @@ static void clickNow(int acc) {   // a short tick on a free second-chip channel 
 	}
 	int c = -1; for (int i = NCS - 1; i >= 0; i--) if (csUsable(i) && gCsOwner[i] < 0) { c = i; break; }
 	if (c < 0) return;
-	u32 v = acc ? 0x7000 : 0x4400;
+	gClickN++; gClickCh = c;
+	u32 v = (u32)((acc ? 0x7000 : 0x4400) * gClickLevel * 1.4f); if (v > 0x7FFF) v = 0x7FFF;   // straight to the speakers: no capture send, so CHIP > FX can't put it on tape
 	CSND_SetChnRegs(SOUND_FORMAT_16BIT | SOUND_ONE_SHOT | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(c) | (CSND_TIMER(32728) << 16),
 		osConvertVirtToPhys(gClickBuf[acc]), osConvertVirtToPhys(gClickBuf[acc]), 1200 * 2, v | (v << 16), 0);
 	csndExecCmds(false);
@@ -6158,6 +6168,9 @@ static int recPos(int* nudge, int* ahead) {   // where a note played now goes, b
 	if (gRecQ == 1) {   // 8ths: the nearest even step
 		float pos = p + f; int q = (int)(pos / 2 + 0.5f) * 2; *ahead = q - p; return ((q % Lp) + Lp) % Lp;
 	}
+	if (gRecQ == 3) {   // 32NDS: the step, or half a step later (NUDGE +50), whichever is nearer
+		int late = f >= 0.75f; *ahead = late; *nudge = (!late && f >= 0.25f) ? 50 : 0; return (p + late) % Lp;
+	}
 	int late = f >= 0.5f; *ahead = late;
 	if (gRecQ == 2) { int nd = (int)lroundf((late ? f - 1 : f) * 100); *nudge = nd < -50 ? -50 : nd > 50 ? 50 : nd; }   // OFF: keep the timing
 	return (p + late) % Lp;
@@ -6168,7 +6181,7 @@ static void liveDown(const int* notes, int n, float vel) {   // a note played wh
 	int nd, ah, st = recPos(&nd, &ah); int fresh = !gSeq[st].n;
 	for (int i = 0; i < n && i < 4; i++) { int nt = notes[i] - gSeqTr; stepSetNote(st, nt, 1); gLvNote[i] = nt; }
 	gTapNote = notes[0] - gSeqTr;
-	gSeq[st].vel = (u8)(vel * 255 > 255 ? 255 : vel * 255); if (fresh || gRecQ == 2) gSeq[st].nudge = (s8)nd;
+	gSeq[st].vel = (u8)(vel * 255 > 255 ? 255 : vel * 255); if (fresh || gRecQ >= 2) gSeq[st].nudge = (s8)nd;
 	gLvN = n < 4 ? n : 4; gLvStep = st; gLvT0 = (float)(gSeqClock + ah);
 }
 // TAP REC: knock on the table while live REC; the mic hears it, harder = louder, onto the grid like a played note
@@ -6213,13 +6226,15 @@ static void prerollTick(float dt) {   // main loop, voice lock held
 		if (now != before) { if (gClick) clickNow(now % 4 == 0); char m[32]; snprintf(m, sizeof(m), "COUNT-IN: %d", (int)(gPreBeats - now)); say(m); }
 		return;
 	}
-	if (gClick == 2) {   // ALWAYS: the click keeps going while recording
-		static int lastBeat = -1; int beat = -1;
-		if (gTapeRec >= 0 && gTapeState == 3) beat = (int)(gTapePos / 32728.0f * gBPM / 60.0f);
-		else if (gLiveRec && gSeqPlaying) beat = (int)(gSeqClock / 4);
-		if (beat >= 0 && beat != lastBeat) clickNow(beat % 4 == 0);
-		lastBeat = beat;
-	}
+}
+static long long gDrClk = -1;   // the drum clock's 16ths (when the drums run on their own)
+static void clickTick(void) {   // audio thread, every frame: the metronome on the beat, from the clock that's running
+	static long long last = -1; long long q = -1;
+	if (gSeqPlaying) q = (long long)(gSeqClock * seqDiv() + 1e-4);   // 16ths
+	else if (gDrums && gDrClk >= 0) q = gDrClk;
+	if (q < 0) { last = -1; return; }
+	int on = gClick == 3 || (gClick == 2 && ((gTapeRec >= 0 && gTapeState == 3) || gLiveRec));
+	if (q != last) { if (on && q % 4 == 0) clickNow(q % 16 == 0); last = q; }
 }
 static void tapeTick(void) {   // main thread, voice lock held
 	if (gTapePlay && gTapeRec < 0 && osGetTime() - gTapeT0 > (u64)gTapeLen * 1000 / 32728 + 300) tapeStopPlay();
@@ -6336,7 +6351,7 @@ static int tapeTouch(int x, int y, int press, int release) {
 		if (b == 4 && gTapeRec < 0) tapeExport();
 		return 1;
 	}
-	if (press && y >= TP_OPT_Y && y < TP_OPT_Y + 16) { if (x < 160) gPreroll = (gPreroll + 1) % 3; else gClick = (gClick + 1) % 3; return 1; }
+	if (press && y >= TP_OPT_Y && y < TP_OPT_Y + 16) { if (x < 160) gPreroll = (gPreroll + 1) % 3; else gClick = (gClick + 1) % 4; return 1; }
 	int t = (y - TP_RY) / TP_RH;
 	if (press) gTpDrag = -1;
 	if (y < TP_RY || t < 0 || t >= NTRK) return press;
@@ -7887,7 +7902,7 @@ static void rowHit(int r, float vel) {   // a pattern hit on row r (kick / snare
 	drumHit(r, vel);
 }
 static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the sequencer when it plays
-	if (!gDrums || !gCsndOK || gDrumBuilt < 0) { gDrumStep = -1; return; }
+	if (!gDrums || !gCsndOK || gDrumBuilt < 0) { gDrumStep = -1; gDrClk = -1; return; }
 	if (gKit == 3) {   // noise drums have no envelope of their own: decay them from here every 5 ms
 		int any = 0;
 		for (int k = 0; k < 2; k++) if (gNzCh[k] >= 0 && gNzVol[k] > 0.001f) {
@@ -7909,6 +7924,7 @@ static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the
 		frac = gDrumPh / len; if (frac > 0.999f) frac = 0.999f;
 	}
 	if (clk < 0) return;
+	gDrClk = clk;
 	int any = 0;
 	if (step >= 0) {
 		gDrumStep = step;
@@ -7921,7 +7937,7 @@ static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the
 	static int pre[10]; static long long startClk = -1;
 	if (clk == 0 && frac < 0.05f && startClk != 0) { for (int r = 0; r < 10; r++) { last[r] = -1; ratLeft[r] = 0; pre[r] = 0; } }
 	startClk = clk;
-	double pos16 = (double)clk + frac;
+	double pos16 = gSeqPlaying ? ((double)clk + frac) * seqDiv() : (double)clk + frac;   // the sequence's steps may be 32nds or 8ths
 	for (int r = 0; r < 10; r++) {
 		if (r < 3 && *DPAT[r] == EU_IDX[r]) { gDrIdx[r] = -1; continue; }
 		double rp = pos16 * DRATE[gDrRate[r]]; long long n = (long long)(rp + 1e-6);
