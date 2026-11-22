@@ -73,12 +73,12 @@
   <div class="note">
     <b>Both screens</b> take taps: on the top one, tap a setting to pick it and drag sideways to change it. <b>Circle pad</b> on the left (D-PAD switches it to the four arrows).<br>
     Keyboard: arrows = D-pad, <b>I J K L</b> = circle pad, <b>X</b> = A, <b>Z</b> = B, <b>S</b> = X, <b>A</b> = Y, <b>Q / W</b> = L / R, <b>Shift</b> = SELECT, <b>Enter</b> = START.<br>
-    <b>MIDI</b> plays it from a controller (Chrome / Edge on a computer, or the Web MIDI Browser app on iPhone). Your sounds and drum grid are kept in this browser.
+    <b>Game controller</b> (Bluetooth or USB): buttons in Nintendo positions, left stick = circle pad, bumpers / triggers = L / R. <b>MIDI</b> plays it from a controller (Chrome / Edge on a computer, or the Web MIDI Browser app on iPhone). Your sounds and drum grid are kept in this browser.
   </div>
 </div>
 <script>
-var KEYS = 0, TOUCH = 0, TX = 0, TY = 0, CX = 0, CY = 0, ready = false;
-function send() { if (ready) Module._web_input(KEYS >>> 0, TOUCH, TX, TY, CX, CY); }
+var KEYS = 0, TOUCH = 0, TX = 0, TY = 0, CX = 0, CY = 0, ready = false, GK = 0, GX = 0, GY = 0;
+function send() { if (ready) Module._web_input((KEYS | GK) >>> 0, TOUCH, TX, TY, GX || GY ? GX : CX, GX || GY ? GY : CY); }
 var msg = document.getElementById('msg');
 var Module = {
   preRun: [function () {
@@ -169,6 +169,21 @@ document.getElementById('full').onclick = function () {
   else msg.textContent = 'On iPhone: Share > Add to Home Screen, then open Syrup from there for full screen.';
 };
 if (navigator.standalone || matchMedia('(display-mode: standalone)').matches) document.getElementById('full').style.display = 'none';   // already full screen
+// ---- a game controller (Bluetooth / USB: Xbox, PlayStation, Switch Pro, MFi): Nintendo layout, left stick = circle pad
+// standard mapping: 0 bottom, 1 right, 2 left, 3 top, 4 / 5 bumpers, 6 / 7 triggers, 8 select, 9 start, 12-15 d-pad
+var GPMAP = [[1, 1], [0, 2], [3, 1024], [2, 2048], [4, 512], [5, 256], [6, 512], [7, 256], [8, 4], [9, 8], [12, 64], [13, 128], [14, 32], [15, 16]];
+var gpName = '';
+function pollPads() {
+  var pads = navigator.getGamepads ? navigator.getGamepads() : [], k = 0, x = 0, y = 0, name = '';
+  for (var i = 0; i < pads.length; i++) { var p = pads[i]; if (!p || !p.connected) continue; name = name || p.id;
+    for (var j = 0; j < GPMAP.length; j++) { var b = p.buttons[GPMAP[j][0]]; if (b && (b.pressed || b.value > 0.5)) k |= GPMAP[j][1]; }
+    var ax = p.axes[0] || 0, ay = p.axes[1] || 0; if (Math.hypot(ax, ay) > 0.15) { x = Math.round(ax * 150); y = Math.round(-ay * 150); } }
+  if (k !== GK || x !== GX || y !== GY) { GK = k; GX = x; GY = y; send(); }
+  if (name !== gpName) { gpName = name; msg.textContent = name ? 'Controller: ' + name.replace(/\s*\(.*\)\s*/g, ' ').trim() : ''; }
+  requestAnimationFrame(pollPads);
+}
+addEventListener('gamepadconnected', function () { msg.textContent = 'Controller connected'; });
+requestAnimationFrame(pollPads);
 // ---- Web MIDI in
 document.getElementById('midi').onclick = function () {
   var btn = this;
