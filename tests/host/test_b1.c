@@ -41,6 +41,15 @@ static void SCRIPT(int fr) {
 	if (fr == 64) { gGridOct = 0; int lo = gridNote(0); for (int k = 0; k < 40; k++) { acidGen(); for (int s = 0; s < 16; s++) if (gSeq[s].n && (gSeq[s].note[0] < lo || gSeq[s].note[0] >= lo + 12)) { fail("RIFF left the octave (%d, base %d)", gSeq[s].note[0], lo); k = 99; break; } } }
 	// HELP: L/R flip the slides, another button closes
 	if (fr == 66) gHelpSlide = 0;
+	if (fr == 67) {   // piano roll: drag a note's head to move it; drag a 1-step note's tail = length
+		memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 16; gRollLow = 55; stepSetNote(0, 60, 1); stepSetLen(0, 60, 2);
+		gridTouch(rollX(0) + 3, rollY(60) + 5, 1, 0); gridTouch(rollX(3) + 3, rollY(62) + 5, 0, 0); gridTouch(rollX(3) + 3, rollY(62) + 5, 0, 1);
+		if (gSeq[0].n) fail("ROLL: the dragged note should leave step 1");
+		if (!(gSeq[3].n == 1 && gSeq[3].note[0] == 62 && gSeq[3].len[0] == 2)) fail("ROLL: the note should land on step 4, pitch 62, still 2 long (n %d note %d len %d)", gSeq[3].n, gSeq[3].note[0], gSeq[3].len[0]);
+		memset(gSeq, 0, sizeof(gSeq)); stepSetNote(5, 60, 1);
+		gridTouch(rollX(5) + 3, rollY(60) + 5, 1, 0); gridTouch(rollX(8) + 3, rollY(60) + 5, 0, 0); gridTouch(rollX(8) + 3, rollY(60) + 5, 0, 1);
+		if (!(gSeq[5].n == 1 && gSeq[5].len[0] == 4)) fail("ROLL: dragging a 1-step note along its row should stretch it (len %d)", gSeq[5].len[0]);
+	}
 	// QUICK SELECT bars: SELECT + circle pad. UP = pages (lean right = further along), RIGHT / LEFT = this page's
 	// choices, DOWN = transport
 	if (fr >= 70 && fr < 76) { HD |= KEY_SELECT; CX = -29; CY = 150; }   // up, leaning a little left: the 5th page (FILT)

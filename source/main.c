@@ -4203,8 +4203,8 @@ static void drawStepEd(void);
 // Hold a cell: the step editor. Drag the keys up / down to scroll; OCT- / OCT+ jump an octave.
 #define ROLL_KW 24
 #define ROLL_TOP (XY_Y + 16)
-#define ROLL_RH 12
-#define ROLL_ROWS 16
+#define ROLL_RH 16
+#define ROLL_ROWS 12   // one octave on screen, taller rows (the keys drag to scroll; L / R jump an octave)
 #define ROLL_CW ((320 - ROLL_KW) / (float)NSTEP)
 static int gRollLow = 45;   // lowest pitch on screen
 static int rollX(int st) { return ROLL_KW + (int)(st * ROLL_CW); }
@@ -4233,8 +4233,9 @@ static void drawGrid(void) {
 		int nt = gRollLow + r, y = rollY(nt), bk = isBlack(nt), cr = rowOfNote(nt);
 		rectP(ROLL_KW, y, 320 - ROLL_KW, ROLL_RH - 1, bk ? TH->bg : TH->pad);
 		for (int st = 0; st < NSTEP; st++) { int x = rollX(st); if (st >= gSeqLen) rectP(x, y, (int)ROLL_CW + 1, ROLL_RH - 1, TH->bg); rectP(x, y, 1, ROLL_RH - 1, (st & 3) == 0 ? TH->line : TH->grid); }
-		rectP(0, y, ROLL_KW - 1, ROLL_RH - 1, bk ? TH->keyB : TH->keyW);
-		if (nt % 12 == 0) { char t[6]; snprintf(t, sizeof(t), "C%d", nt / 12 - 1); text(2, y + 2, t, 1, RGB3(TH->keyB)); }
+		int snd = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note == nt) { snd = 1; break; }
+		rectP(0, y, ROLL_KW - 1, ROLL_RH - 1, snd ? TH->keyOn : bk ? TH->keyB : TH->keyW);   // the side keys play along
+		if (nt % 12 == 0) { char t[6]; snprintf(t, sizeof(t), "C%d", nt / 12 - 1); text(2, y + 4, t, 1, RGB3(TH->keyB)); }
 		if (cr >= 0) rectP(ROLL_KW - 4, y, 3, ROLL_RH - 1, TH->keyOn);   // this pitch runs its own rhythm (step editor > ROW)
 	}
 	if (gSeqPlaying && gSeqPos >= 0) { int x = rollX(gSeqPos); rectP(x, ROLL_TOP, (int)ROLL_CW, 1, TH->keyOn); rectP(x, ROLL_TOP + ROLL_ROWS * ROLL_RH - 1, (int)ROLL_CW, 1, TH->keyOn); }
@@ -4515,8 +4516,10 @@ static void stepSetLen(int st, int nt, int L) {
 	for (int k = 0; k < sp->n; k++) if (sp->note[k] == nt) { sp->len[k] = (u8)L; if (st + L > gSeqLen) gSeqLen = st + L; }
 }
 static void audition(int nt) { if (!gSeqPlaying) { playSet(&nt, 1, 0.8f); gAuditionT = 0.18f; } }
-// tap empty = a note, tap a note = gone, drag = length (from a new note or a note's tail), hold = step editor; the keys scroll
+// tap empty = a note, tap a note = gone, drag a new note or a note's tail = length, drag a note's head (or up / down) = move it,
+// hold = step editor; the keys scroll
 static int gGtSt = -1, gGtNote = 0, gGtHit = -1, gGtDrag = 0, gGtLong = 0, gGtKeys = 0, gGtY0 = 0, gGtLow0 = 0; static u64 gGtT0;
+static int gGtMove = 0, gMvSt = -1, gMvNt = 0, gMvLen = 1, gMvSt0 = 0, gMvNt0 = 0;   // dragging a note to a new step / pitch
 static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (gStepEd >= 0 && !(press && y < XY_Y + 15)) return stepEdTouch(x, y, press, release);
 	if (press && y < XY_Y + 15) { gridButtons(x); return 1; }
@@ -4527,7 +4530,7 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (press) {
 		gGtKeys = x < ROLL_KW && y >= ROLL_TOP; gGtY0 = y; gGtLow0 = gRollLow; gGtDrag = 0; gGtLong = 0; gGtT0 = svcGetSystemTick();
 		if (gGtKeys) { if (row >= 0 && row < ROLL_ROWS) audition(nt); gGtSt = -1; return 0; }
-		gGtSt = ok ? st : -1; gGtNote = nt; gGtHit = ok ? noteCover(st, nt, NULL) : -1;
+		gGtSt = ok ? st : -1; gGtNote = nt; gGtHit = ok ? noteCover(st, nt, NULL) : -1; gGtMove = 0;
 		return 0;
 	}
 	if (gGtKeys) {   // drag the keyboard: scroll
@@ -4545,8 +4548,23 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 		if (gSeq[s0].n >= 4) { say("4 NOTES PER STEP"); return 0; }
 		undoMark(); stepSetNote(s0, gGtNote, 1); gTapNote = gGtNote; audition(gGtNote); return 1;
 	}
+	if (!gGtLong && ok && gGtHit >= 0 && !gGtDrag && (st != gGtSt || nt != gGtNote)) {   // first move on a note: move it, or stretch it?
+		int k0 = 0; noteCover(gGtSt, gGtNote, &k0); int L = noteLen(&gSeq[gGtHit], k0);
+		gGtMove = nt != gGtNote || gGtSt != gGtHit + L - 1;   // off its pitch, or from its head / body = MOVE; along the row from its tail = length
+	}
+	if (!gGtLong && ok && gGtHit >= 0 && gGtMove) {
+		// a drag that starts on a note's head, or moves off its pitch: MOVE it (its tail still sets the length)
+		if (!gGtDrag) { int k0 = 0; noteCover(gGtSt, gGtNote, &k0); gGtDrag = 1; undoMark(); gMvSt0 = gMvSt = gGtHit; gMvNt0 = gMvNt = gGtNote; gMvLen = noteLen(&gSeq[gGtHit], k0); }
+		int ds = gMvSt0 + (st - gGtSt), dn = gMvNt0 + (nt - gGtNote); if (ds < 0) ds = 0; if (ds > NSTEP - 1) ds = NSTEP - 1; if (dn < 0) dn = 0; if (dn > 127) dn = 127;
+		if (ds != gMvSt || dn != gMvNt) {
+			if (gSeq[ds].n >= 4 && !(ds == gMvSt)) return 0;   // that step is full
+			stepSetNote(gMvSt, gMvNt, 0); stepSetNote(ds, dn, 1); stepSetLen(ds, dn, gMvLen); gMvSt = ds; gMvNt = dn; if (dn != gMvNt0 || ds != gMvSt0) audition(dn);
+			return 1;
+		}
+		return 0;
+	}
 	if (!gGtLong && ok && st != gGtSt) {   // a drag along the row: length
-		if (!gGtDrag) { gGtDrag = 1; undoMark(); if (gGtHit < 0) { if (gSeq[gGtSt].n >= 4 || rowOfNote(gGtNote) >= 0) { gGtSt = -1; return 0; } stepSetNote(gGtSt, gGtNote, 1); gGtHit = gGtSt; } }
+		if (!gGtDrag) { gGtDrag = 1; gGtMove = 0; undoMark(); if (gGtHit < 0) { if (gSeq[gGtSt].n >= 4 || rowOfNote(gGtNote) >= 0) { gGtSt = -1; return 0; } stepSetNote(gGtSt, gGtNote, 1); gGtHit = gGtSt; } }
 		stepSetLen(gGtHit, gGtNote, st - gGtHit + 1); return 1;
 	}
 	if (!gGtDrag && !gGtLong && svcGetSystemTick() - gGtT0 > SYSCLOCK_ARM11 * 2 / 5) {
