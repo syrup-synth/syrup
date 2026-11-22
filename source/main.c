@@ -130,7 +130,7 @@ static void crashCheck(void) {
 	fclose(f);
 	gSafeMode = 1;
 }        // set while the audio thread runs the arp/seq clock (it holds gMipsLock)
-static LightLock gMipsLock;   // guards the shared FFT buffers (worker on core 1 vs main core)
+static LightLock gMipsLock; static volatile int gTickNoMips = 0;   // audio tick running without gMipsLock (a rebuild holds it)   // guards the shared FFT buffers (worker on core 1 vs main core)
 static Thread gWorker = NULL;
 #define SYRUP_VERSION "1.0 BETA"
 // safe saves: write NAME.new, then swap it in, so pulling the power mid-save can never leave a half-written file
@@ -676,9 +676,22 @@ static void uniParams(const Osc* o, int u, float* det, float* pan, float* gain) 
 }
 
 static u8 gChClean[24];   // filter state already zeroed while the channel sat idle
+static u8 gWbPend[NCH];   // a voice layer waiting to start with its first volume
+// VOLUME RAMPS: the voices' volumes are worked out 60 times a second, but the DSP applies a new volume as a step at
+// its next 5 ms frame. On a sine (G-FUNK SINE, EP SATURDAY) each 16 ms step was a click, worst on note changes.
+// The main loop now sets targets and the audio tick walks every channel there over ~3 DSP frames.
+static float gMixTgt[NCH][12], gMixCur[NCH][12]; static u8 gMixLive[NCH];
+static void mixRampTick(void) {   // audio tick, voice lock held
+	static float lastG = -1; int gch = gAutoGain != lastG; lastG = gAutoGain;
+	for (int c = 0; c < NCH; c++) if (gMixLive[c]) {
+		int moved = gch;
+		for (int k = 0; k < 12; k++) { float d = gMixTgt[c][k] - gMixCur[c][k]; if (d > 1e-5f || d < -1e-5f) { gMixCur[c][k] += fabsf(d) < 0.002f ? d : d * (d > 0 ? 0.5f : 0.75f); /* up a little slower than down: no added sustain */ moved = 1; } }
+		if (moved) { float m[12]; for (int k = 0; k < 12; k++) m[k] = gMixCur[c][k] * gAutoGain; ndspChnSetMix(c, m); }
+	}
+}
 static void stopCh(int bk, int ch) {
 	if (bk == BK_DSP) {
-		ndspChnWaveBufClear(ch); gDspOwner[ch] = -1;
+		ndspChnWaveBufClear(ch); gDspOwner[ch] = -1; if (ch >= 0 && ch < NCH) { gWbPend[ch] = 0; gMixLive[ch] = 0; }
 		if (gQScream > 0.001f && ch < 24) { ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, 0, 0, 0, 0, 0); gChClean[ch] = 1; }   // flush while silent: no gap on the next note
 	}
 	else { if (ch < 0 || ch >= NCS) return; if (gCsndOK) CSND_SetPlayState(ch, 0); gCsOwner[ch] = -1; }   // (-1 would land on channel 31: the looper)
@@ -799,7 +812,7 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 	if (!(m->built & (1u << v->lev[i]))) {
 		if (gInAudioTick) {   // no FFT in the audio thread: borrow the nearest smoother level that's built
 			int L = v->lev[i] + 1; while (L < NLEV && !(m->built & (1u << L))) L++;
-			if (L < NLEV) v->lev[i] = L; else mipsBuildLevel(m, v->lev[i]);
+			if (L < NLEV) v->lev[i] = L; else if (!gTickNoMips) mipsBuildLevel(m, v->lev[i]);   // (without the lock the worker owns the FFT buffers: play what's there)
 		} else mipsBuildLevel(m, v->lev[i]);
 	}
 	if (!gInAudioTick) LightLock_Unlock(&gMipsLock);
@@ -816,7 +829,7 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 		gWB[ch].data_vaddr = m->lev[v->lev[i]];
 		gWB[ch].nsamples = N;
 		gWB[ch].looping = true;
-		ndspChnWaveBufAdd(ch, &gWB[ch]);
+		ndspChnWaveBufAdd(ch, &gWB[ch]); memset(gMixCur[ch], 0, sizeof(gMixCur[ch])); memset(gMixTgt[ch], 0, sizeof(gMixTgt[ch])); gMixLive[ch] = !v->isEcho;   // starts silent; the audio tick ramps it in
 	} else {
 		u32 pa = osConvertVirtToPhys(m->lev[v->lev[i]]);
 		u32 timer = CSND_TIMER(f * N);
@@ -903,7 +916,7 @@ static void voiceOn(int note, float vel) {
 		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4) { m = &gV[i]; break; }
 		if (m && gVoiceMode == 2) { m->note = note; m->freq = mtof((float)note); return; }   // legato: just glide
 		float from = m ? m->cur : 0;
-		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho) freeVoice(&gV[i]);
+		for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho) { gV[i].stage = gV[i].stage2 = 4; gV[i].relMul = 0.05f / (gEnv1.r + 0.0005f); }   // the old note fades out over 50 ms (cutting it dead clicked; volumes move at 60 Hz)
 		SVoice* v = newVoice(); initVoice(v);
 		v->note = note; v->freq = mtof((float)note); v->cur = (from > 0 && gGlide > 0) ? from : v->freq; v->vel = vel;
 		lfoTrig(); startVoice(v - gV);
@@ -1155,7 +1168,10 @@ static void voicesUpdate(float dt, float bend) {
 			mix[4] = mix[0] * s0; mix[5] = mix[1] * s0;
 			mix[8] = mix[0] * s1; mix[9] = mix[1] * s1;
 		}
-		ndspChnSetMix(c, mix);
+		int ow = gDspOwner[c], echo = ow >= 0 && ow < NVS && gV[ow].isEcho;   // echo taps: short blips, no ramp (it cost them 3 dB)
+		if (gWbPend[c] && (mix[0] + mix[1] + mix[4] + mix[5] + mix[8] + mix[9]) > 1e-4f) { gWbPend[c] = 0; memset(gMixCur[c], 0, sizeof(gMixCur[c])); ndspChnSetMix(c, gMixCur[c]); ndspChnWaveBufAdd(c, &gWB[c]); gMixLive[c] = !echo; }   // starts silent at phase 0, ramps up
+		{ float ig = gAutoGain > 1e-4f ? 1.0f / gAutoGain : 0; for (int k = 0; k < 12; k++) gMixTgt[c][k] = mix[k] * ig; }   // the ramp moves the envelope; the limiter gain applies straight
+		if (!gMixLive[c] || !gAudioClock) { memcpy(gMixCur[c], gMixTgt[c], sizeof(mix)); ndspChnSetMix(c, mix); }   // channels outside the voices (noise) and no audio clock: as before
 	}
 	int any = 0;
 	for (int c = 0; c < NCS; c++) if (cL[c] >= 0) {
@@ -1975,7 +1991,8 @@ static void audioTick(void* data) {
 	#define CLK_MISS (void)0
 #endif
 	if (LightLock_TryLock(&gVoiceLock)) { CLK_MISS; return; }   // main loop busy: the frames are counted next time
-	if (LightLock_TryLock(&gMipsLock)) { LightLock_Unlock(&gVoiceLock); CLK_MISS; return; }
+	int mipsOk = !LightLock_TryLock(&gMipsLock);   // a wavetable rebuild (XY, circle pad, motion moving WT POS) used to hold the clock here:
+	gTickNoMips = !mipsOk;                          // now the clock runs anyway and notes it starts just skip building tables
 #ifndef SYRUP_HOST
 	lastId = id; init = 1;
 #endif
@@ -1991,8 +2008,9 @@ static void audioTick(void* data) {
 		drumTick(d);
 		shakeQTick();
 	}
-	gInAudioTick = 0;
-	LightLock_Unlock(&gMipsLock);
+	mixRampTick();
+	gInAudioTick = 0; gTickNoMips = 0;
+	if (mipsOk) LightLock_Unlock(&gMipsLock);
 	LightLock_Unlock(&gVoiceLock);
 }
 
@@ -3111,6 +3129,7 @@ static int askName(const char* cur, char* out, int len) {   // the system keyboa
 	}
 	out[n] = 0; return n > 0;
 }
+static int gBrowseDefer = 0, gBrowsePend = 0;
 static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound changed
 	if (gEdited && !gGuard) { if (!fresh) return 0; gGuard = 1; say("PATCH EDITED: AGAIN TO LEAVE IT, A SAVES IT"); return 0; }
 	int u = NSTYLES - 1;
@@ -3126,7 +3145,8 @@ static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound
 		if (gVoiceMode >= 3) { allOff(); gVoiceMode = 0; ch = 1; }
 		say("EMPTY SLOT: PRESS A TO SAVE THIS SOUND HERE"); return ch;
 	}
-	presetLoad(gStyle, gPreset); return 1;
+	if (gBrowseDefer) { gBrowsePend = 1; return 0; }   // scrolling held: load where the list stops, not every patch on the way
+	gBrowsePend = 0; presetLoad(gStyle, gPreset); return 1;
 }
 // START: a quick menu over the top screen (no more quitting by accident)
 static int gStartMenu = 0, gStartSel = 0;
@@ -7238,7 +7258,7 @@ static float gDrumLevel = 0.8f;
 #define NDCH 7
 static int gDrumCh[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, gDrumStep = -1;
 static float gDrumPh = 0;
-static s16* gDrumSmp[NDRUM]; static int gDrumLen[NDRUM]; static int gDrumPoly = 1;   // DRUM POLY
+static s16* gDrumSmp[NDRUM]; static s16* gDrumBack[NDRUM]; static int gDrumLen[NDRUM]; static volatile int gDrumWant = -1;   // kits build into the back set, then swap: hits never read a half-built drum static int gDrumPoly = 1;   // DRUM POLY
 static const char* KIT_NAMES[6] = {"808", "909", "LOFI", "CHIP", "PERC", "WAVE"};
 static const char* KICKP_NAMES[9] = {"OFF", "FOUR FLOOR", "BREAK", "TRAP", "DNB", "HALFTIME", "BOOM BAP", "MINE", "EUCLID"};
 static const char* SNAREP_NAMES[8] = {"OFF", "BACKBEAT", "BREAK", "TRAP", "DNB", "CLAP 2+4", "MINE", "EUCLID"};
@@ -7302,9 +7322,9 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 	unsigned seed = 1234;
 	unsigned lfsr = 0x7FFF; float lph = 0;   // CHIP kit: Game Boy style noise register
 	for (int d = 0; d < NDRUM; d++) {
-		if (!gDrumSmp[d]) gDrumSmp[d] = (s16*)linearAlloc((int)(sr * MAXS[d]) * 2 + 64);
-		if (!gDrumSmp[d]) return;
-		gDrumLen[d] = len[d];
+		if (!gDrumBack[d]) gDrumBack[d] = (s16*)linearAlloc((int)(sr * MAXS[d]) * 2 + 64);
+		if (!gDrumBack[d]) return;
+		s16* out = gDrumBack[d];
 		float ph = 0, ph2 = 0, lp = 0, bp1 = 0, bp2 = 0, hp = 0, prev = 0;
 		for (int i = 0; i < len[d]; i++) {
 			float t = i / sr, v = 0;
@@ -7423,11 +7443,17 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 			if (kit == 3) v *= 0.6f;   // CHIP: square waves are all edge - as loud by peak, much louder to the ear (-4.4 dB)
 			if (v > 1) v = 1;
 			if (v < -1) v = -1;
-			gDrumSmp[d][i] = (s16)(v * 30000);
+			out[i] = (s16)(v * 30000);
 		}
-		if (gCsndOK) CSND_FlushDataCache(gDrumSmp[d], len[d] * 2);
+		if (gCsndOK) CSND_FlushDataCache(out, len[d] * 2);
 	}
+	for (int d = 0; d < NDRUM; d++) { s16* t = gDrumSmp[d]; gDrumSmp[d] = gDrumBack[d]; gDrumBack[d] = t; gDrumLen[d] = len[d]; }   // swap in (the old set keeps ringing out)
 	gDrumBuilt = kit;
+}
+static void drumService(void) {   // main loop, OUTSIDE the voice lock: a kit takes ~0.2 s to synthesise on the 3DS,
+	int k = gDrumWant;             // and holding the lock that long stalled the drum clock (the skip on DRUMS ON / KIT)
+	if (k < 0) return;
+	gDrumWant = -1; int force = k >= 100; k %= 100; if (force || gDrumBuilt != k) drumBuild(k);   // +100: rebuild anyway (the WAVE kit follows OSC A)
 }
 static void drumPickChannels(void) {
 	gNzCh[0] = gNzCh[1] = -1;
@@ -7525,7 +7551,7 @@ static void drumsChanged(void) {   // main thread
 	myDrumLoad();
 	if (gDrums) {
 		if (!gCsndOK) { say("DRUMS NEED THE SECOND SOUND CHIP"); gDrums = 0; return; }
-		if (gDrumBuilt != gKit) drumBuild(gKit);
+		if (gDrumBuilt != gKit) gDrumWant = gKit;   // built after the lock is let go (drumService)
 		drumPickChannels(); gDrumStep = -1; gEuPos = 0;
 	} else if (gCsndOK && gVoiceMode < 3) { for (int d = 0; d < 3; d++) if (gDrumCh[d] >= 0) CSND_SetPlayState(gDrumCh[d], 0); for (int k = 0; k < 2; k++) if (gNzCh[k] >= 0) CSND_SetPlayState(gNzCh[k], 0); csndExecCmds(false); }
 }
@@ -7559,7 +7585,7 @@ static int kitPadOrder(int i) { return gVoiceMode == 7 ? KIT_PAD_ORDER_P[i] : KI
 static void kitEnsure(void) {   // main thread: build the patch's kit and claim its channels
 	if (gVoiceMode < 3 || !gCsndOK) return;
 	int kit = gVoiceMode - 3;
-	if (gDrumBuilt != kit || gKit != kit) { gKit = kit; drumBuild(kit); }
+	if (gDrumBuilt != kit || gKit != kit) { gKit = kit; gDrumWant = kit; }
 	if (gDrumCh[NDCH - 1] < 0 && gDrumCh[3] < 0) drumPickChannels();
 	for (int k = 0; k < NDCH; k++) if (gDrumCh[k] >= 0 && gCsOwner[gDrumCh[k]] >= 0) { CSND_SetPlayState(gDrumCh[k], 0); gCsOwner[gDrumCh[k]] = -1; }
 }
@@ -8262,7 +8288,7 @@ static void visFrame(int page, float dt) {
 // Morph + warp + FFT band-limiting run on core 1 (the system core; the app gets up to 80% of it via
 // APT_SetAppCpuTimeLimit). The main core only posts jobs. gMipsLock guards the shared FFT buffers.
 typedef struct { float pe[2], we[2]; int chg[2]; u32 used[2]; } RebuildJob;
-static RebuildJob gJob; static volatile int gJobTaken = 1;
+static RebuildJob gJob, gMainJob; static volatile int gJobTaken = 1; static int gMainJobDue = 0, gTblDue = 0;
 static int gJobBusy = 0, gWorkerQuit = 0, gJobDone = 0;   // accessed with __atomic ops (cross-core)
 #define AGET(x) __atomic_load_n(&(x), __ATOMIC_ACQUIRE)
 #define ASET(x, v) __atomic_store_n(&(x), (v), __ATOMIC_RELEASE)
@@ -8521,7 +8547,10 @@ int main(void) {
 			if (kDown & (KEY_DUP | KEY_DDOWN)) { dp = (kDown & KEY_DDOWN) ? 1 : -1; repeatT = 0.35f; }
 			else if (kHeld & (KEY_DUP | KEY_DDOWN)) { repeatT -= dt; if (repeatT <= 0) { dp = (kHeld & KEY_DDOWN) ? 1 : -1; repeatT = 0.09f; } }
 			fresh = (kDown & (KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT)) != 0;
+			gBrowseDefer = dp && !fresh;   // held: the list moves, the patch loads when it stops
 			if (ds || dp) { if (browseStep(ds, dp, fresh)) { curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = 1; }
+			gBrowseDefer = 0;
+			if (gBrowsePend && !(kHeld & (KEY_DUP | KEY_DDOWN))) { gBrowsePend = 0; presetLoad(gStyle, gPreset); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = botDirty = 1; }
 			kDown &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT); kHeld &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT);
 		}
 		// parameter editing
@@ -8601,8 +8630,8 @@ int main(void) {
 				if (p->dirty & (D_SCALE | D_SEQ)) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; botDirty = 1; if (p->p == &gSeqMode && gSeqMode == 2) gRecPos = 0; if (p->p == &gSeqMode && gSeqMode != 1) gSeqTr = 0; }
 				if (p->dirty & D_PRESET) { presetLoad(gStyle, gPreset); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				if (p->dirty & (D_TBLA | D_TBLB)) LightLock_Lock(&gMipsLock);
-				if (p->dirty & D_TBLA) tableSelect(&A->tb, A->table);
-				if (p->dirty & D_TBLB) tableSelect(&B->tb, B->table);
+				if (p->dirty & D_TBLA) gTblDue |= 1;   // loaded after the voice lock is let go: a user table comes off the SD card
+				if (p->dirty & D_TBLB) gTblDue |= 2;
 				if (p->dirty & (D_TBLA | D_TBLB)) LightLock_Unlock(&gMipsLock);
 				if (p->dirty & (D_A | D_TBLA)) gForceBuild |= 1;
 				if (p->dirty & (D_B | D_TBLB)) gForceBuild |= 2;
@@ -8753,7 +8782,7 @@ int main(void) {
 			curKey = key;
 		}
 		if (gVoiceMode >= 3 && (gDrumBuilt != gVoiceMode - 3 || gDrumCh[3] < 0)) { kitEnsure(); botDirty = 1; }
-		{ static float st = 0; if (gDrumBuilt == 5 && waveSig() != gWaveSig) { st += 1.0f / 60; if (st > 0.25f) { drumBuild(5); st = 0; } } else st = 0; }   // WAVE kit: the drums follow OSC A's table and WT POS (rebuilt once it settles)
+		{ static float st = 0; if (gDrumBuilt == 5 && waveSig() != gWaveSig) { st += 1.0f / 60; if (st > 0.25f) { gDrumWant = 105; gWaveSig = waveSig(); st = 0; } } else st = 0; }   // WAVE kit: the drums follow OSC A's table and WT POS (rebuilt once it settles)
 		if (gTapeKeys) gTapeStop = !(curKey >= 0 || gHeldN > 0 || gArpN > 0 || gSqNn > 0);   // SLOWDOWN: the loop runs while you hold notes
 		if (page != gCurPage) { gCurPage = page; botDirty = 1; }
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; if (!g) { gStepEd = -1; gSeqSaveDue = 1; } } }
@@ -8779,6 +8808,15 @@ int main(void) {
 			if (we[o] < 0) we[o] = 0;
 			if (we[o] > 1) we[o] = 1;
 		}
+		{   // slew: a note's envelope can yank WT POS / WARP in one step (EP SATURDAY's FM attack); every ringing voice
+			// shares the table, so that jump was a click in the other notes. Big moves now spread over a few frames.
+			static float sp[2] = {-1, -1}, sw[2] = {-1, -1}; const float mx = 0.08f;
+			for (int o = 0; o < 2; o++) {
+				if (sp[o] < 0 || gForceBuild) { sp[o] = pe[o]; sw[o] = we[o]; }
+				sp[o] += fmaxf(-mx, fminf(mx, pe[o] - sp[o])); sw[o] += fmaxf(-mx, fminf(mx, we[o] - sw[o]));
+				pe[o] = sp[o]; we[o] = sw[o];
+			}
+		}
 		int chg[2];
 		for (int o = 0; o < 2; o++) chg[o] = (gForceBuild & (1 << o)) || fabsf(pe[o] - lastPos[o]) > 0.002f || fabsf(we[o] - lastWarp[o]) > 0.002f;
 		if (chg[1] && A->warp >= W_FM) chg[0] = 1;
@@ -8790,7 +8828,7 @@ int main(void) {
 				if (chg[o]) { lastPos[o] = pe[o]; lastWarp[o] = we[o]; gPosEff[o] = pe[o]; }
 			}
 			if (gWorker) { gJob = j; ASET(gJobTaken, 0); ASET(gJobBusy, 1); LightEvent_Signal(&gJobEv); }   // core 1
-			else { LightLock_Lock(&gMipsLock); doRebuild(&j); LightLock_Unlock(&gMipsLock); ASET(gJobDone, 1); }
+			else { gMainJob = j; gMainJobDue = 1; }   // no core 1: rebuilt below, after the voice lock is let go (it used to stall the clock)
 			gForceBuild = 0;
 		}
 		if (AGET(gJobDone)) { ASET(gJobDone, 0); topDirty = 1; }
@@ -8815,6 +8853,9 @@ int main(void) {
 		LightLock_Unlock(&gVoiceLock);
 		// SD writes wait until here, so a page press never holds the lock the audio tick needs
 		if (gPageMarkDue) { gPageMarkDue = 0; settingsSave(page); char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
+		if (gTblDue) { int t = gTblDue; gTblDue = 0; LightLock_Lock(&gMipsLock); if (t & 1) tableSelect(&A->tb, A->table); if (t & 2) tableSelect(&B->tb, B->table); LightLock_Unlock(&gMipsLock); gForceBuild |= t; topDirty = 1; }
+		if (gMainJobDue) { gMainJobDue = 0; LightLock_Lock(&gMipsLock); doRebuild(&gMainJob); LightLock_Unlock(&gMipsLock); ASET(gJobDone, 1); }
+		drumService();
 		if (gSeqSaveDue) { gSeqSaveDue = 0; LightLock_Lock(&gVoiceLock); seqSnap(); LightLock_Unlock(&gVoiceLock); seqWriteSnap(); }
 		{ static int sk = 0; int now = skipRecent(); if (now != sk) { sk = now; topDirty = 1; } }
 
