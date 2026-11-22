@@ -118,10 +118,10 @@ static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
 static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
 static float gVisBeat = 0;
 static int gVisTrails = 0, gVisParts = 1, gVisBurst = 0;
-#define NTHEMES 16
+#define NTHEMES 17
 static const char* THEME_NAMES[NTHEMES] = {"ORIGINAL", "PIP GREEN", "DOS BLUE", "AMBER EGA", "MAGENTA", "STICKER", "IMPULSE",
-	"CYBER", "SOLARIZED", "GB POCKET", "VAPORWAVE", "CGA", "SINCLAIR", "X11", "NORD", "ACID"};
-static int gTheme = 0, gScan = 0, gBright = 0;   // gBright: screen brightness 1..5, 0 = leave the system setting
+	"CYBER", "SOLARIZED", "GB POCKET", "VAPORWAVE", "CGA", "SINCLAIR", "X11", "NORD", "ACID", "BBS"};
+static int gTheme = 16,   /* BBS: the default look */ gScan = 0, gBright = 0;   // gBright: screen brightness 1..5, 0 = leave the system setting
 static const char* BRIGHT_NAMES[6] = {"SYSTEM", "1 DIM", "2", "3", "4", "5 BRIGHT"};
    // graphics-chip visuals (see visFrame); off by default while being tested on hardware
 static int gInAudioTick = 0;
@@ -3608,6 +3608,7 @@ typedef struct {
 	u8 acc[4];        // EGA visual ramp (unused when smooth)
 	int ega;          // 1: EGA-style (meters, dotted grids, outlined tabs, quantised visual colours)
 	int rampOn; u8 ramp[3][3];   // visual colour ramp (GPU visuals) for non-EGA themes; ORIGINAL uses amber > magenta > cyan
+	int boxed;        // 1: panels are whole double-line boxes (BBS menu style), not corner marks
 } Theme;
 static const Theme THEMES[NTHEMES] = {
 	{"ORIGINAL", {14, 9, 4}, {200, 110, 20}, {150, 100, 40}, {255, 225, 170}, {70, 44, 14}, {255, 220, 160}, {255, 225, 170}, {255, 80, 60},
@@ -3661,6 +3662,11 @@ static const Theme THEMES[NTHEMES] = {
 	{"ACID", {6, 8, 6}, {85, 255, 85}, {40, 120, 40}, {230, 255, 230}, {255, 255, 0}, {0, 0, 0}, {0, 255, 255}, {255, 0, 128},
 	 {205, 235, 205}, {4, 6, 4}, {85, 255, 85}, {255, 255, 0}, {40, 120, 40}, {4, 6, 4}, {24, 40, 24}, {85, 255, 85}, {12, 16, 12}, {30, 50, 30}, {0, 0, 0, 0}, 0,
 	 1, {{255, 255, 0}, {85, 255, 85}, {255, 0, 255}}},
+	// BBS: a dial-up board's ANSI main menu - black, double-line cyan boxes, light grey labels, bright cyan values,
+	// a dark teal selection bar; readable first (grey on black, not dim teal)
+	{"BBS", {0, 0, 0}, {0, 170, 170}, {170, 170, 170}, {230, 230, 230}, {0, 92, 92}, {255, 255, 255}, {85, 255, 255}, {255, 85, 85},
+	 {200, 200, 200}, {0, 0, 0}, {85, 255, 255}, {0, 170, 170}, {0, 120, 120}, {0, 0, 0}, {0, 34, 34}, {85, 255, 255}, {0, 16, 16}, {0, 60, 60}, {3, 11, 7, 15}, 1,
+	 0, {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}}, 1}
 };
 #define TH (&THEMES[gTheme])
 #define RGB3(a) (a)[0], (a)[1], (a)[2]
@@ -3678,7 +3684,9 @@ static const Theme THEMES[NTHEMES] = {
 #define WARN  RGB3(TH->warn)
 
 // Pip-Boy style corner brackets around a panel
+static void outline(int x, int y, int w, int h, u8 r, u8 g, u8 b);
 static void frame(int x, int y, int w, int h) {
+	if (TH->boxed) { outline(x, y, w, h, LINE); outline(x + 2, y + 2, w - 4, h - 4, LINE); return; }   // BBS: a double-line box
 	int L = 8;
 	rect(x, y, L, 1, LINE); rect(x, y, 1, L, LINE);
 	rect(x + w - L, y, L, 1, LINE); rect(x + w - 1, y, 1, L, LINE);
@@ -3976,7 +3984,7 @@ static int paramDst(const void* p) {   // the matrix destination that moves this
 	return -1;
 }
 static const char* SET_PATH = "sdmc:/3ds/syrup/settings.bin";
-static void settingsSave(int page) { FILE* f = safeOpen(SET_PATH); if (!f) return; int d[6] = {0x53455432, page, gStickMode, gSpkEq, gBright, gSeqRate}; safeClose(f, SET_PATH, fwrite(d, sizeof(d), 1, f) == 1); }
+static void settingsSave(int page) { FILE* f = safeOpen(SET_PATH); if (!f) return; int d[7] = {0x53455432, page, gStickMode, gSpkEq, gBright, gSeqRate, gTheme}; safeClose(f, SET_PATH, fwrite(d, sizeof(d), 1, f) == 1); }
 static int settingsLoad(void) {   // returns the page you were on last time
 	FILE* f = safeRead(SET_PATH); int d[4] = {0}, pg = 0; if (!f) return pg;   // first run: the browser
 	if (fread(d, sizeof(d), 1, f) == 1 && (d[0] == 0x53455431 || d[0] == 0x53455432)) {
@@ -3984,6 +3992,7 @@ static int settingsLoad(void) {   // returns the page you were on last time
 		gStickMode = d[0] == 0x53455432 && d[2] >= 0 && d[2] < 4 ? d[2] : SM_DATA;   // older settings: the new default, DATA
 		int b = 0; if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 6) gBright = b;   // older settings: no brightness, SYSTEM
 		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 3) gSeqRate = b;
+		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < NTHEMES) gTheme = b;   // the theme you picked stays picked
 	}
 	fclose(f); return pg;
 }
@@ -5791,7 +5800,31 @@ static void drawPerfRow(int latch) {   // the row above the keys: SCALE, PLAY, P
 		else { rect(1, y + 1, KB_X - 3, SIDE_H - 2, RGB3(TH->tab)); text(KB_X / 2 - 16, y + SIDE_H / 2 - 4, SB[i], 1, RGB3(TH->tabTxt)); }
 	}
 }
+// THEME picker: every theme at once on the bottom screen, each drawn in its own colours; tap one (B or CLOSE leaves)
+static int gThemePick = 0, gBrightSaveDue = 0;
+#define TP_COLS 3
+#define TP_CH 30
+static void drawThemePick(void) {
+	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
+	rectP(0, 0, 320, 240, TH->bg);
+	text(6, 6, "PICK A THEME", 1, RGB3(TH->val));
+	rectP(262, 2, 54, 16, TH->keyOn); text(267, 6, "CLOSE", 1, RGB3(EGA[0]));
+	for (int i = 0; i < NTHEMES; i++) {
+		const Theme* t = &THEMES[i]; int x = 4 + (i % TP_COLS) * 105, y = 22 + (i / TP_COLS) * (TP_CH + 4), w = 101;
+		rectP(x, y, w, TP_CH, t->bg); outlineP(x, y, w, TP_CH, t->line);
+		if (i == gTheme) { outlineP(x - 1, y - 1, w + 2, TP_CH + 2, t->val); outlineP(x + 1, y + 1, w - 2, TP_CH - 2, t->val); }
+		text(x + 5, y + 5, t->name, 1, RGB3(t->txt));
+		rectP(x + 5, y + 18, 14, 6, t->val); rectP(x + 21, y + 18, 14, 6, t->keyOn); rectP(x + 37, y + 18, 14, 6, t->hi); rectP(x + 53, y + 18, 14, 6, t->warn);
+	}
+}
+static int themePickTouch(int x, int y) {   // 1 = picked or closed
+	if (y < 20) { if (x >= 262) { gThemePick = 0; return 1; } return 0; }
+	int c = (x - 4) / 105, r = (y - 22) / (TP_CH + 4); if (c < 0 || c >= TP_COLS || r < 0) return 0;
+	int i = r * TP_COLS + c; if (i >= NTHEMES) return 0;
+	gTheme = i; gThemePick = 0; gBrightSaveDue = 1; char m[32]; snprintf(m, sizeof(m), "THEME: %s", THEME_NAMES[i]); say(m); return 1;
+}
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
+	if (gThemePick) { drawThemePick(); return; }
 	drawBottomMain(base, on, helpOn, latch);
 	if ((gPads && !gGridOn) || gModOn || gGridOn || gDrumOnB) return;
 	if (gShapeOn && !gGridOn && !gAddEdit) drawShapeEditor();
@@ -5827,7 +5860,6 @@ static void extrasBasicInit(void) {
 }
 static u32 brTop(void) { return gBright ? (u32)gBright : gBrightTop; }   // gBrightTop / Bot: the system's own, put back on exit
 static u32 brBot(void) { return gBright ? (u32)gBright : gBrightBot; }
-static int gBrightSaveDue = 0;
 static void beatLightTick(float dt) {   // brightness jump on each arp / sequencer step, then back; BRIGHTNESS setting
 	if (!gLcdOK) return;
 	static int applied = 0;
@@ -9568,6 +9600,7 @@ int main(void) {
 		if (kDown & KEY_X) { page = navStep(page, 1); topDirty = 1; }
 		if (kDown & KEY_Y) { page = navStep(page, -1); topDirty = 1; }
 		if (kDown & KEY_A) { if (page == 0) browseSave(); else gChord = (gChord + 1) % 5; topDirty = 1; }
+		if (gThemePick && (kDown & KEY_B)) { gThemePick = 0; kDown &= ~KEY_B; botDirty = 1; }   // B closes the theme picker
 		if (kDown & KEY_B) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
 		if (kDown & (KEY_L | KEY_R)) {   // shoulders: OCT- / OCT+ (X / Y step the pages)
 			int d = (kDown & KEY_R) ? 1 : -1;
@@ -9580,7 +9613,7 @@ int main(void) {
 		if (startAct == 2) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0;
 			panicRest();
 			say("PANIC: EVERYTHING STOPPED"); }
-		if (startAct == 4) { gTheme = (gTheme + 1) % NTHEMES; char m[32]; snprintf(m, sizeof(m), "THEME: %s", THEME_NAMES[gTheme]); say(m); }
+		if (startAct == 4) { gThemePick = 1; botDirty = 1; }   // THEME: the picker, every theme at once
 		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
 
 		if (page == 0) {   // preset browser: the D-pad moves through the list itself
@@ -9628,6 +9661,7 @@ int main(void) {
 				hintT -= dt;
 			}
 		}
+		if (dir && PAGES[page][sel[page]].p == &gTheme) { dir = 0; gThemePick = !gThemePick; botDirty = 1; }   // THEME: < or > opens the picker
 		if (dir) {
 			Param* p = &PAGES[page][sel[page]];
 			if ((p->dirty & (D_LOOPTAB | D_MICTAB | D_CAMTAB | D_DLWT | D_UPDATE)) && dir > 0 && !fast) {
@@ -9679,7 +9713,7 @@ int main(void) {
 				else if (p->dirty & D_CAMV) vidChanged();
 				if (p->dirty & D_NETMIDI) netMidiChanged();
 				if (p->dirty & D_LINK) linkChanged();
-				if (p->dirty & D_THEME) botDirty = 1;
+				if (p->dirty & D_THEME) { botDirty = 1; gBrightSaveDue = 1; }   /* (saves the theme with the settings) */
 				if (p->dirty & (D_SCALE | D_SEQ)) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; botDirty = 1; if (p->p == &gSeqMode && gSeqMode == 2) gRecPos = 0; if (p->p == &gSeqMode && gSeqMode != 1) gSeqTr = 0; }
 				if (p->dirty & D_PRESET) { presetLoad(gStyle, gPreset); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				if (p->dirty & (D_TBLA | D_TBLB)) LightLock_Lock(&gMipsLock);
@@ -9748,7 +9782,8 @@ int main(void) {
 		float vel = 0.8f;
 		if (touching) {
 			touchPosition t; hidTouchRead(&t);
-			if (t.py < TAB_H) {
+			if (gThemePick) { if (!prevTouch && themePickTouch(t.px, t.py)) topDirty = botDirty = topAgain = botAgain = 1; }
+			else if (t.py < TAB_H) {
 				if (!prevTouch) {
 					int b = t.px * NCHIP / 320, again = !gPads && chipOfPage(page) == b;
 					if (b == 6) { gPads = !gPads; gPadSel = -1; if (gPads && page == 7) page = 1; /* the piano roll owns the whole screen: leave it for the pads */ if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: LOW = TRIAD, MID = 7TH, TOP = 9TH; EDGES = INVERSION / SUS4"); }
