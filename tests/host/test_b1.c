@@ -71,6 +71,10 @@ static void SCRIPT(int fr) {
 		padsTouch(48, 290, PROG_Y + 8, 1, &v); if (!gProgAuto) fail("PROG: AUTO should turn on"); gBPM = 240; }
 	if (fr == 113) shotBot("shots/pads_prog.ppm");
 	if (fr == 114 + 140) { if (gProgAt < 1) fail("PROG AUTO: a second at 240 BPM should have moved on (%d)", gProgAt); gProgAuto = 0; gPads = 0; playSet(NULL, 0, 0.8f); gBPM = 120; }
+	// ONE KIT: a kit patch and the drum machine play the same kit
+	if (fr == 255) { gVoiceMode = 4; gDrums = 1; drumsChanged(); }
+	if (fr == 258) { if (gKit != 1) fail("ONE KIT: 909 KIT mode should set the drum machine's kit (%d)", gKit); gKit = 0; }
+	if (fr == 261) { if (gVoiceMode != 3) fail("ONE KIT: the drum machine's KIT should move the keys' kit (%d)", gVoiceMode); if (gDrumBuilt != 0) fail("ONE KIT: kit 808 should be built (%d)", gDrumBuilt); gVoiceMode = 0; gDrums = 0; drumsChanged(); }
 	// QUICK SELECT bars: SELECT + circle pad. UP = pages (lean right = further along), RIGHT / LEFT = this page's
 	// choices, DOWN = transport
 	if (fr >= 70 && fr < 76) { HD |= KEY_SELECT; CX = -29; CY = 150; }   // up, leaning a little left: the 5th page (FILT)
@@ -92,7 +96,7 @@ static void SCRIPT(int fr) {
 	if (fr == 98 && gSeqMode != 1) fail("QUICK: down should PLAY");
 }
 int main(void) {
-	mkdir("sd", 0777); loadFont(); FRMAX = 260; app_main();
+	mkdir("sd", 0777); loadFont(); FRMAX = 264; app_main();
 	printf("b1: SELECT transport + combos, undo/redo, L/R octave, MONO chord, RIFF octave\n");
 	return gFails ? 1 : 0;
 }

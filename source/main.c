@@ -7914,6 +7914,18 @@ static void kitEnsure(void) {   // main thread: build the patch's kit and claim 
 	if (gDrumCh[NDCH - 1] < 0 && gDrumCh[3] < 0) drumPickChannels();
 	for (int k = 0; k < NDCH; k++) if (gDrumCh[k] >= 0 && gCsOwner[gDrumCh[k]] >= 0) { CSND_SetPlayState(gDrumCh[k], 0); gCsOwner[gDrumCh[k]] = -1; }
 }
+// ONE KIT: a kit patch (voice MODE 808 KIT .. WAVE KIT) and the drum machine play the same kit. They used to build
+// over each other (only one kit fits in memory at a time), so the drums skipped and switched sounds. Whichever you
+// changed last wins and the other follows.
+static void kitSync(void) {   // main loop
+	static int lastKit = -1, lastMode = -1;
+	if (gVoiceMode >= 3) {
+		if (gVoiceMode != lastMode) gKit = gVoiceMode - 3;          // picked a kit patch / mode: the drum machine follows
+		else if (gKit != lastKit) gVoiceMode = gKit + 3;            // changed the drum machine's KIT: the keys follow
+		if (gDrums && gDrumBuilt != gKit) gDrumWant = gKit;
+	}
+	lastKit = gKit; lastMode = gVoiceMode;
+}
 static void kitHitSound(int d, float vel);
 static void shakeQTick(void) {   // audio thread, after the clocks: a held shake lands on the next 16th / 8th
 	static int last = -1;
@@ -9283,6 +9295,7 @@ int main(void) {
 		if (gPageMarkDue) { gPageMarkDue = 0; settingsSave(page); char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
 		if (gTblDue) { int t = gTblDue; gTblDue = 0; LightLock_Lock(&gMipsLock); if (t & 1) tableSelect(&A->tb, A->table); if (t & 2) tableSelect(&B->tb, B->table); LightLock_Unlock(&gMipsLock); gForceBuild |= t; topDirty = 1; }
 		if (gMainJobDue) { gMainJobDue = 0; LightLock_Lock(&gMipsLock); doRebuild(&gMainJob); LightLock_Unlock(&gMipsLock); ASET(gJobDone, 1); }
+		kitSync();
 		drumService();
 		if (gDrumSaveDue) { gDrumSaveDue = 0; myDrumSave(); }
 		if (gLearnSaveDue) { gLearnSaveDue = 0; learnSave(); }
