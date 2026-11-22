@@ -41,9 +41,21 @@ static void SCRIPT(int fr) {
 	if (fr == 64) { gGridOct = 0; int lo = gridNote(0); for (int k = 0; k < 40; k++) { acidGen(); for (int s = 0; s < 16; s++) if (gSeq[s].n && (gSeq[s].note[0] < lo || gSeq[s].note[0] >= lo + 12)) { fail("RIFF left the octave (%d, base %d)", gSeq[s].note[0], lo); k = 99; break; } } }
 	// HELP: L/R flip the slides, another button closes
 	if (fr == 66) gHelpSlide = 0;
+	// QUICK SELECT bars: SELECT + circle pad. UP = pages (lean right = further along), RIGHT / LEFT = this page's
+	// choices, DOWN = transport
+	if (fr >= 70 && fr < 76) { HD |= KEY_SELECT; CX = -29; CY = 150; }   // up, leaning a little left: the 5th page (FILT)
+	if (fr == 73) shotTop("shots/quick_bars.ppm");
+	if (fr == 78 && gCurPage != 4) fail("QUICK: up, leaning left, should land on FILT+ENV (%d)", gCurPage);
+	if (fr == 80) gFiltType = 0;
+	if (fr >= 82 && fr < 88) { HD |= KEY_SELECT; CX = -150; CY = -60; }   // left bar on FILT+ENV: FILTER type, lean down = further
+	if (fr == 86) shotTop("shots/quick_side.ppm");
+	if (fr == 90 && gSeqMode == 1) fail("QUICK: a pick shouldn't toggle PLAY");
+	if (fr == 90 && gFiltType == 0) fail("QUICK: the left bar should pick another FILTER type (%d)", gFiltType);
+	if (fr >= 92 && fr < 96) { HD |= KEY_SELECT; CX = 0; CY = -150; }   // down, centre: PLAY
+	if (fr == 98 && gSeqMode != 1) fail("QUICK: down should PLAY");
 }
 int main(void) {
-	mkdir("sd", 0777); loadFont(); FRMAX = 70; app_main();
+	mkdir("sd", 0777); loadFont(); FRMAX = 114; app_main();
 	printf("b1: SELECT transport + combos, undo/redo, L/R octave, MONO chord, RIFF octave\n");
 	return gFails ? 1 : 0;
 }

@@ -4889,6 +4889,73 @@ static void drawStartMenu(void) {
 	}
 	text(200 - 16 * 4, my + mh - 12, "A: OK  B: CLOSE", 1, RGB3(TH->dim));
 }
+// QUICK SELECT: hold SELECT and push the circle pad. Four bars: UP = every page (always), DOWN = the transport
+// (REC, PLAY/STOP, TAPE), LEFT and RIGHT = this page's two main choices (the patch list, the table, the filter
+// type, the kit ...). Push toward a bar, then lean along it (the diagonals) to slide to an option; let go of
+// SELECT to take it. Centred, nothing happens (a tap of SELECT is still PLAY / STOP).
+static int gQuickBar = -1, gQuickIdx = 0, gQuickDir = 0;   // bar: 0 up, 1 right, 2 down, 3 left; -1 = none lit
+static const char* presetName(int st, int ix);
+static const char* QPAGE[NPAGES] = {"PAT", "OSA", "OSB", "SUB", "FLT", "MOD", "VCE", "SEQ", "VIS", "HW", "MFX", "DRM"};   // 3 letters: twelve fit across
+static const char* QTRANS[3] = {"REC", "PLAY/STOP", "TAPE REC"};
+static Param* quickParam(int page, int which) {   // the page's first / second choice control (an enum)
+	if (page == 0) return NULL;
+	int k = 0;
+	for (int i = 0; PAGES[page][i].name; i++) {
+		Param* p = &PAGES[page][i];
+		if (p->type != PT_E || p->names == PRESS_RIGHT || (p->dirty & (D_SAVE | D_INIT | D_REST | D_CLEAR | D_PRESET | D_STYLE))) continue;
+		if (k++ == which) return p;
+	}
+	return NULL;
+}
+static int quickCount(int page, int side) {   // options on a side bar (side 0 = left, 1 = right)
+	if (page == 0) return side == 0 ? NSTYLES : presetCount(gStyle);
+	Param* p = quickParam(page, side); if (!p) return 0;
+	return p->names == TABLE_NAME_DUMMY ? gTableCount : (int)p->mx - (int)p->mn + 1;
+}
+static void quickName(int page, int side, int i, char* o, int n) {
+	if (page == 0) { snprintf(o, n, "%.14s", side == 0 ? STYLE_NAMES[i] : presetName(gStyle, i)); return; }
+	Param* p = quickParam(page, side); if (!p) { o[0] = 0; return; }
+	int v = (int)p->mn + i, keep = *(int*)p->p; *(int*)p->p = v; char t[24]; paramFmt(p, t, sizeof(t)); *(int*)p->p = keep;
+	snprintf(o, n, "%.14s", t);
+}
+static int quickCur(int page, int side) {
+	if (page == 0) return side == 0 ? gStyle : gPreset;
+	Param* p = quickParam(page, side); return p ? *(int*)p->p - (int)p->mn : 0;
+}
+static void drawQuick(int page) {
+	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
+	rect(0, 14, 400, 226, RGB3(TH->bg)); outline(2, 16, 396, 222, RGB3(TH->line));
+	const u8* on = TH->keyOn; char t[24];
+	// UP: every page
+	for (int i = 0; i < NPAGES; i++) {
+		int pg = NAV[i], x = 6 + i * 33, lit = gQuickBar == 0 && gQuickIdx == i, here = pg == page;
+		if (lit) rect(x - 1, 20, 33, 12, RGB3(on)); else if (here) outline(x - 1, 20, 33, 12, RGB3(TH->line));
+		const u8* c = lit ? EGA[0] : TH->tabTxt; text(x + 16 - (int)strlen(QPAGE[pg]) * 4, 22, QPAGE[pg], 1, c[0], c[1], c[2]);
+	}
+	// DOWN: the transport
+	for (int i = 0; i < 3; i++) {
+		const char* nm = i == 1 ? (gSeqMode == 1 ? "STOP" : "PLAY") : QTRANS[i];
+		int w = (int)strlen(nm) * 8, x = 200 + (i - 1) * 120 - w / 2, lit = gQuickBar == 2 && gQuickIdx == i;
+		if (lit) rect(x - 5, 218, w + 10, 14, RGB3(on));
+		const u8* c = lit ? EGA[0] : TH->tabTxt; text(x, 221, nm, 1, c[0], c[1], c[2]);
+	}
+	// LEFT / RIGHT: this page's two choices, a window of the list around what's picked
+	for (int side = 0; side < 2; side++) {
+		int n = quickCount(page, side); int bar = side ? 1 : 3, x = side ? 270 : 10;
+		const char* hd = page == 0 ? (side ? "PATCH" : "STYLE") : (quickParam(page, side) ? quickParam(page, side)->name : "");
+		text(x, 40, hd, 1, RGB3(TH->dim));
+		if (!n) continue;
+		int sel = gQuickBar == bar ? gQuickIdx : quickCur(page, side), first = sel - 6; if (first > n - 12) first = n - 12; if (first < 0) first = 0;
+		for (int i = first, row = 0; i < n && row < 12; i++, row++) {
+			int y = 54 + row * 12, lit = gQuickBar == bar && gQuickIdx == i, cur = i == quickCur(page, side);
+			quickName(page, side, i, t, sizeof(t));
+			if (lit) rect(x - 3, y - 2, 124, 12, RGB3(on)); else if (cur) outline(x - 3, y - 2, 124, 12, RGB3(TH->line));
+			const u8* c = lit ? EGA[0] : TH->tabTxt; text(x, y, t, 1, c[0], c[1], c[2]);
+		}
+	}
+	char h[48]; snprintf(h, sizeof(h), "%s: LEAN ALONG A BAR, LET GO", gQuickBar == 0 ? PAGE_NAMES[NAV[gQuickIdx]] : "SELECT");
+	text(200 - (int)strlen(h) * 4, 205, h, 1, RGB3(TH->dim));
+}
 #define ENV_X0 16                // inset from the edge: a stylus can't reach the last pixels under the bezel
 #define ENV_TOP (SH_Y + 14)       // clear of the tabs above and the A/D/S/R readout
 #define ENV_BOT (SH_Y + SH_H - 14)   // clear of the PERF buttons below
@@ -8506,14 +8573,44 @@ int main(void) {
 		{   // SELECT: tap = PLAY / STOP (sequencer and drums together). Held, it's a modifier:
 			// SELECT+L undo, SELECT+R redo, SELECT+DOWN panic. The tap acts on release, only if nothing was combined.
 			static u32 prevHeld = 0; static int selCombo = 0, drumsWas = 0; u32 kUp = prevHeld & ~kHeld; prevHeld = kHeld;
-			if (kDown & KEY_SELECT) selCombo = 0;
+			static int qBar = -1, qIdx = 0;
+			if (kDown & KEY_SELECT) { selCombo = 0; qBar = -1; }
 			if (selSwallow) { selCombo = 1; if (!(kHeld & KEY_SELECT)) selSwallow = 0; }   // the press that closed HELP isn't PLAY
+			gQuickBar = -1;
 			if (kHeld & KEY_SELECT) {
+				circlePosition qp; hidCircleRead(&qp); float qx = qp.dx / 150.0f, qy = qp.dy / 150.0f;
+				if (qx * qx + qy * qy > 0.5f * 0.5f) {   // a bar: the main direction; the other axis slides along it
+					int bar = fabsf(qy) >= fabsf(qx) ? (qy > 0 ? 0 : 2) : (qx > 0 ? 1 : 3);
+					int n = bar == 0 ? NPAGES : bar == 2 ? 3 : quickCount(page, bar == 1 ? 1 : 0);
+					float along = (bar == 0 || bar == 2) ? qx : -qy;   // across: left -> right; side bars: top -> bottom
+					along = along * 1.4f; if (along > 1) along = 1; if (along < -1) along = -1;
+					if (n > 0) {
+						if (bar != qBar) qIdx = bar == 0 ? 0 : bar == 2 ? 1 : quickCur(page, bar == 1 ? 1 : 0);   // a side bar starts on what's picked
+						int i = (bar == 1 || bar == 3) ? (int)lroundf(quickCur(page, bar == 1 ? 1 : 0) + along * 6) : (int)lroundf((along + 1) * 0.5f * (n - 1));
+						if (bar == 0 || bar == 2) i = (int)lroundf((along + 1) * 0.5f * (n - 1));
+						qIdx = i < 0 ? 0 : i >= n ? n - 1 : i; qBar = bar; selCombo = 1;
+					}
+				}
+				if (qBar >= 0) { gQuickBar = qBar; gQuickIdx = qIdx; topDirty = 1; kDown &= ~(KEY_A | KEY_B | KEY_X | KEY_Y | KEY_DUP | KEY_DDOWN); }
 				if (kDown & KEY_L) { selCombo = 1; int r = histStep(1); say(r == 1 ? "UNDO: PATTERN" : r == 2 ? "UNDO: PATCH EDIT" : "NOTHING TO UNDO"); topDirty = botDirty = 1; }
 				if (kDown & KEY_R) { selCombo = 1; int r = histStep(0); say(r == 1 ? "REDO: PATTERN" : r == 2 ? "REDO: PATCH EDIT" : "NOTHING TO REDO"); topDirty = botDirty = 1; }
 				if (kDown & KEY_DDOWN) { selCombo = 1; startAct = 2; }   // PANIC, below
 				if (kDown & (KEY_DUP | KEY_DLEFT | KEY_DRIGHT)) selCombo = 1;
 				kDown &= ~(KEY_L | KEY_R | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT); kHeld &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT);
+			}
+			if ((kUp & KEY_SELECT) && qBar >= 0) {   // take what's lit
+				int b = qBar; qBar = -1; topDirty = botDirty = 1;
+				if (b == 0) { page = NAV[qIdx]; gPads = 0; }
+				else if (b == 2) { if (qIdx == 0) liveRecToggle(); else if (qIdx == 2) { if (gTapeRec >= 0) tapeRecStop(0); else tapeRecStart(); } else selCombo = 0; }   // PLAY / STOP: below
+				else if (page == 0) {
+					if (b == 3) { gStyle = qIdx; gPreset = 0; } else gPreset = qIdx;
+					gEdited = 0; gGuard = 0; if (gStyle < NSTYLES - 1 || gUser[gPreset].magic == PATCH_MAGIC) presetLoad(gStyle, gPreset);
+					curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0;
+				} else {
+					Param* qp = quickParam(page, b == 1 ? 1 : 0);
+					if (qp) { int t = (int)qp->mn + qIdx; for (int i = 0; PAGES[page][i].name; i++) if (&PAGES[page][i] == qp) sel[page] = i;
+						if (t > (int)qp->mn) { *(int*)qp->p = t - 1; gQuickDir = 1; } else { *(int*)qp->p = t + 1; gQuickDir = -1; } }   // one step onto it below, so its side effects run
+				}
 			}
 			if ((kUp & KEY_SELECT) && !selCombo) {
 				gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0);
@@ -8558,6 +8655,7 @@ int main(void) {
 		if (kDown & KEY_DUP)   { sel[page] = (sel[page] + n - 1) % n; topDirty = 1; }
 		if (kDown & KEY_DDOWN) { sel[page] = (sel[page] + 1) % n; topDirty = 1; }
 		int dir = 0, fast = 0;
+		if (gQuickDir) { dir = gQuickDir; gQuickDir = 0; }   // QUICK SELECT picked a value: land on it through the normal path
 		if (kDown & (KEY_DLEFT | KEY_DRIGHT)) { dir = (kDown & KEY_DRIGHT) ? 1 : -1; repeatT = 0.35f; }
 		else if (kHeld & (KEY_DLEFT | KEY_DRIGHT)) { repeatT -= dt; if (repeatT <= 0) { dir = (kHeld & KEY_DRIGHT) ? 1 : -1; repeatT = 0.05f; fast = 1; } }
 		else if (gStickDX != 0 && page != 0 && !gStartMenu) {   // circle pad DATA: the further it's pushed, the faster the value moves (2 to 30 steps a second)
@@ -8646,6 +8744,7 @@ int main(void) {
 		// circle pad: soft dead zone (no jump at its edge), clamp, then smooth (~35 ms) so bends and STICK mod glide
 		static float sx = 0, sy = 0;
 		float rx = cp.dx / 150.0f, ry = cp.dy / 150.0f;
+		if (kHeld & KEY_SELECT) rx = ry = 0;   // held SELECT: the pad drives QUICK SELECT, not bend / data
 		// wide centre dead zone on L/R (bend) and a curved response so small moves bend gently
 		#define DZ(v, z) (fabsf(v) < (z) ? 0.0f : ((v) > 0 ? ((v) - (z)) : ((v) + (z))) / (1.0f - (z)))
 		rx = DZ(rx, 0.30f); ry = DZ(ry, 0.15f);
@@ -8899,7 +8998,8 @@ int main(void) {
 					else { frame(4, 30, 196, 125); text(8, 34, "A", 1, DIM); text(8, 96, "B", 1, DIM); }
 					scanlines();
 				}
-				if (gStartMenu) drawStartMenu();
+				if (gQuickBar >= 0) drawQuick(page);
+				else if (gStartMenu) drawStartMenu();
 				else if (gCallT > 0 && page != 8) {   // big value pop-up, drawn last so the visuals don't cover it
 					fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
 					const Param* cp = (const Param*)gCallP; int bar = cp && cp->type != PT_E && cp->mx > cp->mn;
