@@ -38,7 +38,7 @@ static void SCRIPT(int fr) {
 	if (fr == 62) { memset(gSeq, 0, sizeof(gSeq)); stepSetNote(0, 60, 1); const Param* p = NULL; for (int i = 0; PAGES[7][i].name; i++) if (PAGES[7][i].dirty & D_CLEAR) p = &PAGES[7][i]; if (!p) fail("no CLEAR control"); else {
 		int pg = 7; (void)pg; } }
 	// RIFF stays inside the octave
-	if (fr == 64) { gGridOct = 0; int lo = gridNote(0); for (int k = 0; k < 40; k++) { acidGen(); for (int s = 0; s < 16; s++) if (gSeq[s].n && (gSeq[s].note[0] < lo || gSeq[s].note[0] >= lo + 12)) { fail("RIFF left the octave (%d, base %d)", gSeq[s].note[0], lo); k = 99; break; } } }
+	if (fr == 64) { gGridOct = 1; gRollLow = 36; int lo = riffBase(); if (lo != 36 + gRoot % 12 && lo != 24 + gRoot % 12) fail("RIFF: its base should be the roll's octave (%d, roll %d)", lo, gRollLow); for (int k = 0; k < 40; k++) { acidGen(); for (int s = 0; s < 16; s++) if (gSeq[s].n && (gSeq[s].note[0] < lo || gSeq[s].note[0] >= lo + 12)) { fail("RIFF left the roll's octave (%d, base %d)", gSeq[s].note[0], lo); k = 99; break; } } gGridOct = 0; }
 	// HELP: L/R flip the slides, another button closes
 	if (fr == 66) gHelpSlide = 0;
 	if (fr == 67) {   // piano roll: drag a note's head to move it; drag a 1-step note's tail = length

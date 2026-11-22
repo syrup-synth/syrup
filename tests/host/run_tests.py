@@ -58,8 +58,9 @@ for f in ('seq.bin', 'settings.bin', 'last.bin'):
     except OSError: pass
 for st in range(32):
     for ix in range(16):
-        try: os.remove(os.path.join(BUILD, 'sd', 'last.bin'))
-        except OSError: pass
+        for f in ('last.bin', 'mydrums.bin'):   # each patch from a fresh card (MINE patches play the starter beat)
+            try: os.remove(os.path.join(BUILD, 'sd', f))
+            except OSError: pass
         r = sh(['./test_patch', str(st), str(ix)], timeout=60)
         if r.returncode == 3: continue
         if r.returncode:

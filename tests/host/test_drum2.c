@@ -83,5 +83,12 @@ static void SCRIPT(int fr) {
 	if (fr == 2090) { int k = gSeSel; (void)k; }
 	if (fr == 2092 || fr == 2093) HD |= KEY_B;
 	if (fr == 2095 && gStepEd >= 0) fail("PAD: B should close the step editor");
+	// DRUMS inside the SEQ page: its DRUMS button, the grid under the buttons, a tap sets a step, NOTES goes back
+	if (fr == 2097) { gridButtons(4 * 320 / GRID_BTNS + 5); if (gPatView != 3) fail("SEQ DRUMS: the button should show the drums (%d)", gPatView); only(1, 0, 0, 0); }
+	if (fr == 2099 || fr == 2100) { TOUCH = 1; TX = DG_LX + (int)(6.5f * (320 - DG_LX - 2) / 16.0f); TY = TAB_H + 2 + 16 + 18 + 18 + 5; }   // SNARE, step 7
+	if (fr == 2103) { if (!gMyDrum[1][6]) fail("SEQ DRUMS: a tap on the grid in the sequencer should set the step");
+		fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320; drawGrid(); shotBot("shots/seq_drums.ppm");
+		gridButtons(4 * 320 / GRID_BTNS + 5); if (gPatView != 0) fail("SEQ DRUMS: NOTES should go back to the piano roll"); }
+	if (fr == 2104) { fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320; splashDraw(); shotBot("shots/loading_tip.ppm"); }
 }
-int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 2100; app_main(); printf("drum2: ratchets, conditions, row rate / length, sound editor, holds, beats\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 2108; app_main(); printf("drum2: ratchets, conditions, row rate / length, sound editor, holds, beats\n"); return gFails ? 1 : 0; }
