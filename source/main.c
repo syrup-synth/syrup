@@ -6622,8 +6622,14 @@ static int tapeTouch(int x, int y, int press, int release) {
 	if (y < TP_RY || t < 0 || t >= NTRK) return press;
 	if (press && x < 44) { if (gTapeRec < 0) gTapeArm = t; return 1; }
 	if (press && x >= 168 && x < 208) { gTpMute[t] = !gTpMute[t]; tapeVol(t); return 1; }
-	if (press && x >= 122 && x < 166) {   // TRACK SPEED: from the next play
-		int v = gTpSpd[t] + (x >= 144 ? 1 : -1); gTpSpd[t] = v < 0 ? 0 : v >= NTSPD ? NTSPD - 1 : v;
+	if (press && x >= 122 && x < 166) {   // TRACK SPEED: - / + step round the speeds, heard at once
+		gTpSpd[t] = (gTpSpd[t] + (x >= 144 ? 1 : -1) + NTSPD) % NTSPD;   // round and round: past X4 comes 1/4 again
+		if (gTapePlay && gTpHave[t] && gTapeRec != t) {   // heard now, not just from the next play
+			float sp = TSPD[gTpSpd[t]];
+			for (int k = 0; k < 2; k++) { int c = gTapeCh[t * 2 + k]; if (c < 0) continue;
+				CSND_SetTimer(c, CSND_TIMER((int)lroundf(32728 * sp))); CSND_SetAdpcmReload(c, sp > 1.001f); CSND_SetLooping(c, sp > 1.001f ? 1 : 2); }
+			csndExecCmds(false);
+		}
 		char m[40]; snprintf(m, sizeof(m), "TRACK %d SPEED %s", t + 1, TSPD_NAMES[gTpSpd[t]]); say(m); return 1;
 	}
 	if (press && x >= 286) {

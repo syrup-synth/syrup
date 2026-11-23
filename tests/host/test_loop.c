@@ -24,6 +24,10 @@ static void SCRIPT(int fr) {
 	if (fr == 100) {
 		if (!gTapePlay || gTapeCh[0] < 0 || !CS[gTapeCh[0]].on) fail("tape didn't start");
 		if (gTapeCh[0] >= 0 && CS[gTapeCh[0]].timer != CSND_TIMER(32728 * 2)) fail("TRACK SPEED X2 should double the rate (timer %u)", CS[gTapeCh[0]].timer);
+		tapeTouch(150, TP_RY + 8, 1, 0); if (gTpSpd[0] != 9 || CS[gTapeCh[0]].timer != CSND_TIMER(32728 * 3)) fail("TRACK SPEED +: X3, heard at once (%d, timer %u)", gTpSpd[0], CS[gTapeCh[0]].timer);
+		tapeTouch(150, TP_RY + 8, 1, 0); tapeTouch(150, TP_RY + 8, 1, 0); if (gTpSpd[0] != 0 || CS[gTapeCh[0]].rep) fail("TRACK SPEED: past X4 goes round to 1/4, played once (%d)", gTpSpd[0]);
+		tapeTouch(130, TP_RY + 8, 1, 0); if (gTpSpd[0] != NTSPD - 1) fail("TRACK SPEED -: below 1/4 goes round to X4 (%d)", gTpSpd[0]);
+		gTpSpd[0] = 8;
 		stopCh(BK_CSND, -1); csndExecCmds(false);   // a stale -1 channel must not reach channel 31
 		if (gTapeCh[0] >= 0 && !CS[gTapeCh[0]].on) fail("stopCh(-1) stopped the tape's channel");
 	}

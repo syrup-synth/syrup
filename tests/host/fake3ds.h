@@ -108,7 +108,7 @@ static Result CSND_ReleaseCapUnit(u32 u){ CAPUSED[u]=0; CAPU[u].on=0; return 0; 
 static void CSND_SetCapRegs(u32 u,u32 flags,u32 addr,u32 size){(void)flags; CAPU[u].b=(s16*)PHYS[addr]; CAPU[u].n=size/2; CAPU[u].pos=0; }
 static void CSND_CapSetTimer(u32 u,u32 t){(void)u;(void)t;} static void CSND_CapEnable(u32 u,bool e){CAPU[u].on=e;}
 static void CSND_SetPlayState(u32 c,u32 v){ CS[c].on=v; }
-static void CSND_SetTimer(u32 c,u32 t){ CS[c].timer=t; }
+static void CSND_SetTimer(u32 c,u32 t){ CS[c].timer=t; } static void CSND_SetLooping(u32 c,u32 v){ CS[c].rep = v == 1; }
 static void CSND_SetVol(u32 c,u32 vol,u32 cap){ CS[c].l=(vol&0xffff)/32768.0f; CS[c].r=(vol>>16)/32768.0f; CS[c].cl=(cap&0xffff)/32768.0f; CS[c].cr=(cap>>16)/32768.0f; }
 #ifdef FAKE_WEB
 #define OUTMAX 1
