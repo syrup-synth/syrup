@@ -365,7 +365,7 @@ var KEYBG = false, OV = { p: 1, c: 1, k: 1, b: 1 };
 if (MIR) {
   document.body.classList.add('mir'); if (STREAM) document.body.classList.add('stream');
   if (QS.has('ov')) { var ovs = QS.get('ov'); OV = { p: +(ovs.indexOf('p') >= 0), c: +(ovs.indexOf('c') >= 0), k: +(ovs.indexOf('k') >= 0), b: +(ovs.indexOf('b') >= 0) }; }
-  if (QS.get('bg') === 'clear') { KEYBG = true; document.body.classList.add('keyed'); }
+  if (QS.get('bg') === 'clear') KEYBG = true;   // (the see-through class goes on once Syrup runs: mirLink)
   document.title = STREAM ? 'Syrup stream' : 'Syrup mirror';
 }
 function mirLink() {
