@@ -29,7 +29,9 @@ EMSCRIPTEN_KEEPALIVE void web_link_set(int st) {
 	if (dr != (gDrums ? 1 : 0)) { gDrums = dr; drumsChanged(); }
 }
 // SAMPLES: the page wrote WAVs into sd/kits/WEB; use them
-EMSCRIPTEN_KEEPALIVE void web_kit_reload(void) { kitScanDirs(); for (int i = 0; i < gNKitDirs; i++) if (!strcmp(gKitDirs[i], "WEB")) gKitDir = i; gKit = KIT_SAMPLE; gDrumWant = KIT_SAMPLE + 100; if (!gDrums) { gDrums = 1; drumsChanged(); } say("SAMPLE KIT: YOUR FILES"); }
+static int W_KITRL = 0;
+EMSCRIPTEN_KEEPALIVE void web_kit_reload(void) { W_KITRL = 1; }   // done from the main loop (SCRIPT), not inside the page event
+static void webKitReload(void) { kitScanDirs(); for (int i = 0; i < gNKitDirs; i++) if (!strcmp(gKitDirs[i], "WEB")) gKitDir = i; gKit = KIT_SAMPLE; gDrumWant = KIT_SAMPLE + 100; if (!gDrums) { gDrums = 1; drumsChanged(); } say("SAMPLE KIT: YOUR FILES"); }
 // CAMERA: the page runs the browser camera while Syrup wants one (CAMERA, CAM > TABLE, CAM WAVE) and puts 160x120 frames here
 EMSCRIPTEN_KEEPALIVE int web_cam_want(void) { return gCamOn || gCamWant || gCamVid; }
 EMSCRIPTEN_KEEPALIVE u16* web_cam_buf(void) { return W_CAMBUF; }
@@ -52,7 +54,8 @@ static void webVBlank(void) {   // after each frame: show it, then wait until it
 	if (W_AUDIO) { int guard = 0; while (WRW - WRR > 32728 / 10 && guard++ < 200) emscripten_sleep(4); }   // keep ~100 ms of sound queued
 	else { static double next = 0; double now = emscripten_get_now(); if (next < now - 100) next = now; next += 1000.0 / 60; double w = next - now; emscripten_sleep(w > 0 ? (unsigned)w : 0); }
 }
-static void SCRIPT(int fr) { (void)fr; HD = W_KEYS | W_LATCH; W_LATCH = 0; TOUCH = W_TOUCH || W_TLATCH; W_TLATCH = 0; TX = W_TX; TY = W_TY; CX = W_CX; CY = W_CY; CSX = W_CSX; CSY = W_CSY; TTOUCH = W_TT || W_TTL; W_TTL = 0; TTX = W_TTX; TTY = W_TTY; }
+static void webMirDrain(void);
+static void SCRIPT(int fr) { (void)fr; webMirDrain(); if (W_KITRL) { W_KITRL = 0; webKitReload(); } HD = W_KEYS | W_LATCH; W_LATCH = 0; TOUCH = W_TOUCH || W_TLATCH; W_TLATCH = 0; TX = W_TX; TY = W_TY; CX = W_CX; CY = W_CY; CSX = W_CSX; CSY = W_CSY; TTOUCH = W_TT || W_TTL; W_TTL = 0; TTX = W_TTX; TTY = W_TTY; }
 int main(void) {
 	FILE* f = fopen("default_font.bin", "rb"); if (f) { if (fread(FONT, 1, 2048, f) != 2048) {} fclose(f); }
 	mkdir("sd", 0777);
@@ -69,7 +72,12 @@ static u8 W_MIR[65536]; static char W_INFO[1024];
 EMSCRIPTEN_KEEPALIVE void web_mirror_on(int on) { gMirror = on; if (on) { gSeqMode = 0; seqStop(); } }
 EMSCRIPTEN_KEEPALIVE void web_mirror_vis(int on) { gMirVis = on; }   // STREAM: the visualizer whatever page the 3DS is on
 EMSCRIPTEN_KEEPALIVE u8* web_mir_buf(void) { return W_MIR; }
-EMSCRIPTEN_KEEPALIVE void web_mir_feed(int n) { if (n > 0 && n <= (int)sizeof(W_MIR)) mirFeed(W_MIR, n); }
+// the page hands batches over between frames; they're played from the main loop (SCRIPT), never from inside a page
+// event while the loop is paused in a sleep (that broke the paused loop's saved state: crashes)
+#define WMQ (1 << 19)
+static u8 W_MQ[WMQ]; static int W_MQN = 0;
+EMSCRIPTEN_KEEPALIVE void web_mir_feed(int n) { if (n > 0 && n <= (int)sizeof(W_MIR) && W_MQN + n <= WMQ) { memcpy(W_MQ + W_MQN, W_MIR, n); W_MQN += n; } }
+static void webMirDrain(void) { if (W_MQN) { int n = W_MQN; W_MQN = 0; mirFeed(W_MQ, n); } }
 EMSCRIPTEN_KEEPALIVE int web_th(int k) { const u8* c = k == 0 ? TH->bg : k == 1 ? TH->val : k == 2 ? TH->keyOn : k == 3 ? TH->ink : TH->dim; return c[0] << 16 | c[1] << 8 | c[2]; }
 EMSCRIPTEN_KEEPALIVE const char* web_mir_info(void) {
 	char nm[32]; int j = 0; for (int i = 0; gPatchName[i] && j < 30; i++) { char ch = gPatchName[i]; if (ch == '"' || ch == '\\') continue; nm[j++] = ch; } nm[j] = 0;
