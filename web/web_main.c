@@ -6,7 +6,7 @@
 #include "syrup_host.c"
 #include <emscripten.h>
 
-static u32 W_KEYS = 0; static int W_TOUCH = 0, W_TX = 0, W_TY = 0; static short W_CX = 0, W_CY = 0;
+static u32 W_KEYS = 0; static int W_TOUCH = 0, W_TX = 0, W_TY = 0; static short W_CX = 0, W_CY = 0, W_CSX = 0, W_CSY = 0;
 static int W_AUDIO = 0;   // the page's audio is running (it pulls the ring); until then frames are paced by the clock
 static u8 W_TOP[400 * 240 * 4], W_BOT[320 * 240 * 4];
 
@@ -17,6 +17,16 @@ EMSCRIPTEN_KEEPALIVE void web_input(u32 keys, int touch, int tx, int ty, int cx,
 }
 static int W_TT = 0, W_TTX = 0, W_TTY = 0, W_TTL = 0;
 EMSCRIPTEN_KEEPALIVE void web_top_input(int t, int x, int y) { if (t && !W_TT) W_TTL = 1; W_TT = t; W_TTX = x; W_TTY = y; }
+EMSCRIPTEN_KEEPALIVE void web_cstick(int x, int y) { W_CSX = (short)x; W_CSY = (short)y; }
+// LINK: browser tabs / windows on one device share transport, tempo and the drum machine (shell.html carries it on a BroadcastChannel)
+EMSCRIPTEN_KEEPALIVE int web_link_get(void) { return (gSeqMode == 1 ? 1 : 0) | (gDrums ? 2 : 0) | (gBPM << 4); }
+EMSCRIPTEN_KEEPALIVE void web_link_set(int st) {
+	int play = st & 1, dr = (st >> 1) & 1, bpm = st >> 4;
+	if (bpm >= 40 && bpm <= 240) gBPM = bpm;
+	if (play && gSeqMode != 1) { seqStop(); gSongPos = 0; gSeqMode = 1; if (gSeqBase < 0) gSeqBase = gridNote(0); }
+	else if (!play && gSeqMode == 1) { gSeqMode = 0; seqStop(); }
+	if (dr != (gDrums ? 1 : 0)) { gDrums = dr; drumsChanged(); }
+}
 EMSCRIPTEN_KEEPALIVE void web_midi(int st, int a, int b) { midiPush((u8)st, (u8)a, (u8)b); }
 EMSCRIPTEN_KEEPALIVE void web_audio_on(int on) { W_AUDIO = on; }
 EMSCRIPTEN_KEEPALIVE int web_audio_avail(void) { return (int)(WRW - WRR); }
@@ -35,12 +45,13 @@ static void webVBlank(void) {   // after each frame: show it, then wait until it
 	if (W_AUDIO) { int guard = 0; while (WRW - WRR > 32728 / 10 && guard++ < 200) emscripten_sleep(4); }   // keep ~100 ms of sound queued
 	else { static double next = 0; double now = emscripten_get_now(); if (next < now - 100) next = now; next += 1000.0 / 60; double w = next - now; emscripten_sleep(w > 0 ? (unsigned)w : 0); }
 }
-static void SCRIPT(int fr) { (void)fr; HD = W_KEYS | W_LATCH; W_LATCH = 0; TOUCH = W_TOUCH || W_TLATCH; W_TLATCH = 0; TX = W_TX; TY = W_TY; CX = W_CX; CY = W_CY; TTOUCH = W_TT || W_TTL; W_TTL = 0; TTX = W_TTX; TTY = W_TTY; }
+static void SCRIPT(int fr) { (void)fr; HD = W_KEYS | W_LATCH; W_LATCH = 0; TOUCH = W_TOUCH || W_TLATCH; W_TLATCH = 0; TX = W_TX; TY = W_TY; CX = W_CX; CY = W_CY; CSX = W_CSX; CSY = W_CSY; TTOUCH = W_TT || W_TTL; W_TTL = 0; TTX = W_TTX; TTY = W_TTY; }
 int main(void) {
 	FILE* f = fopen("default_font.bin", "rb"); if (f) { if (fread(FONT, 1, 2048, f) != 2048) {} fclose(f); }
 	mkdir("sd", 0777);
 	FRMAX = 0x7FFFFFFF;
 	gFakeHP = true;
+	gN3 = 1;   // the browser has the second stick (gamepad right stick / the small one on screen) and ZL / ZR
 	app_main();
 	return 0;
 }

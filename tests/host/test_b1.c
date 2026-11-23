@@ -26,10 +26,10 @@ static void SCRIPT(int fr) {
 	if (fr >= 42 && fr < 46) HD |= KEY_SELECT; if (fr == 43) HD |= KEY_R;
 	if (fr == 47 && gCutoff < 0.52f) fail("SELECT+R should redo it (%.3f)", gCutoff);
 	if (fr == 48 && gSeqMode == 1) fail("an undo combo shouldn't toggle PLAY");
-	// L / R: octave, and the OCT buttons light
+	// L / R: the bottom screen's tabs
 	if (fr == 50) pat0 = 0;
 	press(fr, 52, KEY_R);
-	if (fr == 55) { if (gOctFlash[1] <= 0) fail("R should light OCT+"); }
+	if (fr == 55) { if (gCurPage != 4 && gCurPage != 1) fail("R should step the bottom tabs (page %d)", gCurPage); }
 	if (fr == 56) { midiPush(0x90, 60, 100); }
 	// MONO + CHORD: the key you hit, one note
 	if (fr == 60) { midiPush(0x80, 60, 0); gVoiceMode = 1; gChord = 1; gArp = 0; int n[4]; int k = chordNotes(60, n); if (k != 1 || n[0] != 60) fail("MONO + CHORD should play just the key (%d notes, %d)", k, n[0]); gVoiceMode = 0;
@@ -64,7 +64,7 @@ static void SCRIPT(int fr) {
 		double lo = 1e9, hi = 0; int w = SEC(0.125) / 4; for (int a = g0 + SEC(0.2); a + w < ON; a += w) { double r = rmsOf(a, a + w); if (r < lo) lo = r; if (r > hi) hi = r; }
 		if (!(hi > 200 && lo < hi * 0.35)) fail("GATE: the held note should be chopped (rms %.0f .. %.0f)", lo, hi); } }
 	// PADS: PROGRESSION row. Pick I V vi IV, tap its 2nd chord (V), then AUTO walks a chord a bar
-	if (fr == 112) { gPads = 1; gProg = 1; float v; padsTouch(48, 104 + 44 + 10, PROG_Y + 8, 1, &v); if (gPadSel != 4) fail("PROG: the 2nd chip of I V vi IV should play V (pad %d)", gPadSel);
+	if (fr == 112) { gPads = 1; gProg = 1; float v; padsTouch(48, 128 + 38 + 10, PROG_Y + 8, 1, &v); if (gPadSel != 4) fail("PROG: the 2nd chip of I V vi IV should play V (pad %d)", gPadSel);
 		padsTouch(48, 290, PROG_Y + 8, 1, &v); if (!gProgAuto) fail("PROG: AUTO should turn on"); gBPM = 240; }
 	if (fr == 113) shotBot("shots/pads_prog.ppm");
 	if (fr == 114 + 140) { if (gProgAt < 1) fail("PROG AUTO: a second at 240 BPM should have moved on (%d)", gProgAt); gProgAuto = 0; gPads = 0; playSet(NULL, 0, 0.8f); gBPM = 120; }

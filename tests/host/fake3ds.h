@@ -33,7 +33,7 @@ static int threadJoin(Thread t,unsigned long long to){(void)to;pthread_join(*t,N
 typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32; typedef uint64_t u64; typedef int16_t s16; typedef int32_t Result;
 #define R_SUCCEEDED(r) ((r)>=0)
 enum{GFX_TOP,GFX_BOTTOM}; enum{GFX_LEFT};
-enum{KEY_A=1,KEY_B=2,KEY_SELECT=4,KEY_START=8,KEY_DRIGHT=16,KEY_DLEFT=32,KEY_DUP=64,KEY_DDOWN=128,KEY_R=256,KEY_L=512,KEY_X=1024,KEY_Y=2048,KEY_TOUCH=1<<20};
+enum{KEY_A=1,KEY_B=2,KEY_SELECT=4,KEY_START=8,KEY_DRIGHT=16,KEY_DLEFT=32,KEY_DUP=64,KEY_DDOWN=128,KEY_R=256,KEY_L=512,KEY_X=1024,KEY_Y=2048,KEY_ZL=1<<14,KEY_ZR=1<<15,KEY_TOUCH=1<<20};
 typedef struct{u16 px,py;}touchPosition; typedef struct{short dx,dy;}circlePosition;
 typedef struct{u8* gfx; u16 asciiOffset; u16 numChars;}ConsoleFont; typedef struct{ConsoleFont font;}PrintConsole;
 enum{NDSP_OUTPUT_MONO=0, NDSP_OUTPUT_STEREO=1, NDSP_OUTPUT_SURROUND=2, NDSP_CLIP_SOFT=1}; enum{NDSP_INTERP_POLYPHASE=0, NDSP_INTERP_LINEAR=1, NDSP_INTERP_NONE=2}; enum{NDSP_FORMAT_MONO_PCM16=5, NDSP_FORMAT_MONO_ADPCM=9};
@@ -41,7 +41,7 @@ typedef struct{ u16 index; s16 history0, history1; } ndspAdpcmData;
 typedef struct{ union{const void* data_vaddr; s16* data_pcm16;}; u32 nsamples; ndspAdpcmData* adpcm_data; u32 offset; bool looping; u8 status; }ndspWaveBuf;
 // harness state
 static u8 FONT[2048]; static PrintConsole CON; static u8 TOPFB[400*240*3], BOTFB[320*240*3];
-static int FR=0, FRMAX=0; static u32 HD=0, HDPREV=0; static int TOUCH=0, TX=0, TY=0; static short CX=0, CY=0;
+static int FR=0, FRMAX=0; static u32 HD=0, HDPREV=0; static int TOUCH=0, TX=0, TY=0; static short CX=0, CY=0, CSX=0, CSY=0;
 static PrintConsole* consoleGetDefault(void){CON.font.gfx=FONT;return &CON;}
 static void gfxInitDefault(void){} static void gfxSetDoubleBuffering(int a,bool b){(void)a;(void)b;} static void gfxExit(void){}
 static u8* gfxGetFramebuffer(int s,int e,void*a,void*b){(void)e;(void)a;(void)b;return s==GFX_TOP?TOPFB:BOTFB;}
@@ -49,7 +49,7 @@ static void gfxFlushBuffers(void){} static void gfxSwapBuffers(void){}
 static void* linearAlloc(size_t n){return malloc(n);} static void linearFree(void*p){free(p);} static void DSP_FlushDataCache(const void*p,u32 n){(void)p;(void)n;}
 static u64 osGetTime(void){return (u64)(FR*1000/60);}
 static void hidScanInput(void){} static u32 hidKeysHeld(void){return HD|(TOUCH?KEY_TOUCH:0);} static u32 hidKeysDown(void){return HD&~HDPREV;}
-static void hidTouchRead(touchPosition* t){t->px=TX;t->py=TY;} static void hidCircleRead(circlePosition* c){c->dx=CX;c->dy=CY;}
+static void hidTouchRead(touchPosition* t){t->px=TX;t->py=TY;} static void hidCircleRead(circlePosition* c){c->dx=CX;c->dy=CY;} static void hidCstickRead(circlePosition* c){c->dx=CSX;c->dy=CSY;}
 // ndsp emulation
 typedef struct{ ndspWaveBuf* wb; ndspWaveBuf* q[8]; int nq; double pos; float rate, mix[12]; int bq; float b0,b1,b2,a1,a2,z1,z2; int cq; int cp[5], x1,x2,y1,y2; } Ch;
 enum{NDSP_WBUF_FREE=0,NDSP_WBUF_QUEUED=1,NDSP_WBUF_PLAYING=2,NDSP_WBUF_DONE=3};

@@ -7,7 +7,7 @@ static float cut0, pos0;
 static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0; gFxCore2 = 0; CX = 0; CY = 0;
 	if (fr == 3) { int st, ix; if (findPreset("REESE CRATE", &st, &ix)) presetLoad(st, ix); }
-	if (fr == 5) { if (!xyShown()) fail("settings: should start on OSC A (saved page) with the XY pad"); gXyMode = 0; }
+	if (fr == 5) { gXyGlide = 0; if (!xyShown()) fail("settings: should start on OSC A (saved page) with the XY pad"); gXyMode = 0; }
 	// XY mode button steps the mode; PERF: sliders over the pad; CUTOFF + RES mode moves both
 	if (fr == 8) { TOUCH = 1; TX = 300; TY = XY_Y + 6; }
 	if (fr == 10) { if (gXyMode != 1) fail("XY mode button should step the XY PAD mode (%d)", gXyMode); gXyMode = 6; }
@@ -88,7 +88,7 @@ static void SCRIPT(int fr) {
 	if (fr == 256 || fr == 257) { TOUCH = 1; TX = 4 * 320 / 7 + 20; TY = 8; }   // FX chip
 	{ static int at; if (fr == 260) { for (int i = 0; i < NFXB; i++) if (gFxOrder[i] == 3) at = i; }
 	  if (fr == 262 || fr == 263) { TOUCH = 1; TX = CH_X(at) + 20; TY = CH_Y + 10; } }
-	if (fr == 267 || fr == 268) { TOUCH = 1; TX = 38 + 2 * 278 / NREVT + 8; TY = CT_Y + 16 + 5; }   // REVERB: PLATE
+	if (fr == 267 || fr == 268) { TOUCH = 1; int x0, y0, w; ctRect(1, 2, 2, NREVT, &x0, &y0, &w); TX = x0 + 4; TY = y0 + 5; }   // REVERB: PLATE
 	if (fr == 272) { shotBot("shots/fx_chain_sel.ppm"); shotTop("shots/fx_chain_top.ppm"); if (gChSel != 3 || gRevType != 2) fail("FX CHAIN screen: SPACE + PLATE (sel %d, rev %d)", gChSel, gRevType); }
 	// chips: OSC, OSC again = OSC B, again = SUB+NOISE; R from there goes on to FILT+ENV (L / R skip the side pages)
 	{ static int pg[3]; int xo = 0 * 320 / 7 + 20;
@@ -100,11 +100,12 @@ static void SCRIPT(int fr) {
 	if (fr == 197) {   // the browser: a GROOVE patch's beat and a DRUMS kit stop when you move on, also into USER
 		gStyle = 14; gPreset = 0; presetLoad(14, 0); gEdited = 0; gGuard = 0;
 		if (gVoiceMode < 3) fail("browser: a DRUMS kit should play the kit");
-		browseStep(1, 0, 1); if (!gDrums || !gBeatFromPatch) fail("browser: a GROOVE patch should bring its beat (%d)", gDrums);
-		browseStep(1, 0, 1); if (gDrums) fail("browser: moving GROOVE -> USER should stop the patch's beat");
+		gStyle = 15; presetLoad(15, 0); if (!gDrums || !gBeatFromPatch) fail("browser: a GROOVE patch should bring its beat (%d)", gDrums);
+		browseStep(1, 0, 1); if (gStyle != NSTYLES - 1) fail("browser: DRUMS / GROOVE are out of the list: > goes to USER (%d)", gStyle);
+		if (gDrums) fail("browser: moving GROOVE -> USER should stop the patch's beat");
 		gStyle = 14; gPreset = 0; presetLoad(14, 0); gEdited = 0; gGuard = 0;
 		gStyle = NSTYLES - 1; gPreset = 0; for (int i = 0; i < NUSER; i++) gUser[i].magic = 0;
-		gStyle = 14; browseStep(1, 0, 1); browseStep(1, 0, 1); if (gVoiceMode >= 3 || gDrums) fail("browser: into USER the kit and beat should go (vm %d, drums %d)", gVoiceMode, gDrums);
+		gStyle = 15; presetLoad(15, 0); gEdited = 0; gGuard = 0; browseStep(1, 0, 1); if (gVoiceMode >= 3 || gDrums) fail("browser: into USER the kit and beat should go (vm %d, drums %d)", gVoiceMode, gDrums);
 		if (strcmp(gPatchName, "BOOM BAP BASS")) fail("browser: an empty USER slot keeps the sound (%s)", gPatchName);
 		gGuard = 0; gEdited = 0; gStyle = NSTYLES - 1; gPreset = 1; presetLoad(15, 0); gStyle = NSTYLES - 1; gPreset = 1;
 		browseStep(0, -1, 1); if (gDrums) fail("browser: an empty USER slot should stop a patch's beat");
@@ -116,7 +117,7 @@ static void SCRIPT(int fr) {
 		{ int at = 0; for (int i = 0; i < NFXB; i++) if (gFxOrder[i] == 1) at = i;   // tap MOD FX: selected, its settings up top, pick a type
 		  chainTouch(CH_X(at) + 20, CH_Y + 8, 1, 0); chainTouch(CH_X(at) + 22, CH_Y + 8, 0, 0); chainTouch(0, 0, 0, 1);
 		  if (gChSel != 1 || !gSelReq || strcmp(gSelReq, "MOD FX")) fail("FX CHAIN: tapping MOD FX should select it and bring up its settings");
-		  gSelReq = NULL; int n = 8; chainTouch(38 + 3 * 278 / n + 5, CT_Y + 5, 1, 0); chainTouch(0, 0, 0, 1);
+		  gSelReq = NULL; int n = 8, x0, y0, w; ctRect(0, 1, 3, n, &x0, &y0, &w); chainTouch(x0 + 5, y0 + 5, 1, 0); chainTouch(0, 0, 0, 1);
 		  if (gModFx != 3) fail("FX CHAIN: tapping a type should change the effect (%d)", gModFx); gSelReq = NULL; gModFx = 0; gChSel = -1; }
 		SPatch ip; patchInit(&ip); initWire(&ip); patchApply(&ip);
 		if (gMod[4].src != SRC_M1 || gMod[4].dst != DST_CUTOFF || gXyMode != 1) fail("INIT PATCH: macro 1 should be wired to the filter, XY on MACRO 1+2");

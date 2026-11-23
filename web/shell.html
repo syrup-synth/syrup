@@ -34,6 +34,9 @@
   .k.sq { border-radius: 8px; }
   .k.down, button.b.down { background: var(--hot); color: #120d08; }
   .stick { position: absolute; left: 50%; top: 50%; width: 108px; height: 108px; margin: -54px 0 0 -54px; border-radius: 50%; background: var(--panel); border: 1px solid var(--line); }
+  .shp { display: flex; gap: 6px; } .shp .sh { flex: 3; } .shp .sh.z { flex: 2; font-size: 12px; }
+  .cst { position: absolute; right: 0; top: 0; width: 36px; height: 36px; border-radius: 50%; background: var(--panel); border: 1px solid var(--line); touch-action: none; }
+  .cnub { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #3a2a18; border: 1px solid var(--dim); pointer-events: none; }
   .nub { position: absolute; left: 50%; top: 50%; width: 50px; height: 50px; margin: -25px 0 0 -25px; border-radius: 50%; background: #3a2a18; border: 1px solid var(--dim); }
   @media (orientation: landscape) and (min-aspect-ratio: 5/4) {
     .wrap { max-width: none; }
@@ -68,6 +71,8 @@
         
         <span class="sndw"><button class="b" id="snd">SOUND ON</button><svg class="finger" id="finger" width="54" height="57" viewBox="0 0 54 57" shape-rendering="crispEdges" aria-hidden="true"><rect x="18" y="0" width="3" height="3" fill="#55ffff"/><rect x="21" y="0" width="3" height="3" fill="#55ffff"/><rect x="15" y="3" width="3" height="3" fill="#55ffff"/><rect x="18" y="3" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="3" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="3" width="3" height="3" fill="#55ffff"/><rect x="15" y="6" width="3" height="3" fill="#55ffff"/><rect x="18" y="6" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="6" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="6" width="3" height="3" fill="#55ffff"/><rect x="15" y="9" width="3" height="3" fill="#55ffff"/><rect x="18" y="9" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="9" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="9" width="3" height="3" fill="#55ffff"/><rect x="15" y="12" width="3" height="3" fill="#55ffff"/><rect x="18" y="12" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="12" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="12" width="3" height="3" fill="#55ffff"/><rect x="27" y="12" width="3" height="3" fill="#55ffff"/><rect x="30" y="12" width="3" height="3" fill="#55ffff"/><rect x="15" y="15" width="3" height="3" fill="#55ffff"/><rect x="18" y="15" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="15" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="15" width="3" height="3" fill="#55ffff"/><rect x="27" y="15" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="15" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="15" width="3" height="3" fill="#55ffff"/><rect x="36" y="15" width="3" height="3" fill="#55ffff"/><rect x="39" y="15" width="3" height="3" fill="#55ffff"/><rect x="15" y="18" width="3" height="3" fill="#55ffff"/><rect x="18" y="18" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="18" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="18" width="3" height="3" fill="#55ffff"/><rect x="27" y="18" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="18" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="18" width="3" height="3" fill="#55ffff"/><rect x="36" y="18" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="18" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="18" width="3" height="3" fill="#55ffff"/><rect x="45" y="18" width="3" height="3" fill="#55ffff"/><rect x="48" y="18" width="3" height="3" fill="#55ffff"/><rect x="15" y="21" width="3" height="3" fill="#55ffff"/><rect x="18" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="21" width="3" height="3" fill="#55ffff"/><rect x="27" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="21" width="3" height="3" fill="#55ffff"/><rect x="36" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="21" width="3" height="3" fill="#55ffff"/><rect x="45" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="21" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="21" width="3" height="3" fill="#55ffff"/><rect x="6" y="24" width="3" height="3" fill="#55ffff"/><rect x="9" y="24" width="3" height="3" fill="#55ffff"/><rect x="15" y="24" width="3" height="3" fill="#55ffff"/><rect x="18" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="24" width="3" height="3" fill="#55ffff"/><rect x="27" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="24" width="3" height="3" fill="#55ffff"/><rect x="36" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="24" width="3" height="3" fill="#55ffff"/><rect x="45" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="24" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="24" width="3" height="3" fill="#55ffff"/><rect x="3" y="27" width="3" height="3" fill="#55ffff"/><rect x="6" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="9" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="12" y="27" width="3" height="3" fill="#55ffff"/><rect x="15" y="27" width="3" height="3" fill="#55ffff"/><rect x="18" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="27" width="3" height="3" fill="#55ffff"/><rect x="27" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="27" width="3" height="3" fill="#55ffff"/><rect x="36" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="27" width="3" height="3" fill="#55ffff"/><rect x="45" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="27" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="27" width="3" height="3" fill="#55ffff"/><rect x="3" y="30" width="3" height="3" fill="#55ffff"/><rect x="6" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="9" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="12" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="15" y="30" width="3" height="3" fill="#55ffff"/><rect x="18" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="30" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="30" width="3" height="3" fill="#55ffff"/><rect x="6" y="33" width="3" height="3" fill="#55ffff"/><rect x="9" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="12" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="15" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="18" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="33" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="33" width="3" height="3" fill="#55ffff"/><rect x="6" y="36" width="3" height="3" fill="#55ffff"/><rect x="9" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="12" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="15" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="18" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="36" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="36" width="3" height="3" fill="#55ffff"/><rect x="9" y="39" width="3" height="3" fill="#55ffff"/><rect x="12" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="15" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="18" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="39" width="3" height="3" fill="#e6e6e6"/><rect x="51" y="39" width="3" height="3" fill="#55ffff"/><rect x="9" y="42" width="3" height="3" fill="#55ffff"/><rect x="12" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="15" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="18" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="42" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="42" width="3" height="3" fill="#55ffff"/><rect x="12" y="45" width="3" height="3" fill="#55ffff"/><rect x="15" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="18" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="45" width="3" height="3" fill="#e6e6e6"/><rect x="48" y="45" width="3" height="3" fill="#55ffff"/><rect x="12" y="48" width="3" height="3" fill="#55ffff"/><rect x="15" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="18" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="48" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="48" width="3" height="3" fill="#55ffff"/><rect x="15" y="51" width="3" height="3" fill="#55ffff"/><rect x="18" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="21" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="24" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="27" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="30" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="33" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="36" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="39" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="42" y="51" width="3" height="3" fill="#e6e6e6"/><rect x="45" y="51" width="3" height="3" fill="#55ffff"/><rect x="15" y="54" width="3" height="3" fill="#55ffff"/><rect x="18" y="54" width="3" height="3" fill="#55ffff"/><rect x="21" y="54" width="3" height="3" fill="#55ffff"/><rect x="24" y="54" width="3" height="3" fill="#55ffff"/><rect x="27" y="54" width="3" height="3" fill="#55ffff"/><rect x="30" y="54" width="3" height="3" fill="#55ffff"/><rect x="33" y="54" width="3" height="3" fill="#55ffff"/><rect x="36" y="54" width="3" height="3" fill="#55ffff"/><rect x="39" y="54" width="3" height="3" fill="#55ffff"/><rect x="42" y="54" width="3" height="3" fill="#55ffff"/><rect x="45" y="54" width="3" height="3" fill="#55ffff"/></svg></span>
         <button class="b" id="midi">MIDI</button>
+        <select class="b" id="mch" title="MIDI channel this window listens to"><option value="0">ALL CH</option></select>
+        <button class="b" id="link" title="Link with other Syrup windows on this device">LINK</button>
         <button class="b" id="full">FULL</button>
       </div>
       <div id="msg">Loading…</div>
@@ -76,9 +81,9 @@
       <canvas id="top" width="400" height="240"></canvas>
       <canvas id="bot" width="320" height="240"></canvas>
     </div>
-    <button class="b sh" data-k="512" style="grid-area:shl">L</button>
+    <div class="shp" style="grid-area:shl"><button class="b sh z" data-k="16384">ZL</button><button class="b sh" data-k="512">L</button></div>
     <div class="mid" style="grid-area:mid"><button class="b" data-k="4">SELECT ▶︎❚❚</button><button class="b" data-k="8">START</button></div>
-    <button class="b sh" data-k="256" style="grid-area:shr">R</button>
+    <div class="shp" style="grid-area:shr"><button class="b sh" data-k="256">R</button><button class="b sh z" data-k="32768">ZR</button></div>
     <div class="cluster" style="grid-area:dpad">
       <button class="k sq" data-k="64" style="left:calc(50% - 20px);top:0">▲</button>
       <button class="k sq" data-k="128" style="left:calc(50% - 20px);bottom:0">▼</button>
@@ -91,12 +96,13 @@
       <button class="k" data-k="2048" style="left:calc(50% - 60px);top:calc(50% - 20px)">Y</button>
       <button class="k" data-k="1" style="left:calc(50% + 20px);top:calc(50% - 20px)">A</button>
       <button class="k" data-k="2" style="left:calc(50% - 20px);bottom:0">B</button>
+      <div class="cst" id="cst" title="C-stick (STICK 2)"><div class="cnub" id="cnub"></div></div>
     </div>
   </div>
   <div class="note">
     <b>Both screens</b> take taps: on the top one, tap a setting to pick it and drag sideways to change it, or tap a style or patch in the browser.<br>
-    Keyboard: arrows = D-pad, <b>I J K L</b> = circle pad, <b>X</b> = A, <b>Z</b> = B, <b>S</b> = X, <b>A</b> = Y, <b>Q / W</b> = L / R, <b>Shift</b> = SELECT, <b>Enter</b> = START.<br>
-    <b>Game controller</b> (Bluetooth or USB): buttons in Nintendo positions, left stick = circle pad, bumpers / triggers = L / R. <b>MIDI</b> plays it from a controller (Chrome / Edge on a computer, or the Web MIDI Browser app on iPhone). Your sounds and drum grid are kept in this browser. Turn the phone sideways for the wide layout.
+    Keyboard: arrows = D-pad, <b>I J K L</b> = circle pad, <b>X</b> = A, <b>Z</b> = B, <b>S</b> = X, <b>A</b> = Y, <b>Q / W</b> = L / R, <b>1 / 2</b> = ZL / ZR, <b>Shift</b> = SELECT, <b>Enter</b> = START.<br>
+    <b>Game controller</b> (Bluetooth or USB): buttons in Nintendo positions, left stick = circle pad, right stick = C-stick, bumpers = L / R, triggers = ZL / ZR (ZR plays / stops, ZL records). <b>MIDI</b> plays it from a controller (Chrome / Edge on a computer, or the Web MIDI Browser app on iPhone). Your sounds and drum grid are kept in this browser. Turn the phone sideways for the wide layout.
   </div>
 </div>
 <script>
@@ -131,7 +137,7 @@ function bindKey(el) {
   el.addEventListener('pointerdown', dn); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up); el.addEventListener('pointerleave', up);
 }
 document.querySelectorAll('[data-k]').forEach(bindKey);
-var KB = { ArrowUp: 64, ArrowDown: 128, ArrowLeft: 32, ArrowRight: 16, x: 1, z: 2, s: 1024, a: 2048, q: 512, w: 256, Shift: 4, Enter: 8 };
+var KB = { ArrowUp: 64, ArrowDown: 128, ArrowLeft: 32, ArrowRight: 16, x: 1, z: 2, s: 1024, a: 2048, q: 512, w: 256, 1: 16384, 2: 32768, Shift: 4, Enter: 8 };
 var stickKeys = {};
 function stickFromKeys() { CX = (stickKeys.l ? 150 : 0) - (stickKeys.j ? 150 : 0); CY = (stickKeys.i ? 150 : 0) - (stickKeys.k ? 150 : 0); send(); }
 addEventListener('keydown', function (e) { var k = KB[e.key] || KB[e.key.toLowerCase()]; if (k) { KEYS |= k; send(); e.preventDefault(); } if ('ijkl'.indexOf(e.key.toLowerCase()) >= 0 && e.key.length === 1) { stickKeys[e.key.toLowerCase()] = 1; stickFromKeys(); } });
@@ -156,6 +162,15 @@ function stickAt(e) { var r = stick.getBoundingClientRect(), dx = (e.clientX - r
 stick.addEventListener('pointerdown', function (e) { e.preventDefault(); stick.setPointerCapture(e.pointerId); stickAt(e); });
 stick.addEventListener('pointermove', function (e) { if (e.buttons || e.pointerType === 'touch') stickAt(e); });
 ['pointerup', 'pointercancel'].forEach(function (t) { stick.addEventListener(t, function () { nub.style.transform = ''; CX = CY = 0; send(); }); });
+// ---- the C-stick (New 3DS): STICK 2. A small nub by ABXY; the game controller's right stick does the same
+var cst = document.getElementById('cst'), cnub = document.getElementById('cnub'), C2X = 0, C2Y = 0, G2X = 0, G2Y = 0;
+function sendC() { if (ready) Module._web_cstick(G2X || G2Y ? G2X : C2X, G2X || G2Y ? G2Y : C2Y); }
+function cstAt(e) { var r = cst.getBoundingClientRect(), dx = (e.clientX - r.left - r.width / 2) / (r.width / 2), dy = (e.clientY - r.top - r.height / 2) / (r.height / 2);
+  var m = Math.hypot(dx, dy); if (m > 1) { dx /= m; dy /= m; }
+  cnub.style.transform = 'translate(' + dx * 10 + 'px,' + dy * 10 + 'px)'; C2X = Math.round(dx * 150); C2Y = Math.round(-dy * 150); sendC(); }
+cst.addEventListener('pointerdown', function (e) { e.preventDefault(); cst.setPointerCapture(e.pointerId); cstAt(e); });
+cst.addEventListener('pointermove', function (e) { if (e.buttons || e.pointerType === 'touch') cstAt(e); });
+['pointerup', 'pointercancel'].forEach(function (t) { cst.addEventListener(t, function () { cnub.style.transform = ''; C2X = C2Y = 0; sendC(); }); });
 // ---- sound: Web Audio pulls Syrup's 32728 Hz mix from the ring and resamples it
 var actx = null, phase = 0;
 document.getElementById('snd').onclick = function () {
@@ -189,28 +204,71 @@ document.getElementById('full').onclick = function () {
 if (navigator.standalone || matchMedia('(display-mode: standalone)').matches) document.getElementById('full').style.display = 'none';   // already full screen
 // ---- a game controller (Bluetooth / USB: Xbox, PlayStation, Switch Pro, MFi): Nintendo layout, left stick = circle pad
 // standard mapping: 0 bottom, 1 right, 2 left, 3 top, 4 / 5 bumpers, 6 / 7 triggers, 8 select, 9 start, 12-15 d-pad
-var GPMAP = [[1, 1], [0, 2], [3, 1024], [2, 2048], [4, 512], [5, 256], [6, 512], [7, 256], [8, 4], [9, 8], [12, 64], [13, 128], [14, 32], [15, 16]];
+var GPMAP = [[1, 1], [0, 2], [3, 1024], [2, 2048], [4, 512], [5, 256], [6, 16384], [7, 32768], [8, 4], [9, 8], [12, 64], [13, 128], [14, 32], [15, 16]];
 var gpName = '';
 function pollPads() {
-  var pads = navigator.getGamepads ? navigator.getGamepads() : [], k = 0, x = 0, y = 0, name = '';
+  var pads = navigator.getGamepads ? navigator.getGamepads() : [], k = 0, x = 0, y = 0, x2 = 0, y2 = 0, name = '';
   for (var i = 0; i < pads.length; i++) { var p = pads[i]; if (!p || !p.connected) continue; name = name || p.id;
     for (var j = 0; j < GPMAP.length; j++) { var b = p.buttons[GPMAP[j][0]]; if (b && (b.pressed || b.value > 0.5)) k |= GPMAP[j][1]; }
-    var ax = p.axes[0] || 0, ay = p.axes[1] || 0; if (Math.hypot(ax, ay) > 0.15) { x = Math.round(ax * 150); y = Math.round(-ay * 150); } }
+    var ax = p.axes[0] || 0, ay = p.axes[1] || 0; if (Math.hypot(ax, ay) > 0.15) { x = Math.round(ax * 150); y = Math.round(-ay * 150); }
+    var bx = p.axes[2] || 0, by = p.axes[3] || 0; if (Math.hypot(bx, by) > 0.15) { x2 = Math.round(bx * 150); y2 = Math.round(-by * 150); } }
   if (k !== GK || x !== GX || y !== GY) { GK = k; GX = x; GY = y; send(); }
+  if (x2 !== G2X || y2 !== G2Y) { G2X = x2; G2Y = y2; sendC(); }
   if (name !== gpName) { gpName = name; msg.textContent = name ? 'Controller: ' + name.replace(/\s*\(.*\)\s*/g, ' ').trim() : ''; }
   requestAnimationFrame(pollPads);
 }
 addEventListener('gamepadconnected', function () { msg.textContent = 'Controller connected'; });
 requestAnimationFrame(pollPads);
+// ---- per window: which MIDI channel and input it listens to (so several windows can be several instruments:
+// on a Mac, IAC Driver buses or a controller's zones give each one its own part)
+var MCH = 0, MIN = '', mchSel = document.getElementById('mch');
+try { MCH = +(localStorage.getItem('syrup-mch-' + (location.hash || '#1')) || 0); MIN = localStorage.getItem('syrup-min-' + (location.hash || '#1')) || ''; } catch (e) {}
+for (var c = 1; c <= 16; c++) { var o = document.createElement('option'); o.value = c; o.textContent = 'CH ' + c; mchSel.appendChild(o); }
+function fillIns(m) {
+  var keep = mchSel.value; while (mchSel.options.length > 17) mchSel.remove(17);
+  m.inputs.forEach(function (inp) { var o = document.createElement('option'); o.value = 'in:' + inp.id; o.textContent = (MIN === inp.id ? '● ' : '') + 'IN: ' + inp.name; mchSel.appendChild(o); });
+  var a = document.createElement('option'); a.value = 'in:'; a.textContent = (MIN ? '' : '● ') + 'IN: ALL'; mchSel.appendChild(a);
+  mchSel.value = keep;
+}
+mchSel.value = MCH;
+mchSel.onchange = function () {
+  var v = mchSel.value;
+  if (v.indexOf('in:') === 0) { MIN = v.slice(3); mchSel.value = MCH; msg.textContent = 'MIDI input: ' + (MIN ? mchSel.options[mchSel.selectedIndex].textContent : 'all'); }
+  else MCH = +v;
+  try { localStorage.setItem('syrup-mch-' + (location.hash || '#1'), MCH); localStorage.setItem('syrup-min-' + (location.hash || '#1'), MIN); } catch (e) {}
+  if (window.MIDIM) fillIns(window.MIDIM);
+};
+// ---- LINK: windows / tabs on this device play together: PLAY / STOP, BPM and the drums follow whichever changes
+var linkBtn = document.getElementById('link'), lch = null, lastLink = -1, linkPeers = {}, myId = Math.random().toString(36).slice(2);
+function linkOn(on) {
+  if (on && !lch && window.BroadcastChannel) {
+    lch = new BroadcastChannel('syrup-link'); linkPeers = {};
+    lch.onmessage = function (ev) { var d = ev.data; if (!d || d.id === myId) return;
+      if (d.hi) { linkPeers[d.id] = 1; if (d.hi === 1) lch.postMessage({ id: myId, hi: 2 }); }
+      if (d.bye) delete linkPeers[d.id];
+      if (d.st !== undefined && ready) { Module._web_link_set(d.st); lastLink = d.st; }
+      linkBtn.textContent = 'LINK ' + (Object.keys(linkPeers).length + 1); };
+    lch.postMessage({ id: myId, hi: 1 }); linkBtn.classList.add('on'); linkBtn.textContent = 'LINK 1';
+    msg.textContent = 'Linked: open Syrup in another tab or window and tap LINK there too.';
+  } else if (!on && lch) { lch.postMessage({ id: myId, bye: 1 }); lch.close(); lch = null; linkBtn.classList.remove('on'); linkBtn.textContent = 'LINK'; }
+  else if (on && !window.BroadcastChannel) msg.textContent = 'This browser can\'t link windows.';
+}
+linkBtn.onclick = function () { linkOn(!lch); };
+addEventListener('beforeunload', function () { linkOn(false); });
+setInterval(function () { if (!lch || !ready) return; var st = Module._web_link_get(); if (st !== lastLink) { if (lastLink !== -1) lch.postMessage({ id: myId, st: st }); lastLink = st; } }, 20);
 // ---- Web MIDI in
 document.getElementById('midi').onclick = function () {
   var btn = this;
   if (!navigator.requestMIDIAccess) { msg.textContent = 'No Web MIDI here: use Chrome / Edge, or the Web MIDI Browser app on iPhone.'; return; }
   navigator.requestMIDIAccess({ sysex: false }).then(function (m) {
+    window.MIDIM = m;
     var n = 0;
     function hook() { n = 0; m.inputs.forEach(function (inp) { n++; inp.onmidimessage = function (ev) { var d = ev.data; if (!ready || !d.length || d[0] === 0xF0) return;
       if (d[0] >= 0xF8) { Module._web_midi(d[0], 0, 0); return; }
+      if (MCH && d[0] < 0xF0 && (d[0] & 15) + 1 !== MCH) return;   // this window's channel only
+      if (MIN && inp.id !== MIN) return;   // and only the input picked for it
       Module._web_midi(d[0], d.length > 1 ? d[1] : 0, d.length > 2 ? d[2] : 0); }; });
+      fillIns(m);
       btn.classList.toggle('on', n > 0); msg.textContent = n ? 'MIDI: ' + n + ' input' + (n > 1 ? 's' : '') + ' connected' : 'MIDI on: plug in a controller'; }
     hook(); m.onstatechange = hook;
   }, function () { msg.textContent = 'MIDI was refused.'; });
