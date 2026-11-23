@@ -98,6 +98,8 @@ static u8 gDrAcc[DSTEP]; static float gDrAccAmt = 0.6f; static int gAccMode = 0;
 #define NKIT 7
 #define KIT_SAMPLE 6
 static float gPadMorph = 0.25f;   // PADS: sliding glides to the next chord over this long (0 = retrigger)
+static int gStrumScale = 0; static const char* STRN_NAMES[2] = {"CHORD", "SCALE"};   // PADS strum strip: the chord's notes, or the scale's
+static int gRollScale = 1; static const char* RSC_NAMES[3] = {"OFF", "SHOW", "FOLD"};   // the piano roll and the SCALE
 static volatile int gDrumWant;
 // SAMPLE kit: WAV files from a folder under /3ds/syrup/kits (one folder = one kit); gKitDirP names them for KIT FOLDER
 static int gKitDir = 0, gNKitDirs = 0; static char gKitDirs[16][32], gKitRaw[16][64]; static const char* gKitDirP[16] = {"(NONE)"};
@@ -127,9 +129,9 @@ static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
 static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
 static float gVisBeat = 0;
 static int gVisTrails = 0, gVisParts = 1, gVisBurst = 0;
-#define NTHEMES 17
+#define NTHEMES 18
 static const char* THEME_NAMES[NTHEMES] = {"ORIGINAL", "PIP GREEN", "DOS BLUE", "AMBER EGA", "MAGENTA", "STICKER", "IMPULSE",
-	"CYBER", "SOLARIZED", "GB POCKET", "VAPORWAVE", "CGA", "SINCLAIR", "X11", "NORD", "ACID", "BBS"};
+	"CYBER", "SOLARIZED", "GB POCKET", "VAPORWAVE", "CGA", "SINCLAIR", "X11", "NORD", "ACID", "BBS", "HERCULES"};
 static int gTheme = 16,   /* BBS: the default look */ gScan = 0, gBright = 0;   // gBright: screen brightness 1..5, 0 = leave the system setting
 static const char* BRIGHT_NAMES[6] = {"SYSTEM", "1 DIM", "2", "3", "4", "5 BRIGHT"};
    // graphics-chip visuals (see visFrame); off by default while being tested on hardware
@@ -3502,7 +3504,7 @@ static Param P_PRESET[] = {
 static Param P_PLAY[] = {
 	// most-reached first: tempo and the transport, then the arp, the key, then the details
 	PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
-	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("SEQ KEYS", &gSeqKeys, 2, SEQKEYS_NAMES, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
+	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("SEQ KEYS", &gSeqKeys, 2, SEQKEYS_NAMES, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0), PE("ROLL SCALE", &gRollScale, 3, RSC_NAMES, 0), PE("STRUM NOTES", &gStrumScale, 2, STRN_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
 	PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0), PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0),
 	PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PE("REC QUANT", &gRecQ, 4, RQ_NAMES, 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("CLICK", &gClick, 4, CLICK_NAMES, 0), PF("CLICK LEVEL", &gClickLevel, 0, 1, 0.05f, "%", 0), PI_("TAPE ALIGN", &gTapeAlign, -50, 50, 0),
 	PE("SHAKE QUANT", &gShakeQ, 3, SHQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
@@ -3772,7 +3774,12 @@ static const Theme THEMES[NTHEMES] = {
 	// a dark teal selection bar; readable first (grey on black, not dim teal)
 	{"BBS", {0, 0, 0}, {0, 170, 170}, {170, 170, 170}, {230, 230, 230}, {0, 92, 92}, {255, 255, 255}, {85, 255, 255}, {255, 85, 85},
 	 {200, 200, 200}, {0, 0, 0}, {85, 255, 255}, {0, 170, 170}, {0, 120, 120}, {0, 0, 0}, {0, 34, 34}, {85, 255, 255}, {0, 16, 16}, {0, 60, 60}, {3, 11, 7, 15}, 1,
-	 0, {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}}, 1}
+	 0, {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}}, 1},
+	// HERCULES: the monochrome card - grey phosphor on black, "intense" white for values, inverse video for the bar,
+	// nothing in colour anywhere (warnings are just intense too)
+	{"HERCULES", {0, 0, 0}, {170, 170, 170}, {125, 125, 125}, {205, 205, 205}, {205, 205, 205}, {0, 0, 0}, {255, 255, 255}, {255, 255, 255},
+	 {205, 205, 205}, {0, 0, 0}, {255, 255, 255}, {170, 170, 170}, {70, 70, 70}, {0, 0, 0}, {45, 45, 45}, {225, 225, 225}, {30, 30, 30}, {70, 70, 70}, {0, 8, 7, 15}, 1,
+	 1, {{90, 90, 90}, {175, 175, 175}, {255, 255, 255}}, 1}
 };
 // Every theme is checked when first used: text must stand out from what it sits on (WCAG-style contrast; a colour
 // that's too close is pushed lighter or darker, keeping its hue), and a one-colour theme (GB POCKET, PIP GREEN...)
@@ -4073,7 +4080,7 @@ static const char* paramHelp(const char* n) {
 		{"REV DAMP", "DARKER REVERB TAIL"}, {"FX MIX", "HOW MUCH EFFECT"}, {"DRIVE", "DISTORTION TYPE"}, {"DRIVE AMT", "HOW MUCH DISTORTION"},
 		{"MASTER", "OUTPUT VOLUME"}, {"ROOT", "KEY OF THE SCALE"}, {"SCALE", "LOCK THE KEYS TO A SCALE"}, {"ARP", "ARPEGGIATOR PATTERN"},
 		{"ARP RATE", "ARPEGGIATOR SPEED"}, {"ARP OCTAVES", "OCTAVES THE ARP CLIMBS"}, {"ARP GATE", "ARP NOTE LENGTH"}, {"ARP STRUM", "CHORD ARP: TIME BETWEEN STRINGS"}, {"STRUM DIR", "DOWN, UP, OR BOTH LIKE A GUITAR"}, {"BPM", "TEMPO"},
-		{"SEQ GATE", "STEP NOTE LENGTH"}, {"SEQ KEYS", "KEYS PLAY ALONG OR TRANSPOSE"}, {"PAD MORPH", "PADS: SLIDE GLIDES TO THE NEXT CHORD (0 = RETRIGGER)"},
+		{"SEQ GATE", "STEP NOTE LENGTH"}, {"SEQ KEYS", "KEYS PLAY ALONG OR TRANSPOSE"}, {"PAD MORPH", "PADS: SLIDE GLIDES TO THE NEXT CHORD (0 = RETRIGGER)"}, {"ROLL SCALE", "PIANO ROLL: SHOW THE SCALE, OR ONLY ITS NOTES"}, {"STRUM NOTES", "PADS STRUM STRIP: CHORD TONES OR THE SCALE"},
 		{"SWING", "SHUFFLE FEEL"},
 		{"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},
 		{"THEME", "COLOUR SCHEME"},
@@ -4528,10 +4535,22 @@ static int gRollPg = 0, gRollFollow = 1;   // the page shown (16 steps each); FO
 static int rollX(int st) { return ROLL_KW + (int)((st - RP0) * ROLL_CW); }
 static int rollIn(int st) { return st >= RP0 && st < RP0 + ROLL_VIEW; }
 // KIT patches: one row per drum (kick at the bottom), named; other patches: chromatic from gRollLow
-static int rollNote(int row) { if (gVoiceMode >= 3) return row >= 0 && row < 10 ? kitPadNote(row) : -1; return gRollLow + row; }
+// ROLL SCALE: SHOW lights the scale's rows (the rest dark, the root marked); FOLD shows only the scale's notes
+static int rollFold(void) { return gRollScale == 2 && gScale && gVoiceMode < 3; }
+static int rollNote(int row) {
+	if (gVoiceMode >= 3) return row >= 0 && row < 10 ? kitPadNote(row) : -1;
+	if (!rollFold()) return gRollLow + row;
+	if (row < 0) return -1;
+	int n = gRollLow; while (!inScale(n)) n++;
+	for (int r = 0; r < row; r++) { n++; while (!inScale(n)) n++; }
+	return n;
+}
 static int rollRow(int nt) {
 	if (gVoiceMode >= 3) { for (int d = 0; d < 10; d++) if (kitPadNote(d) == nt) return d; return -1; }
-	return nt >= gRollLow && nt < gRollLow + ROLL_ROWS ? nt - gRollLow : -1;
+	if (!rollFold()) return nt >= gRollLow && nt < gRollLow + ROLL_ROWS ? nt - gRollLow : -1;
+	if (nt < gRollLow || !inScale(nt)) return -1;
+	for (int r = 0; r < ROLL_ROWS; r++) if (rollNote(r) == nt) return r;
+	return -1;
 }
 static int rollY(int nt) { return ROLL_TOP + (ROLL_ROWS - 1 - rollRow(nt)) * ROLL_RH; }
 static int isBlack(int nt) { static const u8 B[12] = {0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0}; return B[nt % 12]; }
@@ -4609,8 +4628,9 @@ static void drawGrid(void) {
 	for (int r = 0; r < ROLL_ROWS; r++) {   // lanes and the keyboard down the side
 		int nt = rollNote(r), y = ROLL_TOP + (ROLL_ROWS - 1 - r) * ROLL_RH, kit = gVoiceMode >= 3;
 		if (nt < 0) { rectP(0, y, 320, ROLL_RH - 1, TH->bg); continue; }   // a kit has 10 drums: the top rows stay empty
-		int bk = kit ? (r & 1) : isBlack(nt), cr = rowOfNote(nt);
-		rectP(ROLL_KW, y, 320 - ROLL_KW, ROLL_RH - 1, bk ? TH->bg : TH->pad);
+		int bk = kit ? (r & 1) : isBlack(nt), cr = rowOfNote(nt), out = !kit && gScale && gRollScale && !inScale(nt);
+		rectP(ROLL_KW, y, 320 - ROLL_KW, ROLL_RH - 1, out ? TH->bg : !kit && gScale && gRollScale ? TH->pad : bk ? TH->bg : TH->pad);   // SHOW: the scale lit, the rest dark
+		if (!kit && gScale && gRollScale && (nt - gRoot) % 12 == 0) rectP(ROLL_KW, y + ROLL_RH - 2, 320 - ROLL_KW, 1, TH->line);   // the root
 		for (int st = RP0; st < RP0 + ROLL_VIEW; st++) { int x = rollX(st); if (st >= gSeqLen) rectP(x, y, (int)ROLL_CW + 1, ROLL_RH - 1, TH->bg); rectP(x, y, 1, ROLL_RH - 1, (st & 3) == 0 ? TH->line : TH->grid); }
 		int snd = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4 && gV[i].note == nt) { snd = 1; break; }
 		rectP(0, y, ROLL_KW - 1, ROLL_RH - 1, snd ? TH->keyOn : bk ? TH->keyB : TH->keyW);   // the side keys play along
@@ -5041,6 +5061,11 @@ static int padDeg(int base, int d) {   // scale degree -> note, using the scale 
 	if (gScale && scaleLen() == 7) return scaleNote(base + gRoot, d);
 	int o = d / 7; return base + gRoot + 12 * o + MAJ7[d % 7];
 }
+static int strumScaleNote(int base, int q) {   // STRUM NOTES SCALE: string q = the scale (all of it, any length) up from the pad's root, an octave down to start
+	if (!gScale) return padDeg(base, gPadSel + q) - 12;
+	int r = padDeg(base, gPadSel), k = -40; while (scaleNote(base + gRoot, k) < r) k++;
+	return scaleNote(base + gRoot, k + q) - 12;
+}
 static int padChord(int base, int pad, int band, int side, int* out) {
 	int r = padDeg(base, pad), t3 = padDeg(base, pad + 2), t5 = padDeg(base, pad + 4), t7 = padDeg(base, pad + 6), t9 = padDeg(base, pad + 8);
 	if (side == 2) t3 = padDeg(base, pad + 3);   // sus4
@@ -5159,7 +5184,7 @@ static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 
 	int from = gStrumZone < 0 ? z : gStrumZone + (z > gStrumZone ? 1 : -1), d = z >= from ? 1 : -1;
 	float v = 0.4f + 0.6f * (y - STRUM_Y) / (float)(240 - STRUM_Y);
 	for (int q = from; ; q += d) {
-		int nt = gPadNotes[q % gPadN] + 12 * (q / gPadN) - 12;   // walk up the chord tones, octave by octave
+		int nt = gStrumScale ? strumScaleNote(base, q) : gPadNotes[q % gPadN] + 12 * (q / gPadN) - 12;   // walk up the chord tones (or the SCALE from the chord's root), octave by octave
 		int k = 0; for (; k < gStrumOffN; k++) if (gStrumOff[k].note == nt) break;
 		if (k < gStrumOffN) { voiceOff(nt); gStrumOff[k].t = 0.35f; } else if (gStrumOffN < 24) { gStrumOff[gStrumOffN].note = nt; gStrumOff[gStrumOffN].t = 0.35f; gStrumOffN++; }
 		voiceOn(nt, v);
@@ -10204,6 +10229,7 @@ int main(void) {
 				if (mode == 4) {   // piano roll: move, A = note, hold A = its step editor
 					if (ex) { int L = (gSeqLen + 15) / 16 * 16; if (L < 16) L = 16; gRcS = (gRcS + ex + L) % L; gRollPg = gRcS / ROLL_VIEW; gRollFollow = 0; }
 					if (ey) { if (gVoiceMode >= 3) { int r = rollRow(gRcN) + ey; if (r < 0) r = 0; if (r > 9) r = 9; gRcN = rollNote(r); }
+						else if (rollFold()) { int nn = gRcN; do nn += ey; while (!inScale(nn) && nn > 0 && nn < 127); gRcN = nn; while (rollRow(gRcN) < 0 && gRcN < gRollLow) gRollLow--; while (rollRow(gRcN) < 0 && gRcN > gRollLow) gRollLow++; }
 						else { gRcN += ey; if (gRcN < gRollLow) gRollLow = gRcN; if (gRcN >= gRollLow + ROLL_ROWS) gRollLow = gRcN - ROLL_ROWS + 1; } }   // (silent: moving the cursor doesn't play)
 					if (rollRow(gRcN) < 0) gRcN = gVoiceMode >= 3 ? rollNote(0) : gRollLow + 5;
 				} else if (mode == 2) {   // drum grid

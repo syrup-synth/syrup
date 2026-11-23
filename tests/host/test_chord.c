@@ -64,6 +64,12 @@ static void SCRIPT(int fr) {
 	if (fr >= 363 && fr < 366) CY = -150;
 	if (fr == 366) { CY = 0; if (gStartSel == sel0) fail("circle pad down should move in the START menu"); }
 	if (fr == 368) HD = KEY_B;
+	if (fr == 368) {   // ROLL SCALE FOLD and STRUM NOTES SCALE
+		int sv = gScale, rv = gRoot, lo = gRollLow, vm = gVoiceMode; gScale = 1; gRoot = 0; gRollScale = 2; gRollLow = 60; gVoiceMode = 0;
+		if (rollNote(0) != 60 || rollNote(1) != 62 || rollNote(2) != 64 || rollRow(61) != -1 || rollRow(65) != 3) fail("ROLL SCALE FOLD: rows should be C D E F.. (%d %d %d)", rollNote(0), rollNote(1), rollNote(2));
+		gStrumScale = 1; gPadSel = 0; if (strumScaleNote(48, 1) - strumScaleNote(48, 0) != 2 || strumScaleNote(48, 7) - strumScaleNote(48, 0) != 12) fail("STRUM NOTES SCALE: the strings should walk the scale");
+		gStrumScale = 0; gRollScale = 1; gScale = sv; gRoot = rv; gRollLow = lo; gVoiceMode = vm; gPadSel = -1;
+	}
 	if (fr == 369) {   // DRUM HITS table and KIT > TABLE
 		float* f = builtinFrames(T_DRUMS); if (!f) fail("DRUM HITS: no table");
 		else { float a0 = 0, a7 = 0; for (int k = 0; k < CYC; k++) { a0 += fabsf(f[k]); a7 += fabsf(f[7 * CYC + k]); } if (a0 < 100 || a7 < 100) fail("DRUM HITS: kick frames should have sound (%.0f %.0f)", a0, a7); }
