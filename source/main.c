@@ -5202,9 +5202,10 @@ static void drawStartMenu(void) {
 		int y = my + 30 + i * 22, on = i == gStartSel;
 		if (on) rect(mx + 10, y - 3, mw - 20, 16, RGB3(TH->keyOn));
 		const u8* c = on ? EGA[0] : TH->tabTxt;
-		text(200 - (int)strlen(START_NAMES[i]) * 4, y + 1, START_NAMES[i], 1, c[0], c[1], c[2]);
+		char nm[32]; if (i == 4) snprintf(nm, sizeof(nm), "< THEME: %s >", THEME_NAMES[gTheme]); else snprintf(nm, sizeof(nm), "%s", START_NAMES[i]);   // THEME shows which, < > / L R change it
+		text(200 - (int)strlen(nm) * 4, y + 1, nm, 1, c[0], c[1], c[2]);
 	}
-	text(200 - 16 * 4, my + mh - 12, "A: OK  B: CLOSE", 1, RGB3(TH->dim));
+	text(200 - 16 * 4, my + mh - 12, gStartSel == 4 ? "< > L R: THEME  A: ALL" : "A: OK  B: CLOSE", 1, RGB3(TH->dim));
 }
 // QUICK SELECT: hold SELECT and push the circle pad toward a place, let go of SELECT to go there. Sixteen spots
 // all the way round (the 8 directions and the 8 between): every page, the TAPE, and the transport along the bottom
@@ -9452,6 +9453,9 @@ int main(void) {
 		if (gStartMenu) {   // the menu has the buttons; the touch screen keeps playing
 			if (kDown & KEY_DUP) { gStartSel = (gStartSel + NSTART - 1) % NSTART; topDirty = 1; }
 			if (kDown & KEY_DDOWN) { gStartSel = (gStartSel + 1) % NSTART; topDirty = 1; }
+			if (gStartSel == 4 && (kDown & (KEY_DLEFT | KEY_DRIGHT | KEY_L | KEY_R))) {   // THEME: < > or L / R try the themes right here, live
+				int d = (kDown & (KEY_DRIGHT | KEY_R)) ? 1 : -1; gTheme = (gTheme + NTHEMES + d) % NTHEMES; gBrightSaveDue = 1; topDirty = topAgain = botDirty = botAgain = 1;
+			}
 			if (kDown & KEY_A) { startAct = gStartSel; gStartMenu = 0; }
 			if (kDown & KEY_B) gStartMenu = 0;
 			if (!gStartMenu) topDirty = topAgain = botDirty = 1;
