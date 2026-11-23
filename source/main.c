@@ -129,9 +129,9 @@ static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
 static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
 static float gVisBeat = 0;
 static int gVisTrails = 0, gVisParts = 1, gVisBurst = 0;
-#define NTHEMES 18
+#define NTHEMES 20
 static const char* THEME_NAMES[NTHEMES] = {"ORIGINAL", "PIP GREEN", "DOS BLUE", "AMBER EGA", "MAGENTA", "STICKER", "IMPULSE",
-	"CYBER", "SOLARIZED", "GB POCKET", "VAPORWAVE", "CGA", "SINCLAIR", "X11", "NORD", "ACID", "BBS", "HERCULES"};
+	"CYBER", "SOLARIZED", "GB POCKET", "VAPORWAVE", "CGA", "SINCLAIR", "X11", "NORD", "ACID", "BBS", "HERCULES", "HERC AMBER", "HERC GREEN"};
 static int gTheme = 16,   /* BBS: the default look */ gScan = 0, gBright = 0;   // gBright: screen brightness 1..5, 0 = leave the system setting
 static const char* BRIGHT_NAMES[6] = {"SYSTEM", "1 DIM", "2", "3", "4", "5 BRIGHT"};
    // graphics-chip visuals (see visFrame); off by default while being tested on hardware
@@ -3376,7 +3376,7 @@ static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound
 		int ch = 0;
 		if (gBeatFromPatch) { gBeatFromPatch = 0; gDrums = 0; if (gCsndOK) drumsChanged(); if (gDrumRec) { gDrumRec = 0; if (gCsndOK) drumRecChanged(); } ch = 1; }
 		if (gVoiceMode >= 3) { allOff(); gVoiceMode = 0; ch = 1; }
-		say("EMPTY SLOT: PRESS A TO SAVE THIS SOUND HERE"); return ch;
+		say("EMPTY SLOT: SAVE (TWICE) TO KEEP THIS SOUND HERE"); return ch;
 	}
 	if (gBrowseDefer) { gBrowsePend = 1; return 0; }   // scrolling held: load where the list stops, not every patch on the way
 	gBrowsePend = 0; presetLoad(gStyle, gPreset); return 1;
@@ -3734,9 +3734,11 @@ static const Theme THEMES[NTHEMES] = {
 	 {246, 238, 226}, {34, 38, 68}, {226, 66, 136}, {232, 100, 52}, {34, 38, 68}, {34, 38, 68}, {58, 48, 92}, {200, 232, 245}, {36, 34, 66}, {62, 60, 104}, {0, 0, 0, 0}, 0,
 	 1, {{232, 100, 52}, {226, 66, 136}, {110, 185, 225}}},
 	// IMPULSE: Impulse Tracker style - black fields, tracker-grey panels and tabs, deep blue selection bar
-	{"IMPULSE", {0, 0, 0}, {168, 164, 152}, {112, 108, 100}, {196, 192, 180}, {44, 44, 132}, {255, 255, 255}, {236, 232, 220}, {220, 76, 64},
-	 {216, 212, 200}, {28, 28, 28}, {72, 72, 196}, {100, 100, 216}, {100, 96, 88}, {132, 128, 120}, {168, 164, 152}, {0, 0, 0}, {14, 14, 22}, {44, 44, 56}, {0, 0, 0, 0}, 0,
-	 1, {{168, 164, 152}, {72, 72, 210}, {236, 232, 220}}},
+	// IMPULSE: Impulse Tracker's screen - warm khaki-grey panels everywhere with black text, lighter raised buttons,
+	// darker insets, the dark blue selection bar, values in deep blue
+	{"IMPULSE", {168, 164, 152}, {236, 232, 220}, {84, 80, 72}, {0, 0, 0}, {44, 44, 132}, {255, 255, 255}, {20, 20, 110}, {150, 30, 20},
+	 {236, 232, 220}, {28, 28, 28}, {72, 72, 196}, {100, 100, 216}, {100, 96, 88}, {132, 128, 120}, {200, 196, 184}, {0, 0, 0}, {136, 132, 122}, {112, 108, 100}, {0, 0, 0, 0}, 0,
+	 1, {{60, 56, 50}, {72, 72, 210}, {236, 232, 220}}, 1},
 	// CYBER: neon cyan and magenta at full strength, glows on the dim bottom screen
 	{"CYBER", {10, 10, 20}, {0, 255, 255}, {100, 100, 150}, {220, 220, 255}, {255, 0, 128}, {255, 255, 255}, {0, 255, 128}, {255, 50, 50},
 	 {190, 195, 235}, {10, 10, 20}, {255, 0, 128}, {200, 0, 100}, {0, 255, 255}, {15, 15, 30}, {20, 20, 40}, {0, 255, 255}, {25, 25, 45}, {40, 40, 70}, {0, 0, 0, 0}, 0,
@@ -3779,7 +3781,14 @@ static const Theme THEMES[NTHEMES] = {
 	// nothing in colour anywhere (warnings are just intense too)
 	{"HERCULES", {0, 0, 0}, {170, 170, 170}, {125, 125, 125}, {205, 205, 205}, {205, 205, 205}, {0, 0, 0}, {255, 255, 255}, {255, 255, 255},
 	 {205, 205, 205}, {0, 0, 0}, {255, 255, 255}, {170, 170, 170}, {70, 70, 70}, {0, 0, 0}, {45, 45, 45}, {225, 225, 225}, {30, 30, 30}, {70, 70, 70}, {0, 8, 7, 15}, 1,
-	 1, {{90, 90, 90}, {175, 175, 175}, {255, 255, 255}}, 1}
+	 1, {{90, 90, 90}, {175, 175, 175}, {255, 255, 255}}, 1},
+	// HERC AMBER / HERC GREEN: the same card on the brown-amber and the green phosphor monitors
+	{"HERC AMBER", {0, 0, 0}, {200, 120, 10}, {140, 88, 10}, {232, 150, 22}, {232, 150, 22}, {0, 0, 0}, {255, 200, 60}, {255, 210, 90},
+	 {232, 150, 22}, {0, 0, 0}, {255, 200, 60}, {180, 110, 10}, {70, 45, 5}, {0, 0, 0}, {52, 33, 4}, {242, 172, 42}, {30, 19, 2}, {72, 46, 6}, {0, 6, 14, 14}, 1,
+	 1, {{90, 55, 5}, {200, 120, 10}, {255, 200, 60}}, 1},
+	{"HERC GREEN", {0, 0, 0}, {40, 170, 40}, {32, 125, 32}, {64, 222, 64}, {64, 222, 64}, {0, 0, 0}, {130, 255, 130}, {160, 255, 160},
+	 {64, 222, 64}, {0, 0, 0}, {130, 255, 130}, {40, 150, 40}, {10, 60, 10}, {0, 0, 0}, {10, 46, 10}, {92, 240, 92}, {4, 26, 4}, {14, 62, 14}, {0, 2, 10, 10}, 1,
+	 1, {{15, 70, 15}, {40, 170, 40}, {130, 255, 130}}, 1}
 };
 // Every theme is checked when first used: text must stand out from what it sits on (WCAG-style contrast; a colour
 // that's too close is pushed lighter or darker, keeping its hue), and a one-colour theme (GB POCKET, PIP GREEN...)
@@ -10282,7 +10291,7 @@ int main(void) {
 		}
 		if (kDown & KEY_X) { page = navStep(page, 1); topDirty = 1; }
 		if (kDown & KEY_Y) { page = navStep(page, -1); topDirty = 1; }
-		if (kDown & KEY_A) { if (page == 0) browseSave(); else gChord = (gChord + 1) % NCHORD; topDirty = 1; }
+		if (kDown & KEY_A) { if (page != 0) gChord = (gChord + 1) % NCHORD; topDirty = 1; }   // (the browser saves with its SAVE button or START > SAVE PATCH, not A)
 		if (gThemePick && (kDown & KEY_B)) { gThemePick = 0; kDown &= ~KEY_B; botDirty = 1; }   // B closes the theme picker
 		if (kDown & KEY_B) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
 		if (gN3 > 0 && (kDown & KEY_ZR)) {   // ZR: the sequence plays / stops

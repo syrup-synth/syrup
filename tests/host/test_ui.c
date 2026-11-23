@@ -16,11 +16,13 @@ static void SCRIPT(int fr) {
 	if (fr == 80 && gStyle != NSTYLES - 1) fail("browser: STYLES, up from BASS should wrap to USER, got style %d", gStyle);
 	if (fr == 80 && strcmp(gPatchName, PRESETS[0][3].name)) fail("browser: an empty USER slot should keep the sound, got '%s'", gPatchName);
 	// --- save + name: A twice
-	press(fr, 90, KEY_A);
-	if (fr == 95 && gUser[0].magic == PATCH_MAGIC) fail("save: the first A should only ask");
-	press(fr, 100, KEY_A);
+	press(fr, 86, KEY_A);   // A doesn't save on the browser any more
+	if (fr == 89 && gUser[0].magic == PATCH_MAGIC) fail("save: A on the browser shouldn't save");
+	if (fr == 90) browseSave();   // the SAVE button (twice)
+	if (fr == 95 && gUser[0].magic == PATCH_MAGIC) fail("save: the first SAVE should only ask");
+	if (fr == 100) browseSave();
 	if (fr == 110) {
-		if (gUser[0].magic != PATCH_MAGIC) fail("save: nothing in USER 1 after A A");
+		if (gUser[0].magic != PATCH_MAGIC) fail("save: nothing in USER 1 after SAVE SAVE");
 		else if (strcmp(gUser[0].name, "TEST NAME ?")) fail("save: name should be 'TEST NAME ?', got '%s'", gUser[0].name);
 		shotTop("shots/user.ppm");
 	}
