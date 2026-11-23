@@ -4926,11 +4926,19 @@ static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 
 	if (gPadSel < 0) { gPadSel = 0; gPadN = padChord(base, 0, 0, 1, gPadNotes); }
 	int z = (x - 2) * 24 / 316; if (z < 0) z = 0; if (z > 23) z = 23;
 	if (z == gStrumZone) return 0;
-	gStrumZone = z;
-	int nt = gPadNotes[z % gPadN] + 12 * (z / gPadN) - 12;   // walk up the chord tones, octave by octave
+	// every string the stylus crossed since the last frame sounds, in order (a fast swipe used to drop most of them:
+	// the touch is read 60 times a second), and a string struck again lets its last note go first rather than
+	// stacking voices until they had to be stolen - which is where the clicks came from
+	int from = gStrumZone < 0 ? z : gStrumZone + (z > gStrumZone ? 1 : -1), d = z >= from ? 1 : -1;
 	float v = 0.4f + 0.6f * (y - STRUM_Y) / (float)(240 - STRUM_Y);
-	voiceOn(nt, v);
-	if (gStrumOffN < 24) { gStrumOff[gStrumOffN].note = nt; gStrumOff[gStrumOffN].t = 0.35f; gStrumOffN++; }
+	for (int q = from; ; q += d) {
+		int nt = gPadNotes[q % gPadN] + 12 * (q / gPadN) - 12;   // walk up the chord tones, octave by octave
+		int k = 0; for (; k < gStrumOffN; k++) if (gStrumOff[k].note == nt) break;
+		if (k < gStrumOffN) { voiceOff(nt); gStrumOff[k].t = 0.35f; } else if (gStrumOffN < 24) { gStrumOff[gStrumOffN].note = nt; gStrumOff[gStrumOffN].t = 0.35f; gStrumOffN++; }
+		voiceOn(nt, v);
+		if (q == z) break;
+	}
+	gStrumZone = z;
 	return 1;
 }
 static void padsTick(float dt) {   // strummed notes ring for a moment, then let go
