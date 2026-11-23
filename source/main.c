@@ -3358,6 +3358,7 @@ static int askName(const char* cur, char* out, int len) {   // the system keyboa
 }
 static int gBrowseDefer = 0, gBrowsePend = 0;
 static void patchMark(const void* ctl);
+static int gBrFocus = 1;   // preset browser: 0 = the STYLES list has up / down, 1 = the PATCHES list
 static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound changed
 	(void)fresh;
 	if (gEdited) patchMark(&gEdited);   // leaving an edited patch: SELECT + L brings it back
@@ -4238,7 +4239,8 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		frame(4, 30, 196, 194);
 		for (int k = 0; k < NVSTY; k++) {
 			int y = 34 + k * 10, i = VSTY[k];
-			if (i == gStyle) { rect(7, y - 2, 74, 10, HI); text(10, y, STYLE_NAMES[i], 1, HITXT); }
+			if (i == gStyle && !gBrFocus) { rect(7, y - 2, 74, 10, HI); text(10, y, STYLE_NAMES[i], 1, HITXT); }
+			else if (i == gStyle) { outline(7, y - 2, 74, 10, HI); text(10, y, STYLE_NAMES[i], 1, VAL); }   // (the other list has the D-pad)
 			else text(10, y, STYLE_NAMES[i], 1, DIM);
 		}
 		rect(84, 33, 1, 186, LINE);
@@ -4249,7 +4251,8 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			if (user && i == NUSER) snprintf(nm, sizeof(nm), "INIT PATCH");
 			else if (user && gUser[i].magic != PATCH_MAGIC) snprintf(nm, sizeof(nm), "%d  - EMPTY -", i + 1);
 			else snprintf(nm, sizeof(nm), "%.13s", presetName(gStyle, i));
-			if (cur) { rect(87, y - 2, 110, 11, HI); text(90, y, nm, 1, HITXT); }
+			if (cur && gBrFocus) { rect(87, y - 2, 110, 11, HI); text(90, y, nm, 1, HITXT); }
+			else if (cur) { outline(87, y - 2, 110, 11, HI); text(90, y, nm, 1, VAL); }
 			else text(90, y, nm, 1, TXT);
 		}
 		char cnt[40]; snprintf(cnt, sizeof(cnt), "%d PATCHES%s", presetCount(gStyle), gEdited ? " *" : ""); text(10, 212, cnt, 1, gEdited ? VAL : DIM);   /* (the build number is on the start screen and in HELP) */
@@ -10176,9 +10179,10 @@ int main(void) {
 
 		if (page == 0) {   // preset browser: the D-pad moves through the list itself
 			int ds = 0, dp = 0, fresh = 0;
-			if (kDown & KEY_DLEFT) ds = -1; else if (kDown & KEY_DRIGHT) ds = 1;
+			if (kDown & KEY_DLEFT) { gBrFocus = 0; topDirty = 1; } else if (kDown & KEY_DRIGHT) { gBrFocus = 1; topDirty = 1; }   // < > : the STYLES list or the PATCHES list
 			if (kDown & (KEY_DUP | KEY_DDOWN)) { dp = (kDown & KEY_DDOWN) ? 1 : -1; repeatT = 0.35f; }
-			else if (kHeld & (KEY_DUP | KEY_DDOWN)) { repeatT -= dt; if (repeatT <= 0) { dp = (kHeld & KEY_DDOWN) ? 1 : -1; repeatT = 0.09f; } }
+			else if (kHeld & (KEY_DUP | KEY_DDOWN)) { repeatT -= dt; if (repeatT <= 0) { dp = (kHeld & KEY_DDOWN) ? 1 : -1; repeatT = gBrFocus ? 0.09f : 0.2f; } }
+			if (!gBrFocus && dp) { ds = dp; dp = 0; }   // up / down in STYLES: the next style (its first patch plays)
 			fresh = (kDown & (KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT)) != 0;
 			gBrowseDefer = dp && !fresh;   // held: the list moves, the patch loads when it stops
 			if (ds || dp) { if (browseStep(ds, dp, fresh)) { curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = 1; }

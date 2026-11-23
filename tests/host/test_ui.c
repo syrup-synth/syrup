@@ -9,11 +9,11 @@ static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0; gFxCore2 = 0;
 	// --- browser: from the start page, left twice, down three times, check the patch loaded
 	if (fr == 15) { gStyle = 0; gPreset = 0; presetLoad(0, 0); }
-	press(fr, 20, KEY_DRIGHT); press(fr, 30, KEY_DLEFT);
+	press(fr, 20, KEY_DLEFT); press(fr, 30, KEY_DRIGHT);   // < : STYLES, > : PATCHES (up / down move in that list)
 	press(fr, 40, KEY_DDOWN); press(fr, 50, KEY_DDOWN); press(fr, 60, KEY_DDOWN);
 	if (fr == 70) { if (gStyle != 0 || gPreset != 3 || strcmp(gPatchName, PRESETS[0][3].name)) fail("browser: expected BASS #4 %s, got style %d patch %d '%s'", PRESETS[0][3].name, gStyle, gPreset, gPatchName); shotTop("shots/browser.ppm"); }
-	press(fr, 72, KEY_DLEFT);   // wraps to USER
-	if (fr == 80 && gStyle != NSTYLES - 1) fail("browser: left from BASS should wrap to USER, got style %d", gStyle);
+	press(fr, 72, KEY_DLEFT); press(fr, 75, KEY_DUP);   // STYLES, up from BASS wraps to USER
+	if (fr == 80 && gStyle != NSTYLES - 1) fail("browser: STYLES, up from BASS should wrap to USER, got style %d", gStyle);
 	if (fr == 80 && strcmp(gPatchName, PRESETS[0][3].name)) fail("browser: an empty USER slot should keep the sound, got '%s'", gPatchName);
 	// --- save + name: A twice
 	press(fr, 90, KEY_A);

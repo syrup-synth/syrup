@@ -102,7 +102,7 @@ On the OSC and sound pages the left panel of the top screen is drawn by the 3DS'
 
 ## Presets
 
-Page 1 is a preset browser organised by style. D-pad left / right changes style, up / down moves through the patches (hold to scroll fast); each patch loads as you land on it, so you can play keys to audition it. The right side shows what's loaded and whether you've edited it.
+Page 1 is a preset browser organised by style. D-pad left picks the STYLES list, right picks the PATCHES list (the lit bar shows which); up / down moves in that list (hold to scroll fast); each patch loads as you land on it, so you can play keys to audition it. The right side shows what's loaded and whether you've edited it.
 
 The factory library: 154 patches in 14 styles, with no duplicates, and levels matched so switching patches doesn't jump in volume. Every patch plays from the keys, buttons and circle pad alone. Mic, tilt and camera are optional extras, never required.
 
