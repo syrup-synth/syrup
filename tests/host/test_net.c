@@ -99,7 +99,7 @@ static void SCRIPT(int fr) {
 		while (i + 2 <= got) {   // server frames: not masked
 			int L = b[i + 1] & 127, h = 2; if (L == 126) { L = b[i + 2] << 8 | b[i + 3]; h = 4; } if (i + h + L > got) break;
 			const u8* d = b + i + h; int j = 0;
-			while (j + 3 <= L) { u8 t = d[j]; int n = d[j + 1] | d[j + 2] << 8; if (t == 'P' && n == (int)sizeof(SPatch)) sawP = 1; if (t == 'U') sawU = 1; if (t == 'L') sawL = 1; if (t == 'R' && n == 2048) sawR = 1; if (t == 'N' && d[j + 3] == 64) sawN = 1; j += 3 + n; }
+			while (j + 3 <= L) { u8 t = d[j]; int n = d[j + 1] | d[j + 2] << 8; if (t == 'P' && n == (int)sizeof(SPatch)) sawP = 1; if (t == 'U') sawU = 1; if (t == 'L') sawL = 1; if (t == 'R' && n == DSNAP) sawR = 1; if (t == 'N' && d[j + 3] == 64) sawN = 1; j += 3 + n; }
 			i += h + L;
 		}
 		if (!sawP || !sawU || !sawL || !sawR || !sawN) fail("MIRROR: the snapshot and the note should arrive (patch %d ui %d live %d drums %d note %d, %d bytes)", sawP, sawU, sawL, sawR, sawN, got);

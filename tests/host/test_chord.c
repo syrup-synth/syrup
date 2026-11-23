@@ -115,6 +115,17 @@ static void SCRIPT(int fr) {
 		const Param* kp = knobParam(gCurPage, 0); if (!kp || fabsf(paramNorm(kp) - kv0) < 0.3f) fail("REMOTE KNOBS: CC 20 should turn the page's first setting (%s)", kp ? kp->name : "none");
 		midiPush(0xB0, 105, 0); }
 	if (fr == 478) { int any = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4) any++; if (any) fail("REMOTE PADS: CC 105 0 should let go (%d)", any); }
+	if (fr == 479) {   // the drum grid: one tap on an empty grid is ONE hit (a factory row used to paste itself first); ACC accents one hit
+		myDrumLoad(); memset(gMyDrum, 0, sizeof(gMyDrum)); memset(gDrumX, 0, sizeof(gDrumX)); memset(gDrAcc, 0, sizeof(gDrAcc)); gKickPat = MINE_IDX[0]; gSnarePat = MINE_IDX[1]; gHatPat = MINE_IDX[2]; gDgPg = 0;   // an empty grid, as it looks
+		 gAccMode = 0;
+		int cx = DG_LX + (int)(4.5f * (320 - DG_LX - 2) / 16.0f), cy = DG_TOP + DG_RH / 2;
+		drumGridTouch(cx, cy, 1); drumGridRelease();
+		int n = 0; for (int r = 0; r < 3; r++) for (int i = 0; i < DSTEP; i++) n += gMyDrum[r][i] != 0;
+		if (n != 1 || !gMyDrum[0][4]) fail("DRUM GRID: one tap on an empty grid should add one hit (%d hits)", n);
+		gAccMode = 1; drumGridTouch(cx, cy, 1); drumGridRelease(); gAccMode = 0;
+		int na = 0; for (int r = 0; r < 10; r++) for (int i = 0; i < DSTEP; i++) na += gDrAcc[r][i];
+		if (!gDrAcc[0][4] || na != 1) fail("ACCENT: ACC + a tap should accent that one hit (%d accents)", na);
+	}
 	if (fr == 470) { double r = rmsOf(pr0 + SEC(0.3), ON); if (r > 40) fail("PANIC: everything should be silent half a second later (%.0f rms)", r); if (gFreeze) fail("PANIC should turn FREEZE off"); }
 }
-int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 480; app_main(); printf("chord: NEW 3DS controls, stick in menus, chord types, MIDI chords, live chord REC, pads + BASS, progressions, hold over patch change\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 482; app_main(); printf("chord: NEW 3DS controls, stick in menus, chord types, MIDI chords, live chord REC, pads + BASS, progressions, hold over patch change\n"); return gFails ? 1 : 0; }

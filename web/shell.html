@@ -39,16 +39,17 @@
   .cnub { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #3a2a18; border: 1px solid var(--dim); pointer-events: none; }
   .nub { position: absolute; left: 50%; top: 50%; width: 50px; height: 50px; margin: -25px 0 0 -25px; border-radius: 50%; background: #3a2a18; border: 1px solid var(--dim); }
   @media (orientation: landscape) and (min-aspect-ratio: 5/4) {
-    .wrap { max-width: none; }
-    .wrap { padding-top: calc(4px + env(safe-area-inset-top)); padding-bottom: calc(4px + env(safe-area-inset-bottom)); }
-    .g { grid-template-columns: minmax(124px, 1fr) minmax(112px, 1fr) auto minmax(150px, 1.6fr); gap: 4px 8px;
-         grid-template-areas: "bar bar screens shr" "shl shl screens abxy" "dpad stick screens mid"; align-items: center; }
-    .top .bar { flex-wrap: wrap; justify-content: center; margin: 0; } .top .bar .t { display: none; } .top .bar button { padding: 5px 7px; font-size: 12px; }
-    #msg { text-align: center; font-size: 11px; }
-    .screens { width: min(56vw, calc((100vh - 44px) / 1.2)); gap: 4px; }
-    .cluster { height: 112px; } .sh { height: 34px; }
-    .mid { flex-direction: column; }
+    /* wide: the bar across the top, then shoulder / D-pad / circle pad on the left, the screens, shoulder / ABXY / SELECT START QUICK on the right */
+    .wrap { max-width: none; padding-top: calc(4px + env(safe-area-inset-top)); padding-bottom: calc(4px + env(safe-area-inset-bottom)); }
+    .g { grid-template-columns: minmax(150px, 1fr) auto minmax(150px, 1fr); grid-template-rows: auto auto 1fr 1fr;
+         grid-template-areas: "bar bar bar" "shl screens shr" "dpad screens abxy" "stick screens mid"; gap: 6px 14px; align-items: center; min-height: calc(100vh - 12px); }
+    .top .bar { flex-wrap: nowrap; justify-content: center; margin: 0; } .top .bar .t { display: inline; } .top .bar button { padding: 4px 8px; font-size: 12px; }
+    #msg { text-align: center; font-size: 11px; min-height: 0; }
+    .screens { width: min(52vw, calc((100vh - 70px) / 1.2 * 1.0)); gap: 4px; align-self: start; }
+    .cluster { height: min(126px, 24vh); } .sh { height: 34px; }
+    .mid { flex-direction: column; align-self: start; } .mid button { padding: 6px 4px; }
     .note { display: none; }
+    .sndw { margin-left: 0; } .finger { width: 34px; height: 36px; margin-left: -14px; }
   }
   /* the pointing finger (ANSI block art) until the sound is on */
   .sndw { position: relative; margin-left: auto; display: inline-block; }
@@ -70,7 +71,7 @@
   }
   /* SYRUP_MIRROR: opened from a 3DS (/mirror, /stream): the top screen big, no controls */
   #mirbar, #ov { display: none; }
-  body.mir .cluster, body.mir .shp, body.mir .mid, body.mir .note, body.mir #bot, body.mir #midi, body.mir #mch, body.mir #smp, body.mir #link, body.mir #phone, body.mir #gpl, body.mir .finger { display: none !important; }
+  body.mir .cluster, body.mir .shp, body.mir .mid, body.mir .note, body.mir #bot, body.mir #midi, body.mir #mch, body.mir #smp, body.mir #link, body.mir #kbd, body.mir #phone, body.mir #gpl, body.mir .finger { display: none !important; }
   body.mir .wrap { max-width: none; } body.mir .g { display: block; }
   body.mir .screens { position: relative; width: min(96vw, calc((100vh - 120px) * 5 / 3)); margin: 6px auto; }
   body.mir #top { width: 100%; cursor: default; }
@@ -89,9 +90,9 @@
   body.stream #top { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; aspect-ratio: auto; background: transparent; border-radius: 0; }
   body.keyed #top { background: transparent; }
   /* PHONE: the computer shows a code / QR; the phone (#phone=CODE) is just the controller pages */
-  #phpanel { display: none; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 20; background: var(--panel); border: 1px solid var(--hot); border-radius: 10px; padding: 16px; text-align: center; max-width: 92vw; }
-  #phpanel .code { font-size: 32px; letter-spacing: .2em; color: var(--hot); margin: 6px 0; } #phpanel img { image-rendering: pixelated; background: #fff; padding: 8px; border-radius: 6px; }
-  #phpanel .u { font-size: 11px; color: var(--dim); word-break: break-all; margin: 6px 0; }
+  #lkpanel, #phpanel { display: none; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 20; background: var(--panel); border: 1px solid var(--hot); border-radius: 10px; padding: 16px; text-align: center; max-width: 92vw; }
+  #lkpanel .code, #phpanel .code { font-size: 32px; letter-spacing: .2em; color: var(--hot); margin: 6px 0; } #phpanel img { image-rendering: pixelated; background: #fff; padding: 8px; border-radius: 6px; }
+  #lkpanel .u, #phpanel .u { font-size: 11px; color: var(--dim); word-break: break-all; margin: 6px 0; }
   body.phonemode .wrap { display: none; } body.phonemode #phoneframe { position: fixed; inset: 0; width: 100vw; height: 100%; border: 0; }
   #tapsnd { display: none; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 9; }
 </style>
@@ -107,7 +108,8 @@
         <button class="b" id="midi">MIDI</button>
         <select class="b" id="mch" title="MIDI channel this window listens to"><option value="0">ALL CH</option></select>
         <button class="b" id="smp" title="Load drum samples (WAV, MP3...): name them KICK, SNARE, HAT, OPEN HAT, CLAP, RIM, LO TOM, HI TOM, BELL, CRASH">SAMPLES</button><input type="file" id="smpf" accept="audio/*,.wav" multiple style="display:none">
-        <button class="b" id="link" title="Link with other Syrup windows on this device">LINK</button>
+        <button class="b" id="link" title="Link with other Syrup windows, and other devices (phone, tablet, computer) by code">LINK</button>
+        <button class="b" id="kbd" title="Computer keyboard: the 3DS buttons, or a piano (Z S X D C... and Q 2 W 3 E...)">KEYS: PAD</button>
         <button class="b" id="phone" title="Play this Syrup from a phone: chord pads, drum pads, keys, XY, knobs">PHONE</button>
         <button class="b" id="full">FULL</button>
         <button class="b" id="gpl" title="Controller buttons: by position (Nintendo) or by the letters on an Xbox-style pad">ABXY: POS</button>
@@ -145,6 +147,7 @@
   </div>
 </div>
 <button class="b" id="tapsnd">TAP FOR SOUND</button>
+<div id="lkpanel" class="phpanel"><div>LINK DEVICES: open Syrup on the other device, tap LINK there, and type this code (or type its code here)</div><div class="code" id="lkcode">......</div><div><input id="lkin" inputmode="numeric" maxlength="6" placeholder="code" style="font:inherit;font-size:20px;width:8em;text-align:center;background:#000;color:var(--hot);border:1px solid var(--line);border-radius:6px;padding:6px"> <button class="b" id="lkgo">JOIN</button></div><div id="lkst" class="u"></div><button class="b" id="lkclose">CLOSE</button></div>
 <div id="phpanel"><div>PHONE LINK: on the phone, scan this (or open the address)</div><div id="phqr"></div><div class="code" id="phcode"></div><div class="u" id="phurl"></div><div id="phst" class="u"></div><button class="b" id="phclose">CLOSE</button></div>
 <!--REMOTE_HTML-->
 <script>
@@ -189,8 +192,27 @@ document.querySelectorAll('[data-k]').forEach(bindKey);
 var KB = { ArrowUp: 64, ArrowDown: 128, ArrowLeft: 32, ArrowRight: 16, x: 1, z: 2, s: 1024, a: 2048, q: 512, w: 256, 1: 16384, 2: 32768, Shift: 4, Enter: 8 };
 var stickKeys = {};
 function stickFromKeys() { CX = (stickKeys.l ? 150 : 0) - (stickKeys.j ? 150 : 0); CY = (stickKeys.i ? 150 : 0) - (stickKeys.k ? 150 : 0); send(); }
-addEventListener('keydown', function (e) { var k = KB[e.key] || KB[e.key.toLowerCase()]; if (k) { KEYS |= k; send(); e.preventDefault(); } if ('ijkl'.indexOf(e.key.toLowerCase()) >= 0 && e.key.length === 1) { stickKeys[e.key.toLowerCase()] = 1; stickFromKeys(); } });
-addEventListener('keyup', function (e) { var k = KB[e.key] || KB[e.key.toLowerCase()]; if (k) { KEYS &= ~k; send(); } if ('ijkl'.indexOf(e.key.toLowerCase()) >= 0 && e.key.length === 1) { stickKeys[e.key.toLowerCase()] = 0; stickFromKeys(); } });
+// KEYS: PIANO: the computer keyboard plays notes (tracker layout: Z S X D C V G B H N J M = the lower octave,
+// Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P = the upper; - / = shift the octave). The arrows, Shift and Enter stay buttons.
+var KPIANO = 0, POCT = 48, PDOWN = {};
+var PK = { z: 0, s: 1, x: 2, d: 3, c: 4, v: 5, g: 6, b: 7, h: 8, n: 9, j: 10, m: 11, ',': 12, l: 13, '.': 14, ';': 15, '/': 16,
+  q: 12, 2: 13, w: 14, 3: 15, e: 16, r: 17, 5: 18, t: 19, 6: 20, y: 21, 7: 22, u: 23, i: 24, 9: 25, o: 26, 0: 27, p: 28, '[': 29, '=': -2, '-': -1 };
+try { KPIANO = +(localStorage.getItem('syrup-kpiano') || 0); } catch (e) {}
+function kbdLabel() { var b = document.getElementById('kbd'); b.textContent = KPIANO ? 'KEYS: PIANO' : 'KEYS: PAD'; b.classList.toggle('on', !!KPIANO); }
+kbdLabel();
+document.getElementById('kbd').onclick = function () { KPIANO = 1 - KPIANO; kbdLabel(); try { localStorage.setItem('syrup-kpiano', KPIANO); } catch (e) {} msg.textContent = KPIANO ? 'Computer keyboard = piano: Z S X D C... (lower), Q 2 W 3 E... (upper), - / = octave' : 'Computer keyboard = the 3DS buttons'; this.blur(); };
+function pianoKey(e, down) {
+  if (!KPIANO || !ready || e.ctrlKey || e.metaKey || e.altKey) return false;
+  var k = e.key.length === 1 ? e.key.toLowerCase() : ''; if (!(k in PK)) return false;
+  e.preventDefault(); var v = PK[k];
+  if (v < 0) { if (down && !e.repeat) { POCT = Math.max(12, Math.min(96, POCT + (v === -2 ? 12 : -12))); msg.textContent = 'Octave C' + (POCT / 12 - 1); } return true; }
+  if (down) { if (PDOWN[k] !== undefined || e.repeat) return true; var n = POCT + v; PDOWN[k] = n; Module._web_midi(0x90, n, 100); }
+  else if (PDOWN[k] !== undefined) { Module._web_midi(0x80, PDOWN[k], 0); delete PDOWN[k]; }
+  return true;
+}
+addEventListener('blur', function () { for (var k in PDOWN) { Module._web_midi(0x80, PDOWN[k], 0); } PDOWN = {}; });
+addEventListener('keydown', function (e) { if (e.target && e.target.tagName === 'INPUT') return; if (pianoKey(e, true)) return; var k = KB[e.key] || KB[e.key.toLowerCase()]; if (k) { KEYS |= k; send(); e.preventDefault(); } if ('ijkl'.indexOf(e.key.toLowerCase()) >= 0 && e.key.length === 1) { stickKeys[e.key.toLowerCase()] = 1; stickFromKeys(); } });
+addEventListener('keyup', function (e) { if (e.target && e.target.tagName === 'INPUT') return; if (pianoKey(e, false)) return; var k = KB[e.key] || KB[e.key.toLowerCase()]; if (k) { KEYS &= ~k; send(); } if ('ijkl'.indexOf(e.key.toLowerCase()) >= 0 && e.key.length === 1) { stickKeys[e.key.toLowerCase()] = 0; stickFromKeys(); } });
 // ---- the touch screen
 var bot = document.getElementById('bot');
 function touchAt(e) { var r = bot.getBoundingClientRect(); TX = Math.max(0, Math.min(319, Math.round((e.clientX - r.left) * 320 / r.width))); TY = Math.max(0, Math.min(239, Math.round((e.clientY - r.top) * 240 / r.height))); }
@@ -354,9 +376,29 @@ function linkOn(on) {
   } else if (!on && lch) { lch.postMessage({ id: myId, bye: 1 }); lch.close(); lch = null; linkBtn.classList.remove('on'); linkBtn.textContent = 'LINK'; }
   else if (on && !window.BroadcastChannel) msg.textContent = 'This browser can\'t link windows.';
 }
-linkBtn.onclick = function () { linkOn(!lch); };
+// ...and other DEVICES (no Wi-Fi MIDI in a browser): peer to peer over WebRTC, found by a 6-digit code (PeerJS's free
+// server only introduces them). The same messages: PLAY / STOP, BPM, the drums.
+var lkPeer = null, lkConns = [];
+function lkSt() { var n = Object.keys(linkPeers).length + 1 + lkConns.length; linkBtn.textContent = lch ? 'LINK ' + n : 'LINK'; document.getElementById('lkst').textContent = lkConns.length ? lkConns.length + ' device' + (lkConns.length > 1 ? 's' : '') + ' linked' : ''; }
+function lkHook(c) {
+  c.on('open', function () { lkConns.push(c); lkSt(); msg.textContent = 'Linked with another device'; if (ready) c.send({ st: Module._web_link_get() }); });
+  c.on('data', function (d) { if (d && d.st !== undefined && ready) { Module._web_link_set(d.st); lastLink = d.st; if (lch) lch.postMessage({ id: myId, st: d.st }); } });
+  c.on('close', function () { lkConns = lkConns.filter(function (x) { return x !== c; }); lkSt(); });
+}
+function lkStart() {
+  if (lkPeer) return;
+  loadJs(PEERJS).then(function () {
+    var code = String(Math.floor(100000 + Math.random() * 900000)); lkPeer = new Peer('syrup-lk-' + code);
+    lkPeer.on('open', function () { document.getElementById('lkcode').textContent = code; });
+    lkPeer.on('connection', lkHook);
+    lkPeer.on('error', function (e) { if (e.type === 'unavailable-id') { lkPeer.destroy(); lkPeer = null; lkStart(); } else document.getElementById('lkst').textContent = 'link: ' + (e.type || 'error'); });
+  }).catch(function () { document.getElementById('lkst').textContent = 'Linking devices needs the internet'; });
+}
+document.getElementById('lkgo').onclick = function () { var v = document.getElementById('lkin').value.replace(/\D/g, ''); if (v.length !== 6 || !lkPeer) return; lkHook(lkPeer.connect('syrup-lk-' + v, { reliable: true })); document.getElementById('lkst').textContent = 'joining ' + v + '...'; };
+document.getElementById('lkclose').onclick = function () { document.getElementById('lkpanel').style.display = 'none'; };
+linkBtn.onclick = function () { var on = !lch; linkOn(on); var pn = document.getElementById('lkpanel'); pn.style.display = on ? 'block' : 'none'; if (on) lkStart(); lkSt(); };
 addEventListener('beforeunload', function () { linkOn(false); });
-setInterval(function () { if (!lch || !ready) return; var st = Module._web_link_get(); if (st !== lastLink) { if (lastLink !== -1) lch.postMessage({ id: myId, st: st }); lastLink = st; } }, 20);
+setInterval(function () { if ((!lch && !lkConns.length) || !ready) return; var st = Module._web_link_get(); if (st !== lastLink) { if (lastLink !== -1) { if (lch) lch.postMessage({ id: myId, st: st }); lkConns.forEach(function (c) { if (c.open) c.send({ st: st }); }); } lastLink = st; } }, 20);
 // ---- MIRROR / STREAM: this page was opened from a 3DS (WI-FI MIDI on, http://<the 3DS>:8080/mirror or /stream).
 // It runs Syrup muted and plays / draws exactly what the 3DS sends; STREAM is the clean view for OBS (browser source).
 // /stream?ov=pckb (overlays: Patch, Chord, Keys, Bpm; ov= for none) &bg=clear (see-through background) &sound=1

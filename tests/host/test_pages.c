@@ -68,7 +68,7 @@ static void SCRIPT(int fr) {
 			FILE* f = fopen("sd/mydrums.bin", "wb"); u32 m = DRM2; fwrite(my, sizeof my, 1, f); fwrite(dx, sizeof dx, 1, f); fwrite(&m, 4, 1, f); fwrite(rt, sizeof rt, 1, f); fwrite(cd, sizeof cd, 1, f);
 			fwrite(ra, sizeof ra, 1, f); fwrite(ln, sizeof ln, 1, f); fwrite(dv, sizeof dv, 1, f); fwrite(ac, sizeof ac, 1, f); fclose(f);
 			memset(gMyDrum, 0, sizeof gMyDrum); memset(gDrumX, 0, sizeof gDrumX); gMyDrumLoaded = 0; myDrumLoad();
-			if (gMyDrum[1][3] != 200 || gDrumX[1][7] != 180 || gDrCond[1][3] != 6 || gDrLen[0] != 12 || !gDrAcc[3] || gMyDrum[1][19]) fail("an old 16-step mydrums.bin should load into page 1");
+			if (gMyDrum[1][3] != 200 || gDrumX[1][7] != 180 || gDrCond[1][3] != 6 || gDrLen[0] != 12 || !gDrAcc[0][3] || !gDrAcc[5][3] || gMyDrum[1][19]) fail("an old 16-step mydrums.bin should load into page 1");
 		}
 	}
 }
