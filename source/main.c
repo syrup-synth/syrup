@@ -2159,6 +2159,10 @@ static void arpTick(float dt) {
 
 // ---- clock: the arp and sequencer run in the audio thread, once per DSP frame (160 samples, ~4.9 ms)
 static LightLock gVoiceLock;   // voices are touched by the main loop and by the audio thread
+// HANG REPORT: the main loop leaves a note of where it is; if it stops for 3 s, a watcher thread writes that (and
+// what the audio threads are doing) on the bottom screen and to 3ds/syrup/hang.txt, so a freeze can be photographed
+static volatile const char* gWhere = "START"; static volatile u32 gBeat = 0, gHung = 0;
+#define WHERE(s) (gWhere = (s))
 static float gClockDebt = 0; static volatile int gClockSkips = 0;   // HARDWARE page shows skips
 static void arpTick(float dt);
 static void seqTick(float dt); static void tapeSeqStarted(void); static void clickTick(void);
@@ -10418,6 +10422,31 @@ static int dspAsk(void) {   // the first start without the firmware: say what Sy
 	return 0;
 #endif
 }
+#ifndef SYRUP_HOST
+static void hangWatch(void* a) {   // HANG REPORT (see gWhere)
+	(void)a; u32 last = gBeat; u64 t0 = osGetTime();
+	for (;;) {
+		svcSleepThread(250000000LL);
+		if (gBeat != last) { last = gBeat; t0 = osGetTime(); gHung = 0; continue; }
+		if (gHung || osGetTime() - t0 < 3000 || !strcmp((const char*)gWhere, "LOOP") || !strcmp((const char*)gWhere, "START")) continue;   // LOOP: in aptMainLoop (HOME menu, sleep)
+		gHung = 1;
+		char l[6][48]; extern u16 ndspFrameId;
+		snprintf(l[0], 48, "SYRUP FROZE AT: %.28s", (const char*)gWhere);
+		snprintf(l[1], 48, "VOICE LOCK %ld  FX CORE2 %d BUSY %d", (long)gVoiceLock, gFxThread != NULL, gFxBusy);
+		snprintf(l[2], 48, "DSP FRAME %u  NEW3DS %d  MENU %d", (unsigned)ndspFrameId, gN3, gStartMenu);
+		snprintf(l[3], 48, "PAGE %d  SEQ %d  DRUMS %d", gCurPage, gSeqMode, gDrums);
+		snprintf(l[4], 48, "TAKE A PHOTO OF THIS FOR CLAUDE");
+		snprintf(l[5], 48, "HOLD POWER TO TURN OFF");
+		FILE* f = fopen("sdmc:/3ds/syrup/hang.txt", "a"); if (f) { for (int i = 0; i < 4; i++) fprintf(f, "%s\n", l[i]); fprintf(f, "--\n"); fclose(f); }
+		for (int b = 0; b < 2; b++) {   // both bottom buffers: whichever is showing gets it
+			fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
+			for (int x = 0; x < 320; x++) for (int y = 150; y < 240; y++) { u8* q = fb + (x * 240 + (239 - y)) * 3; q[0] = 0; q[1] = 0; q[2] = 120; }
+			for (int i = 0; i < 6; i++) text(4, 154 + i * 14, l[i], 1, 255, 255, 255);
+			gfxFlushBuffers(); gfxSwapBuffers(); svcSleepThread(40000000LL);
+		}
+	}
+}
+#endif
 int main(void) {
 	gfxInitDefault();
 	gfxSetDoubleBuffering(GFX_TOP, true);     // draw into the hidden buffer, swap on vblank: no tearing
@@ -10497,6 +10526,9 @@ int main(void) {
 	gSplash = 0;   // tests start straight on the instrument (the web build keeps the logo and a tip)
 #endif
 	if (gSplash) for (int k = 0; k < 2; k++) { splashBottomReady(); gfxFlushBuffers(); gfxSwapBuffers(); gspWaitForVBlank(); }
+#ifndef SYRUP_HOST
+	{ s32 pr = 0x30; svcGetThreadPriority(&pr, CUR_THREAD_HANDLE); threadCreate(hangWatch, NULL, 0x2000, pr > 0x19 ? pr - 1 : pr, 0, true); }
+#endif
 	while (aptMainLoop()) {
 #ifndef SYRUP_HOST
 		{   // DSP watchdog: if the DSP stops answering, turn SCREAM off and don't wait on it at exit (that wait never returned)
@@ -10509,6 +10541,7 @@ int main(void) {
 			gDspStalled = st;
 		}
 #endif
+		gBeat++; WHERE("INPUT");
 		hidScanInput();
 		u32 kDown = hidKeysDown(), kHeld = hidKeysHeld();
 		if (gSplash) {   // the logo stays up a few seconds after loading, or until a tap / button
@@ -10526,6 +10559,7 @@ int main(void) {
 		}
 		int startAct = -1;
 		if (gStartMenu) {   // the menu has the buttons; the touch screen keeps playing
+			WHERE("MENU KEYS");
 			if (kDown & KEY_DUP) { gStartSel = (gStartSel + NSTART - 1) % NSTART; topDirty = 1; }
 			if (kDown & KEY_DDOWN) { gStartSel = (gStartSel + 1) % NSTART; topDirty = 1; }
 			if (gStartSel == 4 && (kDown & (KEY_DLEFT | KEY_DRIGHT | KEY_L | KEY_R))) {   // THEME: < > or L / R try the themes right here, live
@@ -10537,8 +10571,9 @@ int main(void) {
 			kDown &= KEY_TOUCH; kHeld &= KEY_TOUCH;
 		}
 		if (startAct == 6) break;   // QUIT
-		wakeTick();
-		LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
+		WHERE("WAKE"); wakeTick();
+		WHERE("VOICE LOCK"); LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
+		WHERE("MOTION / CAMERA");
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
 		if (gVoiceMode == 7 && !gSafeMode) {   // PERC KIT: shake the console, it plays the shaker
 			static int armed = 1; static u64 lastHit = 0, lastTouch = 0; u64 tnow = osGetTime();
@@ -10904,7 +10939,7 @@ int main(void) {
 			}
 			cx = 0; gStick = 0;
 		}
-		if (gN3 < 0) { bool n3 = false; APT_CheckNew3DS(&n3); gN3 = n3 ? 1 : 0; }
+		WHERE("C-STICK"); if (gN3 < 0) { bool n3 = false; APT_CheckNew3DS(&n3); gN3 = n3 ? 1 : 0; }
 		if (gN3) {   // NEW 3DS CONTROLS: the C-stick is STICK 2 (a mod source); routed nowhere, it moves this page's two values
 			circlePosition cs; hidCstickRead(&cs);
 			float qx = DZ(cs.dx / 150.0f, 0.12f), qy = DZ(cs.dy / 150.0f, 0.12f); if (qx > 1) qx = 1; if (qx < -1) qx = -1; if (qy > 1) qy = 1; if (qy < -1) qy = -1;
@@ -11111,7 +11146,7 @@ int main(void) {
 			int any = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho) any = 1;
 			if (any) { gBusWait += dt; if (gBusWait > 1.5f) { gBusFail = 1; topDirty = 1; } }
 		}
-		LightLock_Unlock(&gVoiceLock);
+		LightLock_Unlock(&gVoiceLock); WHERE("SAVES / NET");
 		// SD writes wait until here, so a page press never holds the lock the audio tick needs
 		if (gPageMarkDue) { gPageMarkDue = 0; settingsSave(page); char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
 		if (gTblDue) { int t = gTblDue; gTblDue = 0; LightLock_Lock(&gMipsLock); if (t & 1) tableSelect(&A->tb, A->table); if (t & 2) tableSelect(&B->tb, B->table); LightLock_Unlock(&gMipsLock); gForceBuild |= t; topDirty = 1; }
@@ -11151,6 +11186,7 @@ int main(void) {
 		if (!helpOn && (page == 9 || page == 10 || page == 11)) topDirty = 1;   // live meters / step lights
 		{ static int was = 0; int act = gGridOn && gPatView == 2 && (gTapeRec >= 0 || gTapePlay); if (act || was) botDirty = 1; was = act; }   // tape heads moving
 		if (topDirty || topAgain) {
+			WHERE("DRAW TOP");
 			if (helpOn) drawHelp();
 			else {
 				drawTop(page, sel[page], oct, latch);
@@ -11174,7 +11210,7 @@ int main(void) {
 					scanlines();
 				}
 				if (gQuickBar >= 0 || gQuickOpen) drawQuick(page);
-				else if (gStartMenu) drawStartMenu();
+				else if (gStartMenu) { WHERE("DRAW MENU"); drawStartMenu(); }
 				else if (gCallT > 0 && page != 8) {   // big value pop-up, drawn last so the visuals don't cover it
 					fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
 					const Param* cp = (const Param*)gCallP; int bar = cp && cp->type != PT_E && cp->mx > cp->mn;
@@ -11209,13 +11245,15 @@ int main(void) {
 			}
 			topAgain = topDirty; topDirty = 0;
 		}
-		if (botDirty || botAgain) { drawBottom(base, on, helpOn, latch); botAgain = botDirty; botDirty = 0; }
+		if (botDirty || botAgain) { WHERE("DRAW BOTTOM"); drawBottom(base, on, helpOn, latch); botAgain = botDirty; botDirty = 0; }
 
-		gfxFlushBuffers();
+		WHERE("SWAP"); gfxFlushBuffers();
 		gfxSwapBuffers();
-		gspWaitForVBlank();
+		WHERE("VBLANK"); gspWaitForVBlank();
+		WHERE("LOOP");
 	}
 
+	gHung = 1; WHERE("LOOP");   // quitting: no hang report
 	aptUnhook(&gSleepCookie);
 	// background threads first (network MIDI, IR, downloads, camera) so nothing is mid-call while services close
 	if (!gSafeMode) {
