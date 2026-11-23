@@ -404,3 +404,17 @@ It can't check what only the hardware does: real chip quirks, CPU load on a 2DS,
 - **OUTPUT: MONO** (VOICE+FX) for one speaker or a mono cable.
 - **HELP** has four slides; L / R flip them.
 - **FILTER SCREAM** stays just inside the filter's stable limit (it could lock up the sound chip), and a watchdog turns it off if the chip ever stops answering.
+
+## Mirror, Stream and the phone pages
+- **MIRROR**: turn WI-FI MIDI on, then open `http://<the 3DS>:8080/mirror` on a computer. The page loads Syrup for the web (from `3ds/syrup/web/index.html` on the SD card, or GitHub Pages) and follows the 3DS: notes, drum hits, glides, the live mod values, the page, the patch, the pattern and the drum grid. Its sound is off until you press SOUND ON.
+- **STREAM**: `http://<the 3DS>:8080/stream` is the clean view for OBS (a Browser source, 1920x1080, "Control audio via OBS"): the VISUALIZER full window. Options: `ov=pckb` overlays (Patch, Chord name, Keys, Bpm), `bg=clear` makes the background see-through, `sound=1`, `view=follow` shows the 3DS's own pages instead.
+- **Phone pages** (`http://<the 3DS>:8080/`): KEYS, CHORDS (the pads: top 9th, middle 7th, bottom triad; slide = MORPH; the progression row; a strum strip), DRUMS (General MIDI notes on channel 10 play the drum machine), XY, KNOBS (the first 8 settings of the page on the 3DS, CC 20-27).
+- **PHONE** (web version): the computer shows a 6-digit code and a QR; the phone opens it and gets the same pages, linked peer to peer.
+- **QUICK** (web version): the quick-select ring, by tap.
+- MIDI: channel 10 notes 36 38 42 46 39 37 45 50 56 49 = KICK SNARE HAT OPEN HAT CLAP RIM LO TOM HI TOM BELL CRASH. CC 105-108: the pads (remote).
+
+## PADS + BASS presets (CHORD style)
+SOUL WALK (walking bass, ii V I vi), DISCO OCTAVES (octaves, I vi IV V), HOUSE PIANO (offbeats, vi IV I V), FUNK CLAV (funk, I IV V IV), SKANK ORGAN (reggae, I V vi IV), GALLOP DRIVE (gallop, i VI VII i). Loading one opens the pads with its bass line and progression; AUTO plays it.
+
+## Engine showcase pads (PAD style)
+TABLE TIDE (both tables scanning), GRAIN HALO (grains an octave up + shimmer), PRISM SHIFT (sync warp bending, stepped vowels; XY on the macros), SHIMMER DRIFT (shimmer reverb + tape echo).

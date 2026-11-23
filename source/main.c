@@ -2723,6 +2723,17 @@ static void p_haze(SPatch* p) { p->master = 0.7f; OA.table = T_VOWELS; OA.uni = 
 static void p_reverse(SPatch* p) { p->master = 0.7f; OA.table = T_HARMONIX; OA.uni = 4; OA.detune = 14; ENV1(0.4f, 0, 1.0f, 0.9f, 1.2f); REVB(0.45f, RV_SWELL); DLYS(0.3f, S4, DL_REV); }
 static void p_sonar(SPatch* p) { p->master = 0.75f; OA.table = T_HARMONIX; OA.oct = -1; OA.uni = 3; OA.detune = 8; ENV1(1.0f, 0, 1.0f, 1.0f, 2.5f); OUTF(OF_PHASER, 0.4f, 0.6f, 0, 0);
 	LFO(0, LS_SINE, 0, 0.05f); MOD(2, SRC_LFO1, DST_OFCUT, 0.4f); ORBIT(0.5f, 0.06f); REVB(0.4f, RV_HALL); }
+// ENGINE SHOWCASE pads: each shows one part of Syrup off (wavetable scanning, the grain engine, warp morphing, shimmer)
+static void p_tabletide(SPatch* p) { p->master = 0.65f; OA.table = T_DIGITAL; OA.uni = 3; OA.detune = 14; OA.width = 1; OB.on = 1; OB.table = T_HARMONIX; OB.oct = 1; OB.level = 0.25f;
+	ENV1(0.5f, 0, 1.0f, 0.9f, 1.8f); ENV2(1.5f, 0, 2.0f, 0.4f, 1.5f); LFO(0, LS_TRI, 0, 0.11f); MOD(2, SRC_LFO1, DST_APOS, 0.9f); MOD(3, SRC_ENV2, DST_BPOS, 0.7f);
+	OUTF(OF_CREAMY, 0.6f, 0.2f, 0, 0.2f); MFX(FX_CHORUS, 0.3f, 0.5f, 0.35f); REVB(0.4f, RV_HALL); p->xyMode = 5; }   // the tables wash through every frame
+static void p_grainhalo(SPatch* p) { p->master = 0.7f; OA.table = T_HARMONIX; OA.pos = 0.6f; OA.level = 0.35f; GRN(0.7f, 0.6f, 0.35f, 12, 0.85f); LFO(1, LS_SINE, 0, 0.07f); MOD(2, SRC_LFO2, DST_APOS, 0.6f);
+	ENV1(0.9f, 0, 1.0f, 0.95f, 2.5f); p->shimmer = 1; REVB(0.5f, RV_HALL); MFX(FX_DIM, 0.3f, 0.4f, 0.4f); }   // a cloud of grains an octave up, shimmering
+static void p_prismshift(SPatch* p) { p->master = 0.6f; OA.table = T_SYNC; OA.warp = W_BENDPM; OA.uni = 2; OA.detune = 10; OA.width = 1; OB.on = 1; OB.table = T_VOWELS; OB.level = 0.4f;
+	ENV1(0.4f, 0, 1.0f, 0.9f, 1.6f); LFO(0, LS_TRI, 0, 0.09f); LFO(1, LS_SH, 0, 0.6f); MOD(2, SRC_LFO1, DST_AWARP, 0.7f); MOD(3, SRC_LFO2, DST_BPOS, 0.35f);
+	MFX(FX_PHASER, 0.15f, 0.6f, 0.4f); OUTF(OF_CREAMY, 0.55f, 0.25f, 0, 0); REVB(0.35f, RV_PLATE); p->xyMode = 1; MOD2(0, SRC_M1, DST_AWARP, 0.6f); MOD2(1, SRC_M2, DST_BPOS, 0.6f); }   // warp bending, vowels stepping
+static void p_shimmerdrift(SPatch* p) { p->master = 0.65f; OA.table = T_BASIC; OA.pos = TRI; OA.uni = 3; OA.detune = 18; OA.width = 1; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1; OB.level = 0.3f;
+	ENV1(1.2f, 0, 1.0f, 1.0f, 3.0f); p->shimmer = 1; REVB(0.6f, RV_SWELL); DLYS(0.25f, S4D, DL_TAPE); p->dlyWow = 0.6f; MFX(FX_CHORUS, 0.2f, 0.6f, 0.4f); }   // shimmer + tape echo: it blooms upward
 static void p_hallchoir(SPatch* p) { p->master = 0.7f; OA.table = T_VOWELS; OA.level = 0.4f; LFO(0, LS_TRI, 0, 0.08f); MOD(2, SRC_LFO1, DST_APOS, 0.6f); GRN(0.55f, 0.5f, 0.15f, 0, 0.8f);
 	ENV1(0.6f, 0, 1.0f, 0.9f, 2.0f); REVB(0.45f, RV_HALL); MFX(FX_CHORUS, 0.2f, 0.5f, 0.3f); }
 
@@ -2778,6 +2789,18 @@ static void c_omni(SPatch* p);
 static void c_strum8(SPatch* p) { c_strum(p); p->chord = 2; ARP(6, 1, 1, 0.85f); p->arpStrum = 22; p->arpStrumDir = 2; }   // MAJ7, eighths, down-up like a rhythm guitar
 static void c_harproll(SPatch* p) { c_omni(p); p->chord = 1; ARP(6, 0, 1, 0.95f); p->arpStrum = 70; p->arpStrumDir = 0; }   // slow rolled MIN7, one stroke a beat
 static void c_rake(SPatch* p) { c_strum(p); OA.pos = 0.7f; p->cutoff = 0.5f; p->chord = 4; ARP(6, 3, 1, 0.6f); p->arpStrum = 12; p->arpStrumDir = 3; }   // SUS, fast raked sixteenths
+// PADS + BASS: chord sounds made for the pads with a bass line under them (the bass plays the same sound an octave down,
+// so each has a sub and an envelope that suits both). Loading one opens the pads with its BASS style and progression.
+static void c_soulwalk(SPatch* p) { k_epsat(p); p->master = 0.6f; p->subShape = 0; p->subLevel = 0.25f; ENV1(0.003f, 0, 1.4f, 0.35f, 0.5f); MFX(FX_CHORUS, 0.3f, 0.5f, 0.35f); REVB(0.18f, RV_ROOM); }
+static void c_discooct(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 3; OA.detune = 14; OA.width = 1; p->subLevel = 0.3f; ENV1(0.04f, 0, 0.5f, 0.75f, 0.35f);
+	OUTF(OF_L12, 0.55f, 0.15f, 0, 0.1f); MFX(FX_CHORUS, 0.6f, 0.7f, 0.5f); DLYS(0.12f, S8D, DL_DIGI); REVB(0.22f, RV_HALL); }
+static void c_housepiano(SPatch* p) { p->master = 0.55f; OA.table = T_HARMONIX; OA.pos = 0.5f; OB.on = 1; OB.table = T_BASIC; OB.pos = TRI; OB.oct = -1; OB.level = 0.35f; p->subLevel = 0.2f;
+	ENV1(0.001f, 0, 0.7f, 0.15f, 0.25f); ENV2(0.0f, 0, 0.3f, 0.0f, 0.2f); MOD(2, SRC_ENV2, DST_APOS, 0.3f); MFX(FX_CHORUS, 0.4f, 0.3f, 0.25f); REVB(0.2f, RV_ROOM); }
+static void c_funkclav(SPatch* p) { k_clav(p); p->master = 0.6f; p->subShape = 1; p->subLevel = 0.3f; DRV(1, 0.2f); }
+static void c_skank(SPatch* p) { p->master = 0.55f; OA.table = T_HARMONIX; OA.pos = 0.4f; p->subLevel = 0.35f; ENV1(0.002f, 0, 0.16f, 0.0f, 0.08f); MFX(FX_CHORUS, 4.5f, 0.4f, 0.4f);
+	DLYS(0.2f, S8D, DL_DUB); REVB(0.2f, RV_SPRING); }
+static void c_gallop(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 2; OA.detune = 8; p->subLevel = 0.35f; DRV(14, 0.45f); ENV1(0.002f, 0, 0.5f, 0.6f, 0.2f);
+	OUTF(OF_L12, 0.6f, 0.2f, 0.2f, 0.15f); REVB(0.15f, RV_ROOM); }
 static void c_omni(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = TRI; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1; OB.level = 0.3f; ENV1(0.002f, 0, 2.0f, 0.0f, 1.5f);
 	MFX(FX_CHORUS, 0.5f, 0.6f, 0.45f); REVB(0.35f, RV_HALL); }
 static void c_pump(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 4; OA.detune = 16; ENV1(0.01f, 0, 0.6f, 0.8f, 0.3f); OUTF(OF_L12, 0.5f, 0.2f, 0, 0); p->pump = 0.7f; REVB(0.2f, RV_HALL); }
@@ -3168,14 +3191,16 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"CHIP HERO", l_chiphero}, {"G-FUNK SINE", l_glidesine}, {"RINGER", l_ringer}, {"ACID SCREAM", l_acidscream}, {"PAD BENDER", l_bender},
 	 {"FLUTE", l_flute}, {"STICK THEREMIN", l_theremin}, {"XY SCULPT", l_xysculpt}, {"BUSY BOY", l_busyboy}},
 	{{"WARM FELT", p_felt}, {"GLASS HOUR", p_glass}, {"VOWEL DUSK", p_vowel}, {"COMB WEATHER", p_combweather}, {"CLOUD BANK", p_cloudbank}, {"STRINGS 77", p_strings77},
-	 {"DRAWN SWELL", p_drawnswell}, {"MOTION HAZE", p_haze}, {"SWELL BACKWARD", p_reverse}, {"DEEP SONAR", p_sonar}, {"GRAIN CHOIR", p_hallchoir}, {"GATE 85", p_gate85}, {"SPIN PAD", p_spinpad}, {"XY MORPH", p_xymorph}, {"CINE SWELL", p_cineswell}},
+	 {"DRAWN SWELL", p_drawnswell}, {"MOTION HAZE", p_haze}, {"SWELL BACKWARD", p_reverse}, {"DEEP SONAR", p_sonar}, {"GRAIN CHOIR", p_hallchoir}, {"GATE 85", p_gate85}, {"SPIN PAD", p_spinpad}, {"XY MORPH", p_xymorph}, {"CINE SWELL", p_cineswell},
+	 {"TABLE TIDE", p_tabletide}, {"GRAIN HALO", p_grainhalo}, {"PRISM SHIFT", p_prismshift}, {"SHIMMER DRIFT", p_shimmerdrift}},
 	{{"EP SATURDAY", k_epsat}, {"DRAWBAR", k_drawbar}, {"LOFI UPRIGHT", k_lofiup}, {"CLAV FUNK", k_clav}, {"WURLI BARK", k_wurli}, {"VIBES", k_vibes},
 	 {"TOY KEYS", k_toy}, {"HARPSI", k_harpsi}, {"ROTARY", k_rotary}, {"CUMBIA ORGANO", k_cumbiaorg}, {"REEL PIANO", k_reel}, {"GLASS TOP", k_glasstop}, {"TAPE RHODES", k_taperhodes}},
 	{{"NYLON", u_nylon}, {"MARIMBA WOOD", u_marimba}, {"KALIMBA", u_kalimba}, {"DIGI HARP", u_digiharp}, {"STAB 1999", u_stab99}, {"KOTO SPRING", u_koto},
 	 {"CHIP PLINK", u_chipplink}, {"GRAIN PLUCK", u_grain}, {"STEEL PAN", u_steel}, {"RAIN ON TIN", u_raintin}, {"SOFT PLUCK", u_softpluck}, {"KS GUITAR", u_ksguitar}, {"KS BASS", u_ksbass}, {"KS HARP", u_ksharp}},
 	{{"ORGAN STAB", c_organstab}, {"NEO SOUL 9", c_neosoul}, {"DUB CHORD", c_dub}, {"TECHNO STAB", c_techno}, {"STRUM GUITAR", c_strum}, {"OMNI HARP", c_omni},
 	 {"PUMP CHORDS", c_pump}, {"GOSPEL ORGAN", c_gospel}, {"SHOEGAZE WALL", c_shoegaze},
-	 {"STRUM 8THS", c_strum8}, {"HARP ROLL", c_harproll}, {"RAKE 16THS", c_rake}},
+	 {"STRUM 8THS", c_strum8}, {"HARP ROLL", c_harproll}, {"RAKE 16THS", c_rake},
+	 {"SOUL WALK", c_soulwalk}, {"DISCO OCTAVES", c_discooct}, {"HOUSE PIANO", c_housepiano}, {"FUNK CLAV", c_funkclav}, {"SKANK ORGAN", c_skank}, {"GALLOP DRIVE", c_gallop}},
 	{{"BERLIN 16", q_berlin}, {"ACID CIRCLE", q_acidcircle}, {"TRANCE GATE", q_gate}, {"PING ARP", q_pingarp}, {"CHAOS ARP", q_chaosarp}, {"MOTION BELLS", q_motionbells},
 	 {"OCTAVE BOUNCE", q_octbounce}, {"DRAWN STEPS", q_drawnsteps}, {"GRAIN RUN", q_grainrun}, {"POLYRHYTHM", q_polyrhythm},
 	 {"TABLE KICK", q_tblkick}, {"TABLE SNARE", q_tblsnare}, {"TABLE TOMS", q_tbltoms}, {"TABLE METAL", q_tblmetal}, {"TABLE ZAP", q_tblzap}},
@@ -3346,10 +3371,10 @@ static void patchApplyRaw(const SPatch* p) {
 static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every factory patch to a similar loudness
 	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.49f, 0.90f, 1.42f, 1.32f, 1.28f, 0.68f, 0.97f, 1.19f, 1.00f},
 	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f, 1.00f},
-	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.64f, 1.35f, 2.50f, 1.31f},
+	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.64f, 1.35f, 2.50f, 1.31f, 2.00f, 1.35f, 2.00f, 1.30f},
 	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.11f, 0.95f, 1.80f, 1.00f, 1.00f},
 	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.58f, 1.56f, 0.62f, 1.07f, 1.00f},
-	{2.33f, 1.34f, 4.24f, 2.18f, 2.20f, 1.12f, 2.30f, 0.67f, 2.08f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{2.33f, 1.34f, 4.24f, 2.18f, 2.20f, 1.12f, 2.30f, 0.67f, 2.08f, 1.00f, 1.00f, 1.00f, 0.68f, 1.13f, 1.40f, 0.75f, 1.50f, 0.80f},
 	{1.32f, 1.05f, 4.46f, 1.10f, 3.54f, 1.82f, 2.40f, 6.00f, 1.34f, 2.41f, 0.90f, 2.80f, 0.90f, 6.00f, 2.50f},
 	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.42f, 1.93f, 1.42f, 3.55f, 2.18f},
 	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 0.76f, 0.76f, 0.70f, 0.80f, 0.52f, 0.84f, 0.93f, 0.79f, 1.15f, 0.63f},
@@ -3370,6 +3395,7 @@ static void say(const char* m);
 // edit guard: after you change a patch, the first step to another patch only warns (the second one goes)
 static int gEdited = 0, gGuard = 0, gStyleCur = 0, gPresetCur = 0;
 static char gCallTxt[24], gCallCtx[40]; static float gCallT = 0; static const void* gCallP = NULL;   // big pop-up of the value being changed (Shrub-style); gCallP: its Param, for the bar
+static void padPreset(int style, int idx);
 static void presetLoad(int style, int idx) {
 	gEdited = 0; gGuard = 0; gStyleCur = style; gPresetCur = idx;
 	if (style == NSTYLES - 1) { if (gUser[idx].magic == PATCH_MAGIC) patchApply(&gUser[idx]); return; }
@@ -3379,6 +3405,7 @@ static void presetLoad(int style, int idx) {
 	p.master *= PGAIN[style][idx];
 	snprintf(p.name, sizeof(p.name), "%s", PRESETS[style][idx].name);
 	patchApply(&p);
+	padPreset(style, idx);   // PADS + BASS presets open the pads with their bass line
 	if (style == STYLE_SPACE && gOutMode == 0) { gOutMode = 1; outputApply(); say("3D PATCH: OUTPUT SET TO SURROUND (HEADPHONES BEST)"); }
 	else if (gPackMissing) say("GET WAVETABLES (HW PAGE) FOR THE FULL SOUND");
 }
@@ -5172,6 +5199,12 @@ static const char* PROG_NAMES[NPROG] = {"PROG: OFF", "I V vi IV", "vi IV I V", "
 static const int PROGS[NPROG][4] = {{0, 0, 0, 0}, {0, 4, 5, 3}, {5, 3, 0, 4}, {0, 5, 3, 4}, {1, 4, 0, 0}, {0, 3, 4, 3}, {0, 5, 2, 6}, {0, 3, 4, 0},
 	{0, 3, 5, 4}, {5, 4, 3, 4}, {0, 2, 3, 4}, {1, 4, 0, 5}, {5, 1, 4, 0}, {3, 4, 2, 5}, {0, 4, 3, 0}, {3, 0, 4, 5}, {0, 6, 5, 6}, {0, 5, 6, 0}, {0, 3, 6, 2}, {0, 4, 5, 3}};   // scale degrees (pads)
 static int gPadBass = 0;   // BASS: 0 off, 1 HOLD (the root an octave under the chord), 2.. a bass LINE playing a rhythm
+static void bassStop(void);
+static void padPreset(int style, int idx) {   // CHORD 13-18 (PADS + BASS): their bass style and progression, on the pads
+	static const s8 PB[6][2] = {{6, 11}, {5, 3}, {3, 2}, {7, 5}, {9, 1}, {11, 17}};   // WALK ii V I vi, OCTV I vi IV V, OFFB vi IV I V, FUNK I IV V IV, REGG I V vi IV, GALP i VI VII i
+	if (style != 5 || idx < 12 || idx > 17) return;
+	bassStop(); gPadBass = PB[idx - 12][0]; gProg = PB[idx - 12][1]; gProgAt = -1; gPads = 1;
+}
 // BASS LINES: 16 steps a bar. R root, 3 / 5 / 7 the chord's third, fifth, seventh, O the octave, - rest, _ the note goes on
 #define NBASS 12
 static const char* BASS_NAMES[NBASS] = {"BASS", "HOLD", "PULS", "OFFB", "R+5", "OCTV", "WALK", "FUNK", "TRES", "REGG", "ARP", "GALP"};
