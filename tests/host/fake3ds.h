@@ -57,7 +57,7 @@ static Ch CH[24];
 static Result ndspInit(void){return 0;} static void ndspExit(void){} static void ndspSetOutputMode(int m){(void)m;} static void ndspSetMasterVol(float v){(void)v;}
 static void ndspChnReset(int c){memset(&CH[c],0,sizeof(Ch));} static void ndspChnSetInterp(int c,int i){(void)c;(void)i;} static void ndspChnSetFormat(int c,u16 f){(void)c;(void)f;}
 static void ndspChnSetRate(int c,float r){CH[c].rate=r;} static void ndspChnSetMix(int c,float m[12]){memcpy(CH[c].mix,m,48);}
-static void ndspChnWaveBufClear(int c){CH[c].wb=NULL;CH[c].nq=0;CH[c].pos=0;} static void ndspChnWaveBufAdd(int c,ndspWaveBuf* w){ if(!w->looping && CH[c].wb && !CH[c].wb->looping){ if(CH[c].nq<8){w->status=NDSP_WBUF_QUEUED;CH[c].q[CH[c].nq++]=w;} return;} w->status=NDSP_WBUF_PLAYING; CH[c].wb=w;CH[c].pos=0;}
+static void ndspChnWaveBufClear(int c){CH[c].wb=NULL;CH[c].nq=0;CH[c].pos=0;} static void ndspChnWaveBufAdd(int c,ndspWaveBuf* w){ if(CH[c].wb && !CH[c].wb->looping && (!w->looping || CH[c].wb->status==NDSP_WBUF_PLAYING)){   /* like the DSP: buffers queue behind a one-shot (a looping one too) */ if(CH[c].nq<8){w->status=NDSP_WBUF_QUEUED;CH[c].q[CH[c].nq++]=w;} return;} w->status=NDSP_WBUF_PLAYING; CH[c].wb=w;CH[c].pos=0;}
 static void ndspChnIirBiquadSetEnable(int c,bool e){CH[c].bq=e;}
 static bool ndspChnIirBiquadSetParamsLowPassFilter(int c,float f0,float Q){ CH[c].cq=0; float w=2*3.14159265f*f0/32728.0f, al=sinf(w)/(2*Q), cw=cosf(w), a0=1+al;
  CH[c].b0=(1-cw)/2/a0; CH[c].b1=(1-cw)/a0; CH[c].b2=(1-cw)/2/a0; CH[c].a1=-2*cw/a0; CH[c].a2=(1-al)/a0; return true; }

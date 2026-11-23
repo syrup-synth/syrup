@@ -731,6 +731,11 @@ static float gMpeRange = 48;
 static int gDspOwner[NCH], gCsOwner[NCS];
 static unsigned gAge = 0, gIdc = 0;
 static ndspWaveBuf gWB[NCH];
+// SOFT START: a note's first few cycles play from a one-shot copy that fades in from silence, then the looping cycle
+// takes over at full level. The level used to step up at the DSP's 5 ms frames from wherever the wave happened to
+// be: a click on every note of a pure, plucky sound (STEEL PAN, louder with chords).
+#define FADE_MAX 4096
+static ndspWaveBuf gFadeWB[NCH]; static s16* gFadeBuf[NCH]; static u8 gFadeIn[NCH];
 static int gAudioOK = 0, gCsndOK = 0, gNoiseOn = 0; static int gDspAuto;
 static float gStick = 0, gXYmod = 0, gChorusPh = 0;
 static int gXyGlide = 2; static const char* XYG_NAMES[4] = {"OFF", "FAST", "MEDIUM", "SLOW"}; static float gXyTx = -1, gXyTy = -1;   // XY GLIDE: the dot follows your finger instead of jumping to it
@@ -933,7 +938,26 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 		gWB[ch].data_vaddr = m->lev[v->lev[i]];
 		gWB[ch].nsamples = N;
 		gWB[ch].looping = true;
-		ndspChnWaveBufAdd(ch, &gWB[ch]); memset(gMixCur[ch], 0, sizeof(gMixCur[ch])); memset(gMixTgt[ch], 0, sizeof(gMixTgt[ch])); gMixLive[ch] = !v->isEcho;   // starts silent; the audio tick ramps it in
+		int soft = 0;
+		if (!v->isEcho && ch < NCH) {   // SOFT START
+			if (!gFadeBuf[ch]) gFadeBuf[ch] = (s16*)linearAlloc(FADE_MAX * 2);
+			if (gFadeBuf[ch] && N > 0 && N <= FADE_MAX) {
+				// k whole cycles fading in (~4 ms), then the looping cycle carries on from its start: seamless. Both start
+				// together with the note's first level (gWbPend), so the level goes straight on and only the data fades
+				int z = 0, k = (int)ceilf(0.004f * f); if (k < 1) k = 1; if (k > 8) k = 8;
+				while (k > 1 && z + k * N > FADE_MAX) k--;
+				if (z + k * N > FADE_MAX) z = FADE_MAX - k * N; if (z < 0) z = 0;
+				int fl = k * N, tot = z + fl; const s16* src = m->lev[v->lev[i]];
+				for (int j = 0; j < z; j++) gFadeBuf[ch][j] = 0;
+				for (int j = 0; j < fl; j++) { float u = j / (float)fl; gFadeBuf[ch][z + j] = (s16)(src[j % N] * u * u * (3 - 2 * u)); }
+				DSP_FlushDataCache(gFadeBuf[ch], tot * 2);
+				memset(&gFadeWB[ch], 0, sizeof(ndspWaveBuf)); gFadeWB[ch].data_vaddr = gFadeBuf[ch]; gFadeWB[ch].nsamples = tot; gFadeWB[ch].looping = false;
+				soft = 1;
+			}
+		}
+		memset(gMixCur[ch], 0, sizeof(gMixCur[ch])); memset(gMixTgt[ch], 0, sizeof(gMixTgt[ch])); gMixLive[ch] = !v->isEcho;
+		if (soft) { gFadeIn[ch] = 1; gWbPend[ch] = 1; }   // the buffers go on with the first level (voicesUpdate)
+		else { gFadeIn[ch] = 0; ndspChnWaveBufAdd(ch, &gWB[ch]); }   // starts silent; the audio tick ramps it in
 	} else {
 		u32 pa = osConvertVirtToPhys(m->lev[v->lev[i]]);
 		u32 timer = CSND_TIMER(f * N);
@@ -1279,7 +1303,14 @@ static void voicesUpdate(float dt, float bend) {
 			mix[8] = mix[0] * s1; mix[9] = mix[1] * s1;
 		}
 		int ow = gDspOwner[c], echo = ow >= 0 && ow < NVS && gV[ow].isEcho;   // echo taps: short blips, no ramp (it cost them 3 dB)
-		if (gWbPend[c] && (mix[0] + mix[1] + mix[4] + mix[5] + mix[8] + mix[9]) > 1e-4f) { gWbPend[c] = 0; memset(gMixCur[c], 0, sizeof(gMixCur[c])); ndspChnSetMix(c, gMixCur[c]); ndspChnWaveBufAdd(c, &gWB[c]); gMixLive[c] = !echo; }   // starts silent at phase 0, ramps up
+		if (gWbPend[c] && (mix[0] + mix[1] + mix[4] + mix[5] + mix[8] + mix[9]) > 1e-4f) {   // the note's first level: start it now
+			gWbPend[c] = 0;
+			if (gFadeIn[c]) {   // SOFT START: the level straight on, the one-shot fades the wave in, the loop follows
+				float ig = gAutoGain > 1e-4f ? 1.0f / gAutoGain : 0; for (int k = 0; k < 12; k++) gMixCur[c][k] = mix[k] * ig;
+				ndspChnSetMix(c, mix); ndspChnWaveBufAdd(c, &gFadeWB[c]); ndspChnWaveBufAdd(c, &gWB[c]); gFadeIn[c] = 0;
+			} else { memset(gMixCur[c], 0, sizeof(gMixCur[c])); ndspChnSetMix(c, gMixCur[c]); ndspChnWaveBufAdd(c, &gWB[c]); }
+			gMixLive[c] = !echo;
+		}
 		{ float ig = gAutoGain > 1e-4f ? 1.0f / gAutoGain : 0; for (int k = 0; k < 12; k++) gMixTgt[c][k] = mix[k] * ig; }   // the ramp moves the envelope; the limiter gain applies straight
 		if (!gMixLive[c] || !gAudioClock) { memcpy(gMixCur[c], gMixTgt[c], sizeof(mix)); ndspChnSetMix(c, mix); }   // channels outside the voices (noise) and no audio clock: as before
 	}
@@ -3284,17 +3315,17 @@ static void patchApplyRaw(const SPatch* p) {
 
 
 static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every factory patch to a similar loudness
-	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.82f, 1.42f, 1.42f, 1.32f, 1.28f, 0.68f, 0.97f, 1.19f, 1.00f},
+	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.49f, 0.90f, 1.42f, 1.32f, 1.28f, 0.68f, 0.97f, 1.19f, 1.00f},
 	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f, 1.00f},
 	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.64f, 1.35f, 2.50f, 1.31f},
 	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.11f, 0.95f, 1.80f, 1.00f, 1.00f},
-	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.58f, 1.56f, 1.70f, 1.07f, 1.00f},
+	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.58f, 1.56f, 0.62f, 1.07f, 1.00f},
 	{2.33f, 1.34f, 4.24f, 2.18f, 2.20f, 1.12f, 2.30f, 0.67f, 2.08f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
 	{1.32f, 1.05f, 4.46f, 1.10f, 3.54f, 1.82f, 2.40f, 6.00f, 1.34f, 2.41f, 0.90f, 2.80f, 0.90f, 6.00f, 2.50f},
 	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.42f, 1.93f, 1.42f, 3.55f, 2.18f},
 	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 0.76f, 0.76f, 0.70f, 0.80f, 0.52f, 0.84f, 0.93f, 0.79f, 1.15f, 0.63f},
 	{1.30f, 0.81f, 1.34f, 2.99f, 0.90f, 1.37f, 3.46f, 1.10f, 6.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{0.89f, 1.18f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 0.60f, 1.20f, 1.20f},   // CHIPSET
+	{0.89f, 1.73f, 0.84f, 1.09f, 1.20f, 1.20f, 1.20f, 1.00f, 1.20f, 0.89f, 1.00f, 1.00f, 0.60f, 1.20f, 1.20f},
 	{2.66f, 2.19f, 0.62f, 4.29f, 2.26f, 0.85f, 2.35f, 6.00f, 1.43f, 1.13f, 1.00f, 1.00f, 1.00f, 2.00f, 1.60f},   // MOTION
 	{1.73f, 3.00f, 2.80f, 2.50f, 1.60f, 0.70f, 0.69f, 2.50f, 1.86f, 0.80f, 2.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // QUIRKS
 	{1.39f, 2.04f, 1.36f, 1.81f, 1.69f, 1.50f, 1.17f, 1.24f, 2.90f, 3.10f, 2.20f, 1.65f, 1.26f, 1.52f, 1.00f},   // RAVE
@@ -10682,10 +10713,10 @@ int main(void) {
 		}
 		{   // slew: a note's envelope can yank WT POS / WARP in one step (EP SATURDAY's FM attack); every ringing voice
 			// shares the table, so that jump was a click in the other notes. Big moves now spread over a few frames.
-			static float sp[2] = {-1, -1}, sw[2] = {-1, -1}; const float mx = 0.08f;
+			static float sp[2] = {-1, -1}, sw[2] = {-1, -1}; const float mx = 0.08f, mxw = 0.035f;   // WARP slower: a warp jump reshapes every ringing voice at once (STEEL PAN chords clicked)
 			for (int o = 0; o < 2; o++) {
 				if (sp[o] < 0 || gForceBuild) { sp[o] = pe[o]; sw[o] = we[o]; }
-				sp[o] += fmaxf(-mx, fminf(mx, pe[o] - sp[o])); sw[o] += fmaxf(-mx, fminf(mx, we[o] - sw[o]));
+				sp[o] += fmaxf(-mx, fminf(mx, pe[o] - sp[o])); sw[o] += fmaxf(-mxw, fminf(mxw, we[o] - sw[o]));
 				pe[o] = sp[o]; we[o] = sw[o];
 			}
 		}
