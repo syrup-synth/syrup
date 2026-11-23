@@ -68,6 +68,27 @@
     body.pad .screens { flex-direction: row; align-items: center; justify-content: center; width: min(98vw, calc((100vh - 56px) * 3)); margin: 0 auto; gap: 6px; }
     body.pad #top { width: 55%; } body.pad #bot { width: 44%; }
   }
+  /* SYRUP_MIRROR: opened from a 3DS (/mirror, /stream): the top screen big, no controls */
+  #mirbar, #ov { display: none; }
+  body.mir .cluster, body.mir .shp, body.mir .mid, body.mir .note, body.mir #bot, body.mir #midi, body.mir #mch, body.mir #smp, body.mir #link, body.mir #gpl, body.mir .finger { display: none !important; }
+  body.mir .wrap { max-width: none; } body.mir .g { display: block; }
+  body.mir .screens { position: relative; width: min(96vw, calc((100vh - 120px) * 5 / 3)); margin: 6px auto; }
+  body.mir #top { width: 100%; cursor: default; }
+  body.mir #mirbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+  #mirbar .lk { flex: 1 1 100%; color: var(--dim); font-size: 11px; word-break: break-all; }
+  body.mir #ov { display: block; position: absolute; inset: 0; pointer-events: none; font-weight: 700; text-shadow: 0 0 6px #000, 0 0 2px #000; }
+  #ov .o { position: absolute; display: none; } #ov .o.on { display: block; }
+  #ovp { left: 3%; bottom: 26%; font-size: 3.4vmin; letter-spacing: .08em; }
+  #ovb { right: 3%; bottom: 26%; font-size: 3vmin; }
+  #ovc { left: 3%; bottom: 17%; font-size: 7vmin; }
+  #ovk { left: 3%; right: 3%; bottom: 3%; height: 9%; opacity: .85; } #ovk canvas { width: 100%; height: 100%; image-rendering: auto; background: transparent; border-radius: 0; }
+  body.stream, body.stream .wrap { background: #000; padding: 0; margin: 0; overflow: hidden; }
+  body.stream.keyed, body.stream.keyed .wrap { background: transparent; }
+  body.stream .top, body.stream #mirbar { display: none !important; }
+  body.stream .screens { position: fixed; inset: 0; width: 100vw; height: 100vh; margin: 0; display: block; }
+  body.stream #top { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; aspect-ratio: auto; background: transparent; border-radius: 0; }
+  body.keyed #top { background: transparent; }
+  #tapsnd { display: none; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 9; }
 </style>
 </head>
 <body>
@@ -87,12 +108,14 @@
       </div>
       <div id="msg">Loading…</div>
     </div>
+    <div id="mirbar"><button class="b on" data-ov="p">PATCH</button><button class="b on" data-ov="c">CHORD</button><button class="b on" data-ov="k">KEYS</button><button class="b on" data-ov="b">BPM</button><button class="b" id="keyb" title="Make the background see-through (put the visuals over your camera)">CLEAR BG</button><span class="lk" id="lk"></span></div>
     <div class="screens" style="grid-area:screens">
       <canvas id="top" width="400" height="240"></canvas>
+      <div id="ov"><div class="o" id="ovp"></div><div class="o" id="ovb"></div><div class="o" id="ovc"></div><div class="o" id="ovk"><canvas id="kc" width="840" height="90"></canvas></div></div>
       <canvas id="bot" width="320" height="240"></canvas>
     </div>
     <div class="shp" style="grid-area:shl"><button class="b sh z" data-k="16384">ZL</button><button class="b sh" data-k="512">L</button></div>
-    <div class="mid" style="grid-area:mid"><button class="b" data-k="4">SELECT ▶︎❚❚</button><button class="b" data-k="8">START</button></div>
+    <div class="mid" style="grid-area:mid"><button class="b" data-k="4">SELECT ▶︎❚❚</button><button class="b" data-k="8">START</button><button class="b" id="quick" title="Quick select: tap a page or the transport on the top screen">QUICK</button></div>
     <div class="shp" style="grid-area:shr"><button class="b sh" data-k="256">R</button><button class="b sh z" data-k="32768">ZR</button></div>
     <div class="cluster" style="grid-area:dpad">
       <button class="k sq" data-k="64" style="left:calc(50% - 20px);top:0">▲</button>
@@ -116,8 +139,9 @@
   </div>
 </div>
 <script>
+var MIRP = location.pathname.replace(/\/+$/, ''), MIR = MIRP === '/mirror' || MIRP === '/stream', STREAM = MIRP === '/stream', QS = new URLSearchParams(location.search);
 var KEYS = 0, TOUCH = 0, TX = 0, TY = 0, CX = 0, CY = 0, ready = false, GK = 0, GX = 0, GY = 0;
-function send() { if (ready) Module._web_input((KEYS | GK) >>> 0, TOUCH, TX, TY, GX || GY ? GX : CX, GX || GY ? GY : CY); }
+function send() { if (ready && !MIR) Module._web_input((KEYS | GK) >>> 0, TOUCH, TX, TY, GX || GY ? GX : CX, GX || GY ? GY : CY); }
 var msg = document.getElementById('msg');
 var Module = {
   preRun: [function () {
@@ -132,10 +156,14 @@ var Module = {
     var ti = tc.createImageData(400, 240), bi = bc.createImageData(320, 240);
     Module.present = function () {
       var tp = Module._web_top(), bp = Module._web_bot();
-      ti.data.set(Module.HEAPU8.subarray(tp, tp + 400 * 240 * 4)); tc.putImageData(ti, 0, 0);
+      ti.data.set(Module.HEAPU8.subarray(tp, tp + 400 * 240 * 4));
+      if (MIR && KEYBG) { var bg = Module._web_th(0), br = bg >> 16 & 255, bgg = bg >> 8 & 255, bb = bg & 255, d = ti.data;   // CLEAR BG: the theme's background goes see-through
+        for (var i = 0; i < d.length; i += 4) if (Math.abs(d[i] - br) + Math.abs(d[i + 1] - bgg) + Math.abs(d[i + 2] - bb) < 40) d[i + 3] = 0; }
+      tc.putImageData(ti, 0, 0);
       bi.data.set(Module.HEAPU8.subarray(bp, bp + 320 * 240 * 4)); bc.putImageData(bi, 0, 0);
     };
     send();
+    if (MIR) mirStart();
   },
   print: function (t) { console.log(t); }, printErr: function (t) { console.warn(t); }
 };
@@ -204,6 +232,7 @@ document.getElementById('snd').onclick = function () {
   node.connect(actx.destination); actx.resume(); Module._web_audio_on(1);
   this.textContent = 'SOUND OFF'; this.classList.add('on'); msg.textContent = ''; document.getElementById('finger').classList.add('gone');
 };
+document.getElementById('quick').onclick = function () { if (ready) Module._web_quick(); };
 // ---- full screen: the Fullscreen API where there is one; on iPhone, Share > Add to Home Screen (no Safari bars)
 document.getElementById('full').onclick = function () {
   var d = document.documentElement, rq = d.requestFullscreen || d.webkitRequestFullscreen;
@@ -317,6 +346,74 @@ function linkOn(on) {
 linkBtn.onclick = function () { linkOn(!lch); };
 addEventListener('beforeunload', function () { linkOn(false); });
 setInterval(function () { if (!lch || !ready) return; var st = Module._web_link_get(); if (st !== lastLink) { if (lastLink !== -1) lch.postMessage({ id: myId, st: st }); lastLink = st; } }, 20);
+// ---- MIRROR / STREAM: this page was opened from a 3DS (WI-FI MIDI on, http://<the 3DS>:8080/mirror or /stream).
+// It runs Syrup muted and plays / draws exactly what the 3DS sends; STREAM is the clean view for OBS (browser source).
+// /stream?ov=pckb (overlays: Patch, Chord, Keys, Bpm; ov= for none) &bg=clear (see-through background) &sound=1
+// &view=follow (the 3DS's own pages instead of the VISUALIZER)
+var KEYBG = false, OV = { p: 1, c: 1, k: 1, b: 1 };
+if (MIR) {
+  document.body.classList.add('mir'); if (STREAM) document.body.classList.add('stream');
+  if (QS.has('ov')) { var ovs = QS.get('ov'); OV = { p: +(ovs.indexOf('p') >= 0), c: +(ovs.indexOf('c') >= 0), k: +(ovs.indexOf('k') >= 0), b: +(ovs.indexOf('b') >= 0) }; }
+  if (QS.get('bg') === 'clear') { KEYBG = true; document.body.classList.add('keyed'); }
+  document.title = STREAM ? 'Syrup stream' : 'Syrup mirror';
+}
+function mirLink() {
+  var o = (OV.p ? 'p' : '') + (OV.c ? 'c' : '') + (OV.k ? 'k' : '') + (OV.b ? 'b' : '');
+  var u = 'http://' + location.host + '/stream?ov=' + o + (KEYBG ? '&bg=clear' : '') + '&sound=1';
+  document.getElementById('lk').textContent = 'OBS: add a Browser source with ' + u + ' (1920 x 1080, "Control audio via OBS" for the sound)';
+  document.querySelectorAll('[data-ov]').forEach(function (b) { b.classList.toggle('on', !!OV[b.dataset.ov]); });
+  document.getElementById('keyb').classList.toggle('on', KEYBG); document.body.classList.toggle('keyed', KEYBG);
+}
+document.querySelectorAll('[data-ov]').forEach(function (b) { b.onclick = function () { OV[b.dataset.ov] = !OV[b.dataset.ov]; mirLink(); }; });
+document.getElementById('keyb').onclick = function () { KEYBG = !KEYBG; mirLink(); };
+var NN = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+var CHT = [[[0, 4, 7], ''], [[0, 3, 7], 'm'], [[0, 4, 7, 10], '7'], [[0, 4, 7, 11], 'maj7'], [[0, 3, 7, 10], 'm7'], [[0, 3, 6], 'dim'], [[0, 4, 8], 'aug'], [[0, 2, 7], 'sus2'], [[0, 5, 7], 'sus4'],
+  [[0, 4, 7, 9], '6'], [[0, 3, 7, 9], 'm6'], [[0, 2, 4, 7, 10], '9'], [[0, 2, 4, 7], 'add9'], [[0, 2, 3, 7, 10], 'm9'], [[0, 2, 4, 7, 11], 'maj9'], [[0, 3, 6, 9], 'dim7'], [[0, 3, 6, 10], 'm7b5'],
+  [[0, 7], '5'], [[0, 5, 7, 10], '7sus4'], [[0, 3, 7, 11], 'mMaj7'], [[0, 4, 8, 10], '7#5'], [[0, 4, 6, 10], '7b5'], [[0, 3, 4, 7, 10], '7#9'], [[0, 5, 10], 'quartal']];
+function chordName(ns) {
+  if (!ns.length) return ''; ns = ns.slice().sort(function (a, b) { return a - b; });
+  var pcs = {}; ns.forEach(function (n) { pcs[n % 12] = 1; }); var ks = Object.keys(pcs).map(Number);
+  if (ks.length === 1) return NN[ks[0]];
+  var lo = ns[0] % 12, best = '';
+  for (var pass = 0; pass < 2 && !best; pass++) ks.forEach(function (r) {
+    if (best || (pass === 0 && r !== lo)) return;
+    var iv = ks.map(function (k) { return (k - r + 12) % 12; }).sort(function (a, b) { return a - b; }).join(',');
+    CHT.forEach(function (c) { if (!best && c[0].join(',') === iv) best = NN[r] + c[1] + (r !== lo ? '/' + NN[lo] : ''); });
+  });
+  return best || ns.map(function (n) { return NN[n % 12]; }).join(' ');
+}
+function hex(c) { return '#' + ('00000' + c.toString(16)).slice(-6); }
+var kcx = null;
+function drawKeys(ns) {
+  var c = document.getElementById('kc'); if (!kcx) kcx = c.getContext('2d'); var W = c.width, H = c.height, lo = 36, nw = 35, ww = W / nw;   // C2 .. B6
+  var on = {}; ns.forEach(function (n) { on[n] = 1; }); var hot = hex(Module._web_th(2)), BL = { 1: 1, 3: 1, 6: 1, 8: 1, 10: 1 }, WH = [0, 2, 4, 5, 7, 9, 11];
+  kcx.clearRect(0, 0, W, H);
+  for (var i = 0; i < nw; i++) { var n = lo + Math.floor(i / 7) * 12 + WH[i % 7]; kcx.fillStyle = on[n] ? hot : 'rgba(240,230,210,.85)'; kcx.fillRect(i * ww + 1, 0, ww - 2, H); }
+  for (var i = 0; i < nw; i++) { var b = lo + Math.floor(i / 7) * 12 + WH[i % 7] + 1; if (!BL[b % 12]) continue; kcx.fillStyle = on[b] ? hot : '#111'; kcx.fillRect((i + 1) * ww - ww * 0.3, 0, ww * 0.6, H * 0.6); }
+}
+function mirOverlay() {
+  if (!ready) return; var j; try { j = JSON.parse(Module.UTF8ToString(Module._web_mir_info())); } catch (e) { return; }
+  var col = hex(Module._web_th(1)), hot = hex(Module._web_th(2));
+  var p = document.getElementById('ovp'), b = document.getElementById('ovb'), c = document.getElementById('ovc'), k = document.getElementById('ovk');
+  p.classList.toggle('on', !!OV.p); b.classList.toggle('on', !!OV.b); c.classList.toggle('on', !!OV.c); k.classList.toggle('on', !!OV.k);
+  p.textContent = j.p; p.style.color = col; b.textContent = j.b + ' BPM' + (j.s ? '  ▶' : '') + (j.r ? '  ● REC' : ''); b.style.color = col;
+  var cn = chordName(j.n), now = Date.now(); if (cn) { c.textContent = cn; c.style.color = hot; c.style.opacity = 1; LASTCH = now; } else if (now - LASTCH > 1500) c.style.opacity = Math.max(0, 1 - (now - LASTCH - 1500) / 600);
+  if (OV.k) drawKeys(j.n);
+}
+var mws = null, LASTCH = 0;
+function mirStart() {
+  Module._web_mirror_on(1); Module._web_mirror_vis(STREAM && QS.get('view') !== 'follow' ? 1 : 0); mirLink(); setInterval(mirOverlay, 50);
+  (function conn() {
+    mws = new WebSocket('ws://' + location.host + '/mirror'); mws.binaryType = 'arraybuffer';
+    mws.onopen = function () { msg.textContent = 'MIRROR: following the 3DS'; };
+    mws.onmessage = function (ev) { var a = new Uint8Array(ev.data); if (!a.length || a.length > 65536) return; Module.HEAPU8.set(a, Module._web_mir_buf()); Module._web_mir_feed(a.length); };
+    mws.onclose = function () { msg.textContent = 'MIRROR: looking for the 3DS...'; setTimeout(conn, 1000); };
+  })();
+  if (QS.get('sound') === '1') {   // OBS lets a browser source start its sound; a normal browser wants a tap first
+    var sb = document.getElementById('snd'); sb.onclick();
+    setTimeout(function () { if (actx && actx.state !== 'running') { var t = document.getElementById('tapsnd'); t.style.display = 'block'; t.onclick = function () { actx.resume(); Module._web_audio_on(1); t.style.display = 'none'; }; } }, 800);
+  }
+}
 // ---- Web MIDI in
 document.getElementById('midi').onclick = function () {
   var btn = this;
@@ -335,6 +432,7 @@ document.getElementById('midi').onclick = function () {
   }, function () { msg.textContent = 'MIDI was refused.'; });
 };
 </script>
+<button class="b" id="tapsnd">TAP FOR SOUND</button>
 <!--SYRUP_JS-->
 </body>
 </html>

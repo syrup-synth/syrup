@@ -17,6 +17,7 @@ EMSCRIPTEN_KEEPALIVE void web_input(u32 keys, int touch, int tx, int ty, int cx,
 }
 static int W_TT = 0, W_TTX = 0, W_TTY = 0, W_TTL = 0;
 EMSCRIPTEN_KEEPALIVE void web_top_input(int t, int x, int y) { if (t && !W_TT) W_TTL = 1; W_TT = t; W_TTX = x; W_TTY = y; }
+EMSCRIPTEN_KEEPALIVE void web_quick(void) { gQuickOpen = !gQuickOpen; }   // QUICK button: the quick-select ring, by tap
 EMSCRIPTEN_KEEPALIVE void web_cstick(int x, int y) { W_CSX = (short)x; W_CSY = (short)y; }
 // LINK: browser tabs / windows on one device share transport, tempo and the drum machine (shell.html carries it on a BroadcastChannel)
 EMSCRIPTEN_KEEPALIVE int web_link_get(void) { return (gSeqMode == 1 ? 1 : 0) | (gDrums ? 2 : 0) | (gBPM << 4); }
@@ -60,6 +61,23 @@ int main(void) {
 	gN3 = 1;   // the browser has the second stick (gamepad right stick / the small one on screen) and ZL / ZR
 	app_main();
 	return 0;
+}
+
+// MIRROR: this page is a muted copy of a 3DS (opened from the 3DS's own address: /mirror, /stream). The page passes on
+// what arrives over the WebSocket; the overlays (STREAM) read the state back as a little JSON.
+static u8 W_MIR[65536]; static char W_INFO[512];
+EMSCRIPTEN_KEEPALIVE void web_mirror_on(int on) { gMirror = on; if (on) { gSeqMode = 0; seqStop(); } }
+EMSCRIPTEN_KEEPALIVE void web_mirror_vis(int on) { gMirVis = on; }   // STREAM: the visualizer whatever page the 3DS is on
+EMSCRIPTEN_KEEPALIVE u8* web_mir_buf(void) { return W_MIR; }
+EMSCRIPTEN_KEEPALIVE void web_mir_feed(int n) { if (n > 0 && n <= (int)sizeof(W_MIR)) mirFeed(W_MIR, n); }
+EMSCRIPTEN_KEEPALIVE int web_th(int k) { const u8* c = k == 0 ? TH->bg : k == 1 ? TH->val : k == 2 ? TH->keyOn : k == 3 ? TH->ink : TH->dim; return c[0] << 16 | c[1] << 8 | c[2]; }
+EMSCRIPTEN_KEEPALIVE const char* web_mir_info(void) {
+	char nm[32]; int j = 0; for (int i = 0; gPatchName[i] && j < 30; i++) { char ch = gPatchName[i]; if (ch == '"' || ch == '\\') continue; nm[j++] = ch; } nm[j] = 0;
+	int o = snprintf(W_INFO, sizeof(W_INFO), "{\"p\":\"%s\",\"b\":%d,\"s\":%d,\"r\":%d,\"n\":[", nm, gBPM, gSeqMode == 1, gLiveRec);
+	int first = 1, seen[128] = {0};
+	for (int i = 0; i < NVS && o < (int)sizeof(W_INFO) - 8; i++) { SVoice* v = &gV[i]; if (!v->active || v->isEcho || v->stage == 4 || v->note < 0 || v->note > 127 || seen[v->note]) continue; seen[v->note] = 1; o += snprintf(W_INFO + o, sizeof(W_INFO) - o, first ? "%d" : ",%d", v->note); first = 0; }
+	snprintf(W_INFO + o, sizeof(W_INFO) - o, "]}");
+	return W_INFO;
 }
 EMSCRIPTEN_KEEPALIVE void web_test_cam(int on) { gCamOn = on; }
 EMSCRIPTEN_KEEPALIVE int web_dbg(int k) { if (k == 5) return gCamFrames; return k == 0 ? gStyleCur * 100 + gPresetCur : k == 1 ? gCurPage : k == 2 ? gBrStyle : k == 3 ? (int)gStyle * 100 + gPreset : TOUCH * 1000 + TY; }

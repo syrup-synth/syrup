@@ -83,6 +83,34 @@ static void SCRIPT(int fr) {
 		if (!strstr(b, "400")) fail("WEB UPLOAD: a path out of the folder should be refused");
 		s = tcp(); send(s, "POST /done HTTP/1.1\r\nContent-Length: 0\r\n\r\n", 45, 0); n = readAll(s, b, sizeof b); close(s);
 	}
-	if (fr == 104) { if (gKit != KIT_SAMPLE || !gNKitDirs || strcasecmp(gKitRaw[gKitDir], "Net Kit")) fail("WEB UPLOAD: after /done the kit should be SAMPLE, folder Net Kit (kit %d)", gKit); gMidiNet = 0; netMidiChanged(); }
+	// MIRROR: the loader page, then a /mirror WebSocket gets a full snapshot and the notes played; a mirror plays them
+	static int ms = -1;
+	if (fr == 99) {
+		int s = tcp(); static char b[8192]; send(s, "GET /stream HTTP/1.1\r\nHost: x\r\n\r\n", 35, 0); int n = readAll(s, b, sizeof b); close(s);
+		if (n < 100 || !strstr(b, "SYRUP_MIRROR") || !strstr(b, "syrup.html")) fail("MIRROR: /stream should serve the loader (%d bytes)", n);
+		ms = tcp(); const char* up = "GET /mirror HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+		send(ms, up, strlen(up), 0); char h[512]; int hn = 0; while (hn < 511) { int k = recv(ms, h + hn, 1, 0); if (k <= 0) break; hn++; h[hn] = 0; if (strstr(h, "\r\n\r\n")) break; }
+		if (!strstr(h, "101")) fail("MIRROR: the WebSocket should open (%s)", h);
+	}
+	if (fr == 101 && ms >= 0) { if (!gMirOn) fail("MIRROR: a mirror connecting should turn the events on"); voiceOn(64, 0.8f); }
+	if (fr == 106 && ms >= 0) {
+		static u8 b[200000]; int got = 0; for (int t = 0; t < 40 && got < (int)sizeof b - 70000; t++) { int k = recv(ms, b + got, sizeof b - got, MSG_DONTWAIT); if (k > 0) got += k; else svcSleepThread(5000000); }
+		int i = 0, sawP = 0, sawU = 0, sawL = 0, sawN = 0, sawR = 0;
+		while (i + 2 <= got) {   // server frames: not masked
+			int L = b[i + 1] & 127, h = 2; if (L == 126) { L = b[i + 2] << 8 | b[i + 3]; h = 4; } if (i + h + L > got) break;
+			const u8* d = b + i + h; int j = 0;
+			while (j + 3 <= L) { u8 t = d[j]; int n = d[j + 1] | d[j + 2] << 8; if (t == 'P' && n == (int)sizeof(SPatch)) sawP = 1; if (t == 'U') sawU = 1; if (t == 'L') sawL = 1; if (t == 'R' && n == 2048) sawR = 1; if (t == 'N' && d[j + 3] == 64) sawN = 1; j += 3 + n; }
+			i += h + L;
+		}
+		if (!sawP || !sawU || !sawL || !sawR || !sawN) fail("MIRROR: the snapshot and the note should arrive (patch %d ui %d live %d drums %d note %d, %d bytes)", sawP, sawU, sawL, sawR, sawN, got);
+		voiceOff(64); close(ms); ms = -1;
+		// a mirror: plays a note it is sent, lets it go when the 3DS's sounding list doesn't have it
+		gMirror = 1; allOff(); u8 e[] = {'N', 2, 0, 67, 120}; mirFeed(e, sizeof e);
+		if (!sounding(67)) fail("MIRROR: a mirror should play the note it is sent");
+		u8 v[] = {'V', 0, 0}; mirFeed(v, sizeof v); if (sounding(67)) fail("MIRROR: a note the 3DS isn't playing should stop");
+		gMirror = 0;
+	}
+	if (fr == 108 && gMirOn) fail("MIRROR: the events should stop when the mirror goes");
+	if (fr == 110) { if (gKit != KIT_SAMPLE || !gNKitDirs || strcasecmp(gKitRaw[gKitDir], "Net Kit")) fail("WEB UPLOAD: after /done the kit should be SAMPLE, folder Net Kit (kit %d)", gKit); gMidiNet = 0; netMidiChanged(); }
 }
-int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 112; app_main(); printf("net: UDP 5008, RTP-MIDI session + CC out, HTTP page, WebSocket MIDI through real sockets\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 116; app_main(); printf("net: UDP 5008, RTP-MIDI session + CC out, HTTP page, WebSocket MIDI through real sockets\n"); return gFails ? 1 : 0; }

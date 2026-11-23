@@ -1032,10 +1032,29 @@ static void addTaps(SVoice* v) {
 	}
 }
 
+// ---- MIRROR (Wi-Fi): what this 3DS plays goes out as small events to a browser running Syrup as a muted copy, which
+// draws the top screen (and can sound) in step: notes, drum hits, the live mod values, the page you're on, the patch
+// when it changes. gMirOn: a mirror is listening (3DS); gMirror: this is the mirror (web). Events: type, u16 length, data.
+static volatile int gMirOn = 0, gMirNew = 0, gMirClients = 0; static int gMirror = 0;
+#define MIRQ 65536
+static u8 gMirQ[MIRQ]; static volatile u32 gMirW = 0, gMirR = 0; static volatile int gMirSpin = 0;
+static void mirEmit(u8 t, const void* p, int n) {   // any thread; never waits long (a full ring drops: the next snapshot repairs)
+	if (!gMirOn || n < 0 || n > 16000) return;
+	int tries = 0; while (__sync_lock_test_and_set(&gMirSpin, 1)) { if (++tries > 4000) return; }
+	u32 w = gMirW, need = 3 + (u32)n;
+	if (((gMirR - w - 1) & (MIRQ - 1)) < need) { __sync_lock_release(&gMirSpin); return; }
+	gMirQ[w] = t; gMirQ[(w + 1) & (MIRQ - 1)] = (u8)(n & 255); gMirQ[(w + 2) & (MIRQ - 1)] = (u8)(n >> 8);
+	for (int i = 0; i < n; i++) gMirQ[(w + 3 + i) & (MIRQ - 1)] = ((const u8*)p)[i];
+	__sync_synchronize(); gMirW = (w + need) & (MIRQ - 1);
+	__sync_lock_release(&gMirSpin);
+}
+static void mirNote(u8 t, int note, float x) { if (!gMirOn) return; u8 b[2] = {(u8)(note < 0 ? 0 : note > 127 ? 127 : note), (u8)(x <= 0 ? 0 : x >= 1.7f ? 255 : x * 150)}; mirEmit(t, b, 2); }
+static void mirRetune(int from, int to, int kind) { if (!gMirOn) return; u8 b[3] = {(u8)from, (u8)to, (u8)kind}; mirEmit('G', b, 3); }
 static void kitNoteOn(int note, float vel); static void kitHitSound(int d, float vel);
 static float gNoteVel[128], gKeyFade[128];   // keyboard feedback: how hard each held note was hit; the glow a released key leaves
 static int gChordKey = -1;
 static void voiceOn(int note, float vel) {
+	mirNote('N', note, vel);
 	if (note >= 0 && note < 128) gNoteVel[note] = vel;
 	if (!gAudioOK) return;
 	if (gVoiceMode >= 3) { kitNoteOn(note, vel); return; }   // DRUM KIT patch: a key is a drum hit
@@ -1059,6 +1078,7 @@ static void voiceOn(int note, float vel) {
 }
 
 static void voiceOff(int note) {
+	mirNote('O', note, 0);
 	for (int i = 0; i < NVS; i++) {
 		SVoice* v = &gV[i];
 		if (!v->active || v->isEcho || v->note != note || v->stage == 4) continue;
@@ -1066,7 +1086,7 @@ static void voiceOff(int note) {
 		for (int k = 0; k < NVS; k++) if (gV[k].active && gV[k].isEcho && gV[k].parent == v->id && gV[k].gate < 0) gV[k].gate = v->held;
 	}
 }
-static void allOff(void) { for (int i = 0; i < NVS; i++) if (gV[i].active) { if (gV[i].isEcho && !gV[i].started) gV[i].active = 0; else gV[i].stage = gV[i].stage2 = 4; } }
+static void allOff(void) { mirEmit('A', NULL, 0); for (int i = 0; i < NVS; i++) if (gV[i].active) { if (gV[i].isEcho && !gV[i].started) gV[i].active = 0; else gV[i].stage = gV[i].stage2 = 4; } }
 
 static void envStep(float* e, int* st, const AHDSR* E, float dt, float* hold, float relMul) {
 	switch (*st) {
@@ -2150,8 +2170,7 @@ static void audioTick(void* data) {
 	gTickMidi = 1; if (mqDrain(1)) gTqUi = 1;   // network, IR and remote MIDI: as soon as it arrives, not at the next screen frame
 	while (dt > 1e-6f) {   // missed frames: catch up in frame-sized pieces so every step still fires, in order
 		float d = dt > 160.0f / DSPRATE ? 160.0f / DSPRATE : dt; dt -= d;
-		arpTick(d);
-		seqTick(d);
+		if (!gMirror) { arpTick(d); seqTick(d); }   // a mirror plays only what the 3DS sends
 		drumTick(d);
 		clickTick();
 		shakeQTick();
@@ -2383,7 +2402,7 @@ static void seqFireAt(int idx, unsigned clock, int early, float off0) {
 		for (int a = 0; a < k; a++) {
 			SqN* q = &gSqN[fi[a]]; int j = ord[a], from = q->note;
 			for (int i = 0; i < NVS; i++) { SVoice* v = &gV[i]; if (v->active && !v->isEcho && v->note == from && v->stage < 4 && v->slide != 3) { v->note = notes[j]; v->freq = mtof((float)notes[j]); v->slide = 3; } }
-			q->note = notes[j]; q->left = lens[j] + early; q->slide = sl2; q->thr = (lens[j] == 1 ? off0 : 0) + stepLen((idx + lens[j] - 1) % NSTEP) * g;
+			mirRetune(from, notes[j], chord ? 2 : 1); q->note = notes[j]; q->left = lens[j] + early; q->slide = sl2; q->thr = (lens[j] == 1 ? off0 : 0) + stepLen((idx + lens[j] - 1) % NSTEP) * g;
 		}
 		for (int i = 0; i < NVS; i++) if (gV[i].slide == 3) gV[i].slide = chord ? 2 : 1;   // chords glide by PAD MORPH, single notes by GLIDE
 		for (int a = k; a < m; a++) { sqRelease(&gSqN[fi[a]]); gSqN[fi[a]].left = 0; gSqN[fi[a]].slide = 0; }   // spare voices let go
@@ -5110,6 +5129,7 @@ static int gPads = 0, gPadSel = -1, gPadN = 0, gPadNotes[4], gStrumZone = -1;
 static struct { int note; float t; } gStrumOff[24]; static int gStrumOffN = 0;
 #define STRUM_MAX 6
 static void voiceFade(int note, float sec) {   // let a note go fast but not dead: a short release, no click
+	mirNote('F', note, sec);
 	for (int i = 0; i < NVS; i++) { SVoice* v = &gV[i]; if (v->active && !v->isEcho && v->note == note && v->stage != 4) { v->stage = v->stage2 = 4; v->relMul = sec / (gEnv1.r + 0.0005f); } }
 }
 #define PAD_Y (TAB_H + 2)
@@ -5170,6 +5190,7 @@ static void chordMorph(const int* notes, int n, float vel) {
 	for (int i = 0; i < nw; i++) for (int j = i + 1; j < nw; j++) if (nn[j] < nn[i]) { int t = nn[i]; nn[i] = nn[j]; nn[j] = t; }
 	int m = on < nw ? on : nw;
 	for (int i = 0; i < m; i++) for (int k = 0; k < NVS; k++) { SVoice* v = &gV[k]; if (v->active && !v->isEcho && v->note == o[i] && v->stage < 4 && v->slide != 3) { v->note = nn[i]; v->freq = mtof((float)nn[i]); v->slide = 3; } }
+	for (int i = 0; i < m; i++) mirRetune(o[i], nn[i], 2);
 	for (int k = 0; k < NVS; k++) if (gV[k].slide == 3) gV[k].slide = 2;   // (3: moved this time, so two old notes can't land on one voice)
 	for (int i = m; i < on; i++) voiceOff(o[i]);
 	for (int i = m; i < nw; i++) voiceOn(nn[i], vel);
@@ -5562,7 +5583,7 @@ static void drawStartMenu(void) {
 // QUICK SELECT: hold SELECT and push the circle pad toward a place, let go of SELECT to go there. Sixteen spots
 // all the way round (the 8 directions and the 8 between): every page, the TAPE, and the transport along the bottom
 // (REC, PLAY / STOP straight down, TAPE REC). Centred, nothing happens (a tap of SELECT is still PLAY / STOP).
-static int gQuickBar = -1, gQuickIdx = 0, gQuickDir = 0;   // bar: 0 = a spot is lit, -1 = none
+static int gQuickBar = -1, gQuickIdx = 0, gQuickDir = 0, gQuickOpen = 0;   // open: the web QUICK button's tap version of the ring   // bar: 0 = a spot is lit, -1 = none
 #define NQR 16
 enum { QA_REC = -1, QA_PLAY = -2, QA_TREC = -3, QA_TAPE = -4 };
 static const char* QR_NAME[NQR] = {"PATCH", "OSC A", "OSC B", "SUB", "FILTER", "MOD", "VOICE", "REC", "PLAY", "TAPE REC", "TAPE", "SEQ", "DRUMS", "FX", "HW", "VIS"};
@@ -5610,7 +5631,7 @@ static void drawQuick(int page) {   // a layer over the page you're on: the page
 	{ outline(cx - 22, cy - 22, 45, 45, RGB3(TH->grid));
 	  if (gQuickBar >= 0) { float a = gQuickIdx * (6.2831853f / NQR); rect(cx - 4 + (int)(sinf(a) * 14), cy - 4 - (int)(cosf(a) * 14), 9, 9, RGB3(on)); }
 	  else rect(cx - 3, cy - 3, 7, 7, RGB3(TH->line));
-	  const char* h = "PUSH TOWARD ONE";
+	  const char* h = gQuickOpen ? "TAP ONE  (B: CLOSE)" : "PUSH TOWARD ONE";
 	  if (gQuickBar >= 0) { int d = QR_DEST[gQuickIdx]; h = d >= 0 ? PAGE_NAMES[d] : d == QA_TAPE ? "TAPE" : "LET GO OF SELECT"; }
 	  text(cx - (int)strlen(h) * 4, cy + 28, h, 1, RGB3(TH->val)); }
 }
@@ -7549,12 +7570,23 @@ static void b64(const u8* in, int n, char* out) {
 #include "remote_html.h"
 static int sendAll(int s, const void* d, int n) { const char* p = (const char*)d; while (n > 0) { int k = send(s, p, n, 0); if (k <= 0) { if (k < 0 && errno == EAGAIN) { svcSleepThread(1000000); continue; } return 0; } p += k; n -= k; } return 1; }
 #define NCLI 8
-typedef struct { int s, ws; char buf[2048]; int n; MidiIn run; u8 closing; u64 t; FILE* up; int left; } Cli;   // t: last activity (ms); up / left: a file being uploaded
-static void cliClose(Cli* c) { if (c->up) { fclose(c->up); c->up = NULL; } if (c->s >= 0) close(c->s); c->s = -1; c->ws = 0; c->n = 0; c->closing = 0; }
+typedef struct { int s, ws; char buf[2048]; int n; MidiIn run; u8 closing, mir; u64 t; FILE* up; int left; } Cli;   // mir: a MIRROR page listening   // t: last activity (ms); up / left: a file being uploaded
+static void cliClose(Cli* c) { if (c->mir) { c->mir = 0; if (--gMirClients <= 0) { gMirClients = 0; gMirOn = 0; } } if (c->up) { fclose(c->up); c->up = NULL; } if (c->s >= 0) close(c->s); c->s = -1; c->ws = 0; c->n = 0; c->closing = 0; }
 // WEB UPLOAD (WI-FI MIDI on, then http://<the 3DS>:8080/files): the page turns any audio the browser can read into
 // 32728 Hz mono WAVs and POSTs them one by one, raw, to /up?d=<folder>&n=<name>; then /done and Syrup rescans.
 // d = kits/<NAME> (a SAMPLE kit) or tables (a wavetable WAV for OSC A / B). Names are cleaned; nothing leaves /3ds/syrup.
 static volatile int gWebUpDone = 0, gWebUpN = 0; static char gWebUpKit[40] = "";
+// MIRROR / STREAM: the 3DS only speaks plain http, and the web Syrup lives on https (a browser won't let an https page
+// talk to plain http), so the 3DS hands out this loader: it fetches Syrup for the web (the SD card's copy first, then
+// GitHub Pages) and starts it here, on the 3DS's own address, where it can talk to the 3DS.
+static const char MIRROR_HTML[] =
+"<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Syrup mirror</title>"
+"<style>body{background:#000;color:#e8c48a;font:14px ui-monospace,Menlo,monospace;padding:20px}</style></head><body><div id='m'>LOADING SYRUP...</div><script>"
+"var U=['/syrup.html','https://syrup-synth.github.io/syrup/','https://syrup-synth.github.io/syrup-3ds/'];"
+"(async function(){for(var i=0;i<U.length;i++){try{var r=await fetch(U[i]);if(!r.ok)continue;var t=await r.text();if(t.indexOf('SYRUP_MIRROR')<0)continue;"
+"document.open();document.write(t);document.close();return}catch(e){}}"
+"document.getElementById('m').textContent='COULD NOT LOAD SYRUP. This computer needs the internet the first time (or copy index.html to 3ds/syrup/web/ on the SD card).'})();"
+"</script></body></html>";
 static const char FILES_HTML[] =
 "<!doctype html><html><head><meta name=viewport content='width=device-width,initial-scale=1'><title>SYRUP FILES</title>"
 "<style>body{background:#000;color:#5ff;font:16px monospace;padding:14px}h1{font-size:22px}input,select,button{font:inherit;background:#033;color:#fff;border:1px solid #5ff;padding:8px;margin:6px 0;width:100%;box-sizing:border-box}#log{white-space:pre-wrap;color:#ccc}</style></head><body>"
@@ -7615,6 +7647,7 @@ static void cliHttp(Cli* c) {   // request complete in c->buf
 		char r[256]; int n = snprintf(r, sizeof(r), "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", acc);
 		if (!sendAll(c->s, r, n)) { cliClose(c); return; }
 		c->ws = 1; c->n = 0; gNetClients++;
+		if (!strncmp(c->buf, "GET /mirror", 11)) { c->mir = 1; gMirR = gMirW; gMirClients++; gMirOn = 1; gMirNew = 1; }   // a MIRROR: everything from a full snapshot on
 		return;
 	}
 	if (!strncmp(c->buf, "POST /up?", 9)) { upBegin(c); return; }
@@ -7623,6 +7656,19 @@ static void cliHttp(Cli* c) {   // request complete in c->buf
 		char hdr[160]; int len = (int)strlen(FILES_HTML);
 		int n = snprintf(hdr, sizeof(hdr), "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", len);
 		if (sendAll(c->s, hdr, n)) sendAll(c->s, FILES_HTML, len);
+	}
+	else if (!strncmp(c->buf, "GET /mirror", 11) || !strncmp(c->buf, "GET /stream", 11)) {   // MIRROR / STREAM: a loader that brings in Syrup for the web
+		char hdr[160]; int len = (int)strlen(MIRROR_HTML);
+		int n = snprintf(hdr, sizeof(hdr), "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", len);
+		if (sendAll(c->s, hdr, n)) sendAll(c->s, MIRROR_HTML, len);
+	}
+	else if (!strncmp(c->buf, "GET /syrup.html", 15)) {   // the web page itself, from the SD card (3ds/syrup/web/index.html) for use with no internet
+		FILE* f = fopen("sdmc:/3ds/syrup/web/index.html", "rb");
+		if (!f) { static const char nf[] = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"; sendAll(c->s, nf, sizeof(nf) - 1); }
+		else { fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET); char hdr[160];
+			int n = snprintf(hdr, sizeof(hdr), "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n", len);
+			if (sendAll(c->s, hdr, n)) { static char fb[8192]; size_t k; while ((k = fread(fb, 1, sizeof(fb), f)) > 0) if (!sendAll(c->s, fb, (int)k)) break; }
+			fclose(f); }
 	}
 	else if (!strncmp(c->buf, "GET /favicon", 12)) {   // browsers ask for an icon: answer quickly with nothing
 		static const char nf[] = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"; sendAll(c->s, nf, sizeof(nf) - 1);
@@ -7717,7 +7763,7 @@ static void netMain(void* arg) {
 	int uc = udpOpen(5004), ud = udpOpen(5005), ur = udpOpen(5008); gUdData = ud;   // 5008: plain MIDI bytes (FM-1 LINK and friends)
 	int ub = socket(AF_INET, SOCK_DGRAM, 0); u64 beaconT = 0; MidiIn rawRun = {0};
 	if (ub >= 0) { int on = 1; setsockopt(ub, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)); }
-	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].up = NULL; cl[i].left = 0; cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; memset(&cl[i].run, 0, sizeof(MidiIn)); cl[i].closing = 0; cl[i].t = 0; }
+	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].up = NULL; cl[i].left = 0; cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; memset(&cl[i].run, 0, sizeof(MidiIn)); cl[i].closing = 0; cl[i].mir = 0; cl[i].t = 0; }
 	gNetClients = 0;
 	while (gNetRun) {
 		int idle = 1;
@@ -7729,7 +7775,7 @@ static void netMain(void* arg) {
 				for (int i = 0; i < NCLI; i++) if (!cl[i].ws && (slot < 0 || cl[i].t < cl[slot].t)) slot = i;
 				if (slot >= 0) cliClose(&cl[slot]);
 			}
-			if (slot < 0) close(s); else { cl[slot].s = s; cl[slot].ws = 0; cl[slot].n = 0; memset(&cl[slot].run, 0, sizeof(MidiIn)); cl[slot].closing = 0; cl[slot].t = osGetTime(); }
+			if (slot < 0) close(s); else { cl[slot].s = s; cl[slot].ws = 0; cl[slot].mir = 0; cl[slot].n = 0; memset(&cl[slot].run, 0, sizeof(MidiIn)); cl[slot].closing = 0; cl[slot].t = osGetTime(); }
 			idle = 0;
 		}
 		for (int i = 0; i < NCLI; i++) {
@@ -7748,6 +7794,17 @@ static void netMain(void* arg) {
 			c->n += k; idle = 0; c->t = osGetTime();
 			if (c->ws) cliWs(c);
 			else { c->buf[c->n] = 0; if (strstr(c->buf, "\r\n\r\n")) cliHttp(c); else if (c->n >= (int)sizeof(c->buf) - 1) cliClose(c); }
+		}
+		if (gMirClients > 0 && gMirR != gMirW) {   // MIRROR: whole events out, one WebSocket frame to every mirror
+			static u8 fr[4 + 16384]; u32 r = gMirR, n = (gMirW - r) & (MIRQ - 1), take = 0; if (n > 16384) n = 16384;
+			while (take + 3 <= n) { u32 L = gMirQ[(r + take + 1) & (MIRQ - 1)] | (u32)gMirQ[(r + take + 2) & (MIRQ - 1)] << 8; if (take + 3 + L > n) break; take += 3 + L; }
+			if (take) {
+				int h = 2; fr[0] = 0x82; if (take < 126) fr[1] = (u8)take; else { fr[1] = 126; fr[2] = (u8)(take >> 8); fr[3] = (u8)take; h = 4; }
+				for (u32 i = 0; i < take; i++) fr[h + i] = gMirQ[(r + i) & (MIRQ - 1)];
+				__sync_synchronize(); gMirR = (r + take) & (MIRQ - 1);
+				for (int i = 0; i < NCLI; i++) if (cl[i].s >= 0 && cl[i].ws && cl[i].mir && !sendAll(cl[i].s, fr, h + (int)take)) { gNetClients--; cliClose(&cl[i]); }
+				idle = 0;
+			}
 		}
 		u8 pk[512]; struct sockaddr_in from; socklen_t fl;
 		for (int u = 0; u < 2; u++) {
@@ -8620,6 +8677,7 @@ static int drumFadeTick(void) {   // audio thread, each 5 ms frame: fading chann
 	return any;
 }
 static void drumHit(int d, float vel) {   // from the audio thread (voice lock held)
+	mirNote('D', d, vel);
 	if (d >= 0 && d < NDRUM && vel > 0.05f) { gPadFlash[d] = 1; gDrumHitN[d]++; }
 	static const int DCH[NDRUM] = {0, 1, 2, 2, 3, 1, 4, 4, 5, 6};   // open hat chokes the closed hat (same channel), rim cuts the snare
 	static const int PCH[NDRUM] = {0, 1, 2, 3, 4, 5, 6, 6, 5, 1};   // PERC: each shaker on its own channel; the drums share
@@ -8683,6 +8741,7 @@ static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the
 		}
 		if (any) csndExecCmds(false);
 	}
+	if (gMirror) return;   // a mirror's drums play the hits the 3DS sends, not their own clock
 	int step = -1; float frac = 0;
 	static long long clk = 0;   // 16ths since the drums (or the sequence) started
 	if (gSeqPlaying) { static int lastSeq = -1; if (gSeqPos != lastSeq) { step = gSeqPos & 15; lastSeq = gSeqPos; } clk = gSeqClock; float l = stepLen(gSeqPos < 0 ? 0 : gSeqPos); frac = l > 0 ? gSeqPh / l : 0; }
@@ -9173,6 +9232,79 @@ static void drumSnapSet(const u8* in) { int p[3];
 	#undef SNG
 	gKickPat = p[0]; gSnarePat = p[1]; gHatPat = p[2]; gDrumSaveDue = 1;
 }
+static float gVisT = 0;
+// ---- MIRROR: the snapshots the 3DS sends (main loop) and what a mirror does with everything it gets
+static float* const MIRLV[] = {&gStick, &gXYmod, &gTiltX, &gTiltY, &gMicEnv, &gTwist, &gShake, &gCamLight, &gCamColor, &gChaosX, &gChaosY, &gSpinX, &gSpinY,
+	&gMicBright, &gCamMove, &gPressAll, &gStick2X, &gStick2Y, &gSlideAll, &gCutoff, &gRes, &gOsc[0].pos, &gOsc[1].pos, &gMacro[0], &gMacro[1], &gMacro[2], &gMacro[3]};
+#define NMIRLV ((int)(sizeof(MIRLV) / sizeof(MIRLV[0])))
+typedef struct { s16 page, sel, help, oct, latch, style, preset, brFocus, theme, visMode, visOverlay, patView, startMenu, startSel, quickBar, quickIdx,
+	seqMode, seqPos, bpm, drums, kit, pads, gridOn, seqLen, patCur, liveRec, tapeRec, padSel, prog, voiceMode, drumStep, arp; float visT, swing; } MirUI;
+typedef struct { Step st[NSTEP]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8], rowNote[8]; } MirSeq;
+static MirUI gMirUI; static volatile int gMirUIn = 0, gMirVis = 0; static float gMirBend = 0; static u8 gMirHeld[128];   // gMirVis: the mirror stays on the VISUALIZER (STREAM)
+static void mirSeqGet(MirSeq* q) { memcpy(q->st, gSeq, sizeof(gSeq)); q->len = (s16)gSeqLen; q->base = (s16)gSeqBase; memcpy(q->rowLen, gRowLen, 8); memcpy(q->rowHits, gRowHits, 8); memcpy(q->rowRot, gRowRot, 8); memcpy(q->rowNote, gRowNote, 8); }
+static void mirSend(int page, int selv, int help, int oct, int latch, float bend) {   // 3DS main loop, while a mirror listens
+	static int fc = 0; static SPatch lastP; static MirSeq lastQ; static u8 lastR[2048]; static MirUI lastU; static int force = 1;
+	if (gMirNew) { gMirNew = 0; force = 1; }
+	fc++;
+	if (force || !(fc & 1)) { float v[NMIRLV + 1]; for (int i = 0; i < NMIRLV; i++) v[i] = *MIRLV[i]; v[NMIRLV] = bend; mirEmit('L', v, sizeof(v)); }
+	if (force || fc % 3 == 0) {
+		MirUI u; memset(&u, 0, sizeof(u));
+		u.page = (s16)page; u.sel = (s16)selv; u.help = (s16)help; u.oct = (s16)oct; u.latch = (s16)latch; u.style = (s16)gStyle; u.preset = (s16)gPreset; u.brFocus = (s16)gBrFocus;
+		u.theme = (s16)gTheme; u.visMode = (s16)gVisMode; u.visOverlay = (s16)gVisOverlay; u.patView = (s16)gPatView; u.startMenu = (s16)gStartMenu; u.startSel = (s16)gStartSel;
+		u.quickBar = (s16)gQuickBar; u.quickIdx = (s16)gQuickIdx; u.seqMode = (s16)gSeqMode; u.seqPos = (s16)gSeqPos; u.bpm = (s16)gBPM; u.drums = (s16)gDrums; u.kit = (s16)gKit;
+		u.pads = (s16)gPads; u.gridOn = (s16)gGridOn; u.seqLen = (s16)gSeqLen; u.patCur = (s16)gPatCur; u.liveRec = (s16)gLiveRec; u.tapeRec = (s16)gTapeRec; u.padSel = (s16)gPadSel;
+		u.prog = (s16)gProg; u.voiceMode = (s16)gVoiceMode; u.drumStep = (s16)gDrumStep; u.arp = (s16)gArp; u.visT = gVisT; u.swing = gSwing;
+		if (force || memcmp(&u, &lastU, sizeof(u)) || fc % 30 == 0) { lastU = u; mirEmit('U', &u, sizeof(u)); }
+	}
+	if (force || fc % 10 == 0) {   // the patch, when it changes (the live values above don't count: they move all the time)
+		SPatch p; memset(&p, 0, sizeof(p)); patchCapture(&p); SPatch m = p;
+		m.cutoff = m.res = 0; m.osc[0].pos = m.osc[1].pos = 0; for (int i = 0; i < 4; i++) m.macro[i] = 0; m.bpm = 0;
+		if (force || memcmp(&m, &lastP, sizeof(m))) { lastP = m; mirEmit('P', &p, sizeof(p)); }
+	}
+	if (force || fc % 15 == 0) {
+		MirSeq q; memset(&q, 0, sizeof(q)); mirSeqGet(&q); if (force || memcmp(&q, &lastQ, sizeof(q))) { lastQ = q; mirEmit('Q', &q, sizeof(q)); }
+		u8 r[2048]; memset(r, 0, sizeof(r)); drumSnapGet(r); if (force || memcmp(r, lastR, sizeof(r))) { memcpy(lastR, r, sizeof(r)); mirEmit('R', r, sizeof(r)); }
+		u8 nt[64]; int k = 0; for (int i = 0; i < NVS && k < 64; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4) nt[k++] = (u8)gV[i].note;
+		mirEmit('V', nt, k);   // what's sounding: a mirror lets go of anything else (a lost note-off can't hang)
+	}
+	force = 0;
+}
+static void mirFeed(const u8* p, int n) {   // the mirror: a batch of events from the 3DS
+	int i = 0;
+	while (i + 3 <= n) {
+		u8 t = p[i]; int L = p[i + 1] | p[i + 2] << 8; const u8* d = p + i + 3; i += 3 + L; if (i > n) break;
+		float x = L >= 2 ? d[1] / 150.0f : 0;
+		switch (t) {
+		case 'N': if (L >= 2) { voiceOn(d[0], x); gMirHeld[d[0] & 127] = d[1] ? d[1] : 1; } break;
+		case 'O': if (L >= 1) { voiceOff(d[0]); gMirHeld[d[0] & 127] = 0; } break;
+		case 'F': if (L >= 2) { voiceFade(d[0], x); gMirHeld[d[0] & 127] = 0; } break;
+		case 'A': allOff(); memset(gMirHeld, 0, sizeof(gMirHeld)); break;
+		case 'D': if (L >= 2 && gDrums && gDrumBuilt >= 0) drumHit(d[0], x); break;
+		case 'G': if (L >= 3) { for (int k = 0; k < NVS; k++) { SVoice* v = &gV[k]; if (v->active && !v->isEcho && v->note == d[0] && v->stage < 4) { v->note = d[1]; v->freq = mtof((float)d[1]); v->slide = d[2]; } }
+			gMirHeld[d[1] & 127] = gMirHeld[d[0] & 127]; if (d[0] != d[1]) gMirHeld[d[0] & 127] = 0; } break;
+		case 'L': { int m = L / 4; for (int k = 0; k < m && k <= NMIRLV; k++) { float f; memcpy(&f, d + k * 4, 4); if (k < NMIRLV) *MIRLV[k] = f; else gMirBend = f; } break; }
+		case 'U': if (L == (int)sizeof(MirUI)) { memcpy(&gMirUI, d, sizeof(MirUI)); gMirUIn = 1; } break;
+		case 'P': if (L == (int)sizeof(SPatch)) { SPatch sp; memcpy(&sp, d, sizeof(sp)); int drums = gDrums, kit = gKit, bpm = gBPM;
+			patchApplyRaw(&sp); gBPM = bpm; if (gDrums != drums || gKit != kit) { gDrums = drums; gKit = kit; drumsChanged(); }   // the drums follow the 3DS's own state ('U')
+			for (int k = 0; k < 128; k++) if (gMirHeld[k]) voiceOn(k, gMirHeld[k] / 150.0f);   // what was sounding goes on in the new sound
+			} break;
+		case 'Q': if (L == (int)sizeof(MirSeq)) { MirSeq q; memcpy(&q, d, sizeof(q)); memcpy(gSeq, q.st, sizeof(gSeq)); gSeqLen = q.len < 1 ? 16 : q.len > NSTEP ? NSTEP : q.len; gSeqBase = q.base;
+			memcpy(gRowLen, q.rowLen, 8); memcpy(gRowHits, q.rowHits, 8); memcpy(gRowRot, q.rowRot, 8); memcpy(gRowNote, q.rowNote, 8); } break;
+		case 'R': if (L == 2048) drumSnapSet(d); break;
+		case 'V': { u8 on[128] = {0}; for (int k = 0; k < L; k++) on[d[k] & 127] = 1;
+			for (int k = 0; k < NVS; k++) { SVoice* v = &gV[k]; if (v->active && !v->isEcho && v->stage != 4 && !on[v->note & 127]) { v->stage = v->stage2 = 4; } }
+			for (int k = 0; k < 128; k++) if (!on[k]) gMirHeld[k] = 0; break; }
+		}
+	}
+}
+static void mirUiApply(void) {   // the mirror's main loop: the 3DS's drums, tempo and the rest of the state ('U')
+	const MirUI* u = &gMirUI;
+	if (u->theme >= 0 && u->theme < NTHEMES) gTheme = u->theme;
+	gStyle = u->style; gPreset = u->preset; gBrFocus = u->brFocus; gVisMode = u->visMode; gVisOverlay = u->visOverlay; gPatView = u->patView; gStartMenu = u->startMenu; gStartSel = u->startSel;
+	gQuickBar = u->quickBar; gQuickIdx = u->quickIdx; gSeqMode = u->seqMode; gSeqPos = u->seqPos; gSeqPlaying = u->seqMode == 1 && u->seqPos >= 0; gBPM = u->bpm; gPads = u->pads; gGridOn = u->gridOn;
+	gPatCur = u->patCur; gLiveRec = u->liveRec; gPadSel = u->padSel; gProg = u->prog; gVoiceMode = u->voiceMode; gDrumStep = u->drumStep; gArp = u->arp; gVisT = u->visT; gSwing = u->swing;
+	if (u->drums != gDrums || u->kit != gKit) { gKit = u->kit; gDrums = u->drums; drumsChanged(); }
+}
 static void drumGridMark(void) { static HistE e; histSnap(&e, 2, 0); histPush(gUndoH, &gUndoN, &e); gRedoN = 0; histFlags(); }
 static int gHoldR = -1, gHoldI = -1, gHoldOff = 0, gHoldMoved = 0, gHoldX0 = 0, gHoldY0 = 0, gHoldVel = 0, gHoldV0 = 0; static u64 gHoldT = 0;   // a press waiting to become a HOLD
 static int drumGridTouch(int x, int y, int press) {   // 1 = redraw
@@ -9354,7 +9486,7 @@ static C3D_RenderTarget* gVisTgt = NULL;
 static C3D_RenderTarget* gFullTgt = NULL;
 static u8* gFullLin = NULL;
 static u8* gVisLin = NULL;
-static float gVisT = 0, gVisEnv = 0;
+static float gVisEnv = 0;
 #define TRAILS 10
 #define TPTS 64
 static float gTrail[2][TRAILS][TPTS], gTrailPos[2][TRAILS];
@@ -10302,6 +10434,28 @@ int main(void) {
 				say(gSeqMode == 1 ? "PLAY" : "STOP"); topDirty = botDirty = 1;
 			}
 		}
+#ifdef FAKE_WEB
+		if (gQuickOpen) {   // the phone's QUICK button: the same ring on the top screen, picked with a tap (no two-thumb SELECT + pad)
+			static int qw = 0, qi = -1;
+			if (kDown & (KEY_B | KEY_SELECT | KEY_START)) { gQuickOpen = 0; qi = -1; topDirty = botDirty = 1; kDown &= KEY_TOUCH; }
+			else if (TTOUCH) {
+				float dx = (TTX - 200) / 158.0f, dy = (118 - TTY) / 94.0f;
+				if (dx * dx + dy * dy > 0.3f) { float pos = atan2f(dx, dy) / (6.2831853f / NQR); if (pos < 0) pos += NQR; qi = ((int)lroundf(pos)) % NQR; } else qi = -1;
+				gQuickBar = qi >= 0 ? 0 : -1; gQuickIdx = qi >= 0 ? qi : 0; topDirty = 1;
+			} else if (qw) {   // let go: go there (a tap in the middle just closes it)
+				gQuickOpen = 0; topDirty = botDirty = 1;
+				if (qi >= 0) { int d = QR_DEST[qi];
+					if (d >= 0) { page = d; gPads = 0; if (d == 7 && gPatView != 3) gPatView = 0; }
+					else if (d == QA_TAPE) { page = 7; gPads = 0; gPatView = 2; }
+					else if (d == QA_REC) liveRecToggle();
+					else if (d == QA_TREC) { if (gTapeRec >= 0) tapeRecStop(0); else tapeRecStart(); }
+					else { gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0); if (gSeqMode == 0) { seqStop(); if (gLiveRec || gPreFor == 2) liveRecStop(); } say(gSeqMode == 1 ? "PLAY" : "STOP"); } }
+				qi = -1;
+			}
+			if (gQuickOpen && qi >= 0) { gQuickBar = 0; gQuickIdx = qi; }
+			qw = TTOUCH; TTOUCH = 0; kDown &= ~(KEY_A | KEY_X | KEY_Y | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT);
+		}
+#endif
 		if (startAct == 3) { helpOn = 1; gHelpSlide = 0; topDirty = botDirty = 1; }
 		if (startAct == 5) { learnArm(page, sel[page]); topDirty = 1; }
 		{   // CIRCLE PAD in the editors (see curShown)
@@ -10748,7 +10902,7 @@ int main(void) {
 		}
 		if (AGET(gJobDone)) { ASET(gJobDone, 0); topDirty = 1; }
 
-		if (!gAudioClock) { arpTick(dt); seqTick(dt); }
+		if (!gAudioClock && !gMirror) { arpTick(dt); seqTick(dt); }
 		{	// runtime milestones for the crash guard (written once each)
 			static int m1 = 0, m2 = 0, m3 = 0, m4 = 0;
 			if (!m1) { m1 = 1; crashMark("RUNNING"); }
@@ -10759,6 +10913,12 @@ int main(void) {
 			if (page != lastMarkPage) { lastMarkPage = page; gPageMarkDue = 1; }   // written after the voice lock is released
 		}
 		gFxModVal = modSum(DST_FXP, newestVoice()); gFxMixMod = modSum(DST_FXMIX, newestVoice());
+		if (gMirOn) mirSend(page, sel[page], helpOn, oct, latch, cx + gMidiBend);   // a mirror is listening (Wi-Fi)
+		if (gMirror) {   // this is the mirror: the 3DS's page, its bend
+			if (gMirUIn) { gMirUIn = 0; mirUiApply(); if (gMirUI.page >= 0 && gMirUI.page < NPAGES) { page = gMirUI.page; sel[page] = gMirUI.sel; } if (gMirVis) { page = 8; gQuickBar = -1; gStartMenu = 0; } helpOn = gMirUI.help; oct = gMirUI.oct; latch = gMirUI.latch; topDirty = botDirty = 1; }
+			if (gMirVis && page != 8) { page = 8; topDirty = 1; }
+			cx = gMirBend; gMidiBend = 0;
+		}
 		if (gAudioOK) voicesUpdate(dt, cx + gMidiBend);
 		// effect-bus self check: if notes are sending but the DSP never delivers aux audio, fall back to taps
 		if (gBusOK && !gBusFail && !gBusSeen && (masterActive() || busSend(0) > 0 || busSend(1) > 0)) {
@@ -10827,7 +10987,7 @@ int main(void) {
 					else { frame(4, 30, 196, 125); text(8, 34, "A", 1, DIM); text(8, 96, "B", 1, DIM); }
 					scanlines();
 				}
-				if (gQuickBar >= 0) drawQuick(page);
+				if (gQuickBar >= 0 || gQuickOpen) drawQuick(page);
 				else if (gStartMenu) drawStartMenu();
 				else if (gCallT > 0 && page != 8) {   // big value pop-up, drawn last so the visuals don't cover it
 					fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
