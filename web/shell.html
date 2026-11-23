@@ -275,6 +275,30 @@ document.getElementById('smpf').onchange = function () {
   });
   this.value = '';
 };
+// ---- CAMERA: while Syrup asks for it (HARDWARE > CAMERA, CAM > TABLE, CAM WAVE), the browser's camera feeds it 160x120 frames
+var camStream = null, camVid = null, camCv = null, camCx = null, camBusy = false, camNo = false;
+function camStep() {
+  if (!camStream) return;
+  if (camVid.readyState >= 2) {
+    camCx.drawImage(camVid, 0, 0, 160, 120); var px = camCx.getImageData(0, 0, 160, 120).data, p = Module._web_cam_buf() >> 1, H = Module.HEAPU16;
+    for (var i = 0, j = 0; i < 19200; i++, j += 4) H[p + i] = ((px[j] >> 3) << 11) | ((px[j + 1] >> 2) << 5) | (px[j + 2] >> 3);
+    Module._web_cam_frame();
+  }
+  setTimeout(camStep, 66);   // ~15 frames a second, like the 3DS camera
+}
+setInterval(function () {
+  if (!ready || camBusy) return;
+  var want = Module._web_cam_want();
+  if (!want) camNo = false;   // asked again later: try again
+  if (want && !camStream && !camNo && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    camBusy = true;
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: 320, height: 240 }, audio: false }).then(function (st) {
+      camStream = st; camVid = document.createElement('video'); camVid.muted = true; camVid.setAttribute('playsinline', ''); camVid.srcObject = st; camVid.play();
+      camCv = document.createElement('canvas'); camCv.width = 160; camCv.height = 120; camCx = camCv.getContext('2d', { willReadFrequently: true });
+      camBusy = false; msg.textContent = 'Camera on'; camStep();
+    })  .catch(function () { camBusy = false; camNo = true; msg.textContent = 'No camera (allow it in the browser to use CAMERA)'; });
+  } else if (!want && camStream) { camStream.getTracks().forEach(function (t) { t.stop(); }); camStream = null; msg.textContent = 'Camera off'; }
+}, 300);
 // ---- LINK: windows / tabs on this device play together: PLAY / STOP, BPM and the drums follow whichever changes
 var linkBtn = document.getElementById('link'), lch = null, lastLink = -1, linkPeers = {}, myId = Math.random().toString(36).slice(2);
 function linkOn(on) {

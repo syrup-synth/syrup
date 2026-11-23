@@ -3525,7 +3525,7 @@ static Param P_HW[] = {
 	{"CAM > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CAMTAB},
 	PE("ADD EDITOR", &gAddEdit, 2, ONOFF, D_ADDED), {"RULE > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	PE("CAM WAVE", &gCamVid, 3, VID_NAMES, D_CAMV), PF("WT SCAN", &gWtScan, 0, 4, 0.05f, "X", 0),
-	PE("WI-FI MIDI", &gMidiNet, 2, ONOFF, D_NETMIDI), PF("NET BUFFER", &gNetLat, 0, 60, 1, "MS", 0),
+	PE("WI-FI MIDI", &gMidiNet, 2, ONOFF, D_NETMIDI), {"WEB UPLOAD", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT}, PF("NET BUFFER", &gNetLat, 0, 60, 1, "MS", 0),
 	{"UPDATE SYRUP", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_UPDATE},
 	{"GET WAVETABLES", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	{"NET > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
@@ -5110,9 +5110,14 @@ static void drawPads(int base) {
 }
 static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 = screen changed
 	if (y < PROG_Y - 2) {
-		if (!press) return 0;
 		int i = (x - 2) / 45; if (i < 0 || i > 6) return 0;
 		int ly = y - PAD_Y, band = ly < PAD_H / 3 ? 2 : ly < 2 * PAD_H / 3 ? 1 : 0, lx = x - 2 - i * 45, side = lx < 10 ? 0 : lx > 33 ? 2 : 1;
+		static int lastI = -1, lastB = -1, lastS = -1;
+		if (!press) {   // SLIDE: drag across the pads and the chord follows the finger (a new pad, or a new band / edge of this one)
+			if (gPadSel < 0 || (i == lastI && band == lastB && side == lastS)) return 0;
+			if (i == lastI && (abs(lx - (side == 0 ? 5 : side == 2 ? 38 : 21)) > 6)) return 0;   // (an edge only counts once the finger is well into it)
+		}
+		lastI = i; lastB = band; lastS = side;
 		gPadSel = i; gPadN = padChord(base, i, band, side, gPadNotes);
 		*velOut = 0.55f + 0.45f * (1 - ly / (float)PAD_H) * 0.5f + 0.2f;
 		padPlay(base, gPadNotes, gPadN, *velOut, 1);
@@ -6226,6 +6231,26 @@ static void wtInstall(const char* base, float* fr) {
 // mic: record 1 s, then turn it into a table
 static float gMicRecT = 0;
 static void micRecStart(void) { if (!gMicOK) { say("MIC NOT AVAILABLE"); return; } gMicRecT = 1.1f; }
+// WEB UPLOAD: the Wi-Fi server (the one WI-FI MIDI runs) also takes files at /files
+static void kitScanDirs(void); static void netMidiChanged(void); static int gMidiNet; static char gNetAddr[32]; static volatile int gWebUpDone, gWebUpN; static char gWebUpKit[40];
+static int gWebUpSay = 0;
+static void webUpStart(void) {
+#ifdef SYRUP_NO_NET
+	say("ON THE WEB VERSION: USE THE SAMPLES BUTTON");
+#else
+	if (!gMidiNet) { gMidiNet = 1; netMidiChanged(); }
+	gWebUpSay = 1; say("WEB UPLOAD: STARTING WI-FI...");
+#endif
+}
+static void webUpTick(void) {
+	if (gWebUpSay && strchr(gNetAddr, ':')) { gWebUpSay = 0; static char m[64]; snprintf(m, sizeof m, "OPEN %s/files IN A BROWSER", gNetAddr); say(m); gMsgT = 15; }
+	else if (gWebUpSay && gNetAddr[0] && !strchr(gNetAddr, ':')) { gWebUpSay = 0; say(gNetAddr); }
+	if (!gWebUpDone) return;
+	gWebUpDone = 0; int n = gWebUpN; gWebUpN = 0;
+	LightLock_Lock(&gMipsLock); scanTables(); gTableCount = T_BUILTIN + gNFiles; LightLock_Unlock(&gMipsLock);
+	if (gWebUpKit[0]) { kitScanDirs(); for (int i = 0; i < gNKitDirs; i++) if (!strcasecmp(gKitRaw[i], gWebUpKit)) gKitDir = i; gKit = KIT_SAMPLE; gDrumWant = KIT_SAMPLE + 100; gWebUpKit[0] = 0; }
+	char m[48]; snprintf(m, sizeof m, "%d FILE%s ARRIVED OVER WI-FI", n, n == 1 ? "" : "S"); say(m);
+}
 // MIC > PAD: a second of the mic, from where the sound starts, becomes the picked drum's sample (kits/MIC)
 static float gMicPadT = 0;
 static void micPadStart(void) { if (!gMicOK) { say("MIC NOT AVAILABLE"); return; } gMicPadT = 1.1f; }
@@ -7392,8 +7417,61 @@ static void b64(const u8* in, int n, char* out) {
 #include "remote_html.h"
 static int sendAll(int s, const void* d, int n) { const char* p = (const char*)d; while (n > 0) { int k = send(s, p, n, 0); if (k <= 0) { if (k < 0 && errno == EAGAIN) { svcSleepThread(1000000); continue; } return 0; } p += k; n -= k; } return 1; }
 #define NCLI 8
-typedef struct { int s, ws; char buf[2048]; int n; MidiIn run; u8 closing; u64 t; } Cli;   // t: last activity (ms)
-static void cliClose(Cli* c) { if (c->s >= 0) close(c->s); c->s = -1; c->ws = 0; c->n = 0; c->closing = 0; }
+typedef struct { int s, ws; char buf[2048]; int n; MidiIn run; u8 closing; u64 t; FILE* up; int left; } Cli;   // t: last activity (ms); up / left: a file being uploaded
+static void cliClose(Cli* c) { if (c->up) { fclose(c->up); c->up = NULL; } if (c->s >= 0) close(c->s); c->s = -1; c->ws = 0; c->n = 0; c->closing = 0; }
+// WEB UPLOAD (WI-FI MIDI on, then http://<the 3DS>:8080/files): the page turns any audio the browser can read into
+// 32728 Hz mono WAVs and POSTs them one by one, raw, to /up?d=<folder>&n=<name>; then /done and Syrup rescans.
+// d = kits/<NAME> (a SAMPLE kit) or tables (a wavetable WAV for OSC A / B). Names are cleaned; nothing leaves /3ds/syrup.
+static volatile int gWebUpDone = 0, gWebUpN = 0; static char gWebUpKit[40] = "";
+static const char FILES_HTML[] =
+"<!doctype html><html><head><meta name=viewport content='width=device-width,initial-scale=1'><title>SYRUP FILES</title>"
+"<style>body{background:#000;color:#5ff;font:16px monospace;padding:14px}h1{font-size:22px}input,select,button{font:inherit;background:#033;color:#fff;border:1px solid #5ff;padding:8px;margin:6px 0;width:100%;box-sizing:border-box}#log{white-space:pre-wrap;color:#ccc}</style></head><body>"
+"<h1>SYRUP: SEND FILES</h1><label>SEND AS</label><select id=t><option value=kit>DRUM KIT (SAMPLE kit folder)</option><option value=tab>WAVETABLE</option></select>"
+"<label>KIT FOLDER NAME</label><input id=k value=WEB maxlength=24><label>FILES (name drums KICK, SNARE, HAT, OPEN HAT, CLAP, RIM, LO TOM, HI TOM, BELL, CRASH)</label>"
+"<input type=file id=f multiple accept='audio/*,.wav'><button id=go>SEND TO THE 3DS</button><div id=log></div><script>"
+"var L=document.getElementById('log');function log(t){L.textContent+=t+'\\n'}"
+"function clean(n){return n.replace(/\\.[^.]*$/,'').replace(/[^A-Za-z0-9 _-]/g,'').slice(0,40)||'file'}"
+"function wav(x){var N=x.length,b=new DataView(new ArrayBuffer(44+N*2)),w=function(o,t){for(var i=0;i<t.length;i++)b.setUint8(o+i,t.charCodeAt(i))};"
+"w(0,'RIFF');b.setUint32(4,36+N*2,true);w(8,'WAVEfmt ');b.setUint32(16,16,true);b.setUint16(20,1,true);b.setUint16(22,1,true);b.setUint32(24,32728,true);b.setUint32(28,65456,true);b.setUint16(32,2,true);b.setUint16(34,16,true);w(36,'data');b.setUint32(40,N*2,true);"
+"for(var i=0;i<N;i++)b.setInt16(44+i*2,Math.max(-1,Math.min(1,x[i]))*32000,true);return b.buffer}"
+"async function one(f,kit,ac){var d=kit?'kits/'+clean(document.getElementById('k').value||'WEB'):'tables',body;"
+"if(!kit&&/\\.wav$/i.test(f.name))body=await f.arrayBuffer();else{var buf=await ac.decodeAudioData(await f.arrayBuffer()),len=Math.min(Math.ceil(buf.duration*32728),32728*(kit?3:12)),"
+"off=new OfflineAudioContext(1,len,32728),s=off.createBufferSource();s.buffer=buf;s.connect(off.destination);s.start();body=wav((await off.startRendering()).getChannelData(0))}"
+"var r=await fetch('/up?d='+encodeURIComponent(d)+'&n='+encodeURIComponent(clean(f.name)+'.wav'),{method:'POST',body:body});log((r.ok?'OK  ':'FAIL ')+f.name)}"
+"document.getElementById('go').onclick=async function(){var fs=document.getElementById('f').files,kit=document.getElementById('t').value=='kit',ac=new (window.AudioContext||window.webkitAudioContext)();"
+"if(!fs.length){log('PICK SOME FILES FIRST');return}for(var i=0;i<fs.length;i++){try{await one(fs[i],kit,ac)}catch(e){log('FAIL '+fs[i].name)}}await fetch('/done',{method:'POST'});log('DONE: '+(kit?'KIT = SAMPLE on the 3DS':'TABLES rescanned'))}"
+"</script></body></html>";
+static int upArg(const char* q, const char* key, char* out, int n) {   // a query value, %-decoded, only [A-Za-z0-9 _.-/]
+	const char* p = strstr(q, key); if (!p) return 0; p += strlen(key); int k = 0;
+	while (*p && *p != '&' && *p != ' ' && k < n - 1) {
+		int ch = *p++; if (ch == '%' && isxdigit((unsigned char)p[0]) && isxdigit((unsigned char)p[1])) { char h[3] = {p[0], p[1], 0}; ch = (int)strtol(h, NULL, 16); p += 2; } else if (ch == '+') ch = ' ';
+		if (isalnum(ch) || ch == ' ' || ch == '_' || ch == '-' || ch == '.' || ch == '/') out[k++] = (char)ch;
+	}
+	out[k] = 0; return k > 0;
+}
+static void upMore(Cli* c, const char* b, int k);
+static void upBegin(Cli* c) {   // POST /up?d=..&n=..: start writing the body to the SD card
+	char d[64], nm[64], path[200]; const char* q = c->buf + 8;
+	int len = 0; const char* cl = strstr(c->buf, "Content-Length:"); if (!cl) cl = strstr(c->buf, "content-length:"); if (cl) len = atoi(cl + 15);
+	int ok = upArg(q, "d=", d, sizeof d) && upArg(q, "n=", nm, sizeof nm) && !strstr(d, "..") && !strstr(nm, "..") && !strchr(nm, '/') && len > 44 && len < 8 * 1024 * 1024;
+	int kit = ok && !strncmp(d, "kits/", 5) && d[5] && !strchr(d + 5, '/'), tab = ok && !strcmp(d, "tables");
+	if (!kit && !tab) { static const char bad[] = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"; sendAll(c->s, bad, sizeof(bad) - 1); shutdown(c->s, SHUT_WR); c->closing = 1; c->n = 0; return; }
+	mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777);
+	if (kit) { mkdir("sdmc:/3ds/syrup/kits", 0777); snprintf(path, sizeof path, "sdmc:/3ds/syrup/%s", d); mkdir(path, 0777); snprintf(path, sizeof path, "sdmc:/3ds/syrup/%s/%s", d, nm); snprintf(gWebUpKit, sizeof gWebUpKit, "%s", d + 5); }
+	else snprintf(path, sizeof path, "sdmc:/3ds/syrup/%s", nm);
+	c->up = fopen(path, "wb"); c->left = len;
+	if (!c->up) { static const char bad[] = "HTTP/1.1 500 Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"; sendAll(c->s, bad, sizeof(bad) - 1); shutdown(c->s, SHUT_WR); c->closing = 1; c->n = 0; return; }
+	char* body = strstr(c->buf, "\r\n\r\n") + 4; int have = c->n - (int)(body - c->buf); if (have > c->left) have = c->left;
+	if (have > 0) { fwrite(body, 1, have, c->up); c->left -= have; }
+	c->n = 0; upMore(c, NULL, 0);
+}
+static void upMore(Cli* c, const char* b, int k) {   // more body bytes; at the end: close the file, answer
+	if (k > 0) { if (k > c->left) k = c->left; fwrite(b, 1, k, c->up); c->left -= k; }
+	if (c->left > 0) return;
+	fclose(c->up); c->up = NULL; gWebUpN++;
+	static const char ok[] = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"; sendAll(c->s, ok, sizeof(ok) - 1);
+	shutdown(c->s, SHUT_WR); c->closing = 1; c->n = 0; c->t = osGetTime();
+}
 static void cliHttp(Cli* c) {   // request complete in c->buf
 	c->buf[c->n] = 0;
 	char* key = strstr(c->buf, "Sec-WebSocket-Key:");
@@ -7407,7 +7485,14 @@ static void cliHttp(Cli* c) {   // request complete in c->buf
 		c->ws = 1; c->n = 0; gNetClients++;
 		return;
 	}
-	if (!strncmp(c->buf, "GET /favicon", 12)) {   // browsers ask for an icon: answer quickly with nothing
+	if (!strncmp(c->buf, "POST /up?", 9)) { upBegin(c); return; }
+	if (!strncmp(c->buf, "POST /done", 10)) { gWebUpDone = 1; static const char ok[] = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"; sendAll(c->s, ok, sizeof(ok) - 1); }
+	else if (!strncmp(c->buf, "GET /files", 10)) {   // WEB UPLOAD: the page for sending samples / tables to the SD card
+		char hdr[160]; int len = (int)strlen(FILES_HTML);
+		int n = snprintf(hdr, sizeof(hdr), "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", len);
+		if (sendAll(c->s, hdr, n)) sendAll(c->s, FILES_HTML, len);
+	}
+	else if (!strncmp(c->buf, "GET /favicon", 12)) {   // browsers ask for an icon: answer quickly with nothing
 		static const char nf[] = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"; sendAll(c->s, nf, sizeof(nf) - 1);
 	} else {
 		char hdr[160]; int len = (int)strlen(REMOTE_HTML);
@@ -7500,7 +7585,7 @@ static void netMain(void* arg) {
 	int uc = udpOpen(5004), ud = udpOpen(5005), ur = udpOpen(5008); gUdData = ud;   // 5008: plain MIDI bytes (FM-1 LINK and friends)
 	int ub = socket(AF_INET, SOCK_DGRAM, 0); u64 beaconT = 0; MidiIn rawRun = {0};
 	if (ub >= 0) { int on = 1; setsockopt(ub, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)); }
-	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; memset(&cl[i].run, 0, sizeof(MidiIn)); cl[i].closing = 0; cl[i].t = 0; }
+	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].up = NULL; cl[i].left = 0; cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; memset(&cl[i].run, 0, sizeof(MidiIn)); cl[i].closing = 0; cl[i].t = 0; }
 	gNetClients = 0;
 	while (gNetRun) {
 		int idle = 1;
@@ -7519,6 +7604,12 @@ static void netMain(void* arg) {
 			Cli* c = &cl[i]; if (c->s < 0) continue;
 			if (!c->ws && osGetTime() - c->t > (c->closing ? 3000 : 10000)) { cliClose(c); continue; }
 			if (c->closing) { char junk[256]; int k = recv(c->s, junk, sizeof(junk), 0); if (k == 0 || (k < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) cliClose(c); continue; }
+			if (c->up) {   // an upload: the body straight to the file
+				char tmp[4096]; int k = recv(c->s, tmp, sizeof(tmp), 0);
+				if (k == 0 || (k < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) { fclose(c->up); c->up = NULL; cliClose(c); continue; }
+				if (k > 0) { upMore(c, tmp, k); idle = 0; c->t = osGetTime(); }
+				continue;
+			}
 			int k = recv(c->s, c->buf + c->n, sizeof(c->buf) - 1 - c->n, 0);
 			if (k == 0 || (k < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) { if (c->ws) gNetClients--; cliClose(c); continue; }
 			if (k < 0) continue;
@@ -10013,7 +10104,7 @@ int main(void) {
 				armed = 0; lastHit = tnow; }
 			if (gShakeD < 0.2f) armed = 1;
 		}
-		micRecTick(1.0f / 60); micPadTick(1.0f / 60); if (gPanicClr > 0) { gPanicClr--; fxTailsClear(); } prerollTick(1.0f / 60); seqTapTick(1.0f / 60); tapeTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
+		micRecTick(1.0f / 60); micPadTick(1.0f / 60); webUpTick(); if (gPanicClr > 0) { gPanicClr--; fxTailsClear(); } prerollTick(1.0f / 60); seqTapTick(1.0f / 60); tapeTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
 		if (midiTick()) topDirty = botDirty = 1;
 		if (gOfType) {   // OUT FILTER cutoff mod: the mod matrix and ENV 2 of the newest note
 			const SVoice* nv = newestVoice(); float m = modSum(DST_OFCUT, (SVoice*)nv);
@@ -10237,6 +10328,7 @@ int main(void) {
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "RULE > TABLE")) ruleTable();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "KIT > TABLE")) kitToTable();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "MIC > PAD")) micPadStart();
+				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "WEB UPLOAD")) webUpStart();
 				else if (p->dirty & D_DLWT) dlStart();
 				else if (p->dirty & D_LOOPTAB) loopToTable();
 				else if (p->dirty & D_MICTAB) micRecStart();

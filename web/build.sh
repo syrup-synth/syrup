@@ -10,7 +10,7 @@ cd "$out"
 emcc -O2 web_main.c -I "$root/source" -w -o syrup.js -DSYRUP_BUILD=$(git -C "$root" rev-list --count HEAD 2>/dev/null || echo 0) \
   -s ASYNCIFY=1 -s ASYNCIFY_STACK_SIZE=65536 -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=134217728 -s TOTAL_STACK=1048576 \
   -s SINGLE_FILE=1 -s ENVIRONMENT=web -s EXIT_RUNTIME=0 -s FORCE_FILESYSTEM=1 \
-  -s EXPORTED_RUNTIME_METHODS='["FS","HEAPU8","HEAPF32","addRunDependency","removeRunDependency"]' \
+  -s EXPORTED_RUNTIME_METHODS='["FS","HEAPU8","HEAPU16","HEAPF32","addRunDependency","removeRunDependency"]' \
   --embed-file default_font.bin -lidbfs.js
 python3 "$here/pack.py" "$here/shell.html" syrup.js index.html
 echo "built $out/index.html ($(wc -c < index.html) bytes)"

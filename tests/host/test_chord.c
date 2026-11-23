@@ -38,6 +38,11 @@ static void SCRIPT(int fr) {
 		if (gHeldN != 4 || gHeld[0] != padDeg(base, 0) - 12) fail("BASS: the root an octave down should sound (%d)", gHeld[0]);
 		liveUp(); playSet(NULL, 0, 0.8f); gPadBass = 0;
 	}
+	if (fr == 66) {   // PADS SLIDE: drag from pad 1 to pad 4, the chord follows
+		gPadBass = 0; float v; int y = PAD_Y + PAD_H / 2; padsTouch(48, 2 + 22, y, 1, &v); padsTouch(48, 2 + 45 + 22, y, 0, &v); padsTouch(48, 2 + 3 * 45 + 22, y, 0, &v);
+		if (gPadSel != 3) fail("PADS: sliding across should play the pad under the finger (%d)", gPadSel);
+		liveUp(); playSet(NULL, 0, 0.8f); gPadSel = -1; memset(gSeq, 0, sizeof(gSeq));
+	}
 	if (fr == 70) {   // a progression on AUTO records a chord a bar
 		memset(gSeq, 0, sizeof(gSeq)); gProg = 9; gProgAuto = 1; gPadBase = 48;
 	}

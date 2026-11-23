@@ -159,7 +159,14 @@ static Result CAMU_SetSize(u32 a,int b,int c){(void)a;(void)b;(void)c;return 0;}
 static Result CAMU_SetNoiseFilter(u32 a,bool b){(void)a;(void)b;return 0;} static Result CAMU_SetAutoExposure(u32 a,bool b){(void)a;(void)b;return 0;} static Result CAMU_SetAutoWhiteBalance(u32 a,bool b){(void)a;(void)b;return 0;}
 static Result CAMU_SetTrimming(u32 a,bool b){(void)a;(void)b;return 0;} static Result CAMU_GetMaxBytes(u32* m,s16 w,s16 h){(void)w;(void)h;*m=1024;return 0;} static Result CAMU_SetTransferBytes(u32 a,u32 b,s16 w,s16 h){(void)a;(void)b;(void)w;(void)h;return 0;}
 static Result CAMU_ClearBuffer(u32 p){(void)p;return 0;} static Result CAMU_StartCapture(u32 p){(void)p;return 0;} static u16* CAMDST; static Result CAMU_SetReceiving(Handle* e,void* d,u32 p,u32 s,s16 t){(void)p;(void)s;(void)t;CAMDST=(u16*)d;*e=7;return 0;}
-static int CAMT; static Result svcWaitSynchronization(Handle h,long long t){(void)t; if(h==7&&CAMDST&&(++CAMT%4==0)){ for(int y=0;y<120;y++)for(int x=0;x<160;x++){ float v=0.5f+0.5f*sinf(x*0.08f+CAMT*0.05f)*cosf(y*0.05f+CAMT*0.02f); int g=(int)(v*63); CAMDST[y*160+x]=(u16)(((g>>1)<<11)|(g<<5)|(g>>1)); } return 0;} return 1;} static Result svcCloseHandle(Handle h){(void)h;return 0;} static void svcSleepThread(long long n){(void)n;}
+#ifdef FAKE_WEB
+static u16 W_CAMBUF[160*120]; static volatile int W_CAMNEW=0;   /* the browser's camera, 160x120 RGB565, filled by the page */
+#endif
+static int CAMT; static Result svcWaitSynchronization(Handle h,long long t){(void)t;
+#ifdef FAKE_WEB
+  if(h==7&&CAMDST){ if(!W_CAMNEW) return 1; memcpy(CAMDST,W_CAMBUF,sizeof(W_CAMBUF)); W_CAMNEW=0; return 0; }
+#endif
+  if(h==7&&CAMDST&&(++CAMT%4==0)){ for(int y=0;y<120;y++)for(int x=0;x<160;x++){ float v=0.5f+0.5f*sinf(x*0.08f+CAMT*0.05f)*cosf(y*0.05f+CAMT*0.02f); int g=(int)(v*63); CAMDST[y*160+x]=(u16)(((g>>1)<<11)|(g<<5)|(g>>1)); } return 0;} return 1;} static Result svcCloseHandle(Handle h){(void)h;return 0;} static void svcSleepThread(long long n){(void)n;}
 typedef struct{int x;} udsBindContext; typedef struct{int x;} udsNetworkStruct; typedef struct{udsNetworkStruct network;} udsNetworkScanInfo; typedef struct{u8 total_nodes;} udsConnectionStatus;
 #define UDS_BROADCAST_NETWORKNODEID 0xFFFF
 #define UDS_DEFAULT_RECVBUFSIZE 0x2E30

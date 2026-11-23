@@ -67,6 +67,22 @@ static void SCRIPT(int fr) {
 		if (k < 4 || r[0] != 0x8A || r[1] != 2 || r[2] != 'h') fail("WebSocket: a ping should get its pong (%d)", k);
 		u8 off[] = {0x80, 67, 0, 0x80, 69, 0}; wsSend(ws, off, 6, 2, 0); }
 	if (fr == 88) { if (sounding(67) || sounding(69)) fail("WebSocket: note offs should stop them"); u8 z[1]; wsSend(ws, z, 0, 8, 0); }
-	if (fr == 96) { if (gNetClients != 0) fail("WebSocket: a close should drop the remote (%d)", gNetClients); close(ws); close(us5008); close(uc); close(ud); gMidiNet = 0; netMidiChanged(); }
+	if (fr == 96) { if (gNetClients != 0) fail("WebSocket: a close should drop the remote (%d)", gNetClients); close(ws); close(us5008); close(uc); close(ud); }
+	// WEB UPLOAD: the files page, a WAV POSTed in pieces into a kit folder, a sneaky path refused, then /done
+	if (fr == 98) {
+		int s = tcp(); static char b[16384]; send(s, "GET /files HTTP/1.1\r\nHost: x\r\n\r\n", 34, 0); int n = readAll(s, b, sizeof b); close(s);
+		if (n < 100 || !strstr(b, "SEND TO THE 3DS")) fail("WEB UPLOAD: /files should serve the upload page (%d bytes)", n);
+		static u8 w[44 + 6000]; memset(w, 0, sizeof w); memcpy(w, "RIFF", 4); memcpy(w + 8, "WAVEfmt ", 8); w[16] = 16; w[20] = 1; w[22] = 1; u32 r = 32728; memcpy(w + 24, &r, 4); w[34] = 16; memcpy(w + 36, "data", 4); u32 dl = 6000; memcpy(w + 40, &dl, 4);
+		for (int i = 0; i < 3000; i++) { s16 v = (s16)(12000 * sinf(i * 0.1f)); memcpy(w + 44 + i * 2, &v, 2); }
+		s = tcp(); char h[200]; int hn = snprintf(h, sizeof h, "POST /up?d=kits%%2FNet%%20Kit&n=Snare%%2001.wav HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n", (int)sizeof w);
+		send(s, h, hn, 0); send(s, w, 1000, 0); svcSleepThread(30000000); send(s, w + 1000, sizeof w - 1000, 0); n = readAll(s, b, sizeof b); close(s);
+		if (!strstr(b, "200 OK")) fail("WEB UPLOAD: the POST should succeed (%s)", b);
+		FILE* f = fopen("sd/kits/Net Kit/Snare 01.wav", "rb"); long sz = 0; if (f) { fseek(f, 0, SEEK_END); sz = ftell(f); fclose(f); }
+		if (sz != (long)sizeof w) fail("WEB UPLOAD: the file should land whole in the kit folder (%ld bytes)", sz);
+		s = tcp(); hn = snprintf(h, sizeof h, "POST /up?d=..%%2F..&n=x.wav HTTP/1.1\r\nContent-Length: 100\r\n\r\n"); send(s, h, hn, 0); n = readAll(s, b, sizeof b); close(s);
+		if (!strstr(b, "400")) fail("WEB UPLOAD: a path out of the folder should be refused");
+		s = tcp(); send(s, "POST /done HTTP/1.1\r\nContent-Length: 0\r\n\r\n", 45, 0); n = readAll(s, b, sizeof b); close(s);
+	}
+	if (fr == 104) { if (gKit != KIT_SAMPLE || !gNKitDirs || strcasecmp(gKitRaw[gKitDir], "Net Kit")) fail("WEB UPLOAD: after /done the kit should be SAMPLE, folder Net Kit (kit %d)", gKit); gMidiNet = 0; netMidiChanged(); }
 }
-int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 110; app_main(); printf("net: UDP 5008, RTP-MIDI session + CC out, HTTP page, WebSocket MIDI through real sockets\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 112; app_main(); printf("net: UDP 5008, RTP-MIDI session + CC out, HTTP page, WebSocket MIDI through real sockets\n"); return gFails ? 1 : 0; }

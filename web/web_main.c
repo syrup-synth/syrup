@@ -29,6 +29,10 @@ EMSCRIPTEN_KEEPALIVE void web_link_set(int st) {
 }
 // SAMPLES: the page wrote WAVs into sd/kits/WEB; use them
 EMSCRIPTEN_KEEPALIVE void web_kit_reload(void) { kitScanDirs(); for (int i = 0; i < gNKitDirs; i++) if (!strcmp(gKitDirs[i], "WEB")) gKitDir = i; gKit = KIT_SAMPLE; gDrumWant = KIT_SAMPLE + 100; if (!gDrums) { gDrums = 1; drumsChanged(); } say("SAMPLE KIT: YOUR FILES"); }
+// CAMERA: the page runs the browser camera while Syrup wants one (CAMERA, CAM > TABLE, CAM WAVE) and puts 160x120 frames here
+EMSCRIPTEN_KEEPALIVE int web_cam_want(void) { return gCamOn || gCamWant || gCamVid; }
+EMSCRIPTEN_KEEPALIVE u16* web_cam_buf(void) { return W_CAMBUF; }
+EMSCRIPTEN_KEEPALIVE void web_cam_frame(void) { W_CAMNEW = 1; }
 EMSCRIPTEN_KEEPALIVE void web_midi(int st, int a, int b) { midiPush((u8)st, (u8)a, (u8)b); }
 EMSCRIPTEN_KEEPALIVE void web_audio_on(int on) { W_AUDIO = on; }
 EMSCRIPTEN_KEEPALIVE int web_audio_avail(void) { return (int)(WRW - WRR); }
@@ -57,4 +61,5 @@ int main(void) {
 	app_main();
 	return 0;
 }
-EMSCRIPTEN_KEEPALIVE int web_dbg(int k) { return k == 0 ? gStyleCur * 100 + gPresetCur : k == 1 ? gCurPage : k == 2 ? gBrStyle : k == 3 ? (int)gStyle * 100 + gPreset : TOUCH * 1000 + TY; }
+EMSCRIPTEN_KEEPALIVE void web_test_cam(int on) { gCamOn = on; }
+EMSCRIPTEN_KEEPALIVE int web_dbg(int k) { if (k == 5) return gCamFrames; return k == 0 ? gStyleCur * 100 + gPresetCur : k == 1 ? gCurPage : k == 2 ? gBrStyle : k == 3 ? (int)gStyle * 100 + gPreset : TOUCH * 1000 + TY; }
