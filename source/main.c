@@ -5060,6 +5060,10 @@ static void outline(int x, int y, int w, int h, u8 r, u8 g, u8 b) { rect(x, y, w
 // right edge = sus4. Slide across the STRUM strip to strum the last chord like an autoharp.
 static int gPads = 0, gPadSel = -1, gPadN = 0, gPadNotes[4], gStrumZone = -1;
 static struct { int note; float t; } gStrumOff[24]; static int gStrumOffN = 0;
+#define STRUM_MAX 6
+static void voiceFade(int note, float sec) {   // let a note go fast but not dead: a short release, no click
+	for (int i = 0; i < NVS; i++) { SVoice* v = &gV[i]; if (v->active && !v->isEcho && v->note == note && v->stage != 4) { v->stage = v->stage2 = 4; v->relMul = sec / (gEnv1.r + 0.0005f); } }
+}
 #define PAD_Y (TAB_H + 2)
 #define PAD_H 120
 #define PROG_Y (PAD_Y + PAD_H + 4)   // the PROGRESSION row between the pads and the strum strip
@@ -5099,7 +5103,15 @@ static const char* PROG_NAMES[NPROG] = {"PROG: OFF", "I V vi IV", "vi IV I V", "
 	"I IV vi V", "vi V IV V", "I iii IV V", "ii V I vi", "vi ii V I", "IV V iii vi", "I V IV I", "IV I V vi", "i VII VI VII", "i VI VII i", "i iv VII III", "i v VI iv"};
 static const int PROGS[NPROG][4] = {{0, 0, 0, 0}, {0, 4, 5, 3}, {5, 3, 0, 4}, {0, 5, 3, 4}, {1, 4, 0, 0}, {0, 3, 4, 3}, {0, 5, 2, 6}, {0, 3, 4, 0},
 	{0, 3, 5, 4}, {5, 4, 3, 4}, {0, 2, 3, 4}, {1, 4, 0, 5}, {5, 1, 4, 0}, {3, 4, 2, 5}, {0, 4, 3, 0}, {3, 0, 4, 5}, {0, 6, 5, 6}, {0, 5, 6, 0}, {0, 3, 6, 2}, {0, 4, 5, 3}};   // scale degrees (pads)
-static int gPadBass = 0;   // BASS: the chord's root an octave under it as well
+static int gPadBass = 0;   // BASS: 0 off, 1 HOLD (the root an octave under the chord), 2.. a bass LINE playing a rhythm
+// BASS LINES: 16 steps a bar. R root, 3 / 5 / 7 the chord's third, fifth, seventh, O the octave, - rest, _ the note goes on
+#define NBASS 12
+static const char* BASS_NAMES[NBASS] = {"BASS", "HOLD", "PULS", "OFFB", "R+5", "OCTV", "WALK", "FUNK", "TRES", "REGG", "ARP", "GALP"};
+static const char* BASS_LONG[NBASS] = {"BASS OFF", "BASS: HOLD THE ROOT", "BASS: 8TH PULSE", "BASS: OFFBEATS", "BASS: ROOT + FIFTH", "BASS: OCTAVES (DISCO)", "BASS: WALKING",
+	"BASS: FUNK", "BASS: TRESILLO 3-3-2", "BASS: ONE DROP (REGGAE)", "BASS: ARPEGGIO", "BASS: GALLOP"};
+static const char* BASS_PAT[NBASS] = {"", "", "R-R-R-R-R-R-R-R-", "--R---R---R---R-", "R___5___R___5___", "R-O-R-O-R-O-R-O-", "R___3___5___O___",
+	"R--R--O-R-5--R7-", "R__R__R_R__R__R_", "------R_---R-5--", "R-3-5-O-R-3-5-O-", "R-RRR-RRR-RRR-RR"};
+static int gBassNote = -1; static float gBassPh = 0; static int gBassStep = -1; static void bassStop(void);
 // MORPH (pads slide): the held chord turns into the new one by gliding - voice i of the old chord (low to high) bends
 // to note i of the new one over PAD MORPH seconds; extra notes start, spare ones let go. No retrigger.
 static void chordMorph(const int* notes, int n, float vel) {
@@ -5118,7 +5130,7 @@ static void chordMorph(const int* notes, int n, float vel) {
 // a pad chord sounds (and, while recording, goes into the sequencer: live REC onto the grid, step REC one step each)
 static void padPlay(int base, const int* notes, int n, float vel, int sound) {
 	int all[6], k = 0;
-	if (gPadBass && gPadSel >= 0) all[k++] = padDeg(base, gPadSel) - 12;
+	if (gPadBass == 1 && gPadSel >= 0) all[k++] = padDeg(base, gPadSel) - 12;
 	for (int i = 0; i < n && k < 6; i++) all[k++] = notes[i];
 	if (gLiveRec) liveDown(all, k, vel); else if (gSeqMode == 2) seqRecord(all, k, vel);
 	if (sound == 2) chordMorph(all, k, vel); else if (sound) playSet(all, k, vel);
@@ -5141,7 +5153,7 @@ static void drawPads(int base) {
 		rect(2, PROG_Y, 316, PROG_H, RGB3(TH->kbBg));
 		char t[24]; snprintf(t, sizeof(t), "%s", PROG_NAMES[gProg]);
 		rect(4, PROG_Y + 2, 88, PROG_H - 4, RGB3(TH->tab)); text(48 - (int)strlen(t) * 4, PROG_Y + 7, t, 1, RGB3(TH->tabTxt));
-		{ const u8* bc = gPadBass ? TH->keyOn : TH->tab; rect(94, PROG_Y + 2, 32, PROG_H - 4, RGB3(bc)); const u8* btc = gPadBass ? TH->ink : TH->tabTxt; text(94, PROG_Y + 7, "BASS", 1, btc[0], btc[1], btc[2]); }
+		{ const u8* bc = gPadBass ? TH->keyOn : TH->tab; rect(94, PROG_Y + 2, 32, PROG_H - 4, RGB3(bc)); const u8* btc = gPadBass ? TH->ink : TH->tabTxt; text(94 + 16 - (int)strlen(BASS_NAMES[gPadBass]) * 4, PROG_Y + 7, BASS_NAMES[gPadBass], 1, btc[0], btc[1], btc[2]); }
 		if (gProg) {
 			for (int k = 0; k < 4; k++) {
 				int x = 128 + k * 38, lit = gProgAt == k && (gProgAuto || gPadSel == PROGS[gProg][k]);
@@ -5175,7 +5187,7 @@ static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 
 	}
 	if (y < STRUM_Y - 1) {   // the PROGRESSION row
 		if (!press) return 0;
-		if (x >= 94 && x < 128) { gPadBass = !gPadBass; return 1; }
+		if (x >= 94 && x < 128) { gPadBass = (gPadBass + 1) % NBASS; bassStop(); say(BASS_LONG[gPadBass]); return 1; }
 		if (x < 94) { gProg = (gProg + 1) % NPROG; gProgAt = -1; if (!gProg && gProgAuto) { gProgAuto = 0; playSet(NULL, 0, 0.8f); } return 1; }
 		if (!gProg) return 0;
 		if (x >= 280) { gProgAuto = !gProgAuto; gProgAt = -1; gProgBar = 1; if (!gProgAuto) playSet(NULL, 0, 0.8f); return 1; }
@@ -5195,12 +5207,33 @@ static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 
 	for (int q = from; ; q += d) {
 		int nt = gStrumScale ? strumScaleNote(base, q) : gPadNotes[q % gPadN] + 12 * (q / gPadN) - 12;   // walk up the chord tones (or the SCALE from the chord's root), octave by octave
 		int k = 0; for (; k < gStrumOffN; k++) if (gStrumOff[k].note == nt) break;
-		if (k < gStrumOffN) { voiceOff(nt); gStrumOff[k].t = 0.35f; } else if (gStrumOffN < 24) { gStrumOff[gStrumOffN].note = nt; gStrumOff[gStrumOffN].t = 0.35f; gStrumOffN++; }
+		if (k < gStrumOffN) { voiceFade(nt, 0.02f); for (int j = k; j < gStrumOffN - 1; j++) gStrumOff[j] = gStrumOff[j + 1]; gStrumOffN--; }   // struck again: the old one fades in 20 ms
+		while (gStrumOffN >= STRUM_MAX) { voiceFade(gStrumOff[0].note, 0.03f); for (int j = 0; j < gStrumOffN - 1; j++) gStrumOff[j] = gStrumOff[j + 1]; gStrumOffN--; }   // only so many strings ring: the oldest fades (stolen voices were cut dead: the clicks)
+		gStrumOff[gStrumOffN].note = nt; gStrumOff[gStrumOffN].t = 0.35f; gStrumOffN++;
 		voiceOn(nt, v);
 		if (q == z) break;
 	}
 	gStrumZone = z;
 	return 1;
+}
+static void bassStop(void) { if (gBassNote >= 0) { voiceFade(gBassNote, 0.04f); gBassNote = -1; } gBassStep = -1; }
+static int bassNoteOf(char c) {   // a line's letter -> a note, from the pad that's held, an octave under the chord
+	int b = gPadBase, p = gPadSel, r = padDeg(b, p) - 12;
+	switch (c) { case '3': return padDeg(b, p + 2) - 12; case '5': return padDeg(b, p + 4) - 12; case '7': return padDeg(b, p + 6) - 12; case 'O': return r + 12; default: return r; }
+}
+static void bassTick(float dt) {   // BASS LINES: while a pad chord sounds, the line plays on the 16ths (the sequencer's, or its own at BPM)
+	int on = gPads && gPadBass >= 2 && gPadSel >= 0 && gHeldN > 0;
+	if (!on) { if (gBassNote >= 0 || gBassStep >= 0) bassStop(); return; }
+	int st;
+	if (gSeqPlaying) st = gSeqPos & 15;
+	else { if (gBassStep < 0) gBassPh = 0; else gBassPh += dt * gBPM / 60.0f * 4.0f; st = ((int)gBassPh) & 15; }
+	if (st == gBassStep) return;
+	gBassStep = st;
+	char c = BASS_PAT[gPadBass][st];
+	if (c == '_') return;   // held
+	if (gBassNote >= 0) { voiceFade(gBassNote, 0.03f); gBassNote = -1; }
+	if (c == '-') return;
+	gBassNote = bassNoteOf(c); voiceOn(gBassNote, st % 4 == 0 ? 0.9f : 0.75f);
 }
 static void padsTick(float dt) {   // strummed notes ring for a moment, then let go
 	if (gProg && gProgAuto) {   // AUTO: the next chord on every bar (on the sequencer's bar line when it plays)
@@ -8669,7 +8702,7 @@ static void panicRest(void);
 static int gPanicClr = 0;   // frames left to keep emptying the FX: audio already on its way in refills them
 static void panicAll(void) {
 	for (int i = 0; i < NVS; i++) if (gV[i].active) freeVoice(&gV[i]);
-	gHeldN = 0; gArpN = 0; gArpOnN = 0; gStrN = 0; gMidiHeldN = 0; gSqNn = 0; gStrumOffN = 0; gSlideOn = 0;
+	gHeldN = 0; gArpN = 0; gArpOnN = 0; gStrN = 0; gMidiHeldN = 0; gSqNn = 0; gStrumOffN = 0; gSlideOn = 0; gBassNote = -1; gBassStep = -1;
 	gFreeze = 0; fxTailsClear(); gPanicClr = 15;
 	if (gGrains) { gGrains = 0; grainsChanged(); }
 	panicRest();
@@ -10598,7 +10631,7 @@ int main(void) {
 		if (prevTouch && !touching && grainEdTouch(0, 0, 0, 1)) botDirty = 1;
 		if (gDrumOnB && prevTouch && !touching && drumGridRelease()) botDirty = 1;   // let go of the grain editor: SCAN carries on from there
 		if (gPads && prevTouch && !touching) { gStrumZone = -1; if (gLiveRec) liveUp(); if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
-		padsTick(dt); if (gProgDirty) { gProgDirty = 0; if (gPads) botDirty = 1; }
+		padsTick(dt); bassTick(dt); if (gProgDirty) { gProgDirty = 0; if (gPads) botDirty = 1; }
 		int freshPress = touching && !prevTouch;   // a new tap restrikes the key even if it's the one still held (LATCH, drum pads)
 		prevTouch = touching;
 		{ static int f = 0; if (gAddDirty && (++f % 6 == 0 || !touching)) { gAddDirty = 0; addApply(); topDirty = 1; } }   // additive editor: rebuild a few times a second while drawing

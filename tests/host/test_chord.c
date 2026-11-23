@@ -86,6 +86,9 @@ static void SCRIPT(int fr) {
 		if (gSeq[4].n || gSeq[6].n) fail("ERASER: scribbling across should clear the notes (%d %d)", gSeq[4].n, gSeq[6].n);
 		int any = 0; for (int i = 0; i < 16; i++) any += gSeq[i].n; if (any) fail("ERASER shouldn't add notes (%d)", any);
 	}
+	if (fr == 371) { gPads = 1; gPadBass = 2; gPadBase = 48; gVoiceMode = 0; gArp = 0; float v; padsTouch(48, 2 + 22, PAD_Y + PAD_H / 2, 1, &v); }
+	if (fr == 375) { int want = padDeg(48, 0) - 12, got = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].note == want && gV[i].stage != 4) got = 1;
+		if (!got) fail("BASS PULSE: the bass line should be playing the root an octave down (%d)", want); playSet(NULL, 0, 0.8f); gPads = 0; gPadBass = 0; gPadSel = -1; }
 	// PANIC: a long pad, its reverb on FREEZE, grains looping: all gone at once
 	if (fr == 376) { int st, ix; if (findPreset("SHIMMER CLOUD", &st, &ix)) presetLoad(st, ix); gRevMix = 0.6f; gMasterFX = 1; midiPush(0x90, 60, 110); midiPush(0x90, 67, 110); }
 	if (fr == 420) { gFreeze = 1; }
