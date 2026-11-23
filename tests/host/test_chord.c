@@ -107,6 +107,14 @@ static void SCRIPT(int fr) {
 		if (!(gSeq[0].fl & 2) || (gSeq[1].fl & 2)) fail("CHORD SLIDE REC: morphing pads should mark the first step SLIDE (%d %d)", gSeq[0].fl, gSeq[1].fl);
 		gSeqMode = 0; playSet(NULL, 0, 0.8f);
 	}
+	// the phone remote: CHORDS page pads (CC 105, played by the main loop like a tap), KNOBS (CC 20-27: the page's settings)
+	static float kv0;
+	if (fr == 472) { gLearnLoaded = 1; memset(gLearnMap, 0, sizeof(gLearnMap)); gArp = 0; gVoiceMode = 0; playSet(NULL, 0, 0.8f); allOff(); midiPush(0xB0, 105, 1 + 4 * 3); const Param* kp = knobParam(gCurPage, 0); kv0 = kp ? paramNorm(kp) : -1; midiPush(0xB0, 20, kv0 > 0.5f ? 0 : 127); }
+	if (fr == 475) { int any = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4) any++;
+		if (gPadSel != 4 || any < 3) fail("REMOTE PADS: CC 105 should play pad V (sel %d, %d voices)", gPadSel, any);
+		const Param* kp = knobParam(gCurPage, 0); if (!kp || fabsf(paramNorm(kp) - kv0) < 0.3f) fail("REMOTE KNOBS: CC 20 should turn the page's first setting (%s)", kp ? kp->name : "none");
+		midiPush(0xB0, 105, 0); }
+	if (fr == 478) { int any = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].stage != 4) any++; if (any) fail("REMOTE PADS: CC 105 0 should let go (%d)", any); }
 	if (fr == 470) { double r = rmsOf(pr0 + SEC(0.3), ON); if (r > 40) fail("PANIC: everything should be silent half a second later (%.0f rms)", r); if (gFreeze) fail("PANIC should turn FREEZE off"); }
 }
-int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 474; app_main(); printf("chord: NEW 3DS controls, stick in menus, chord types, MIDI chords, live chord REC, pads + BASS, progressions, hold over patch change\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 480; app_main(); printf("chord: NEW 3DS controls, stick in menus, chord types, MIDI chords, live chord REC, pads + BASS, progressions, hold over patch change\n"); return gFails ? 1 : 0; }

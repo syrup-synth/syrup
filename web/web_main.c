@@ -65,7 +65,7 @@ int main(void) {
 
 // MIRROR: this page is a muted copy of a 3DS (opened from the 3DS's own address: /mirror, /stream). The page passes on
 // what arrives over the WebSocket; the overlays (STREAM) read the state back as a little JSON.
-static u8 W_MIR[65536]; static char W_INFO[512];
+static u8 W_MIR[65536]; static char W_INFO[1024];
 EMSCRIPTEN_KEEPALIVE void web_mirror_on(int on) { gMirror = on; if (on) { gSeqMode = 0; seqStop(); } }
 EMSCRIPTEN_KEEPALIVE void web_mirror_vis(int on) { gMirVis = on; }   // STREAM: the visualizer whatever page the 3DS is on
 EMSCRIPTEN_KEEPALIVE u8* web_mir_buf(void) { return W_MIR; }
@@ -79,5 +79,6 @@ EMSCRIPTEN_KEEPALIVE const char* web_mir_info(void) {
 	snprintf(W_INFO + o, sizeof(W_INFO) - o, "]}");
 	return W_INFO;
 }
+EMSCRIPTEN_KEEPALIVE const char* web_knobs(void) { knobsJson(W_INFO, sizeof(W_INFO)); return W_INFO; }   // PHONE: the KNOBS page's labels
 EMSCRIPTEN_KEEPALIVE void web_test_cam(int on) { gCamOn = on; }
 EMSCRIPTEN_KEEPALIVE int web_dbg(int k) { if (k == 5) return gCamFrames; return k == 0 ? gStyleCur * 100 + gPresetCur : k == 1 ? gCurPage : k == 2 ? gBrStyle : k == 3 ? (int)gStyle * 100 + gPreset : TOUCH * 1000 + TY; }

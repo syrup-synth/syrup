@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <title>Syrup Remote</title>
 <style>
 *{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
@@ -9,81 +10,141 @@ html,body{margin:0;height:100%;background:#1a1410;color:#f0c890;font:13px/1.2 ui
 .st{flex:1;min-width:120px;color:#a08060}.st b{color:#f0c890}
 button{background:#3a2a1c;color:#f0c890;border:1px solid #6a4a2c;border-radius:4px;padding:9px 10px;font:inherit;min-width:44px}
 button.on{background:#f0a040;color:#1a1410;border-color:#f0a040}
+#tabs{display:flex;gap:4px}#tabs button{flex:1;padding:8px 2px;font-size:12px}
+.pg{display:none;flex:1;min-height:0;flex-direction:column;gap:8px}.pg.on{display:flex}
 #mid{display:flex;gap:8px;flex:1;min-height:0}
 #xy{flex:1;position:relative;background:#2a1e14;border:1px solid #6a4a2c;border-radius:4px;min-height:120px}
-#xy .dot{position:absolute;width:18px;height:18px;margin:-9px;border:2px solid #f0c890;border-radius:50%;pointer-events:none}
+#xy .dot{position:absolute;width:22px;height:22px;margin:-11px;border:2px solid #f0c890;border-radius:50%;pointer-events:none}
 #xy .lab{position:absolute;color:#80603c;font-size:11px;padding:4px}
 #sl{display:flex;gap:6px}
 .s{width:42px;display:flex;flex-direction:column;align-items:center;gap:4px}
 .s .t{position:relative;width:34px;flex:1;background:#2a1e14;border:1px solid #6a4a2c;border-radius:4px;min-height:110px}
 .s .f{position:absolute;left:0;right:0;bottom:0;background:#c07830;border-radius:3px}
 .s span{font-size:10px;color:#a08060}
-#kb{position:relative;height:34%;min-height:130px}
+#kb{position:relative;flex:1;min-height:130px}
 .k{position:absolute;top:0;border:1px solid #6a4a2c;border-radius:0 0 4px 4px}
 .w{background:#f4e6d0;height:100%;z-index:1}.b{background:#2a1e14;height:60%;z-index:2}
 .k.down{background:#f0a040}
+#pads{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;flex:3;min-height:0}
+.pad{position:relative;background:#3a2a1c;border:1px solid #6a4a2c;border-radius:6px;display:flex;flex-direction:column;justify-content:space-between;align-items:center;padding:6px 0;color:#c8a070}
+.pad i{font-style:normal;font-size:10px;color:#80603c}.pad b{font-size:15px}
+.pad.down{background:#f0a040;color:#1a1410}.pad.down i{color:#3a2a1c}
+#prog{display:flex;gap:4px}#prog button{flex:1;padding:9px 2px}
+#strum{flex:1;min-height:60px;background:repeating-linear-gradient(90deg,#2a1e14 0 calc(100%/24 - 2px),#6a4a2c calc(100%/24 - 2px) calc(100%/24));border:1px solid #6a4a2c;border-radius:4px;position:relative}
+#strum span{position:absolute;left:6px;top:4px;color:#80603c;font-size:11px}
+#drums{display:grid;grid-template-columns:repeat(3,1fr);grid-auto-rows:1fr;gap:6px;flex:1;min-height:0}
+.dr{background:#3a2a1c;border:1px solid #6a4a2c;border-radius:8px;display:flex;align-items:flex-end;padding:8px;color:#c8a070;font-weight:700}
+.dr.down{background:#f0a040;color:#1a1410}
+#knobs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;flex:1;align-content:start}
+.kn{background:#2a1e14;border:1px solid #6a4a2c;border-radius:6px;padding:8px 4px;display:flex;flex-direction:column;align-items:center;gap:6px;min-height:110px}
+.kn canvas{width:64px;height:64px}.kn span{font-size:10px;color:#a08060;text-align:center;min-height:2.4em}
+.hint{color:#80603c;font-size:11px}
 #midi{color:#a08060;font-size:11px}
 </style></head><body><div id="app">
 <div class="bar"><div class="st" id="st">SYRUP REMOTE <b>connecting…</b></div>
-<button id="pp">&lt; PATCH</button><button id="pn">PATCH &gt;</button>
-<button id="seq">PLAY</button><button id="acid">ACID</button></div>
-<div id="mid"><div id="xy"><div class="lab">WT POS → / ↑ CUTOFF</div><div class="dot" id="dot"></div></div>
-<div id="sl"></div></div>
-<div class="bar"><button id="od">OCT-</button><button id="ou">OCT+</button><span class="st" id="oct">C3</span>
-<button id="hold">HOLD</button><button id="panic">ALL OFF</button></div>
-<div id="kb"></div>
+<button id="pp">&lt; PATCH</button><button id="pn">PATCH &gt;</button><button id="seq">PLAY</button></div>
+<div id="tabs"><button data-p="keys" class="on">KEYS</button><button data-p="chords">CHORDS</button><button data-p="drums">DRUMS</button><button data-p="xy">XY</button><button data-p="knobs">KNOBS</button></div>
+<div class="pg on" id="p-keys">
+ <div class="bar"><button id="od">OCT-</button><button id="ou">OCT+</button><span class="st" id="oct">C3</span><button id="acid">RIFF</button>
+ <button id="hold">HOLD</button><button id="panic">ALL OFF</button></div>
+ <div id="kb"></div>
+</div>
+<div class="pg" id="p-chords">
+ <div id="pads"></div>
+ <div id="prog"><button data-g="1">PROG</button><button data-g="2">BASS</button><button data-g="3">1</button><button data-g="4">2</button><button data-g="5">3</button><button data-g="6">4</button><button data-g="7">AUTO</button></div>
+ <div id="strum"><span>STRUM: slide across</span></div>
+ <div class="hint">Top of a pad = 9th, middle = 7th, bottom = triad. Slide to another pad to MORPH. Key and octave follow Syrup.</div>
+</div>
+<div class="pg" id="p-drums"><div id="drums"></div><div class="hint">Lower on a pad = harder. The DRUMS need to be on.</div></div>
+<div class="pg" id="p-xy"><div id="mid"><div id="xy"><div class="lab">WT POS → / ↑ CUTOFF</div><div class="dot" id="dot"></div></div><div id="sl"></div></div></div>
+<div class="pg" id="p-knobs"><div class="st" id="kpage">KNOBS</div><div id="knobs"></div><div class="hint">The first 8 settings of the page Syrup is on. Drag up / down.</div></div>
 <div id="midi"></div>
 </div>
 <script>
 let ws=null,ok=false,base=48,hold=false,seqOn=false;const held=new Set();
-function conn(){ws=new WebSocket('ws://'+location.host+'/ws');ws.binaryType='arraybuffer';
+// BRIDGE: inside Syrup for the web on a phone (PHONE link): the page around it carries the messages to the computer
+const BR=window.parent!==window;let knobCb=null;
+if(BR)window.addEventListener('message',e=>{const d=e.data||{};if(d.syrupStatus){ok=d.syrupStatus=='connected';st(d.syrupStatus)}if(d.syrupKnobs&&knobCb)knobCb(d.syrupKnobs)});
+function conn(){if(BR){st('linking…');return}ws=new WebSocket('ws://'+location.host+'/ws');ws.binaryType='arraybuffer';
  ws.onopen=()=>{ok=true;st('connected')};ws.onclose=()=>{ok=false;st('reconnecting…');setTimeout(conn,1000)};ws.onerror=()=>{}}
 function st(t){document.getElementById('st').innerHTML='SYRUP REMOTE <b>'+t+'</b>'}
-function send(a){if(ok&&ws.readyState==1)ws.send(new Uint8Array(a))}
+function send(a){if(BR){if(ok)parent.postMessage({syrupMidi:a},'*');return}if(ok&&ws.readyState==1)ws.send(new Uint8Array(a))}
 function cc(n,v){send([0xB0,n,Math.max(0,Math.min(127,Math.round(v)))])}
 conn();
-// keyboard: two octaves, multitouch, slide between keys
-const kb=document.getElementById('kb');const keys=[];
+const $=id=>document.getElementById(id);
+// pages: tap a tab or swipe sideways on the tabs
+const PAGES=['keys','chords','drums','xy','knobs'];let page='keys';
+function show(p){page=p;document.querySelectorAll('.pg').forEach(e=>e.classList.toggle('on',e.id=='p-'+p));document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.p==p));if(p=='knobs')pollKnobs()}
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>show(b.dataset.p));
+let sx=null;$('tabs').addEventListener('touchstart',e=>{sx=e.touches[0].clientX},{passive:true});
+$('tabs').addEventListener('touchend',e=>{if(sx==null)return;const dx=e.changedTouches[0].clientX-sx;sx=null;if(Math.abs(dx)>50){const i=PAGES.indexOf(page)+(dx<0?1:-1);if(i>=0&&i<PAGES.length)show(PAGES[i])}},{passive:true});
+// multitouch helper: fn(id, x, y, phase) phase 0 down, 1 move, 2 up
+function touchy(el,fn){
+ el.addEventListener('touchstart',e=>{e.preventDefault();for(const t of e.changedTouches)fn(t.identifier,t.clientX,t.clientY,0)},{passive:false});
+ el.addEventListener('touchmove',e=>{e.preventDefault();for(const t of e.changedTouches)fn(t.identifier,t.clientX,t.clientY,1)},{passive:false});
+ const end=e=>{e.preventDefault();for(const t of e.changedTouches)fn(t.identifier,t.clientX,t.clientY,2)};
+ el.addEventListener('touchend',end,{passive:false});el.addEventListener('touchcancel',end,{passive:false});
+ let md=false;el.addEventListener('mousedown',e=>{md=true;fn('m',e.clientX,e.clientY,0)});window.addEventListener('mousemove',e=>{if(md)fn('m',e.clientX,e.clientY,1)});window.addEventListener('mouseup',e=>{if(md){md=false;fn('m',e.clientX,e.clientY,2)}})}
+// ---- KEYS: two octaves, multitouch, slide between keys
+const kb=$('kb');const keys=[];
 function build(){kb.innerHTML='';keys.length=0;const W=[0,2,4,5,7,9,11],B={0:1,1:3,3:6,4:8,5:10};const nw=14,ww=100/nw;
- for(let i=0;i<nw;i++){const n=base+Math.floor(i/7)*12+W[i%7];const d=mk('k w',i*ww,ww,n)}
+ for(let i=0;i<nw;i++){const n=base+Math.floor(i/7)*12+W[i%7];mk('k w',i*ww,ww,n)}
  for(let i=0;i<nw;i++){if(B[i%7]===undefined)continue;const n=base+Math.floor(i/7)*12+B[i%7];mk('k b',(i+1)*ww-ww*0.3,ww*0.6,n)}
- document.getElementById('oct').textContent='C'+(base/12-1)}
+ $('oct').textContent='C'+(base/12-1)}
 function mk(c,l,w,n){const d=document.createElement('div');d.className=c;d.style.left=l+'%';d.style.width=w+'%';d.dataset.n=n;kb.appendChild(d);keys.push(d);return d}
 build();
-const touches={};
 function noteAt(x,y){const el=document.elementFromPoint(x,y);return el&&el.dataset&&el.dataset.n?+el.dataset.n:-1}
 function on(n,v){if(n<0)return;if(hold&&held.has(n)){off(n,true);return}held.add(n);send([0x90,n,v]);mark(n,true)}
 function off(n,force){if(n<0)return;if(hold&&!force)return;held.delete(n);send([0x80,n,0]);mark(n,false)}
 function mark(n,d){keys.forEach(k=>{if(+k.dataset.n==n)k.classList.toggle('down',d)})}
 function vel(y){const r=kb.getBoundingClientRect();return Math.max(30,Math.min(127,Math.round(40+87*(y-r.top)/r.height)))}
-kb.addEventListener('touchstart',e=>{e.preventDefault();for(const t of e.changedTouches){const n=noteAt(t.clientX,t.clientY);touches[t.identifier]=n;on(n,vel(t.clientY))}},{passive:false});
-kb.addEventListener('touchmove',e=>{e.preventDefault();for(const t of e.changedTouches){const n=noteAt(t.clientX,t.clientY),o=touches[t.identifier];if(n!==o){if(!hold)off(o);touches[t.identifier]=n;if(!hold)on(n,vel(t.clientY))}}},{passive:false});
-function tend(e){e.preventDefault();for(const t of e.changedTouches){off(touches[t.identifier]);delete touches[t.identifier]}}
-kb.addEventListener('touchend',tend,{passive:false});kb.addEventListener('touchcancel',tend,{passive:false});
-let md=-1;kb.addEventListener('mousedown',e=>{md=noteAt(e.clientX,e.clientY);on(md,vel(e.clientY))});window.addEventListener('mouseup',()=>{off(md);md=-1});
-// sliders (CC)
-const SL=[['RES',71,10],['M1',16,0],['M2',17,0],['M3',18,0],['M4',19,0]];
-const sl=document.getElementById('sl');
-SL.forEach(([n,c,v])=>{const s=document.createElement('div');s.className='s';s.innerHTML='<div class="t"><div class="f"></div></div><span>'+n+'</span>';sl.appendChild(s);
- const t=s.querySelector('.t'),f=s.querySelector('.f');const set=y=>{const r=t.getBoundingClientRect();const val=Math.max(0,Math.min(1,1-(y-r.top)/r.height));f.style.height=(val*100)+'%';cc(c,val*127)};
- f.style.height=(v/127*100)+'%';drag(t,(x,y)=>set(y))});
-function drag(el,fn){el.addEventListener('touchstart',e=>{e.preventDefault();fn(e.touches[0].clientX,e.touches[0].clientY)},{passive:false});
- el.addEventListener('touchmove',e=>{e.preventDefault();fn(e.touches[0].clientX,e.touches[0].clientY)},{passive:false});
- let d=false;el.addEventListener('mousedown',e=>{d=true;fn(e.clientX,e.clientY)});window.addEventListener('mousemove',e=>{if(d)fn(e.clientX,e.clientY)});window.addEventListener('mouseup',()=>d=false)}
-// XY pad: X = WT position (CC70), Y = cutoff (CC74)
-const xy=document.getElementById('xy'),dot=document.getElementById('dot');
-drag(xy,(x,y)=>{const r=xy.getBoundingClientRect();const a=Math.max(0,Math.min(1,(x-r.left)/r.width)),b=Math.max(0,Math.min(1,1-(y-r.top)/r.height));
- dot.style.left=(a*100)+'%';dot.style.top=((1-b)*100)+'%';cc(70,a*127);cc(74,b*127)});
-dot.style.left='0%';dot.style.top='25%';
-const $=id=>document.getElementById(id);
+const kt={};touchy(kb,(id,x,y,ph)=>{if(ph==0){const n=noteAt(x,y);kt[id]=n;on(n,vel(y))}else if(ph==1){const n=noteAt(x,y),o=kt[id];if(n!==o){if(!hold)off(o);kt[id]=n;if(!hold)on(n,vel(y))}}else{off(kt[id]);delete kt[id]}});
 $('od').onclick=()=>{if(base>24){panic();base-=12;build()}};$('ou').onclick=()=>{if(base<84){panic();base+=12;build()}};
-$('pp').onclick=()=>cc(102,127);$('pn').onclick=()=>cc(103,127);$('acid').onclick=()=>cc(104,127);
-$('seq').onclick=()=>{seqOn=!seqOn;send([seqOn?0xFA:0xFC]);$('seq').classList.toggle('on',seqOn);$('seq').textContent=seqOn?'STOP':'PLAY'};
+$('acid').onclick=()=>cc(104,127);
 $('hold').onclick=()=>{hold=!hold;$('hold').classList.toggle('on',hold);if(!hold)panic()};
 function panic(){held.forEach(n=>{send([0x80,n,0]);mark(n,false)});held.clear();cc(123,0)}
 $('panic').onclick=panic;
-// Web MIDI: forward any connected MIDI keyboard / controller (needs Chrome on a secure page, see Syrup README)
+$('pp').onclick=()=>cc(102,127);$('pn').onclick=()=>cc(103,127);
+$('seq').onclick=()=>{seqOn=!seqOn;send([seqOn?0xFA:0xFC]);$('seq').classList.toggle('on',seqOn);$('seq').textContent=seqOn?'STOP':'PLAY'};
+// ---- CHORDS: the 3DS's 7 pads (CC 105 press, 106 slide = MORPH, 0 = let go), the progression row (CC 108), the strum strip (CC 107)
+const RN=['I','ii','iii','IV','V','vi','vii°'],pads=$('pads');
+RN.forEach((r,i)=>{const d=document.createElement('div');d.className='pad';d.dataset.i=i;d.innerHTML='<i>9</i><b>'+r+'</b><i>7</i>';pads.appendChild(d)});
+function padAt(x,y){const el=document.elementFromPoint(x,y);const p=el&&el.closest?el.closest('.pad'):null;if(!p)return null;const r=p.getBoundingClientRect(),f=(y-r.top)/r.height;return{i:+p.dataset.i,band:f<1/3?2:f<2/3?1:0,el:p}}
+let padT=null,padCur=null;
+touchy(pads,(id,x,y,ph)=>{
+ if(ph==0&&padT===null){padT=id;const p=padAt(x,y);if(p){padCur=p;p.el.classList.add('down');cc(105,1+p.i*3+p.band)}}
+ else if(ph==1&&id===padT){const p=padAt(x,y);if(p&&padCur&&(p.i!=padCur.i||p.band!=padCur.band)){padCur.el.classList.remove('down');padCur=p;p.el.classList.add('down');cc(106,1+p.i*3+p.band)}}
+ else if(ph==2&&id===padT){padT=null;if(padCur)padCur.el.classList.remove('down');padCur=null;cc(105,0)}});
+document.querySelectorAll('#prog button').forEach(b=>b.onclick=()=>{cc(108,+b.dataset.g);if(b.dataset.g=='7')b.classList.toggle('on')});
+const sm=$('strum');let sz=-1;
+touchy(sm,(id,x,y,ph)=>{if(ph==2){sz=-1;cc(107,0);return}const r=sm.getBoundingClientRect();const z=Math.max(0,Math.min(23,Math.floor((x-r.left)/r.width*24)));if(z!=sz){sz=z;cc(107,z+1)}});
+// ---- DRUMS: General MIDI notes on channel 10 (the 3DS plays them on its drum machine)
+const DR=[['KICK',36],['SNARE',38],['CLAP',39],['HAT',42],['OPEN HAT',46],['RIM',37],['LO TOM',45],['HI TOM',50],['BELL',56],['CRASH',49]],drums=$('drums');
+DR.forEach(([n,m])=>{const d=document.createElement('div');d.className='dr';d.dataset.m=m;d.textContent=n;drums.appendChild(d)});
+const dt={};touchy(drums,(id,x,y,ph)=>{if(ph==0){const el=document.elementFromPoint(x,y);const d=el&&el.closest?el.closest('.dr'):null;if(!d)return;const r=d.getBoundingClientRect(),v=Math.round(50+77*Math.max(0,Math.min(1,(y-r.top)/r.height)));send([0x99,+d.dataset.m,v]);d.classList.add('down');dt[id]=d}
+ else if(ph==2&&dt[id]){send([0x89,+dt[id].dataset.m,0]);dt[id].classList.remove('down');delete dt[id]}});
+// ---- XY + sliders (CC)
+const SL=[['RES',71,10],['M1',16,0],['M2',17,0],['M3',18,0],['M4',19,0]];
+const sl=$('sl');
+function drag(el,fn){touchy(el,(id,x,y,ph)=>{if(ph<2)fn(x,y)})}
+SL.forEach(([n,c,v])=>{const s=document.createElement('div');s.className='s';s.innerHTML='<div class="t"><div class="f"></div></div><span>'+n+'</span>';sl.appendChild(s);
+ const t=s.querySelector('.t'),f=s.querySelector('.f');const set=y=>{const r=t.getBoundingClientRect();const val=Math.max(0,Math.min(1,1-(y-r.top)/r.height));f.style.height=(val*100)+'%';cc(c,val*127)};
+ f.style.height=(v/127*100)+'%';drag(t,(x,y)=>set(y))});
+const xy=$('xy'),dot=$('dot');
+drag(xy,(x,y)=>{const r=xy.getBoundingClientRect();const a=Math.max(0,Math.min(1,(x-r.left)/r.width)),b=Math.max(0,Math.min(1,1-(y-r.top)/r.height));
+ dot.style.left=(a*100)+'%';dot.style.top=((1-b)*100)+'%';cc(70,a*127);cc(74,b*127)});
+dot.style.left='0%';dot.style.top='25%';
+// ---- KNOBS: what the page on the 3DS has, CC 20-27
+const kn=$('knobs'),KN=[];
+for(let k=0;k<8;k++){const d=document.createElement('div');d.className='kn';d.innerHTML='<canvas width="128" height="128"></canvas><span>-</span>';kn.appendChild(d);
+ const o={el:d,cv:d.querySelector('canvas'),lab:d.querySelector('span'),v:-1,busy:0};KN.push(o);
+ let y0=0,v0=0;touchy(d,(id,x,y,ph)=>{if(o.v<0)return;if(ph==0){y0=y;v0=o.v;o.busy=1}else if(ph==1){o.v=Math.max(0,Math.min(127,Math.round(v0+(y0-y)*0.8)));cc(20+k,o.v);knob(o)}else o.busy=0})}
+function knob(o){const c=o.cv.getContext('2d');c.clearRect(0,0,128,128);c.lineWidth=12;c.lineCap='round';c.strokeStyle='#3a2a1c';c.beginPath();c.arc(64,64,48,0.75*Math.PI,2.25*Math.PI);c.stroke();
+ if(o.v>=0){c.strokeStyle='#f0a040';c.beginPath();c.arc(64,64,48,0.75*Math.PI,(0.75+1.5*o.v/127)*Math.PI);c.stroke()}}
+function pollKnobs(){if(page!='knobs')return;const use=j=>{$('kpage').textContent='KNOBS: '+j.page;j.k.forEach((a,i)=>{const o=KN[i];o.lab.textContent=a[0]||'-';if(!o.busy)o.v=a[1];knob(o)})};if(BR){knobCb=t=>{try{use(JSON.parse(t))}catch(e){}};parent.postMessage({syrupKnobs:1},'*');return}fetch('/knobs').then(r=>r.json()).then(use).catch(()=>{})}
+KN.forEach(knob);setInterval(pollKnobs,700);
+// ---- Web MIDI: forward any connected MIDI keyboard / controller (needs Chrome on a secure page, see Syrup README)
 const mi=$('midi');
 if(navigator.requestMIDIAccess){navigator.requestMIDIAccess().then(a=>{const hook=()=>{const names=[];a.inputs.forEach(i=>{names.push(i.name);i.onmidimessage=m=>{const d=m.data;if(d[0]!=0xFE)send(Array.from(d))}});mi.textContent=names.length?'MIDI IN: '+names.join(', '):'WEB MIDI ON: plug in a MIDI keyboard'};hook();a.onstatechange=hook},()=>{mi.textContent='WEB MIDI blocked by the browser'})}
-else mi.textContent='No Web MIDI in this browser (on-screen controls still work)';
+else mi.textContent='';
 </script></body></html>

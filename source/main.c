@@ -7579,6 +7579,7 @@ static volatile int gWebUpDone = 0, gWebUpN = 0; static char gWebUpKit[40] = "";
 // MIRROR / STREAM: the 3DS only speaks plain http, and the web Syrup lives on https (a browser won't let an https page
 // talk to plain http), so the 3DS hands out this loader: it fetches Syrup for the web (the SD card's copy first, then
 // GitHub Pages) and starts it here, on the 3DS's own address, where it can talk to the 3DS.
+static int knobsJson(char* j, int cap);
 static const char MIRROR_HTML[] =
 "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Syrup mirror</title>"
 "<style>body{background:#000;color:#e8c48a;font:14px ui-monospace,Menlo,monospace;padding:20px}</style></head><body><div id='m'>LOADING SYRUP...</div><script>"
@@ -7669,6 +7670,11 @@ static void cliHttp(Cli* c) {   // request complete in c->buf
 			int n = snprintf(hdr, sizeof(hdr), "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n", len);
 			if (sendAll(c->s, hdr, n)) { static char fb[8192]; size_t k; while ((k = fread(fb, 1, sizeof(fb), f)) > 0) if (!sendAll(c->s, fb, (int)k)) break; }
 			fclose(f); }
+	}
+	else if (!strncmp(c->buf, "GET /knobs", 10)) {   // the phone's KNOBS page: what the 8 knobs turn on the page you're on, and where they are
+		static char j[1024]; int o = knobsJson(j, sizeof(j));
+		char hdr[180]; int n = snprintf(hdr, sizeof(hdr), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", o);
+		if (sendAll(c->s, hdr, n)) sendAll(c->s, j, o);
 	}
 	else if (!strncmp(c->buf, "GET /favicon", 12)) {   // browsers ask for an icon: answer quickly with nothing
 		static const char nf[] = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"; sendAll(c->s, nf, sizeof(nf) - 1);
@@ -7922,12 +7928,52 @@ static int learnApply(u8 cc, u8 val) {   // 1 = the CC was learned or is bound
 	}
 	return hit;
 }
+// the phone's KNOBS page: the first 8 settings on the page you're on that a knob can turn (as MIDI LEARN sees them)
+static const Param* knobParam(int page, int k) {
+	if (page < 0 || page >= NPAGES) return NULL;
+	for (int i = 0, n = 0; PAGES[page][i].name; i++) { const Param* p = &PAGES[page][i]; if (!learnable(p) || p->mx <= p->mn) continue; if (n++ == k) return p; }
+	return NULL;
+}
+static float paramNorm(const Param* p) {
+	float v = p->type == PT_F ? *(float*)p->p : (float)*(int*)p->p, t = (v - p->mn) / (p->mx - p->mn);
+	return t < 0 ? 0 : t > 1 ? 1 : t;
+}
+static void paramSetNorm(const Param* p, float t) {
+	if (p->type == PT_F) *(float*)p->p = p->mn + t * (p->mx - p->mn);
+	else if (p->type == PT_I) *(int*)p->p = (int)lroundf(p->mn + t * (p->mx - p->mn));
+	else { int n = (int)p->mx - (int)p->mn + 1; int k = (int)(t * n); if (k >= n) k = n - 1; *(int*)p->p = (int)p->mn + k; }
+}
+static int knobsJson(char* j, int cap) {   // {"page":..,"k":[[name, 0-127 or -1] x 8],"drums":..,"bpm":..}
+	int o = snprintf(j, cap, "{\"page\":\"%s\",\"k\":[", PAGE_NAMES[gCurPage < 0 || gCurPage >= NPAGES ? 0 : gCurPage]);
+	for (int k = 0; k < 8 && o < cap - 64; k++) { const Param* p = knobParam(gCurPage, k); o += snprintf(j + o, cap - o, "%s[\"%s\",%d]", k ? "," : "", p ? p->name : "", p ? (int)(paramNorm(p) * 127) : -1); }
+	o += snprintf(j + o, cap - o, "],\"drums\":%d,\"bpm\":%d}", gDrums, gBPM);
+	return o;
+}
+// the phone's PADS: CC 105 a pad (1 + pad * 3 + band; 0 = let go), 106 slid onto one (MORPH), 107 a STRUM string (1-24; 0 = done),
+// 108 the PROGRESSION row (1 next progression, 2 bass, 3-6 its chords, 7 AUTO). Played by the main loop like taps on the pads.
+static u8 gRemQ[32][2]; static int gRemW = 0, gRemR = 0;
+static void remQPush(u8 a, u8 b) { int n = (gRemW + 1) & 31; if (n == gRemR) return; gRemQ[gRemW][0] = a; gRemQ[gRemW][1] = b; gRemW = n; }
+static int padsTouch(int base, int x, int y, int press, float* velOut);
+static int remPads(int base, int latch) {   // main loop: 1 = the screens changed
+	int ch = 0;
+	while (gRemR != gRemW) {
+		int a = gRemQ[gRemR][0], v = gRemQ[gRemR][1]; gRemR = (gRemR + 1) & 31; float pv = 0.8f;
+		if ((a == 105 || a == 106) && v > 0 && v <= 21) { int i = (v - 1) / 3, band = (v - 1) % 3; padsTouch(base, 2 + i * 45 + 21, PAD_Y + (2 - band) * PAD_H / 3 + PAD_H / 6, a == 105, &pv); }
+		else if (a == 105 || (a == 107 && v == 0)) { gStrumZone = -1; if (gLiveRec) liveUp(); if (!latch && gPadSel >= 0 && a == 105) playSet(NULL, 0, 0.8f); }
+		else if (a == 107 && v <= 24) padsTouch(base, 2 + (v - 1) * 316 / 24 + 6, STRUM_Y + (240 - STRUM_Y) / 2, gStrumZone < 0, &pv);
+		else if (a == 108) { static const int PX[8] = {0, 40, 110, 138, 176, 214, 252, 290}; if (v >= 1 && v <= 7) padsTouch(base, PX[v], PROG_Y + 6, 1, &pv); }
+		ch = 1;
+	}
+	return ch;
+}
+static int midiDrumPad(int a, int on, int vel, int inTick);
 static void acidGen(void);
 // one MIDI message: inTick = from the audio tick (only light work there; patch changes etc. go to the main loop)
 static int midiApply(u8 st, u8 a, u8 b, int inTick) {
 	int ch = 0;
-	if (inTick && ((st & 0xF0) == 0xC0 || ((st & 0xF0) == 0xB0 && ((a >= 102 && a <= 104) || gLearnP)))) { mainQPush(st, a, b); return 0; }
+	if (inTick && ((st & 0xF0) == 0xC0 || ((st & 0xF0) == 0xB0 && ((a >= 102 && a <= 108) || gLearnP)))) { mainQPush(st, a, b); return 0; }
 	int mc = st & 15;
+	if (mc == 9 && ((st & 0xF0) == 0x90 || (st & 0xF0) == 0x80) && midiDrumPad(a, (st & 0xF0) == 0x90 && b, b, inTick)) return 1;   // channel 10: the drum machine's sounds
 	switch (st & 0xF0) {
 	case 0xD0: {   // channel pressure (aftertouch): MPE - that channel's note; else every note
 		float pr = a / 127.0f; int hit = 0;
@@ -7946,6 +7992,8 @@ static int midiApply(u8 st, u8 a, u8 b, int inTick) {
 	case 0xB0: {
 		float v = b / 127.0f; ch = 1;
 		if (learnApply(a, b)) break;   // learned bindings first
+		if (a >= 20 && a <= 27) { const Param* kp = knobParam(gCurPage, a - 20); if (kp) { paramSetNorm(kp, b / 127.0f); gEdited = 1; } break; }   // the phone's KNOBS: this page's settings
+		if (a >= 105 && a <= 108) { remQPush(a, b); break; }   // the phone's PADS (the main loop plays them, it knows the octave)
 		if (a == 74 && gMpe && mc > 0) { for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].mch == mc) gV[i].mslide = v; break; }   // MPE slide (Y axis): that note's own
 		if (a == 74) gSlideAll = v;
 		if (a == 74) gCutoff = v; else if (a == 71) gRes = v; else if (a == 70) { gOsc[0].pos = v; }
@@ -8783,6 +8831,17 @@ static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the
 		if (nr > 1) { ratLeft[r] = nr - 1; ratStep[r] = 1.0 / nr; ratNext[r] = (double)n + ratStep[r]; ratVel[r] = vel * 0.8f; }
 	}
 	if (any) csndExecCmds(false);
+}
+static int midiDrumPad(int a, int on, int vel, int inTick) {   // channel 10 (General MIDI drums, the phone's DRUM PADS): 1 = it was a drum
+	static const u8 GM[NDRUM] = {36, 38, 42, 46, 39, 37, 45, 50, 56, 49};
+	int d = -1; for (int k = 0; k < NDRUM; k++) if (GM[k] == a) d = k;
+	if (d < 0) { if (a == 35) d = 0; else if (a == 40) d = 1; else if (a == 44) d = 2; else if (a == 41 || a == 43) d = 6; else if (a == 47 || a == 48) d = 7; else if (a == 51 || a == 53) d = 8; else if (a == 57 || a == 52 || a == 55) d = 9; }
+	if (d < 0) return 0;
+	if (on) {
+		if (gDrums && gDrumBuilt >= 0 && gCsndOK) { drumHit(d, 0.3f + 0.7f * vel / 127.0f); csndExecCmds(false); gBeatFlash = 1; }
+		else if (!inTick) say("DRUM PADS: TURN THE DRUMS ON");
+	}
+	return 1;
 }
 static void myDrumLoad(void);
 static void drumsChanged(void) {   // main thread
@@ -10740,6 +10799,7 @@ int main(void) {
 
 		// touch
 		int base = 48 + 12 * oct, key = -1, touching = !!(kHeld & KEY_TOUCH);
+		if (remPads(base, latch)) topDirty = botDirty = 1;   // the phone's PADS page
 		float vel = 0.8f;
 		if (touching) {
 			touchPosition t; hidTouchRead(&t);
