@@ -2374,11 +2374,21 @@ static void seqFireAt(int idx, unsigned clock, int early, float off0) {
 	gBeatFlash = 1;
 	if (gArp) { playSet(notes, n, vel); gSlideOn = n && (s->fl & 2); return; }   // the arp takes the step's notes as its pool
 	int sl = -1, nsl = 0; for (int i = 0; i < gSqNn; i++) if (gSqN[i].slide && !gSqN[i].rel) { sl = i; nsl++; }
-	if (gSlideOn && n == 1 && nsl == 1) {   // slide: keep the voice, bend it to the new note
-		int from = gSqN[sl].note;
-		for (int i = 0; i < NVS; i++) { SVoice* v = &gV[i]; if (v->active && !v->isEcho && v->note == from && v->stage < 4) { v->note = notes[0]; v->freq = mtof((float)notes[0]); v->slide = 1; } }
-		SqN* q = &gSqN[sl]; q->note = notes[0]; q->left = lens[0] + early; q->slide = (s->fl & 2) != 0; q->thr = (lens[0] == 1 ? off0 : 0) + stepLen((idx + lens[0] - 1) % NSTEP) * g;
-		gSlideOn = q->slide; return;
+	if (gSlideOn && n >= 1 && nsl >= 1) {   // slide: keep the voices, bend them to the new notes (chords pair low to high, like the pads' MORPH)
+		int fi[16], m = 0; for (int i = 0; i < gSqNn; i++) if (gSqN[i].slide && !gSqN[i].rel) fi[m++] = i;
+		for (int a = 0; a < m; a++) for (int b = a + 1; b < m; b++) if (gSqN[fi[b]].note < gSqN[fi[a]].note) { int t = fi[a]; fi[a] = fi[b]; fi[b] = t; }
+		int ord[8]; for (int j = 0; j < n; j++) ord[j] = j;
+		for (int a = 0; a < n; a++) for (int b = a + 1; b < n; b++) if (notes[ord[b]] < notes[ord[a]]) { int t = ord[a]; ord[a] = ord[b]; ord[b] = t; }
+		int chord = n > 1 || m > 1, k = m < n ? m : n, sl2 = (s->fl & 2) != 0;
+		for (int a = 0; a < k; a++) {
+			SqN* q = &gSqN[fi[a]]; int j = ord[a], from = q->note;
+			for (int i = 0; i < NVS; i++) { SVoice* v = &gV[i]; if (v->active && !v->isEcho && v->note == from && v->stage < 4 && v->slide != 3) { v->note = notes[j]; v->freq = mtof((float)notes[j]); v->slide = 3; } }
+			q->note = notes[j]; q->left = lens[j] + early; q->slide = sl2; q->thr = (lens[j] == 1 ? off0 : 0) + stepLen((idx + lens[j] - 1) % NSTEP) * g;
+		}
+		for (int i = 0; i < NVS; i++) if (gV[i].slide == 3) gV[i].slide = chord ? 2 : 1;   // chords glide by PAD MORPH, single notes by GLIDE
+		for (int a = k; a < m; a++) { sqRelease(&gSqN[fi[a]]); gSqN[fi[a]].left = 0; gSqN[fi[a]].slide = 0; }   // spare voices let go
+		for (int a = k; a < n && gSqNn < 16; a++) { int j = ord[a]; voiceOn(notes[j], vel); gSeqHits++; SqN* q = &gSqN[gSqNn++]; q->note = notes[j]; q->left = lens[j] + early; q->rel = 0; q->slide = sl2; q->thr = (lens[j] == 1 ? off0 : 0) + stepLen((idx + lens[j] - 1) % NSTEP) * g; }
+		sqCompact(); gSlideOn = sl2; return;
 	}
 	for (int i = 0; i < gSqNn; i++) if (gSqN[i].slide) { sqRelease(&gSqN[i]); gSqN[i].left = 0; gSqN[i].slide = 0; }   // a slide into something else just ends
 	for (int j = 0; j < n; j++) {
@@ -2386,7 +2396,7 @@ static void seqFireAt(int idx, unsigned clock, int early, float off0) {
 		sqCompact();
 		if (gSqNn >= 16) break;
 		voiceOn(notes[j], vel); gSeqHits++;
-		SqN* q = &gSqN[gSqNn++]; q->note = notes[j]; q->left = lens[j] + early; q->rel = 0; q->slide = (s->fl & 2) != 0 && n == 1;
+		SqN* q = &gSqN[gSqNn++]; q->note = notes[j]; q->left = lens[j] + early; q->rel = 0; q->slide = (s->fl & 2) != 0;
 		q->thr = (lens[j] == 1 ? off0 : 0) + stepLen((idx + lens[j] - 1) % NSTEP) * g;
 	}
 	gSlideOn = n && (s->fl & 2);
@@ -4559,6 +4569,7 @@ static int histStep(int undo) {   // 0 nothing to do, 1 pattern, 2 patch, 3 drum
 	if (!e.kind) { gPat[e.idx] = e.u.pat; patApplyWorking(e.idx); } else if (e.kind == 2) drumSnapSet(e.u.drums); else patchApply(&e.u.patch);
 	histFlags(); return 1 + e.kind;
 }
+static int gLvN = 0, gLvNote[4], gLvStep = 0; static float gLvT0 = 0;   // the notes being held while recording live
 static void liveRecToggle(void); static void liveRecStop(void); static void liveDown(const int* notes, int n, float vel); static void liveUp(void); static void liveAdd(const int* notes, int n, float vel);
 static int gDgEd = 0, gDgShift = 0; static void drawDgEd(void); static void drawDrumGrid(void); static int drumGridTouch(int x, int y, int press); static int drumGridRelease(void);
 static void drawPatView(void); static void drawTapeView(void); static int tapeTouch(int x, int y, int press, int release); static void tapeSeqStarted(void);
@@ -5169,7 +5180,9 @@ static void padPlay(int base, const int* notes, int n, float vel, int sound) {
 	int all[6], k = 0;
 	if (gPadBass == 1 && gPadSel >= 0) all[k++] = padDeg(base, gPadSel) - 12;
 	for (int i = 0; i < n && k < 6; i++) all[k++] = notes[i];
-	if (gLiveRec) liveDown(all, k, vel); else if (gSeqMode == 2) seqRecord(all, k, vel);
+	int morph = sound == 2 && !gArp && gHeldN > 0;   // gliding from the held chord: the step before slides into this one
+	if (gLiveRec) { int prev = gLvN ? gLvStep : -1; liveDown(all, k, vel); if (morph && prev >= 0 && gSeqPlaying && prev != gLvStep) gSeq[prev].fl |= 2; }
+	else if (gSeqMode == 2) { int prev = gRecPos > 0 ? gRecPos - 1 : -1; if (morph && prev >= 0 && gSeq[prev].n) gSeq[prev].fl |= 2; seqRecord(all, k, vel); }
 	if (sound == 2) chordMorph(all, k, vel); else if (sound) playSet(all, k, vel);
 }
 static void drawPads(int base) {
@@ -6699,7 +6712,6 @@ static void clickNow(int acc) {   // a short tick on a free second-chip channel 
 	csndExecCmds(false);
 }
 static void undoMark(void);
-static int gLvN = 0, gLvNote[4], gLvStep = 0; static float gLvT0 = 0;   // the notes being held while recording live
 static float seqNowSteps(void) { float l = stepLen(gSeqPos < 0 ? 0 : gSeqPos); return gSeqClock + (l > 0 ? gSeqPh / l : 0); }
 static void liveUp(void) {   // the held notes end: their length is how long they were held, to the nearest step
 	if (!gLvN) return;

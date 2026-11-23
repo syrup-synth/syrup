@@ -93,6 +93,20 @@ static void SCRIPT(int fr) {
 	if (fr == 376) { int st, ix; if (findPreset("SHIMMER CLOUD", &st, &ix)) presetLoad(st, ix); gRevMix = 0.6f; gMasterFX = 1; midiPush(0x90, 60, 110); midiPush(0x90, 67, 110); }
 	if (fr == 420) { gFreeze = 1; }
 	if (fr == 440) { midiPush(0x80, 60, 0); midiPush(0x80, 67, 0); panicAll(); pr0 = ON; }
+	if (fr == 471) {   // CHORD SLIDE: a chord step with SLIDE glides into the next chord (no restrike), and a pad MORPH while step-recording marks it
+		memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 16; gSeqTr = 0; gArp = 0; gScale = 0; sqAllOff(); gSlideOn = 0; for (int i = 0; i < NVS; i++) gV[i].active = 0;
+		stepSetNote(0, 60, 1); stepSetNote(0, 64, 1); stepSetNote(0, 67, 1); gSeq[0].fl |= 2; gSeq[0].vel = 200;
+		stepSetNote(1, 62, 1); stepSetNote(1, 65, 1); stepSetNote(1, 69, 1); gSeq[1].vel = 200;
+		seqFireAt(0, 0, 0, 0); unsigned h0 = gSeqHits; seqFireAt(1, 1, 0, 0);
+		if (gSeqHits != h0) fail("CHORD SLIDE: the next chord shouldn't restrike (%u new notes)", gSeqHits - h0);
+		int want[3] = {62, 65, 69}, ok = 0; for (int w = 0; w < 3; w++) for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].note == want[w] && gV[i].slide == 2) { ok++; break; }
+		if (ok != 3) fail("CHORD SLIDE: the voices should bend to D F A by MORPH (%d of 3)", ok);
+		sqAllOff(); gSlideOn = 0;
+		memset(gSeq, 0, sizeof(gSeq)); gSeqMode = 2; gRecPos = 0; gLiveRec = 0; gPadBass = 0; gHeldN = 0;
+		int c1[3] = {60, 64, 67}, c2[3] = {62, 65, 69}; padPlay(48, c1, 3, 0.8f, 2); padPlay(48, c2, 3, 0.8f, 2);
+		if (!(gSeq[0].fl & 2) || (gSeq[1].fl & 2)) fail("CHORD SLIDE REC: morphing pads should mark the first step SLIDE (%d %d)", gSeq[0].fl, gSeq[1].fl);
+		gSeqMode = 0; playSet(NULL, 0, 0.8f);
+	}
 	if (fr == 470) { double r = rmsOf(pr0 + SEC(0.3), ON); if (r > 40) fail("PANIC: everything should be silent half a second later (%.0f rms)", r); if (gFreeze) fail("PANIC should turn FREEZE off"); }
 }
-int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 472; app_main(); printf("chord: NEW 3DS controls, stick in menus, chord types, MIDI chords, live chord REC, pads + BASS, progressions, hold over patch change\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 474; app_main(); printf("chord: NEW 3DS controls, stick in menus, chord types, MIDI chords, live chord REC, pads + BASS, progressions, hold over patch change\n"); return gFails ? 1 : 0; }
