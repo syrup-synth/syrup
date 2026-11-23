@@ -41,6 +41,7 @@ static void SCRIPT(int fr) {
 	if (fr == 66) {   // PADS SLIDE: drag from pad 1 to pad 4, the chord follows
 		gPadBass = 0; float v; int y = PAD_Y + PAD_H / 2; padsTouch(48, 2 + 22, y, 1, &v); padsTouch(48, 2 + 45 + 22, y, 0, &v); padsTouch(48, 2 + 3 * 45 + 22, y, 0, &v);
 		if (gPadSel != 3) fail("PADS: sliding across should play the pad under the finger (%d)", gPadSel);
+		{ int moved = 0; for (int k = 0; k < NVS; k++) if (gV[k].active && gV[k].slide == 2) moved++; if (gPadMorph > 0 && moved < 2) fail("PADS MORPH: the voices should glide to the new chord, not restart (%d gliding)", moved); }
 		liveUp(); playSet(NULL, 0, 0.8f); gPadSel = -1; memset(gSeq, 0, sizeof(gSeq));
 	}
 	if (fr == 70) {   // a progression on AUTO records a chord a bar

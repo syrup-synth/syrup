@@ -97,6 +97,7 @@ static int gTapeAlign; static int gXyMode, gThru, gTapeKeys; static float gThruC
 static u8 gDrAcc[DSTEP]; static float gDrAccAmt = 0.6f; static int gAccMode = 0;
 #define NKIT 7
 #define KIT_SAMPLE 6
+static float gPadMorph = 0.25f;   // PADS: sliding glides to the next chord over this long (0 = retrigger)
 static volatile int gDrumWant;
 // SAMPLE kit: WAV files from a folder under /3ds/syrup/kits (one folder = one kit); gKitDirP names them for KIT FOLDER
 static int gKitDir = 0, gNKitDirs = 0; static char gKitDirs[16][32], gKitRaw[16][64]; static const char* gKitDirP[16] = {"(NONE)"};
@@ -1196,7 +1197,7 @@ static void voicesUpdate(float dt, float bend) {
 		envStep(&v->env2, &v->stage2, &gEnv2, dt, &v->hold2, 1);
 		if (v->stage == 4 && v->env <= 0) { freeVoice(v); continue; }
 		if (v->stage == 3 && gEnv1.s <= 0.001f) { freeVoice(v); continue; }
-		v->cur += (v->freq - v->cur) * (v->slide ? 1.0f - expf(-dt / 0.03f) : gl);
+		v->cur += (v->freq - v->cur) * (v->slide == 2 ? 1.0f - expf(-dt / (gPadMorph * 0.35f + 0.001f)) : v->slide ? 1.0f - expf(-dt / 0.03f) : gl);   // 2: a pad MORPH
 
 		float pitch = (gMpe && v->mch > 0 ? 0 : bend * gBendRange) + v->mbend + modSum(DST_PITCH, v) * 12.0f;   // MPE: each note bends on its own channel
 		float pm = powf(2.0f, pitch / 12.0f);
@@ -3501,7 +3502,7 @@ static Param P_PRESET[] = {
 static Param P_PLAY[] = {
 	// most-reached first: tempo and the transport, then the arp, the key, then the details
 	PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
-	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("SEQ KEYS", &gSeqKeys, 2, SEQKEYS_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
+	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("SEQ KEYS", &gSeqKeys, 2, SEQKEYS_NAMES, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
 	PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0), PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0),
 	PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PE("REC QUANT", &gRecQ, 4, RQ_NAMES, 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("CLICK", &gClick, 4, CLICK_NAMES, 0), PF("CLICK LEVEL", &gClickLevel, 0, 1, 0.05f, "%", 0), PI_("TAPE ALIGN", &gTapeAlign, -50, 50, 0),
 	PE("SHAKE QUANT", &gShakeQ, 3, SHQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
@@ -4072,7 +4073,7 @@ static const char* paramHelp(const char* n) {
 		{"REV DAMP", "DARKER REVERB TAIL"}, {"FX MIX", "HOW MUCH EFFECT"}, {"DRIVE", "DISTORTION TYPE"}, {"DRIVE AMT", "HOW MUCH DISTORTION"},
 		{"MASTER", "OUTPUT VOLUME"}, {"ROOT", "KEY OF THE SCALE"}, {"SCALE", "LOCK THE KEYS TO A SCALE"}, {"ARP", "ARPEGGIATOR PATTERN"},
 		{"ARP RATE", "ARPEGGIATOR SPEED"}, {"ARP OCTAVES", "OCTAVES THE ARP CLIMBS"}, {"ARP GATE", "ARP NOTE LENGTH"}, {"ARP STRUM", "CHORD ARP: TIME BETWEEN STRINGS"}, {"STRUM DIR", "DOWN, UP, OR BOTH LIKE A GUITAR"}, {"BPM", "TEMPO"},
-		{"SEQ GATE", "STEP NOTE LENGTH"}, {"SEQ KEYS", "KEYS PLAY ALONG OR TRANSPOSE"},
+		{"SEQ GATE", "STEP NOTE LENGTH"}, {"SEQ KEYS", "KEYS PLAY ALONG OR TRANSPOSE"}, {"PAD MORPH", "PADS: SLIDE GLIDES TO THE NEXT CHORD (0 = RETRIGGER)"},
 		{"SWING", "SHUFFLE FEEL"},
 		{"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},
 		{"THEME", "COLOUR SCHEME"},
@@ -5065,13 +5066,28 @@ static const char* PROG_NAMES[NPROG] = {"PROG: OFF", "I V vi IV", "vi IV I V", "
 static const int PROGS[NPROG][4] = {{0, 0, 0, 0}, {0, 4, 5, 3}, {5, 3, 0, 4}, {0, 5, 3, 4}, {1, 4, 0, 0}, {0, 3, 4, 3}, {0, 5, 2, 6}, {0, 3, 4, 0},
 	{0, 3, 5, 4}, {5, 4, 3, 4}, {0, 2, 3, 4}, {1, 4, 0, 5}, {5, 1, 4, 0}, {3, 4, 2, 5}, {0, 4, 3, 0}, {3, 0, 4, 5}, {0, 6, 5, 6}, {0, 5, 6, 0}, {0, 3, 6, 2}, {0, 4, 5, 3}};   // scale degrees (pads)
 static int gPadBass = 0;   // BASS: the chord's root an octave under it as well
+// MORPH (pads slide): the held chord turns into the new one by gliding - voice i of the old chord (low to high) bends
+// to note i of the new one over PAD MORPH seconds; extra notes start, spare ones let go. No retrigger.
+static void chordMorph(const int* notes, int n, float vel) {
+	if (gArp || !gHeldN) { playSet(notes, n, vel); return; }
+	int o[8], nn[8], on = gHeldN < 8 ? gHeldN : 8, nw = n < 8 ? n : 8;
+	for (int i = 0; i < on; i++) o[i] = gHeld[i]; for (int i = 0; i < nw; i++) nn[i] = notes[i];
+	for (int i = 0; i < on; i++) for (int j = i + 1; j < on; j++) if (o[j] < o[i]) { int t = o[i]; o[i] = o[j]; o[j] = t; }
+	for (int i = 0; i < nw; i++) for (int j = i + 1; j < nw; j++) if (nn[j] < nn[i]) { int t = nn[i]; nn[i] = nn[j]; nn[j] = t; }
+	int m = on < nw ? on : nw;
+	for (int i = 0; i < m; i++) for (int k = 0; k < NVS; k++) { SVoice* v = &gV[k]; if (v->active && !v->isEcho && v->note == o[i] && v->stage < 4 && v->slide != 3) { v->note = nn[i]; v->freq = mtof((float)nn[i]); v->slide = 3; } }
+	for (int k = 0; k < NVS; k++) if (gV[k].slide == 3) gV[k].slide = 2;   // (3: moved this time, so two old notes can't land on one voice)
+	for (int i = m; i < on; i++) voiceOff(o[i]);
+	for (int i = m; i < nw; i++) voiceOn(nn[i], vel);
+	gHeldN = 0; for (int i = 0; i < nw; i++) gHeld[gHeldN++] = nn[i]; gHeldVel = vel;
+}
 // a pad chord sounds (and, while recording, goes into the sequencer: live REC onto the grid, step REC one step each)
 static void padPlay(int base, const int* notes, int n, float vel, int sound) {
 	int all[6], k = 0;
 	if (gPadBass && gPadSel >= 0) all[k++] = padDeg(base, gPadSel) - 12;
 	for (int i = 0; i < n && k < 6; i++) all[k++] = notes[i];
 	if (gLiveRec) liveDown(all, k, vel); else if (gSeqMode == 2) seqRecord(all, k, vel);
-	if (sound) playSet(all, k, vel);
+	if (sound == 2) chordMorph(all, k, vel); else if (sound) playSet(all, k, vel);
 }
 static void drawPads(int base) {
 	gPadBase = base;
@@ -5120,7 +5136,7 @@ static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 
 		lastI = i; lastB = band; lastS = side;
 		gPadSel = i; gPadN = padChord(base, i, band, side, gPadNotes);
 		*velOut = 0.55f + 0.45f * (1 - ly / (float)PAD_H) * 0.5f + 0.2f;
-		padPlay(base, gPadNotes, gPadN, *velOut, 1);
+		padPlay(base, gPadNotes, gPadN, *velOut, !press && gPadMorph > 0.001f ? 2 : 1);   // sliding: the chord MORPHS (each voice glides to its new note)
 		return 1;
 	}
 	if (y < STRUM_Y - 1) {   // the PROGRESSION row
