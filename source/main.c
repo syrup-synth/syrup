@@ -224,8 +224,8 @@ static void mipsSet(Mips* m, const float* cyc, u32 needMask) {
 }
 
 // ---------------------------------------------------------------- wavetables
-enum { T_BASIC, T_PWM, T_HARMONIX, T_VOWELS, T_SYNC, T_GROWL, T_DIGITAL, T_PLUCK, T_BUILTIN };
-static const char* BUILTIN_NAMES[T_BUILTIN] = {"BASIC SHAPES", "PWM", "HARMONIX", "VOWELS", "SYNC SAW", "FM GROWL", "DIGITAL", "KARPLUS"};
+enum { T_BASIC, T_PWM, T_HARMONIX, T_VOWELS, T_SYNC, T_GROWL, T_DIGITAL, T_PLUCK, T_DRUMS, T_BUILTIN };
+static const char* BUILTIN_NAMES[T_BUILTIN] = {"BASIC SHAPES", "PWM", "HARMONIX", "VOWELS", "SYNC SAW", "FM GROWL", "DIGITAL", "KARPLUS", "DRUM HITS"};
 #define MAXFILES 64
 static char gFiles[MAXFILES][64];
 static int gNFiles = 0;
@@ -238,7 +238,47 @@ static float hash01(int a, int b) {
 
 typedef struct { float* frames; int nFrames; float peak; char name[40]; } Table;
 
+// DRUM HITS (built-in table) and KIT > TABLE: 8 drums, 8 frames each, attack to tail. Frame 8g is drum g's first
+// moment, frame 8g+7 its tail: WT POS swept by a fast envelope plays the hit back, at any pitch, band-limited.
+#define DT_N 8   // drums
+#define DT_F 8   // frames per drum
+static void drumSig(int g, float* o, int n) {   // a cheap analog-style drum, 32728 Hz: KICK SNARE TOM CLAP HAT RIM COWBELL ZAP
+	const float sr = 32728; float ph = 0, ph2 = 0, bp = 0, lp = 0, hp = 0; unsigned r = 22222u + g * 777u;
+	float sq[6] = {0}; static const float HF[6] = {205.3f, 304.4f, 369.6f, 522.7f, 540.0f, 800.0f};
+	for (int i = 0; i < n; i++) {
+		float t = i / sr, v = 0; r = r * 1664525u + 1013904223u; float nz = (int)(r >> 9) / 4194304.0f - 1.0f;
+		switch (g) {
+		case 0: { float f = 48 + 110 * expf(-t * 28); ph += f / sr; v = sinf(TWO_PI * ph) * expf(-t * 5) + (t < 0.004f ? nz * 0.5f : 0); v = tanhf(v * 1.6f); break; }   // KICK
+		case 1: { float f = 185 * (1 + 0.4f * expf(-t * 40)); ph += f / sr; ph2 += f * 1.78f / sr; bp += 0.45f * (nz - bp);
+			v = (0.55f * sinf(TWO_PI * ph) + 0.3f * sinf(TWO_PI * ph2)) * expf(-t * 18) + (nz - bp) * 0.8f * expf(-t * 11); break; }   // SNARE
+		case 2: { float f = 95 * (1 + 0.6f * expf(-t * 18)); ph += f / sr; v = sinf(TWO_PI * ph) * expf(-t * 6) + nz * 0.05f * expf(-t * 40); break; }   // TOM
+		case 3: { float e = t < 0.03f ? expf(-fmodf(t, 0.01f) * 300) : expf(-(t - 0.03f) * 14); bp += 0.25f * (nz - bp); hp = nz - bp; lp += 0.5f * (hp - lp); v = lp * e * 1.6f; break; }   // CLAP
+		case 4: { float m = 0; for (int k = 0; k < 6; k++) { sq[k] += HF[k] * 1.9f / sr; if (sq[k] >= 1) sq[k] -= 1; m += sq[k] < 0.5f ? 1 : -1; }
+			lp += 0.9f * (m / 6 - lp); hp = m / 6 - lp; v = (hp + nz * 0.3f) * expf(-t * 9); break; }   // HAT (six squares, like the 808)
+		case 5: { ph += 1700 / sr; ph2 += 465 / sr; v = (0.6f * sinf(TWO_PI * ph) + 0.6f * sinf(TWO_PI * ph2)) * expf(-t * 55) + nz * 0.3f * expf(-t * 120); break; }   // RIM
+		case 6: { ph += 540 / sr; ph2 += 800 / sr; float m = (fmodf(ph, 1) < 0.5f ? 1 : -1) + (fmodf(ph2, 1) < 0.5f ? 1 : -1); bp += 0.3f * (m - bp); v = (m - bp) * 0.5f * (0.4f * expf(-t * 60) + 0.6f * expf(-t * 9)); break; }   // COWBELL
+		default: { float f = 1800 * expf(-t * 22) + 60; ph += f / sr; v = (fmodf(ph, 1) < 0.5f ? 0.8f : -0.8f) * expf(-t * 7); break; }   // ZAP
+		}
+		o[i] = v;
+	}
+}
+static void drumTableFrames(float* fr, float* const* sig, const int* len) {   // DT_N hits -> 64 frames
+	for (int g = 0; g < DT_N; g++) for (int j = 0; j < DT_F; j++) {
+		float* f = fr + (g * DT_F + j) * CYC; const float* x = sig[g]; int L = len[g], W = L / 6 < 1500 ? L / 6 : 1500; if (W < 64) W = L;
+		int st = (int)(powf(j / (float)(DT_F - 1), 1.6f) * (L - W) * 0.85f);
+		for (int k = 0; k < CYC; k++) { float u = k * (W - 1) / (float)CYC; int a = st + (int)u; float fa = u - (int)u; f[k] = a + 1 < L ? x[a] * (1 - fa) + x[a + 1] * fa : 0; }
+		float dc = 0; for (int k = 0; k < CYC; k++) dc += f[k]; dc /= CYC; for (int k = 0; k < CYC; k++) f[k] -= dc;
+		for (int k = 0; k < 128; k++) { float w = k / 128.0f; f[CYC - 128 + k] = f[CYC - 128 + k] * (1 - w) + f[k] * w; }   // the end leads back into the start: it loops
+		float pk = 1e-6f; for (int k = 0; k < CYC; k++) if (fabsf(f[k]) > pk) pk = fabsf(f[k]); for (int k = 0; k < CYC; k++) f[k] /= pk;   // each frame full scale: the envelope plays the level
+	}
+}
+static void genDrumTable(Table* tb) {
+	static float buf[DT_N][13000]; float* sig[DT_N]; int len[DT_N];
+	for (int g = 0; g < DT_N; g++) { len[g] = g == 0 || g == 2 ? 13000 : 9000; drumSig(g, buf[g], len[g]); sig[g] = buf[g]; }
+	drumTableFrames(tb->frames, sig, len); tb->nFrames = 64;
+}
 static void genBuiltin(Table* tb, int t) {
+	if (t == T_DRUMS) { genDrumTable(tb); snprintf(tb->name, sizeof(tb->name), "%s", BUILTIN_NAMES[t]); return; }
 	tb->nFrames = 64;
 	for (int f = 0; f < 64; f++) {
 		float* fr = tb->frames + f * CYC;
@@ -2718,6 +2758,14 @@ static void h_gbwave(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos =
 static void h_nes(SPatch* p) { p->master = 0.55f; OA.level = 0.0f; CHIP(0.8f, 0, 0); p->voiceMode = 2; ENV1(0.002f, 0, 0.2f, 0.8f, 0.05f); LFO(0, LS_TRI, 0, 6.0f); MOD(2, SRC_LFO1, DST_PITCH, 0.008f); p->lofiBits = 2; }
 static void h_c64(SPatch* p) { p->master = 0.55f; OA.table = T_PWM; LFO(0, LS_TRI, 0, 0.6f); MOD(2, SRC_LFO1, DST_APOS, 0.5f); OUTF(OF_L12, 0.45f, 0.5f, 0.4f, 0.3f); ENV1(0.003f, 0, 0.3f, 0.7f, 0.15f); p->lofiBits = 1; }
 static void h_arcade(SPatch* p) { p->master = 0.55f; OA.level = 0.3f; OA.table = T_PWM; CHIP(0.5f, 1, 0); ARP(1, 5, 2, 0.8f); ENV1(0.001f, 0, 0.2f, 0.5f, 0.05f); p->lofiBits = 2; }
+// DRUM SYNTH: the DRUM HITS table played by a fast envelope sweeping WT POS through one drum, attack to tail, at
+// the key's pitch. Drum g sits at WT POS 8g/63 .. (8g+7)/63: the patch rests at its tail, the envelope pulls it to the attack.
+#define DRUMSYN(g) do { OA.table = T_DRUMS; OA.pos = (8 * (g) + 7) / 63.0f; MOD(2, SRC_ENV2, DST_APOS, -7 / 63.0f); } while (0)
+static void q_tblkick(SPatch* p) { p->master = 0.7f; DRUMSYN(0); OA.oct = -1; ENV1(0.001f, 0, 0.45f, 0, 0.2f); ENV2(0, 0, 0.18f, 0, 0.1f); MOD(3, SRC_ENV2, DST_PITCH, 0.6f); p->cutoff = 0.7f; }
+static void q_tblsnare(SPatch* p) { p->master = 0.6f; DRUMSYN(1); ENV1(0.001f, 0, 0.25f, 0, 0.12f); ENV2(0, 0, 0.12f, 0, 0.08f); MOD(3, SRC_ENV2, DST_PITCH, 0.2f); REVB(0.18f, RV_ROOM); }
+static void q_tbltoms(SPatch* p) { p->master = 0.65f; DRUMSYN(2); ENV1(0.001f, 0, 0.5f, 0, 0.25f); ENV2(0, 0, 0.25f, 0, 0.1f); MOD(3, SRC_ENV2, DST_PITCH, 0.35f); REVB(0.2f, RV_PLATE); }
+static void q_tblmetal(SPatch* p) { p->master = 0.5f; DRUMSYN(6); OB.on = 1; OB.table = T_DRUMS; OB.pos = 39 / 63.0f; OB.semi = 7; OB.level = 0.5f; ENV1(0.001f, 0, 0.6f, 0, 0.3f); ENV2(0, 0, 0.3f, 0, 0.1f); DLYS(0.25f, S8D, DL_PING); }
+static void q_tblzap(SPatch* p) { p->master = 0.55f; DRUMSYN(7); ENV1(0.001f, 0, 0.3f, 0, 0.15f); ENV2(0, 0, 0.2f, 0, 0.1f); MOD(3, SRC_ENV2, DST_PITCH, 1.0f); p->lofiBits = 2; }
 // CHIP ARPS: one key, a whole chord rolled by the arp at tracker speed, the way the C64 / NES / Game Boy faked chords
 static void h_arpc64(SPatch* p) { p->master = 0.55f; OA.table = T_PWM; OA.pos = 0.3f; LFO(0, LS_TRI, 0, 0.4f); MOD(2, SRC_LFO1, DST_APOS, 0.35f); p->chord = 2; ARP(1, 5, 1, 0.95f); ENV1(0.001f, 0, 0.4f, 0.8f, 0.12f); p->lofiBits = 1; }
 static void h_arpnes(SPatch* p) { p->master = 0.55f; OA.level = 0.0f; CHIP(0.8f, 1, 0); p->chord = 1; ARP(3, 5, 1, 0.9f); ENV1(0.001f, 0, 0.3f, 0.8f, 0.06f); p->lofiBits = 2; }
@@ -3055,7 +3103,8 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"PUMP CHORDS", c_pump}, {"GOSPEL ORGAN", c_gospel}, {"SHOEGAZE WALL", c_shoegaze},
 	 {"STRUM 8THS", c_strum8}, {"HARP ROLL", c_harproll}, {"RAKE 16THS", c_rake}},
 	{{"BERLIN 16", q_berlin}, {"ACID CIRCLE", q_acidcircle}, {"TRANCE GATE", q_gate}, {"PING ARP", q_pingarp}, {"CHAOS ARP", q_chaosarp}, {"MOTION BELLS", q_motionbells},
-	 {"OCTAVE BOUNCE", q_octbounce}, {"DRAWN STEPS", q_drawnsteps}, {"GRAIN RUN", q_grainrun}, {"POLYRHYTHM", q_polyrhythm}},
+	 {"OCTAVE BOUNCE", q_octbounce}, {"DRAWN STEPS", q_drawnsteps}, {"GRAIN RUN", q_grainrun}, {"POLYRHYTHM", q_polyrhythm},
+	 {"TABLE KICK", q_tblkick}, {"TABLE SNARE", q_tblsnare}, {"TABLE TOMS", q_tbltoms}, {"TABLE METAL", q_tblmetal}, {"TABLE ZAP", q_tblzap}},
 	{{"TIDE POOL", x_tidepool}, {"FROZEN TABLE", x_frozen}, {"NET STATIC", x_netstatic}, {"TAPE ROOM", x_taperoom}, {"BROWN SEA", x_sea}, {"GEIGER", x_geiger},
 	 {"DRONE 60", x_drone60}, {"SHIMMER CLOUD", x_shimmercloud}, {"SONAR PING", x_sonarping}, {"STORM FRONT", x_storm}, {"FREEZE GLASS", x_freezeglass}, {"JET COMB", x_jetcomb}, {"WIRE DRONE", x_wiredrone}, {"KITCHEN SINK2", m_sink2}, {"TENSION DRONE", x_tensiondrone}},
 	{{"GB WAVE", h_gbwave}, {"NES PULSE", h_nes}, {"C64 PWM", h_c64}, {"ARCADE ARP", h_arcade}, {"POWER UP", h_powerup}, {"LASER", h_laser},
@@ -3227,7 +3276,7 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.11f, 0.95f, 1.80f, 1.00f, 1.00f},
 	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.58f, 1.56f, 1.70f, 1.07f, 1.00f},
 	{2.33f, 1.34f, 4.24f, 2.18f, 2.20f, 1.12f, 2.30f, 0.67f, 2.08f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
-	{1.32f, 1.05f, 4.46f, 1.10f, 3.54f, 1.82f, 2.40f, 6.00f, 1.34f, 2.41f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
+	{1.32f, 1.05f, 4.46f, 1.10f, 3.54f, 1.82f, 2.40f, 6.00f, 1.34f, 2.41f, 0.90f, 2.80f, 0.90f, 6.00f, 2.50f},
 	{6.00f, 1.51f, 3.91f, 1.19f, 3.50f, 4.82f, 6.00f, 4.32f, 0.62f, 1.36f, 1.42f, 1.93f, 1.42f, 3.55f, 2.18f},
 	{0.90f, 1.24f, 1.14f, 1.50f, 1.37f, 1.28f, 0.91f, 0.63f, 1.18f, 0.76f, 0.76f, 0.70f, 0.80f, 0.52f, 0.84f, 0.93f, 0.79f, 1.15f, 0.63f},
 	{1.30f, 0.81f, 1.34f, 2.99f, 0.90f, 1.37f, 3.46f, 1.10f, 6.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},
@@ -3464,6 +3513,7 @@ static Param P_HW[] = {
 	PE("GRAINS", &gGrains, 3, GRAIN_MODES, D_GRAIN), PE("GRAIN SOURCE", &gGrainSrc, 3, GRAIN_SRCS, D_GRAIN), PF("GRAIN SIZE", &gGrainSize, 0, 1, 0.02f, "%", 0), PF("GRAIN SCAN", &gGrainScan, 0, 1, 0.02f, "%", 0),
 	PF("GRAIN SPRAY", &gGrainSpray, 0, 1, 0.02f, "%", 0), PF("GRAIN PITCH", &gGrainPitch, -24, 24, 1, "ST", 0), PF("GRAIN LEVEL", &gGrainLevel, 0, 1, 0.05f, "%", 0),
 	{"TAPE > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_LOOPTAB},
+	{"KIT > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	{"MIC > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_MICTAB},
 	PE("CAMERA", &gCamOn, 2, ONOFF, D_CAM),
 	{"CAM > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CAMTAB},
@@ -4020,7 +4070,7 @@ static const char* paramHelp(const char* n) {
 		{"SWING", "SHUFFLE FEEL"},
 		{"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},
 		{"THEME", "COLOUR SCHEME"},
-		{"TAPE > TABLE", "PRESS >: THE LAST TAPE TRACK BECOMES A WAVETABLE"}, {"ECHO WOW", "CHIP ECHO SPEED DRIFTS: REPEATS BEND"}, {"CHIP > FX", "SUB, CHIP, DRUMS THROUGH THE FILTER + MASTER FX"}, {"CHIP CUTOFF", "LOW PASS ON THE CHIP PARTS (WITH CHIP > FX)"}, {"CHIP RES", "RESONANCE OF THAT FILTER"},
+		{"TAPE > TABLE", "PRESS >: THE LAST TAPE TRACK BECOMES A WAVETABLE"}, {"KIT > TABLE", "PRESS >: THE DRUM KIT BECOMES A WAVETABLE (8 DRUMS)"}, {"ECHO WOW", "CHIP ECHO SPEED DRIFTS: REPEATS BEND"}, {"CHIP > FX", "SUB, CHIP, DRUMS THROUGH THE FILTER + MASTER FX"}, {"CHIP CUTOFF", "LOW PASS ON THE CHIP PARTS (WITH CHIP > FX)"}, {"CHIP RES", "RESONANCE OF THAT FILTER"},
 		{"MIC > TABLE", "PRESS >, THEN SING 1 SECOND INTO THE MIC"},
 		{"CAMERA", "CAMERA AS MOD SOURCES (CAM LIGHT / COLOR)"}, {"CAM > TABLE", "PRESS > TO TURN A PHOTO INTO A WAVETABLE"},
 		{"LINK", "SYNC TEMPO WITH ANOTHER SYRUP"},
@@ -6762,6 +6812,7 @@ static void thruTick(void) {   // main loop, voice lock held
 	static int f = 0; if (++f % 15 == 0) thruMix();   // follow the FX sends
 }
 static int tapeMono(s16* out, int n);
+static void kitToTable(void);
 static void loopToTable(void) {   // TAPE > TABLE: the last track you recorded becomes a wavetable
 	int n = gTapeLen > 32728 * 12 ? 32728 * 12 : gTapeLen;
 	s16* raw = n > 0 ? (s16*)malloc(sizeof(s16) * n) : NULL; n = raw ? tapeMono(raw, n) : 0;
@@ -8175,6 +8226,15 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 	}
 	for (int d = 0; d < NDRUM; d++) { s16* t = gDrumSmp[d]; gDrumSmp[d] = gDrumBack[d]; gDrumBack[d] = t; gDrumLen[d] = len[d]; }   // swap in (the old set keeps ringing out)
 	gDrumBuilt = kit;
+}
+static void kitToTable(void) {   // KIT > TABLE: the drum kit you have (with your SOUND edits) as a wavetable, 8 drums x 8 frames
+	if (gDrumBuilt != gKit || !gDrumSmp[0]) drumBuild(gKit);
+	if (!gDrumSmp[0]) { say("NO DRUM KIT TO TAKE"); return; }
+	static const int D[DT_N] = {0, 1, 6, 4, 2, 5, 8, 9}; float* sig[DT_N]; int len[DT_N]; int ok = 1;
+	for (int g = 0; g < DT_N; g++) { int d = D[g], n = gDrumLen[d]; sig[g] = n > 0 ? (float*)malloc(sizeof(float) * n) : NULL; len[g] = n; if (!sig[g]) { ok = 0; continue; } for (int i = 0; i < n; i++) sig[g][i] = gDrumSmp[d][i] / 32768.0f; }
+	float* fr = ok ? (float*)malloc(sizeof(float) * CYC * WT_FR) : NULL;
+	if (fr) { drumTableFrames(fr, sig, len); char b[12]; snprintf(b, sizeof(b), "KIT %s", KIT_NAMES[gKit]); wtInstall(b, fr); } else say("NOT ENOUGH MEMORY");
+	free(fr); for (int g = 0; g < DT_N; g++) free(sig[g]);
 }
 static void drumService(void) {   // main loop, OUTSIDE the voice lock: a kit takes ~0.2 s to synthesise on the 3DS,
 	int k = gDrumWant;             // and holding the lock that long stalled the drum clock (the skip on DRUMS ON / KIT)
@@ -10020,6 +10080,7 @@ int main(void) {
 				if (p->dirty & D_UPDATE) upStart();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "NET > TABLE")) netTabStart();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "RULE > TABLE")) ruleTable();
+				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "KIT > TABLE")) kitToTable();
 				else if (p->dirty & D_DLWT) dlStart();
 				else if (p->dirty & D_LOOPTAB) loopToTable();
 				else if (p->dirty & D_MICTAB) micRecStart();

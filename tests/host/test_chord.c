@@ -58,6 +58,11 @@ static void SCRIPT(int fr) {
 	if (fr >= 363 && fr < 366) CY = -150;
 	if (fr == 366) { CY = 0; if (gStartSel == sel0) fail("circle pad down should move in the START menu"); }
 	if (fr == 368) HD = KEY_B;
+	if (fr == 369) {   // DRUM HITS table and KIT > TABLE
+		float* f = builtinFrames(T_DRUMS); if (!f) fail("DRUM HITS: no table");
+		else { float a0 = 0, a7 = 0; for (int k = 0; k < CYC; k++) { a0 += fabsf(f[k]); a7 += fabsf(f[7 * CYC + k]); } if (a0 < 100 || a7 < 100) fail("DRUM HITS: kick frames should have sound (%.0f %.0f)", a0, a7); }
+		int n0 = gNFiles; kitToTable(); if (gNFiles != n0 + 1 || gOsc[0].table < T_BUILTIN) fail("KIT > TABLE: a new table on OSC A (files %d -> %d)", n0, gNFiles);
+	}
 	if (fr == 370) {   // piano roll ERASER: from an empty cell, up first, then across the notes
 		memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 16; gPatView = 0; gStepEd = -1; gRollLow = 60;
 		int row = 3, nt = rollNote(row), y = ROLL_TOP + (ROLL_ROWS - 1 - row) * ROLL_RH + ROLL_RH / 2;
