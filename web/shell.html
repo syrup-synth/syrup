@@ -60,6 +60,14 @@
   .note { color: var(--dim); margin-top: 12px; font-size: 12px; }
   .note b { color: var(--txt); font-weight: 600; }
   #msg { color: var(--dim); font-size: 12px; min-height: 1.2em; }
+  /* a game controller is plugged in: the on-screen controls go, and sideways the two screens sit side by side */
+  body.pad .cluster, body.pad .shp, body.pad .mid, body.pad .note { display: none; }
+  #gpl { display: none; } body.pad #gpl { display: inline-block; }
+  @media (orientation: landscape) {
+    body.pad .g { grid-template-columns: 1fr; grid-template-areas: "bar" "screens"; }
+    body.pad .screens { flex-direction: row; align-items: center; justify-content: center; width: min(98vw, calc((100vh - 56px) * 3)); margin: 0 auto; gap: 6px; }
+    body.pad #top { width: 55%; } body.pad #bot { width: 44%; }
+  }
 </style>
 </head>
 <body>
@@ -74,6 +82,7 @@
         <select class="b" id="mch" title="MIDI channel this window listens to"><option value="0">ALL CH</option></select>
         <button class="b" id="link" title="Link with other Syrup windows on this device">LINK</button>
         <button class="b" id="full">FULL</button>
+        <button class="b" id="gpl" title="Controller buttons: by position (Nintendo) or by the letters on an Xbox-style pad">ABXY: POS</button>
       </div>
       <div id="msg">Loading…</div>
     </div>
@@ -204,6 +213,7 @@ document.getElementById('full').onclick = function () {
 if (navigator.standalone || matchMedia('(display-mode: standalone)').matches) document.getElementById('full').style.display = 'none';   // already full screen
 // ---- a game controller (Bluetooth / USB: Xbox, PlayStation, Switch Pro, MFi): Nintendo layout, left stick = circle pad
 // standard mapping: 0 bottom, 1 right, 2 left, 3 top, 4 / 5 bumpers, 6 / 7 triggers, 8 select, 9 start, 12-15 d-pad
+var GPPOS = [[1, 1], [0, 2], [3, 1024], [2, 2048]], GPLAB = [[0, 1], [1, 2], [2, 1024], [3, 2048]];   // by position (Nintendo) / by letter (Xbox)
 var GPMAP = [[1, 1], [0, 2], [3, 1024], [2, 2048], [4, 512], [5, 256], [6, 16384], [7, 32768], [8, 4], [9, 8], [12, 64], [13, 128], [14, 32], [15, 16]];
 var gpName = '';
 function pollPads() {
@@ -214,9 +224,14 @@ function pollPads() {
     var bx = p.axes[2] || 0, by = p.axes[3] || 0; if (Math.hypot(bx, by) > 0.15) { x2 = Math.round(bx * 150); y2 = Math.round(-by * 150); } }
   if (k !== GK || x !== GX || y !== GY) { GK = k; GX = x; GY = y; send(); }
   if (x2 !== G2X || y2 !== G2Y) { G2X = x2; G2Y = y2; sendC(); }
-  if (name !== gpName) { gpName = name; msg.textContent = name ? 'Controller: ' + name.replace(/\s*\(.*\)\s*/g, ' ').trim() : ''; }
+  if (name !== gpName) { gpName = name; document.body.classList.toggle('pad', !!name); msg.textContent = name ? 'Controller: ' + name.replace(/\s*\(.*\)\s*/g, ' ').trim() : ''; }
   requestAnimationFrame(pollPads);
 }
+var gpl = document.getElementById('gpl'), gpLab = 0;
+try { gpLab = +(localStorage.getItem('syrup-gplab') || 0); } catch (e) {}
+function gpApply() { var m = gpLab ? GPLAB : GPPOS; for (var i = 0; i < 4; i++) GPMAP[i] = m[i]; gpl.textContent = gpLab ? 'ABXY: LETTERS' : 'ABXY: POS'; }
+gpApply();
+gpl.onclick = function () { gpLab = 1 - gpLab; gpApply(); try { localStorage.setItem('syrup-gplab', gpLab); } catch (e) {} msg.textContent = gpLab ? 'Buttons follow the letters (Xbox-style pads)' : 'Buttons follow the positions (Nintendo layout)'; };
 addEventListener('gamepadconnected', function () { msg.textContent = 'Controller connected'; });
 requestAnimationFrame(pollPads);
 // ---- per window: which MIDI channel and input it listens to (so several windows can be several instruments:

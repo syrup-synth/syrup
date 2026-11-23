@@ -58,7 +58,7 @@ for f in ('seq.bin', 'settings.bin', 'last.bin'):
     try: os.remove(os.path.join(BUILD, 'sd', f))
     except OSError: pass
 for st in range(32):
-    for ix in range(16):
+    for ix in range(20):
         for f in ('last.bin', 'mydrums.bin'):   # each patch from a fresh card (MINE patches play the starter beat)
             try: os.remove(os.path.join(BUILD, 'sd', f))
             except OSError: pass

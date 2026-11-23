@@ -72,7 +72,7 @@ A synthesised kit (808, 909, LOFI, CHIP) on three channels of the second sound c
 - **Hold a drum's name**: its SOUND (TUNE, PITCH ENV and its decay, DECAY up to twice as long, TONE darker / thinner, DRIVE, LEVEL, PAN) and the row's RATE (X1, 1/2, X2, 3/4, 3/2, 1/4, 1/8) and LENGTH (1-16): every row can run its own polymeter. The kit rebuilds when you let go and plays the drum.
 - **Header**: DR ON / OFF, KIT, BEAT (the next of 30 whole-kit rhythms each tap: HOUSE, BOOM BAP, TRAP, DNB, BREAK, DISCO, FUNK, HALFTIME, DEMBOW, AFROBEAT, 2-STEP, ELECTRO, ROCK, SHUFFLE, CUMBIA, BOSSA, SAMBA, RUMBA, BEGUINE, CHA-CHA, TANGO, MAMBO, MARCH, SWING, SLOW ROCK in 12/8, WALTZ in 3/4, REGGAE, FOXTROT, TECHNO, GO-GO), CLR (then a name clears that row; CLR again clears all), MIC (knocks near the mic play and record onto the picked row), FILL (hold).
 - KICK / SNARE / HAT patterns are pastes: picking one writes it into the row, which then edits like your own. EUCLID rows stay live.
-- **Circle pad**: moves a cursor on the grid (the first push shows it); A = hit, hold A = the step editor, B = the row's SOUND. In the editors up / down picks a setting, left / right changes it, B closes. The piano roll works the same way (A = note, hold A = its step editor).
+- **Circle pad**: moves a cursor on the grid (the first push shows it); A = hit, hold A = the step editor, B = take the hit away, hold B = the row's SOUND (with no cursor up, A or B brings it up). In the editors up / down picks a setting, left / right changes it, B closes. The piano roll works the same way (A = note, hold A = its step editor, B = take the note away).
 - Everything is saved on the SD card and SELECT + L undoes it.
 
 ## Macros and mod matrix
