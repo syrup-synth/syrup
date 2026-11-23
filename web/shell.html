@@ -374,6 +374,7 @@ function mirLink() {
   document.getElementById('lk').textContent = 'OBS: add a Browser source with ' + u + ' (1920 x 1080, "Control audio via OBS" for the sound)';
   document.querySelectorAll('[data-ov]').forEach(function (b) { b.classList.toggle('on', !!OV[b.dataset.ov]); });
   document.getElementById('keyb').classList.toggle('on', KEYBG); document.body.classList.toggle('keyed', KEYBG);
+  document.documentElement.style.background = KEYBG && STREAM ? 'transparent' : '';   // the page itself too, or OBS sees its colour
 }
 document.querySelectorAll('[data-ov]').forEach(function (b) { b.onclick = function () { OV[b.dataset.ov] = !OV[b.dataset.ov]; mirLink(); }; });
 document.getElementById('keyb').onclick = function () { KEYBG = !KEYBG; mirLink(); };
