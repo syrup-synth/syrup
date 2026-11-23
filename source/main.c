@@ -2020,7 +2020,13 @@ static int gArpIdx = 0, gArpDir = 1, gArpFresh = 0;
 static int gArpOn[8], gArpOnN = 0;
 static int gBeatFlash = 0;   // set on each arp/seq step (UI blink)
 
-static void arpRelease(void) { for (int i = 0; i < gArpOnN; i++) voiceOff(gArpOn[i]); gArpOnN = 0; gStrN = 0; }
+static void voiceFade(int note, float sec);
+static void arpReleaseX(int damp) {   // damp (the next CHORD strum coming): the last one stops in 50 ms, like a guitar restruck -
+	// its long release used to pile up under the next chords until channels were stolen mid-note (the clicks on STRUM 8THS)
+	for (int i = 0; i < gArpOnN; i++) { if (damp && gArp == 6) voiceFade(gArpOn[i], 0.05f); else voiceOff(gArpOn[i]); }
+	gArpOnN = 0; gStrN = 0;
+}
+static void arpRelease(void) { arpReleaseX(0); }
 static void arpSetPool(const int* notes, int n, float vel) {
 	if (n > 8) n = 8;
 	int was = gArpN;
@@ -2030,7 +2036,7 @@ static void arpSetPool(const int* notes, int n, float vel) {
 	if (!n) arpRelease();
 }
 static void arpStep(void) {
-	arpRelease();
+	arpReleaseX(1);
 	int s[8], n = gArpN;
 	for (int i = 0; i < n; i++) s[i] = gArpPool[i];
 	if (gArp == 6) {   // CHORD: retrigger the whole chord (strummed when ARP STRUM is up)
