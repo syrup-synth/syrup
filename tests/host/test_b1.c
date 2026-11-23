@@ -34,9 +34,6 @@ static void SCRIPT(int fr) {
 	// MONO + CHORD: the key you hit, one note
 	if (fr == 60) { midiPush(0x80, 60, 0); gVoiceMode = 1; gChord = 1; gArp = 0; int n[4]; int k = chordNotes(60, n); if (k != 1 || n[0] != 60) fail("MONO + CHORD should play just the key (%d notes, %d)", k, n[0]); gVoiceMode = 0;
 		k = chordNotes(60, n); if (k < 3) fail("POLY + CHORD should still play the chord"); gChord = 0; }
-	// CLEAR in the SEQ menu: two presses of right
-	if (fr == 62) { memset(gSeq, 0, sizeof(gSeq)); stepSetNote(0, 60, 1); const Param* p = NULL; for (int i = 0; PAGES[7][i].name; i++) if (PAGES[7][i].dirty & D_CLEAR) p = &PAGES[7][i]; if (!p) fail("no CLEAR control"); else {
-		int pg = 7; (void)pg; } }
 	// RIFF stays inside the octave
 	if (fr == 64) { gGridOct = 1; gRollLow = 36; int lo = riffBase(); if (lo != 36 + gRoot % 12 && lo != 24 + gRoot % 12) fail("RIFF: its base should be the roll's octave (%d, roll %d)", lo, gRollLow); for (int k = 0; k < 40; k++) { acidGen(); for (int s = 0; s < 16; s++) if (gSeq[s].n && (gSeq[s].note[0] < lo || gSeq[s].note[0] >= lo + 12)) { fail("RIFF left the roll's octave (%d, base %d)", gSeq[s].note[0], lo); k = 99; break; } } gGridOct = 0; }
 	// HELP: L/R flip the slides, another button closes

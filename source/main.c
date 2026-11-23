@@ -3395,13 +3395,11 @@ static Param P_PRESET[] = {
 	PEND};
 static Param P_PLAY[] = {
 	// most-reached first: tempo and the transport, then the arp, the key, then the details
-	PI_("BPM", &gBPM, 40, 240, 0), PE("SEQ", &gSeqMode, 3, SEQ_NAMES, D_SEQ), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
-	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE), PI_("SEQ LENGTH", &gSeqLen, 1, NSTEP, 0),
+	PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
+	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
 	PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0), PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0),
 	PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PE("REC QUANT", &gRecQ, 4, RQ_NAMES, 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("CLICK", &gClick, 4, CLICK_NAMES, 0), PF("CLICK LEVEL", &gClickLevel, 0, 1, 0.05f, "%", 0), PI_("TAPE ALIGN", &gTapeAlign, -50, 50, 0),
 	PE("SHAKE QUANT", &gShakeQ, 3, SHQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
-	{"ADD REST", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_REST},
-	{"CLEAR SEQ", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_CLEAR},
 	PEND};
 static Param P_VIS[] = {
 	PE("VIS MODE", &gVisMode, NVISM, VISM_NAMES, 0), PE("VIS OSC", &gVisOsc, 2, AB_NAMES, 0), PE("OVERLAY", &gVisOverlay, 2, ONOFF, 0),
@@ -3931,8 +3929,8 @@ static const char* paramHelp(const char* n) {
 		{"REV DAMP", "DARKER REVERB TAIL"}, {"FX MIX", "HOW MUCH EFFECT"}, {"DRIVE", "DISTORTION TYPE"}, {"DRIVE AMT", "HOW MUCH DISTORTION"},
 		{"MASTER", "OUTPUT VOLUME"}, {"ROOT", "KEY OF THE SCALE"}, {"SCALE", "LOCK THE KEYS TO A SCALE"}, {"ARP", "ARPEGGIATOR PATTERN"},
 		{"ARP RATE", "ARPEGGIATOR SPEED"}, {"ARP OCTAVES", "OCTAVES THE ARP CLIMBS"}, {"ARP GATE", "ARP NOTE LENGTH"}, {"ARP STRUM", "CHORD ARP: TIME BETWEEN STRINGS"}, {"STRUM DIR", "DOWN, UP, OR BOTH LIKE A GUITAR"}, {"BPM", "TEMPO"},
-		{"SEQ", "SEQUENCER: OFF, PLAY OR RECORD"}, {"SEQ LENGTH", "STEPS IN THE PATTERN"}, {"SEQ GATE", "STEP NOTE LENGTH"},
-		{"SWING", "SHUFFLE FEEL"}, {"ADD REST", "PRESS > TO RECORD A REST"}, {"CLEAR SEQ", "PRESS > TO ERASE THE PATTERN"},
+		{"SEQ GATE", "STEP NOTE LENGTH"},
+		{"SWING", "SHUFFLE FEEL"},
 		{"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},
 		{"THEME", "COLOUR SCHEME"},
 		{"TAPE > TABLE", "PRESS >: THE LAST TAPE TRACK BECOMES A WAVETABLE"}, {"ECHO WOW", "CHIP ECHO SPEED DRIFTS: REPEATS BEND"}, {"CHIP > FX", "SUB, CHIP, DRUMS THROUGH THE FILTER + MASTER FX"}, {"CHIP CUTOFF", "LOW PASS ON THE CHIP PARTS (WITH CHIP > FX)"}, {"CHIP RES", "RESONANCE OF THAT FILTER"},
@@ -4106,27 +4104,11 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		frame(4, 30, 196, 194);
 		snprintf(s, sizeof(s), "%s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); text(10, 36, s, 1, VAL);
 		snprintf(s, sizeof(s), "ARP %s %s X%d", ARP_NAMES[gArp], RATE_NAMES[gArpRate], gArpOct); text(10, 48, s, 1, TXT);
-		snprintf(s, sizeof(s), "%d BPM  SEQ %s  PAT %c", gBPM, SEQ_NAMES[gSeqMode], 'A' + gPatCur); text(10, 60, s, 1, TXT);
-		if (gSongOn && gSongLen) { snprintf(s, sizeof(s), "SONG %d/%d", gSongPos + 1, gSongLen); text(130, 162, s, 1, VAL); }
-		for (int i = 0; i < NSTEP; i++) {   // 2 rows of 8 steps
-			int x = 8 + (i % 8) * 24, y = 76 + (i / 8) * 40, act = i < gSeqLen;
-			int playing = gSeqPlaying && i == gSeqPos, rec = gSeqMode == 2 && i == gRecPos;
-			if (playing) rect(x, y, 22, 34, HI);
-			else if (rec) rect(x, y, 22, 34, WARN);
-			else { rect(x, y, 22, 34, BG); if (act) { rect(x, y, 22, 1, LINE); rect(x, y + 33, 22, 1, LINE); rect(x, y, 1, 34, LINE); rect(x + 21, y, 1, 34, LINE); } else for (int k = 0; k < 22; k += 2) px(x + k, y + 33, DIM); }
-			if (act && gSeq[i].n) {
-				int nt = gSeq[i].note[0], kd = kitDrumOf(nt);
-				char kn[4] = ""; if (kd >= 0) { strncpy(kn, kitPadName(kd), 2); kn[2] = 0; }   // a kit patch: the drum, 2 letters
-				const char* nn = kd >= 0 ? kn : NOTE_NAMES[nt % 12];
-				if (playing) text(x + 11 - (int)strlen(nn) * 4, y + 6, nn, 1, HITXT);
-				else text(x + 11 - (int)strlen(nn) * 4, y + 6, nn, 1, TXT);
-				char o[4]; snprintf(o, sizeof(o), "%d", nt / 12 - 1); if (kd >= 0) o[0] = 0;
-				if (playing) text(x + 7, y + 18, o, 1, HITXT); else text(x + 7, y + 18, o, 1, DIM);
-				if (gSeq[i].n > 1) rect(x + 16, y + 27, 3, 3, VAL);
-			} else if (act) text(x + 7, y + 12, "-", 1, DIM);
-		}
-		text(10, 162, gSeqMode == 2 ? "REC: KEYS WRITE STEPS" : (gSeqMode == 1 ? "PLAY: KEYS TRANSPOSE" : "SEQ OFF"), 1, DIM);
-		if (gSeqMode == 1 && gSeqTr) { snprintf(s, sizeof(s), "TRANSPOSE %+d", gSeqTr); text(10, 174, s, 1, DIM); }
+		snprintf(s, sizeof(s), "%d BPM  SWING %d%%", gBPM, (int)(gSwing * 100 + 0.5f)); text(10, 60, s, 1, TXT);
+		snprintf(s, sizeof(s), "PAT %c  %s", 'A' + gPatCur, gSeqPlaying ? "PLAYING" : "STOPPED"); text(10, 72, s, 1, gSeqPlaying ? VAL : DIM);
+		if (gSongOn && gSongLen) { snprintf(s, sizeof(s), "SONG %d/%d", gSongPos + 1, gSongLen); text(10, 84, s, 1, VAL); }
+		static const char* G[] = {"THE SEQUENCER LIVES", "ON THE BOTTOM SCREEN:", "", "PLAY  START/STOP", "PAT   PICK A PATTERN", "LEN   PATTERN LENGTH", "CLR   ERASE IT", "TAP A STEP TO EDIT"};
+		for (int i = 0; i < 8; i++) text(10, 102 + i * 10, G[i], 1, DIM);
 		drawWave(gOsc[0].mips.lev[2], LEVN[2], 8, 186, 188, 34, gOsc[0].on);
 	} else if (page == 1 || page == 2) {
 		Osc* o = &gOsc[focus];
