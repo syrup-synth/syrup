@@ -62,7 +62,7 @@
   #msg { color: var(--dim); font-size: 12px; min-height: 1.2em; }
   /* a game controller is plugged in: the on-screen controls go, and sideways the two screens sit side by side */
   body.pad .cluster, body.pad .shp, body.pad .mid, body.pad .note { display: none; }
-  #gpl { display: none; } body.pad #gpl { display: inline-block; }
+  #gpl, #mch { display: none; } #mch.on { display: inline-block; } body.pad #gpl { display: inline-block; }
   @media (orientation: landscape) {
     body.pad .g { grid-template-columns: 1fr; grid-template-areas: "bar" "screens"; }
     body.pad .screens { flex-direction: row; align-items: center; justify-content: center; width: min(98vw, calc((100vh - 56px) * 3)); margin: 0 auto; gap: 6px; }
@@ -283,7 +283,7 @@ document.getElementById('midi').onclick = function () {
       if (MCH && d[0] < 0xF0 && (d[0] & 15) + 1 !== MCH) return;   // this window's channel only
       if (MIN && inp.id !== MIN) return;   // and only the input picked for it
       Module._web_midi(d[0], d.length > 1 ? d[1] : 0, d.length > 2 ? d[2] : 0); }; });
-      fillIns(m);
+      fillIns(m); mchSel.classList.add('on');
       btn.classList.toggle('on', n > 0); msg.textContent = n ? 'MIDI: ' + n + ' input' + (n > 1 ? 's' : '') + ' connected' : 'MIDI on: plug in a controller'; }
     hook(); m.onstatechange = hook;
   }, function () { msg.textContent = 'MIDI was refused.'; });
