@@ -45,7 +45,23 @@ static void SCRIPT(int fr) {
 		if (maxDr < 20) fail("32-step drum rows should play past step 20 (%d)", maxDr);
 		gDrums = 0; drumsChanged();
 		myDrumSave(); memset(gMyDrum, 0, sizeof gMyDrum); gMyDrumLoaded = 0; myDrumLoad();
+		{ memset(gSeq, 0, sizeof gSeq); stepSetNote(3, 60, 1); stepSetNote(40, 62, 1); gSeqLen = 48; int cx = ROLL_KW + 4 * PG_W + 60;
+		  pageStripTouch(cx); if (!gSeq[3].n) fail("CLR: one tap only arms it");
+		  pageStripTouch(cx); if (gSeq[3].n || gSeq[40].n || gSeqLen != 16) fail("CLR twice should clear the pattern (len %d)", gSeqLen); }
 		if (!gMyDrum[1][20] || gDrLen[0] != 32) fail("drums save + load at 32 steps (%d, len %d)", gMyDrum[1][20], gDrLen[0]);
+		{   // SAMPLE kit: WAVs in a folder, named by drum; missing ones stay 808
+			static const char* NM[][2] = {{"Kick 01.wav", "0"}, {"808 Open Hat.wav", "3"}, {"hh.WAV", "2"}, {"Lo Tom.wav", "6"}, {"tom2.wav", "7"}, {"Cowbell.wav", "8"}, {"7.wav", "6"}, {"readme.txt", "-1"}};
+			for (int i = 0; i < 8; i++) if (kitFileDrum(NM[i][0]) != atoi(NM[i][1])) fail("SAMPLE: %s should be drum %s (%d)", NM[i][0], NM[i][1], kitFileDrum(NM[i][0]));
+			mkdir("sd/kits", 0777); mkdir("sd/kits/Test Kit", 0777);
+			static float w[8000]; for (int i = 0; i < 8000; i++) w[i] = 0.5f * sinf(i * 0.05f) * (1 - i / 8000.0f);
+			wavWrite16("sd/kits/Test Kit/Kick 01.wav", w, 8000);
+			kitScanDirs(); int k = -1; for (int i = 0; i < gNKitDirs; i++) if (!strcmp(gKitDirs[i], "TEST KIT")) k = i;
+			if (k < 0) fail("SAMPLE: the folder should be listed (%d folders)", gNKitDirs);
+			else { gKitDir = k; drumBuild(KIT_SAMPLE);
+				if (gDrumBuilt != KIT_SAMPLE || abs(gDrumLen[0] - 8000) > 2) fail("SAMPLE: the kick should be the file (len %d, built %d)", gDrumLen[0], gDrumBuilt);
+				else if (abs(gDrumSmp[0][63] - (s16)(w[63] * 30000)) > 300) fail("SAMPLE: the kick's samples should be the file's");
+				if (gDrumLen[1] < 1000) fail("SAMPLE: the snare (no file) should still be the 808 one"); }
+		}
 		{   // a mydrums.bin from before pages: 16-step rows, DRM2 block, accents
 			static u8 my[3][16], dx[7][16], rt[10][16], cd[10][16], ra[10], ln[10], ac[16]; static DVoice dv[10];
 			memset(my, 0, sizeof my); my[1][3] = 200; dx[1][7] = 180; cd[1][3] = 6; for (int r = 0; r < 10; r++) ln[r] = 12; ac[3] = 1; memcpy(dv, gDV, sizeof dv);

@@ -95,6 +95,11 @@ static int gTapeAlign; static int gXyMode, gThru, gTapeKeys; static float gThruC
 // ACCENT (TR-808 style): a step column marked ACC plays every drum on it louder, by ACCENT (DRUMS page)
 #define DSTEP 64   // drum rows: up to 64 steps (4 pages of 16)
 static u8 gDrAcc[DSTEP]; static float gDrAccAmt = 0.6f; static int gAccMode = 0;
+#define NKIT 7
+#define KIT_SAMPLE 6
+static volatile int gDrumWant;
+// SAMPLE kit: WAV files from a folder under /3ds/syrup/kits (one folder = one kit); gKitDirP names them for KIT FOLDER
+static int gKitDir = 0, gNKitDirs = 0; static char gKitDirs[16][32], gKitRaw[16][64]; static const char* gKitDirP[16] = {"(NONE)"};
 static void drumsChanged(void); static void drumRecChanged(void); static void outlineP(int x, int y, int w, int h, const u8* c); static void drawPageStrip(void); static void gestureDemo(int X, int Y, int roll);
 static int gBeatFromPatch;   // the running beat came with the current patch (and stops when you leave it); touching a drum control makes it yours
 // chip quirks: DSP GRIT (the DSP's interpolation off), FILTER SCREAM (its biquad pushed past stable), MIX OVERDRIVE (its
@@ -111,7 +116,7 @@ static int curShown(void) { return gCurT && osGetTime() - gCurT < 5000; }
 static int EU_IDX_(int r) { return r ? 7 : 8; }   // EUCLID in the KICK / SNARE + HAT lists
 #define NBEAT_ 30
 static const char* BEAT_NAMES_[NBEAT_] = {"HOUSE", "BOOM BAP", "TRAP", "DNB", "BREAK", "DISCO", "FUNK", "HALFTIME", "DEMBOW", "AFROBEAT", "2-STEP", "ELECTRO", "ROCK", "SHUFFLE", "CUMBIA", "BOSSA", "SAMBA", "RUMBA", "BEGUINE", "CHA-CHA", "TANGO", "MAMBO", "MARCH", "SWING", "SLOW ROCK", "WALTZ", "REGGAE", "FOXTROT", "TECHNO", "GO-GO"};
-static int gDrumSel[3] = {1, 1, 1}; static int gBeatSel = 0; static void beatPaste(int b); static void drumPaste(int r, int v, int undo); static void drumGridMark(void); static const char* KIT_NAMES[6]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[4];
+static int gDrumSel[3] = {1, 1, 1}; static int gBeatSel = 0; static void beatPaste(int b); static void drumPaste(int r, int v, int undo); static void drumGridMark(void); static const char* KIT_NAMES[7]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[4];
 // live drum shaping: TUNE (semitones, applied at each hit: no rebuild), CHANCE (each hit of the row plays this often), MUTE (rows, bit 1 kick 2 snare 4 hat)
 static float gDrumTune[3] = {0, 0, 0}, gDrumChance[3] = {1, 1, 1}; static int gDrumMute = 0; static int gDrumPoly;
 static const char* DMUTE_NAMES[8] = {"NONE", "KICK", "SNARE", "KICK+SNARE", "HAT", "KICK+HAT", "SNARE+HAT", "ALL"};
@@ -537,7 +542,7 @@ static float gSpinX, gSpinY, gMicBright, gCamMove;   // gyro pitch/roll speed, v
 static int gHeadphones;   // (0 until the first check)
 enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_FXMIX, DST_GRPOS, DST_COUNT };
 static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF", "FX MIX", "GRAIN POS"};   // GRAIN POS: an LFO sweeps where the grains read   // VOLUME: when routed, the source IS the loudness (breath control)
-static const char* VOICE_MODES[9] = {"POLY", "MONO", "LEGATO", "808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT", "PERC KIT", "WAVE KIT"};   // KIT: keys play the drum kit
+static const char* VOICE_MODES[10] = {"POLY", "MONO", "LEGATO", "808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT", "PERC KIT", "WAVE KIT", "SAMPLE KIT"};   // KIT: keys play the drum kit
 static const char* FX_NAMES[4] = {"OFF", "ECHO", "SPACE", "REVERB"};
 static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
 static const float ECHO_T[3] = {0.25f, 0.375f, 0.5f};
@@ -3253,7 +3258,7 @@ static void patchApplyRaw(const SPatch* p) {
 	if (p->ofType % NOFT != gOfType) { gOfType = p->ofType % NOFT; ofReset(); } gOfCut = p->ofCut; gOfRes = p->ofRes; gOfDrive = p->ofDrive; gOfEnv = p->ofEnv;
 	for (int k = 0; k < 2; k++) { for (int i = 0; i < 64; i++) gDl[k][i] = p->dl[k][i] / 127.0f; gDlRate[k] = p->dlRate[k]; gDlSync[k] = p->dlSync[k] % NSYNC; }
 	memcpy(gMot, p->mot, sizeof(gMot)); for (int l = 0; l < 4; l++) { gMotTgt[l] = p->motTgt[l] % 16; gMotOn[l] = p->motOn[l] & 1; } gMotBars = p->motBars & 3; gMotRec = -1; gMotPh = 0;
-	gVoiceMode = (p->voiceMode >= 0 && p->voiceMode < 9) ? p->voiceMode : 0; gChord = p->chord >= 0 && p->chord < NCHORD ? p->chord : 0; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
+	gVoiceMode = (p->voiceMode >= 0 && p->voiceMode < 10) ? p->voiceMode : 0; gChord = p->chord >= 0 && p->chord < NCHORD ? p->chord : 0; gFx = p->fx; gEchoT = p->echoT; gDrive = p->drive; gBendRange = p->bendRange;
 	gGlide = p->glide; gChorus = p->chorus; gRevSize = p->revSize; gRevDamp = p->revDamp; gFxMix = p->fxMix; gDriveAmt = p->driveAmt; gMaster = p->master;
 	gGatePat = p->gatePat >= 0 && p->gatePat < NGATE ? p->gatePat : 0; gGateRate = p->gateRate >= 0 && p->gateRate < 3 ? p->gateRate : 0; gGateDepth = p->gateDepth;
 	gArp = p->arp; gArpRate = p->arpRate; gArpOct = p->arpOct < 1 ? 1 : p->arpOct; gArpGate = p->arpGate; gArpStrum = p->arpStrum; gArpStrumDir = p->arpStrumDir >= 0 && p->arpStrumDir < NSTRD ? p->arpStrumDir : 0;   // the tempo is yours: loading a patch never changes it
@@ -3474,7 +3479,7 @@ static Param P_MOD[] = {
 	PEND};
 static const char* BEND_NAMES[13] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"};
 static Param P_VOICE[] = {
-	PE("MODE", &gVoiceMode, 9, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0), PE("MPE", &gMpe, 2, ONOFF, 0),
+	PE("MODE", &gVoiceMode, 10, VOICE_MODES, 0), PF("GLIDE", &gGlide, 0, 1, 0.01f, "S", 0), PE("MPE", &gMpe, 2, ONOFF, 0),
 	PE("BEND RANGE", &gBendRange, 13, BEND_NAMES, 0), PE("CHORD", &gChord, NCHORD, CHORD_NAMES, 0),
 	PE("GATE", &gGatePat, NGATE, GATE_NAMES, 0), PE("GATE RATE", &gGateRate, 3, GRATE_NAMES, 0), PF("GATE DEPTH", &gGateDepth, 0, 1, 0.05f, "%", 0),
 	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("GPU VISUALS", &gGpuFx, 2, ONOFF, 0), PE("FX", &gFx, 4, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
@@ -3542,7 +3547,7 @@ static Param P_MASTER[] = {
 	PEND};
 static Param P_DRUMS[] = {
 	// (patterns, BEAT, MIC TAP, tune, chance and euclid live on the DRUMS grid now: its buttons, hold a step, hold a name)
-	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, 6, KIT_NAMES, D_DRUMS), PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0), PF("ACCENT", &gDrAccAmt, 0, 1, 0.05f, "%", 0),
+	PE("DRUMS", &gDrums, 2, ONOFF2, D_DRUMS), PE("KIT", &gKit, NKIT, KIT_NAMES, D_DRUMS), PE("KIT FOLDER", &gKitDir, 1, gKitDirP, 0), {"MIC > PAD", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT}, PF("DRUM LEVEL", &gDrumLevel, 0, 1, 0.05f, "%", 0), PF("ACCENT", &gDrAccAmt, 0, 1, 0.05f, "%", 0),
 	PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("MUTE", &gDrumMute, 8, DMUTE_NAMES, 0), PE("DRUM POLY", &gDrumPoly, 2, ONOFF, 0),
 	PF("CHIP ECHO", &gCsEcho, 0, 1, 0.02f, "%", 0), PE("ECHO TIME", &gCsEchoT, 4, CSECHO_T_NAMES, 0), PF("ECHO REPEATS", &gCsEchoFb, 0, 0.85f, 0.03f, "%", 0), PI_("ECHO PITCH", &gCsEchoPitch, -12, 12, 0), PF("ECHO WOW", &gEchoWow, 0, 1, 0.05f, "%", 0),
 	PE("CHIP > FX", &gThru, 2, ONOFF2, 0), PF("CHIP CUTOFF", &gThruCut, 0, 1, 0.02f, "%", 0), PF("CHIP RES", &gThruRes, 0, 1, 0.02f, "%", 0),
@@ -4533,7 +4538,9 @@ static int noteCover(int st, int nt, int* k0) {   // the step whose note nt cove
 // PAGES: a pattern runs up to 64 steps, 4 pages of 16. The strip under the roll: tap a page to see it (one past the
 // end makes the pattern that long), tap the page you're on to turn FOLLOW (the view turns with the playhead) on / off,
 // COPY> puts this page on the next one (and makes room for it).
-#define PG_W ((320 - ROLL_KW - 52) / 4)
+#define PG_W ((320 - ROLL_KW - 52 - 34) / 4)
+static u64 gRollClrT = 0;   // CLR: the first tap of a double tap
+static int rollClrArmed(void) { return gRollClrT && osGetTime() - gRollClrT < 450; }   // a double tap
 static void drawPageStrip(void) {
 	rectP(0, PG_Y, 320, 240 - PG_Y, TH->bg);
 	text(2, PG_Y + 2, gRollFollow ? "F" : "PG", 1, RGB3(gRollFollow ? TH->val : TH->dim));
@@ -4544,12 +4551,17 @@ static void drawPageStrip(void) {
 		char t[4]; snprintf(t, sizeof(t), "%d", i + 1); const u8* c = cur ? TH->ink : has ? TH->tabTxt : TH->dim; text(x + PG_W / 2 - 4, PG_Y + 2, t, 1, c[0], c[1], c[2]);
 		if (i == pp) rectP(x + 3, PG_Y + 4, 3, 3, cur ? TH->ink : TH->keyOn);   // the playhead is on this page
 	}
-	int cx = ROLL_KW + 4 * PG_W; rectP(cx + 1, PG_Y, 320 - cx - 2, 11, gRollPg < NSTEP / ROLL_VIEW - 1 ? TH->tab : TH->bg); text(cx + 4, PG_Y + 2, "COPY>", 1, RGB3(TH->tabTxt));
+	int cx = ROLL_KW + 4 * PG_W; rectP(cx + 1, PG_Y, 50, 11, gRollPg < NSTEP / ROLL_VIEW - 1 ? TH->tab : TH->bg); text(cx + 6, PG_Y + 2, "COPY>", 1, RGB3(TH->tabTxt));
+	{ int a = rollClrArmed(), x = cx + 53; rectP(x, PG_Y, 320 - x - 1, 11, a ? TH->warn : TH->tab); text(x + (320 - x) / 2 - 12, PG_Y + 2, a ? "ALL" : "CLR", 1, RGB3(a ? TH->ink : TH->tabTxt)); }
 }
 static void undoMark(void);
 static int pageStripTouch(int x) {   // press on the strip
 	if (x < ROLL_KW) { gRollFollow = !gRollFollow; say(gRollFollow ? "FOLLOW: THE PAGE TURNS WITH THE PLAYHEAD" : "FOLLOW OFF"); return 1; }
 	int i = (x - ROLL_KW) / PG_W;
+	if (x >= ROLL_KW + 4 * PG_W + 52) {   // CLR: a double tap clears the pattern
+		if (!rollClrArmed()) { gRollClrT = osGetTime(); say("CLR: DOUBLE-TAP TO CLEAR THE PATTERN"); return 1; }
+		undoMark(); memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 16; gRollPg = 0; gRollClrT = 0; say("PATTERN CLEARED (SELECT+L UNDOES)"); return 1;
+	}
 	if (i >= 4) {   // COPY>
 		if (gRollPg >= NSTEP / ROLL_VIEW - 1) { say("THE LAST PAGE"); return 0; }
 		undoMark(); int a = RP0, b = a + ROLL_VIEW; memcpy(&gSeq[b], &gSeq[a], sizeof(Step) * ROLL_VIEW);
@@ -6211,6 +6223,37 @@ static void wtInstall(const char* base, float* fr) {
 // mic: record 1 s, then turn it into a table
 static float gMicRecT = 0;
 static void micRecStart(void) { if (!gMicOK) { say("MIC NOT AVAILABLE"); return; } gMicRecT = 1.1f; }
+// MIC > PAD: a second of the mic, from where the sound starts, becomes the picked drum's sample (kits/MIC)
+static float gMicPadT = 0;
+static void micPadStart(void) { if (!gMicOK) { say("MIC NOT AVAILABLE"); return; } gMicPadT = 1.1f; }
+static void wavWrite16(const char* path, const float* x, int n) {
+	FILE* f = fopen(path, "wb"); if (!f) return; u32 rate = 32728, dl = n * 2, rl = 36 + dl, by = rate * 2; u16 one = 1, bits = 16, ba = 2; u32 fl = 16;
+	fwrite("RIFF", 4, 1, f); fwrite(&rl, 4, 1, f); fwrite("WAVEfmt ", 8, 1, f); fwrite(&fl, 4, 1, f); fwrite(&one, 2, 1, f); fwrite(&one, 2, 1, f); fwrite(&rate, 4, 1, f); fwrite(&by, 4, 1, f); fwrite(&ba, 2, 1, f); fwrite(&bits, 2, 1, f);
+	fwrite("data", 4, 1, f); fwrite(&dl, 4, 1, f); for (int i = 0; i < n; i++) { float v = x[i] > 1 ? 1 : x[i] < -1 ? -1 : x[i]; s16 w = (s16)(v * 32000); fwrite(&w, 2, 1, f); } fclose(f);
+}
+static void kitScanDirs(void); static int gDgSel;
+static void micPadTick(float dt) {
+	if (gMicPadT <= 0) return;
+	gMicPadT -= dt;
+	static const char* PADN[NDRUM] = {"KICK", "SNARE", "HAT", "OPEN HAT", "CLAP", "RIM", "LO TOM", "HI TOM", "BELL", "CRASH"};
+	int d = gDgSel >= 0 && gDgSel < NDRUM ? gDgSel : 0;
+	char m[48]; snprintf(m, sizeof(m), "HIT THE MIC FOR %s... %.1f", PADN[d], gMicPadT > 0 ? gMicPadT : 0); say(m);
+	if (gMicPadT > 0) return;
+	u32 N = gMicSize / 2, end = micGetLastSampleOffset() / 2; const s16* mb = (const s16*)gMicBuf;
+	float* in = (float*)malloc(sizeof(float) * N); float* out = (float*)malloc(sizeof(float) * 32728);
+	if (in && out) {
+		for (u32 i = 0; i < N; i++) in[i] = mb[(end + i) % N] / 32768.0f;   // oldest to newest
+		float pk = 0; for (u32 i = 0; i < N; i++) if (fabsf(in[i]) > pk) pk = fabsf(in[i]);
+		u32 st = 0; for (u32 i = 0; i < N; i++) if (fabsf(in[i]) > pk * 0.25f) { st = i > 40 ? i - 40 : 0; break; }   // from just before the hit
+		int n = 0; for (; n < 32728; n++) { float x = st + n * 0.5f; u32 a = (u32)x; if (a + 1 >= N) break; float u = x - a; out[n] = (in[a] * (1 - u) + in[a + 1] * u) / (pk > 0.01f ? pk : 0.01f) * 0.9f; }   // 16364 -> 32728 Hz, full level
+		for (int i = 0; i < 400 && i < n; i++) out[n - 1 - i] *= i / 400.0f;
+		mkdir("sdmc:/3ds/syrup/kits", 0777); mkdir("sdmc:/3ds/syrup/kits/MIC", 0777);
+		char pth[96]; snprintf(pth, sizeof(pth), "sdmc:/3ds/syrup/kits/MIC/%s.wav", PADN[d]); wavWrite16(pth, out, n);
+		kitScanDirs(); for (int i = 0; i < gNKitDirs; i++) if (!strcmp(gKitDirs[i], "MIC")) gKitDir = i;
+		gKit = KIT_SAMPLE; gDrumWant = KIT_SAMPLE + 100; snprintf(m, sizeof(m), "%s SAMPLED (KIT: SAMPLE, MIC)", PADN[d]); say(m);
+	}
+	free(in); free(out);
+}
 static void micRecTick(float dt) {
 	if (gMicRecT <= 0) return;
 	gMicRecT -= dt;
@@ -7980,7 +8023,7 @@ static float gDrumLevel = 0.8f;
 static int gDrumCh[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, gDrumStep = -1;
 static float gDrumPh = 0;
 static s16* gDrumSmp[NDRUM]; static s16* gDrumBack[NDRUM]; static int gDrumLen[NDRUM]; static volatile int gDrumWant = -1;   // kits build into the back set, then swap: hits never read a half-built drum static int gDrumPoly = 1;   // DRUM POLY
-static const char* KIT_NAMES[6] = {"808", "909", "LOFI", "CHIP", "PERC", "WAVE"};
+static const char* KIT_NAMES[NKIT] = {"808", "909", "LOFI", "CHIP", "PERC", "WAVE", "SAMPLE"};
 static const char* KICKP_NAMES[9] = {"OFF", "FOUR FLOOR", "BREAK", "TRAP", "DNB", "HALFTIME", "BOOM BAP", "MINE", "EUCLID"};
 static const char* SNAREP_NAMES[8] = {"OFF", "BACKBEAT", "BREAK", "TRAP", "DNB", "CLAP 2+4", "MINE", "EUCLID"};
 static const char* HATP_NAMES[8] = {"OFF", "8THS", "16THS", "OFFBEAT", "TRAP ROLL", "SHUFFLE", "MINE", "EUCLID"};
@@ -8050,6 +8093,85 @@ static float metal808(float t, float k) {   // the 808's cymbal / hat source: si
 // (> centre), DRIVE saturates. TUNE, LEVEL and PAN are applied live when it plays.
 static float* gDrF = NULL; static float* gDrE = NULL; static int gDrCap = 0;
 static int dvBaked(const DVoice* v) { return v->penv || v->decay != 100 || v->tone != 100 || v->drive; }
+
+// ---- SAMPLE kit. A folder of WAVs: which drum each file is comes from its name (KICK, SNARE, HAT, OPEN HAT, CLAP,
+// RIM, LO TOM, HI TOM, BELL / COWBELL, CRASH / CYMBAL / RIDE, or BD SD HH OH CP RS LT HT CB CY, or 1..10). Any WAV
+// (8 / 16 / 24 / 32-bit, mono or stereo, any rate) is mixed to mono and resampled to 32728 Hz. A drum with no file
+// plays the 808 one. Tune, decay, tone, drive, level and pan (the SOUND editor) work on samples too.
+static void kitScanDirs(void) {
+	mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777); mkdir("sdmc:/3ds/syrup/kits", 0777); mkdir("sdmc:/3ds/syrup/kits/MY KIT", 0777);
+	char keep[32]; snprintf(keep, sizeof(keep), "%s", gNKitDirs && gKitDir < gNKitDirs ? gKitDirs[gKitDir] : "");
+	gNKitDirs = 0; DIR* d = opendir("sdmc:/3ds/syrup/kits");
+	if (d) { struct dirent* e; while ((e = readdir(d)) && gNKitDirs < 16) { if (e->d_name[0] == '.') continue;
+		char pth[160]; snprintf(pth, sizeof(pth), "sdmc:/3ds/syrup/kits/%s", e->d_name); DIR* t = opendir(pth); if (!t) continue; closedir(t);
+		snprintf(gKitRaw[gNKitDirs], 64, "%.63s", e->d_name); snprintf(gKitDirs[gNKitDirs], 32, "%.31s", e->d_name); for (char* c = gKitDirs[gNKitDirs]; *c; c++) *c = (char)toupper((unsigned char)*c); gNKitDirs++; }
+		closedir(d); }
+	for (int i = 0; i < gNKitDirs; i++) for (int j = i + 1; j < gNKitDirs; j++) if (strcmp(gKitDirs[j], gKitDirs[i]) < 0) { char t[64]; memcpy(t, gKitDirs[i], 32); memcpy(gKitDirs[i], gKitDirs[j], 32); memcpy(gKitDirs[j], t, 32); memcpy(t, gKitRaw[i], 64); memcpy(gKitRaw[i], gKitRaw[j], 64); memcpy(gKitRaw[j], t, 64); }
+	for (int i = 0; i < gNKitDirs; i++) gKitDirP[i] = gKitDirs[i];
+	if (!gNKitDirs) gKitDirP[0] = "(NONE)";
+	gKitDir = 0; for (int i = 0; i < gNKitDirs; i++) if (!strcmp(gKitDirs[i], keep)) gKitDir = i;
+	for (int pg = 0; pg < NPAGES; pg++) for (Param* p = PAGES[pg]; p->name; p++) if (p->p == &gKitDir) p->mx = (float)(gNKitDirs > 0 ? gNKitDirs - 1 : 0);
+}
+static int kitFileDrum(const char* fname) {   // which drum a file is for, from its name; -1 = none
+	char b[64]; int n = 0; for (const char* c = fname; *c && *c != '.' && n < 63; c++) b[n++] = (char)toupper((unsigned char)*c); b[n] = 0;
+	if (n >= 1 && n <= 2 && isdigit((unsigned char)b[0])) { int k = atoi(b); return k >= 1 && k <= 10 ? k - 1 : -1; }
+	static const char* EX[NDRUM][3] = {{"BD", "K", NULL}, {"SD", "S", NULL}, {"HH", "CH", "CHH"}, {"OH", "OHH", NULL}, {"CP", NULL, NULL}, {"RS", "RIM", NULL}, {"LT", NULL, NULL}, {"HT", NULL, NULL}, {"CB", NULL, NULL}, {"CY", "CC", NULL}};
+	for (int d = 0; d < NDRUM; d++) for (int k = 0; k < 3; k++) if (EX[d][k] && !strcmp(b, EX[d][k])) return d;
+	// words, most particular first (OPEN HAT before HAT, LO TOM / HI TOM before TOM)
+	if (strstr(b, "OPEN") || strstr(b, "OHAT") || strstr(b, "OPHAT")) return 3;
+	if (strstr(b, "CRASH") || strstr(b, "CYMB") || strstr(b, "RIDE")) return 9;
+	if (strstr(b, "HAT") || strstr(b, "HIHAT") || strstr(b, "HH")) return 2;
+	if (strstr(b, "KICK") || strstr(b, "BASS") || strstr(b, "KIK")) return 0;
+	if (strstr(b, "SNARE") || strstr(b, "SNR")) return 1;
+	if (strstr(b, "CLAP")) return 4;
+	if (strstr(b, "RIM") || strstr(b, "STICK")) return 5;
+	if (strstr(b, "LOTOM") || strstr(b, "LO TOM") || strstr(b, "LOW TOM") || strstr(b, "TOM1") || strstr(b, "TOM 1") || strstr(b, "FLOOR")) return 6;
+	if (strstr(b, "HITOM") || strstr(b, "HI TOM") || strstr(b, "HIGH TOM") || strstr(b, "TOM2") || strstr(b, "TOM 2")) return 7;
+	if (strstr(b, "TOM")) return 6;
+	if (strstr(b, "BELL") || strstr(b, "COW")) return 8;
+	if (strstr(b, "SNAP") || strstr(b, "SHAK") || strstr(b, "PERC")) return 5;
+	return -1;
+}
+static int wavMono(const char* path, float* out, int cap) {   // any WAV -> mono at 32728 Hz; returns samples
+	FILE* f = fopen(path, "rb"); if (!f) return 0;
+	fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);
+	if (len < 44 || len > 24 * 1024 * 1024) { fclose(f); return 0; }
+	u8* b = (u8*)malloc(len); if (!b) { fclose(f); return 0; }
+	if (fread(b, 1, len, f) != (size_t)len) { free(b); fclose(f); return 0; } fclose(f);
+	int fmt = 1, ch = 1, bits = 16; u32 rate = 32728; const u8* data = NULL; u32 dlen = 0;
+	if (!memcmp(b, "RIFF", 4) && !memcmp(b + 8, "WAVE", 4)) {
+		long o = 12;
+		while (o + 8 <= len) { u32 cl = rd32(b + o + 4);
+			if (!memcmp(b + o, "fmt ", 4)) { fmt = rd16(b + o + 8); ch = rd16(b + o + 10); rate = rd32(b + o + 12); bits = rd16(b + o + 22); if (fmt == 0xFFFE && cl >= 26) fmt = rd16(b + o + 32); }
+			else if (!memcmp(b + o, "data", 4)) { data = b + o + 8; dlen = cl; if (o + 8 + (long)dlen > len) dlen = len - o - 8; }
+			o += 8 + cl + (cl & 1); }
+	}
+	int n = 0;
+	if (data && ch >= 1 && ch <= 8 && rate >= 4000 && rate <= 192000 && (bits == 8 || bits == 16 || bits == 24 || bits == 32)) {
+		int bps = bits / 8 * ch; u32 total = dlen / bps; double step = rate / 32728.0;
+		for (n = 0; n < cap; n++) {
+			double x = n * step; u32 i0 = (u32)x; if (i0 + 1 >= total) break; float u = (float)(x - i0), v[2];
+			for (int k = 0; k < 2; k++) { float acc = 0; const u8* sp = data + (i0 + k) * bps;
+				for (int c = 0; c < ch; c++, sp += bits / 8) {
+					if (bits == 8) acc += (sp[0] - 128) / 128.0f; else if (bits == 16) acc += (s16)rd16(sp) / 32768.0f;
+					else if (bits == 24) acc += ((int)((sp[0] << 8) | (sp[1] << 16) | ((u32)sp[2] << 24)) >> 8) / 8388608.0f;
+					else if (fmt == 3) { float fv; memcpy(&fv, sp, 4); acc += fv; } else acc += (int)rd32(sp) / 2147483648.0f; }
+				v[k] = acc / ch; }
+			out[n] = v[0] * (1 - u) + v[1] * u;
+		}
+		if (n == cap) for (int i = 0; i < 256 && i < n; i++) out[n - 1 - i] *= i / 256.0f;   // cut short: fade the end
+	}
+	free(b); return n;
+}
+static int kitSampleLoad(int d, float* out, int cap) {   // the current SAMPLE folder's file for drum d
+	if (!gNKitDirs) return 0;
+	char dir[160]; snprintf(dir, sizeof(dir), "sdmc:/3ds/syrup/kits/%s", gKitRaw[gKitDir < gNKitDirs ? gKitDir : 0]);
+	DIR* dd = opendir(dir); if (!dd) return 0;
+	struct dirent* e; int n = 0;
+	while ((e = readdir(dd))) { const char* nm = e->d_name; size_t l = strlen(nm); if (l < 5 || strcasecmp(nm + l - 4, ".wav") || kitFileDrum(nm) != d) continue;
+		char pth[256]; snprintf(pth, sizeof(pth), "%s/%s", dir, nm); n = wavMono(pth, out, cap); if (n > 0) break; }
+	closedir(dd); return n;
+}
 static int drumShape(float* x, int n, int L0, const DVoice* dv, float sr, int cap) {   // returns the new length
 	int len = n;
 	float dm = dv->decay / 100.0f; if (dm < 0.1f) dm = 0.1f;
@@ -8081,7 +8203,9 @@ static int drumShape(float* x, int n, int L0, const DVoice* dv, float sr, int ca
 	int f = len < 256 ? len / 4 : 64; for (int i = 0; i < f; i++) x[len - 1 - i] *= i / (float)f;   // no click at the end
 	return len;
 }
-static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear memory for CSND
+static void drumBuild(int kitArg) {   // synthesise kick / snare / hat into linear memory for CSND
+	if (kitArg == KIT_SAMPLE) kitScanDirs();
+	int kit = kitArg == KIT_SAMPLE ? 0 : kitArg;   // SAMPLE: the 808 drums under the files (for any drum without one)
 	const float sr = 32728;
 	static const float MAXS[NDRUM] = {0.6f, 0.3f, 0.12f, 0.5f, 0.35f, 0.1f, 0.5f, 0.4f, 0.35f, 1.4f};
 	int len[NDRUM] = {(int)(sr * 0.6f), (int)(sr * 0.3f), (int)(sr * (kit == 1 ? 0.12f : 0.07f)), (int)(sr * (kit == 1 ? 0.5f : 0.4f)), (int)(sr * 0.35f),
@@ -8222,10 +8346,19 @@ static void drumBuild(int kit) {   // synthesise kick / snare / hat into linear 
 			if (bake) gDrF[i] = v; else out[i] = (s16)(v * 30000);
 		}
 		if (bake) { int n = drumShape(gDrF, Ls, L0, dvc, sr, cap); for (int i = 0; i < n; i++) { float v = gDrF[i]; out[i] = (s16)((v > 1 ? 1 : v < -1 ? -1 : v) * 30000); } len[d] = n; }
+		if (kitArg == KIT_SAMPLE && gDrF) {   // SAMPLE: the folder's file instead (the 808 drum above stays if there's none)
+			float m = dvc->decay > 100 ? dvc->decay / 100.0f : 1; int room = (int)(cap / m); if (room > gDrCap) room = gDrCap;
+			int n = kitSampleLoad(d, gDrF, room);
+			if (n > 0) {
+				if (gDrE && dvBaked(dvc)) n = drumShape(gDrF, n, n, dvc, sr, cap);
+				if (n > cap) n = cap;
+				for (int i = 0; i < n; i++) { float v = gDrF[i]; out[i] = (s16)((v > 1 ? 1 : v < -1 ? -1 : v) * 30000); } len[d] = n;
+			}
+		}
 		if (gCsndOK) CSND_FlushDataCache(out, len[d] * 2);
 	}
 	for (int d = 0; d < NDRUM; d++) { s16* t = gDrumSmp[d]; gDrumSmp[d] = gDrumBack[d]; gDrumBack[d] = t; gDrumLen[d] = len[d]; }   // swap in (the old set keeps ringing out)
-	gDrumBuilt = kit;
+	gDrumBuilt = kitArg;
 }
 static void kitToTable(void) {   // KIT > TABLE: the drum kit you have (with your SOUND edits) as a wavetable, 8 drums x 8 frames
 	if (gDrumBuilt != gKit || !gDrumSmp[0]) drumBuild(gKit);
@@ -8815,7 +8948,7 @@ static int drumGridTouch(int x, int y, int press) {   // 1 = redraw
 		if (!press) return 0;
 		if (x >= 274) { gAccMode = !gAccMode; say(gAccMode ? "ACCENT: TAP STEPS TO ACCENT THEIR COLUMN (ACC AGAIN: DONE)" : "ACCENT DONE"); return 1; }
 		if (x < 55) { gDrums = !gDrums; drumsChanged(); return 1; }
-		if (x < 110) { gKit = (gKit + 1) % 6; gDrumWant = gKit; return 1; }
+		if (x < 110) { gKit = (gKit + 1) % NKIT; gDrumWant = gKit; return 1; }
 		if (x < 153) { beatPaste(gBeatNext); gBeatNext = (gBeatNext + 1) % NBEAT; return 1; }   // BEAT: the next rhythm each tap
 		if (x >= 192 && x < 233) {   // MIC: knocks near the mic play and record onto the picked row (tap a row's name to pick)
 			if (gTapRow >= 0) { gTapRow = -1; gDrumRec = 0; gDrumSaveDue = 1; say("MIC TAP OFF"); }
@@ -9746,7 +9879,7 @@ int main(void) {
 	for (int c = 0; c < NCH; c++) gDspOwner[c] = -1;
 	for (int c = 0; c < NCS; c++) gCsOwner[c] = -1;
 	makeBusyTable();
-	scanTables();
+	scanTables(); kitScanDirs();
 	gTableCount = T_BUILTIN + gNFiles;
 
 	// default patch: A = Basic Shapes, 3-voice unison; B = Harmonix an octave up (off)
@@ -9859,7 +9992,7 @@ int main(void) {
 				armed = 0; lastHit = tnow; }
 			if (gShakeD < 0.2f) armed = 1;
 		}
-		micRecTick(1.0f / 60); prerollTick(1.0f / 60); seqTapTick(1.0f / 60); tapeTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
+		micRecTick(1.0f / 60); micPadTick(1.0f / 60); prerollTick(1.0f / 60); seqTapTick(1.0f / 60); tapeTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
 		if (midiTick()) topDirty = botDirty = 1;
 		if (gOfType) {   // OUT FILTER cutoff mod: the mod matrix and ENV 2 of the newest note
 			const SVoice* nv = newestVoice(); float m = modSum(DST_OFCUT, (SVoice*)nv);
@@ -10081,6 +10214,7 @@ int main(void) {
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "NET > TABLE")) netTabStart();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "RULE > TABLE")) ruleTable();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "KIT > TABLE")) kitToTable();
+				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "MIC > PAD")) micPadStart();
 				else if (p->dirty & D_DLWT) dlStart();
 				else if (p->dirty & D_LOOPTAB) loopToTable();
 				else if (p->dirty & D_MICTAB) micRecStart();
@@ -10108,6 +10242,7 @@ int main(void) {
 				}
 				if (page != 0 && page != 8 && page != 9) gEdited = 1;
 				if ((p->dirty & D_STYLE) && styHidden(gStyle)) gStyle = dir > 0 ? 16 : 13;   // DRUMS / GROOVE aren't in the list
+				if (p->p == &gKitDir) { gKit = KIT_SAMPLE; gDrumWant = KIT_SAMPLE + 100; }   // another SAMPLE folder: build it
 				if (p->dirty & D_STYLE) { gPreset = 0; presetLoad(gStyle, 0); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
 				if (p->dirty & D_OUT) outputApply();
 				if ((p->dirty & (D_DRUMS | D_EUCLID | D_DREC)) || p->p == &gBeatSel || p->p == &gDrumSel[0] || p->p == &gDrumSel[1] || p->p == &gDrumSel[2] || p->p == &gDrumLevel) gBeatFromPatch = 0;   // you changed the beat: it stays when you change patch

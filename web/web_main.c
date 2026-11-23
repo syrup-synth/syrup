@@ -27,6 +27,8 @@ EMSCRIPTEN_KEEPALIVE void web_link_set(int st) {
 	else if (!play && gSeqMode == 1) { gSeqMode = 0; seqStop(); }
 	if (dr != (gDrums ? 1 : 0)) { gDrums = dr; drumsChanged(); }
 }
+// SAMPLES: the page wrote WAVs into sd/kits/WEB; use them
+EMSCRIPTEN_KEEPALIVE void web_kit_reload(void) { kitScanDirs(); for (int i = 0; i < gNKitDirs; i++) if (!strcmp(gKitDirs[i], "WEB")) gKitDir = i; gKit = KIT_SAMPLE; gDrumWant = KIT_SAMPLE + 100; if (!gDrums) { gDrums = 1; drumsChanged(); } say("SAMPLE KIT: YOUR FILES"); }
 EMSCRIPTEN_KEEPALIVE void web_midi(int st, int a, int b) { midiPush((u8)st, (u8)a, (u8)b); }
 EMSCRIPTEN_KEEPALIVE void web_audio_on(int on) { W_AUDIO = on; }
 EMSCRIPTEN_KEEPALIVE int web_audio_avail(void) { return (int)(WRW - WRR); }
