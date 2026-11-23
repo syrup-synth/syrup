@@ -2,7 +2,7 @@
 // with BASS), and a held chord carried into the next patch.
 #include "syrup_host.c"
 #include "harness.h"
-static float c0; static int s0, sel0;
+static float c0; static int s0, sel0, pr0;
 static int stepN(int st) { return gSeq[st].n; }
 static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0; gFxCore2 = 0;
@@ -74,5 +74,10 @@ static void SCRIPT(int fr) {
 		if (gSeq[4].n || gSeq[6].n) fail("ERASER: scribbling across should clear the notes (%d %d)", gSeq[4].n, gSeq[6].n);
 		int any = 0; for (int i = 0; i < 16; i++) any += gSeq[i].n; if (any) fail("ERASER shouldn't add notes (%d)", any);
 	}
+	// PANIC: a long pad, its reverb on FREEZE, grains looping: all gone at once
+	if (fr == 376) { int st, ix; if (findPreset("SHIMMER CLOUD", &st, &ix)) presetLoad(st, ix); gRevMix = 0.6f; gMasterFX = 1; midiPush(0x90, 60, 110); midiPush(0x90, 67, 110); }
+	if (fr == 420) { gFreeze = 1; }
+	if (fr == 440) { midiPush(0x80, 60, 0); midiPush(0x80, 67, 0); panicAll(); pr0 = ON; }
+	if (fr == 470) { double r = rmsOf(pr0 + SEC(0.3), ON); if (r > 40) fail("PANIC: everything should be silent half a second later (%.0f rms)", r); if (gFreeze) fail("PANIC should turn FREEZE off"); }
 }
-int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 374; app_main(); printf("chord: NEW 3DS controls, stick in menus, chord types, MIDI chords, live chord REC, pads + BASS, progressions, hold over patch change\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 472; app_main(); printf("chord: NEW 3DS controls, stick in menus, chord types, MIDI chords, live chord REC, pads + BASS, progressions, hold over patch change\n"); return gFails ? 1 : 0; }

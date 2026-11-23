@@ -8512,6 +8512,24 @@ static void drumsChanged(void) {   // main thread
 // PANIC, after the notes, sequencer and arp: the loop (kept recorded: LOOPER PLAY brings it back), live REC, the tape,
 // the chip echo's tail, the drum machine, a held shake, and anything still ringing on the second chip
 static int gProgAuto;
+// PANIC really stops everything: notes cut (not released), the reverb / delay / FREEZE tails emptied, GRAINS off,
+// held MIDI keys, the arp, strummed strings, the sequencer's ringing notes - then the rest (panicRest)
+static void fxTailsClear(void) {
+	for (int i = 0; i < NCOMB; i++) { Comb* c[2] = {&gCbL[i], &gCbR[i]}; for (int k = 0; k < 2; k++) if (c[k]->b) { memset(c[k]->b, 0, c[k]->n * sizeof(float)); c[k]->st = 0; } }
+	for (int i = 0; i < NAP; i++) { APass* q[2] = {&gApL[i], &gApR[i]}; for (int k = 0; k < 2; k++) if (q[k]->b) memset(q[k]->b, 0, q[k]->n * sizeof(float)); }
+	memset(gSprBuf, 0, sizeof(gSprBuf)); dlyTypeChanged(); gRevEnv = gRevGate = gRevHold = 0;
+	for (int c = 0; c < 2; c++) { if (gMdl[c]) memset(gMdl[c], 0, MDL * sizeof(float)); if (gOfDl[c]) memset(gOfDl[c], 0, OFDL * sizeof(float)); }
+	if (gPs) memset(gPs, 0, PSN * sizeof(float)); memset(gApZ, 0, sizeof(gApZ)); memset(gPhFb, 0, sizeof(gPhFb)); memset(gCombFb, 0, sizeof(gCombFb));
+}
+static void panicRest(void);
+static int gPanicClr = 0;   // frames left to keep emptying the FX: audio already on its way in refills them
+static void panicAll(void) {
+	for (int i = 0; i < NVS; i++) if (gV[i].active) freeVoice(&gV[i]);
+	gHeldN = 0; gArpN = 0; gArpOnN = 0; gStrN = 0; gMidiHeldN = 0; gSqNn = 0; gStrumOffN = 0; gSlideOn = 0;
+	gFreeze = 0; fxTailsClear(); gPanicClr = 15;
+	if (gGrains) { gGrains = 0; grainsChanged(); }
+	panicRest();
+}
 static void panicRest(void) {
 	if (gLiveRec || gPreFor == 2) liveRecStop();
 	tapeStopPlay(); echoStop();
@@ -9992,7 +10010,7 @@ int main(void) {
 				armed = 0; lastHit = tnow; }
 			if (gShakeD < 0.2f) armed = 1;
 		}
-		micRecTick(1.0f / 60); micPadTick(1.0f / 60); prerollTick(1.0f / 60); seqTapTick(1.0f / 60); tapeTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
+		micRecTick(1.0f / 60); micPadTick(1.0f / 60); if (gPanicClr > 0) { gPanicClr--; fxTailsClear(); } prerollTick(1.0f / 60); seqTapTick(1.0f / 60); tapeTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
 		if (midiTick()) topDirty = botDirty = 1;
 		if (gOfType) {   // OUT FILTER cutoff mod: the mod matrix and ENV 2 of the newest note
 			const SVoice* nv = newestVoice(); float m = modSum(DST_OFCUT, (SVoice*)nv);
@@ -10150,8 +10168,8 @@ int main(void) {
 		}
 		if (startAct == 0) { browseSave(); if (gSaveArm >= 0) browseSave(); }   // one press from the menu: no "A again"
 		if (startAct == 1) page = 0;
-		if (startAct == 2) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0;
-			panicRest();
+		if (startAct == 2) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); curKey = -1; gProgAuto = 0;
+			panicAll();
 			say("PANIC: EVERYTHING STOPPED"); }
 		if (startAct == 4) { gThemePick = 1; botDirty = 1; }   // THEME: the picker, every theme at once
 		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
@@ -10367,7 +10385,7 @@ int main(void) {
 					int b = t.px * NPERF / 320;
 					if (b == 0) { if (gScale) { gScaleLast = gScale; gScale = 0; } else gScale = gScaleLast; char m[40]; snprintf(m, sizeof(m), "SCALE: %s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); say(m); }
 					if (b == 1) { gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0); if (gSeqMode == 0) seqStop(); }
-					if (b == 2) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; panicRest(); say("PANIC: EVERYTHING STOPPED"); }
+					if (b == 2) { latch = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); curKey = -1; gProgAuto = 0; panicAll(); say("PANIC: EVERYTHING STOPPED"); }
 					topDirty = botDirty = 1;
 				}
 			} else if (gModOn && !gPads) {
