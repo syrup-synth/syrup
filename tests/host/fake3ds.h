@@ -36,7 +36,7 @@ enum{GFX_TOP,GFX_BOTTOM}; enum{GFX_LEFT};
 enum{KEY_A=1,KEY_B=2,KEY_SELECT=4,KEY_START=8,KEY_DRIGHT=16,KEY_DLEFT=32,KEY_DUP=64,KEY_DDOWN=128,KEY_R=256,KEY_L=512,KEY_X=1024,KEY_Y=2048,KEY_ZL=1<<14,KEY_ZR=1<<15,KEY_TOUCH=1<<20};
 typedef struct{u16 px,py;}touchPosition; typedef struct{short dx,dy;}circlePosition;
 typedef struct{u8* gfx; u16 asciiOffset; u16 numChars;}ConsoleFont; typedef struct{ConsoleFont font;}PrintConsole;
-enum{NDSP_OUTPUT_MONO=0, NDSP_OUTPUT_STEREO=1, NDSP_OUTPUT_SURROUND=2, NDSP_CLIP_SOFT=1}; enum{NDSP_INTERP_POLYPHASE=0, NDSP_INTERP_LINEAR=1, NDSP_INTERP_NONE=2}; enum{NDSP_FORMAT_MONO_PCM16=5, NDSP_FORMAT_MONO_ADPCM=9};
+enum{NDSP_OUTPUT_MONO=0, NDSP_OUTPUT_STEREO=1, NDSP_OUTPUT_SURROUND=2, NDSP_CLIP_SOFT=1}; enum{NDSP_INTERP_POLYPHASE=0, NDSP_INTERP_LINEAR=1, NDSP_INTERP_NONE=2}; enum{NDSP_FORMAT_MONO_PCM16=5, NDSP_FORMAT_MONO_ADPCM=9, NDSP_FORMAT_STEREO_PCM16=6};
 typedef struct{ u16 index; s16 history0, history1; } ndspAdpcmData;
 typedef struct{ union{const void* data_vaddr; s16* data_pcm16;}; u32 nsamples; ndspAdpcmData* adpcm_data; u32 offset; bool looping; u8 status; }ndspWaveBuf;
 // harness state
@@ -51,11 +51,11 @@ static u64 osGetTime(void){return (u64)(FR*1000/60);}
 static void hidScanInput(void){} static u32 hidKeysHeld(void){return HD|(TOUCH?KEY_TOUCH:0);} static u32 hidKeysDown(void){return HD&~HDPREV;}
 static void hidTouchRead(touchPosition* t){t->px=TX;t->py=TY;} static void hidCircleRead(circlePosition* c){c->dx=CX;c->dy=CY;} static void hidCstickRead(circlePosition* c){c->dx=CSX;c->dy=CSY;}
 // ndsp emulation
-typedef struct{ ndspWaveBuf* wb; ndspWaveBuf* q[8]; int nq; double pos; float rate, mix[12]; int bq; float b0,b1,b2,a1,a2,z1,z2; int cq; int cp[5], x1,x2,y1,y2; } Ch;
+typedef struct{ ndspWaveBuf* wb; ndspWaveBuf* q[8]; int nq; double pos; float rate, mix[12]; int bq; float b0,b1,b2,a1,a2,z1,z2; int cq; int cp[5], x1,x2,y1,y2; int st; float rz1,rz2; int rx1,rx2,ry1,ry2; } Ch;
 enum{NDSP_WBUF_FREE=0,NDSP_WBUF_QUEUED=1,NDSP_WBUF_PLAYING=2,NDSP_WBUF_DONE=3};
 static Ch CH[24];
 static Result ndspInit(void){return 0;} static void ndspExit(void){} static void ndspSetOutputMode(int m){(void)m;} static void ndspSetMasterVol(float v){(void)v;}
-static void ndspChnReset(int c){memset(&CH[c],0,sizeof(Ch));} static void ndspChnSetInterp(int c,int i){(void)c;(void)i;} static void ndspChnSetFormat(int c,u16 f){(void)c;(void)f;}
+static void ndspChnReset(int c){memset(&CH[c],0,sizeof(Ch));} static void ndspChnSetInterp(int c,int i){(void)c;(void)i;} static void ndspChnSetFormat(int c,u16 f){CH[c].st=(f==NDSP_FORMAT_STEREO_PCM16);}
 static void ndspChnSetRate(int c,float r){CH[c].rate=r;} static void ndspChnSetMix(int c,float m[12]){memcpy(CH[c].mix,m,48);}
 static void ndspChnWaveBufClear(int c){CH[c].wb=NULL;CH[c].nq=0;CH[c].pos=0;} static void ndspChnWaveBufAdd(int c,ndspWaveBuf* w){ if(CH[c].wb && !CH[c].wb->looping && (!w->looping || CH[c].wb->status==NDSP_WBUF_PLAYING)){   /* like the DSP: buffers queue behind a one-shot (a looping one too) */ if(CH[c].nq<8){w->status=NDSP_WBUF_QUEUED;CH[c].q[CH[c].nq++]=w;} return;} w->status=NDSP_WBUF_PLAYING; CH[c].wb=w;CH[c].pos=0;}
 static void ndspChnIirBiquadSetEnable(int c,bool e){CH[c].bq=e;}
@@ -189,10 +189,15 @@ static void dspFrameEnd(void){
     void* p[4]={buf[0],buf[1],buf[2],buf[3]}; AUXCB[b](NULL,160,p); for(int c=0;c<2;c++) for(int i=0;i<160;i++) RET[b][c][i]=buf[c][i]/32768.0f; }
   memset(AXS,0,sizeof AXS); if(NCB) NCB(NULL); }
 static void renderFrame(void){ int n=32728/60; for(int s=0;s<n;s++){ float L=0,R=0; for(int c=0;c<24;c++){ Ch* h=&CH[c]; if(!h->wb) continue; const s16* d=h->wb->data_vaddr; int N=h->wb->nsamples;
-  int i=(int)h->pos; float u=h->pos-i; float x=(d[i%N]*(1-u)+d[(i+1)%N]*u)/32768.0f; h->pos+=h->rate/32728.0; if(h->pos>=N){ if(h->wb->status==NDSP_WBUF_PLAYING && !h->wb->looping && (h->nq||c==21||c==22)){ h->wb->status=NDSP_WBUF_DONE; if(h->nq){ h->wb=h->q[0]; memmove(h->q,h->q+1,--h->nq*sizeof(void*)); h->wb->status=NDSP_WBUF_PLAYING; h->pos=0;} else { h->wb=NULL; continue; } } else h->pos-=N*floor(h->pos/N);}
+  int i=(int)h->pos; float u=h->pos-i; float x, xr=0;
+  if(h->st){ x=d[(i%N)*2]/32768.0f; xr=d[(i%N)*2+1]/32768.0f; } else x=(d[i%N]*(1-u)+d[(i+1)%N]*u)/32768.0f;   /* stereo streams (SOFT LAYERS) play at the output rate: no interpolation needed */
+  h->pos+=h->rate/32728.0; if(h->pos>=N){ if(h->wb->status==NDSP_WBUF_PLAYING && !h->wb->looping && (h->nq||c==21||c==22||h->st)){ h->wb->status=NDSP_WBUF_DONE; if(h->nq){ h->wb=h->q[0]; memmove(h->q,h->q+1,--h->nq*sizeof(void*)); h->wb->status=NDSP_WBUF_PLAYING; h->pos=0;} else { h->wb=NULL; continue; } } else h->pos-=N*floor(h->pos/N);}
   if(h->bq && h->cq){ int xi=(int)(x*32767); long long acc=(long long)h->cp[4]*xi+(long long)h->cp[3]*h->x1+(long long)h->cp[2]*h->x2+(long long)h->cp[1]*h->y1+(long long)h->cp[0]*h->y2;
     long long y=acc>>14; if(y>32767)y=32767; if(y<-32768)y=-32768; h->x2=h->x1; h->x1=xi; h->y2=h->y1; h->y1=(int)y; x=(float)y/32768.0f; }
   else if(h->bq){ float y=h->b0*x+h->z1; h->z1=h->b1*x-h->a1*y+h->z2; h->z2=h->b2*x-h->a2*y; x=y; }
+  if(h->st){ if(h->bq && h->cq){ int xi=(int)(xr*32767); long long acc=(long long)h->cp[4]*xi+(long long)h->cp[3]*h->rx1+(long long)h->cp[2]*h->rx2+(long long)h->cp[1]*h->ry1+(long long)h->cp[0]*h->ry2; long long y=acc>>14; if(y>32767)y=32767; if(y<-32768)y=-32768; h->rx2=h->rx1; h->rx1=xi; h->ry2=h->ry1; h->ry1=(int)y; xr=(float)y/32768.0f; }
+    else if(h->bq){ float y=h->b0*xr+h->rz1; h->rz1=h->b1*xr-h->a1*y+h->rz2; h->rz2=h->b2*xr-h->a2*y; xr=y; }
+    L+=x*h->mix[0]; R+=xr*h->mix[1]; AXS[0][0][FPOS]+=x*h->mix[4]; AXS[0][1][FPOS]+=xr*h->mix[5]; AXS[1][0][FPOS]+=x*h->mix[8]; AXS[1][1][FPOS]+=xr*h->mix[9]; continue; }
   L+=x*h->mix[0]; R+=x*h->mix[1]; AXS[0][0][FPOS]+=x*h->mix[4]; AXS[0][1][FPOS]+=x*h->mix[5]; AXS[1][0][FPOS]+=x*h->mix[8]; AXS[1][1][FPOS]+=x*h->mix[9]; }
   L+=RET[0][0][FPOS]+RET[1][0][FPOS]; R+=RET[0][1][FPOS]+RET[1][1][FPOS];
   DOUT[(DPOS&4095)*2]=(s16)((L>1?1:L<-1?-1:L)*32767); DOUT[(DPOS&4095)*2+1]=(s16)((R>1?1:R<-1?-1:R)*32767); DPOS++;   // the DSP's own output: what ndsp capture hears (not the second chip)

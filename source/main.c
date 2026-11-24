@@ -726,7 +726,7 @@ static void buildNoise(void) {
 #define NVS 48
 #define NCS 32
 #define NOISE_CH 23
-enum { R_A0, R_A1, R_A2, R_B0, R_B1, R_B2, R_SUB, R_TAP, R_COUNT };
+enum { R_A0, R_A1, R_A2, R_B0, R_B1, R_B2, R_SUB, R_TAP, R_SOFT, R_COUNT };   // R_SOFT: one DSP channel carrying a note's oscillator layers mixed in software (SOFT LAYERS)
 enum { BK_DSP, BK_CSND };
 typedef struct {
 	int active, started, note, stage, stage2, isEcho, nch;
@@ -793,6 +793,116 @@ static u8 gWbPend[NCH];   // a voice layer waiting to start with its first volum
 // its next 5 ms frame. On a sine (G-FUNK SINE, EP SATURDAY) each 16 ms step was a click, worst on note changes.
 // The main loop now sets targets and the audio tick walks every channel there over ~3 DSP frames.
 static float gMixTgt[NCH][12], gMixCur[NCH][12]; static u8 gMixLive[NCH];
+// ---------------------------------------------------------------- SOFT LAYERS
+// A note's oscillator layers (OSC A and B, every unison voice) mixed in software into ONE stereo stream on ONE DSP
+// channel, instead of a DSP channel per layer. 24 channels then hold ~20 notes, unison or not (a 3+3 patch used to
+// get 3). The channel's filter still makes the note's filter; the stream carries the pans, detunes and levels.
+// From ESP32Synth: integer phase accumulators into power-of-two tables, gains that move per sample (no zipper), and
+// half-cosine S-curves for every start and stop (no clicks). The render runs in the DSP's audio callback, outside the
+// voice lock (a lock it can't get would be a dropout); the main loop only writes targets. If the render gets too
+// heavy for the CPU, new notes go back to a channel per layer.
+#define SOFT_BLK 160          // one DSP frame
+#define SOFT_NB 2             // blocks queued per channel: ~10 ms ahead
+#define SOFT_L 6              // layers per note (3 + 3 unison)
+#define SOFT_FADE 96          // S-curve length, samples (~3 ms)
+#define SOFT_HEAD 4.0f        // the stream is s16: rendered at 1/4, the channel's mix gives it back
+typedef struct {
+	volatile int on, out;     // out: >0 fading out (samples left); the channel is busy (owner -3) until the fade is done
+	volatile int armed;       // the main loop has set its first pitches and levels: rendering starts then (no silent blocks queued ahead of the note)
+	int n, in;                // layers; samples faded in so far
+	const s16* tab[SOFT_L]; u32 sh[SOFT_L], mask[SOFT_L];
+	u32 ph[SOFT_L], inc[SOFT_L];
+	float gl[SOFT_L], gr[SOFT_L], cl[SOFT_L], cr[SOFT_L];   // targets (main loop) and where the render is
+	int role[SOFT_L];
+} SoftCh;
+static u8 gSoftFresh[NCH], gSoftLive[NCH]; static float gSoftLimS = 0, gSoftLimA = 0;   // fresh: its mix goes straight on (the render fades it in); live: a carrier this frame
+static int gSoftPend[SOFT_L], gSoftPendN = 0;   // startVoice -> startLayer: the layers the carrier takes
+static SoftCh gSoftC[NCH];
+static s16* gSoftBuf[NCH][SOFT_NB]; static ndspWaveBuf gSoftWB[NCH][SOFT_NB];
+static LightLock gSoftLock; static int gSoftInit = 0;
+static int gSoftMode = 1;   // LAYERS: 0 = HARDWARE (a channel per layer), 1 = SOFT
+static const char* SOFTMODE_NAMES[2] = {"HARDWARE", "SOFT"};
+static volatile float gSoftCpu = 0;   // share of a DSP frame the render took (smoothed)
+static float gSCurve[SOFT_FADE + 1];
+static void softInit(void) {
+	if (gSoftInit) return; LightLock_Init(&gSoftLock);
+	for (int i = 0; i <= SOFT_FADE; i++) gSCurve[i] = 0.5f - 0.5f * cosf(3.14159265f * i / SOFT_FADE);
+	gSoftInit = 1;
+}
+static void softBlock(int ch, s16* out) {   // one block of one channel (gSoftLock held)
+	SoftCh* S = &gSoftC[ch]; int n = S->n;
+	float L[SOFT_BLK], R[SOFT_BLK];
+	memset(L, 0, sizeof(L)); memset(R, 0, sizeof(R));
+	for (int k = 0; k < n; k++) {
+		const s16* t = S->tab[k]; if (!t) continue;
+		u32 ph = S->ph[k], inc = S->inc[k], sh = S->sh[k], mk = S->mask[k];
+		float gl = S->cl[k], gr = S->cr[k], dgl = (S->gl[k] - gl) * (1.0f / SOFT_BLK), dgr = (S->gr[k] - gr) * (1.0f / SOFT_BLK);
+		for (int i = 0; i < SOFT_BLK; i++) {
+			u32 ix = ph >> sh; int a = t[ix], b = t[(ix + 1) & mk];
+			float v = a + (b - a) * (int)((ph << (32 - sh)) >> 17) * (1.0f / 32768.0f);   // linear, 15-bit fraction (signed: the difference can be negative)
+			L[i] += v * gl; R[i] += v * gr; gl += dgl; gr += dgr; ph += inc;
+		}
+		S->ph[k] = ph; S->cl[k] = S->gl[k]; S->cr[k] = S->gr[k];
+	}
+	for (int i = 0; i < SOFT_BLK; i++) {
+		float e = 1;
+		if (S->out > 0) { int r = S->out - i; e = r <= 0 ? 0 : gSCurve[r > SOFT_FADE ? SOFT_FADE : r]; }
+		else if (S->in < SOFT_FADE) e = gSCurve[S->in + i < SOFT_FADE ? S->in + i : SOFT_FADE];
+		float l = L[i] * e * (1.0f / SOFT_HEAD), r = R[i] * e * (1.0f / SOFT_HEAD);
+		if (l > 32767) l = 32767; if (l < -32768) l = -32768; if (r > 32767) r = 32767; if (r < -32768) r = -32768;
+		out[i * 2] = (s16)l; out[i * 2 + 1] = (s16)r;
+	}
+	if (S->out > 0) { S->out -= SOFT_BLK; if (S->out <= 0) S->out = -1; }   // -1: faded, stop once it has played
+	else if (S->in < SOFT_FADE) S->in += SOFT_BLK;
+}
+static void softQueue(int ch) {   // keep SOFT_NB blocks queued on a carrier (gSoftLock held)
+	SoftCh* S = &gSoftC[ch];
+	for (int b = 0; b < SOFT_NB; b++) {
+		ndspWaveBuf* w = &gSoftWB[ch][b];
+		if (w->status == NDSP_WBUF_QUEUED || w->status == NDSP_WBUF_PLAYING) continue;
+		if (S->out == -1 || !S->armed) continue;   // nothing more to say / nothing to say yet
+		if (!gSoftBuf[ch][b] && !(gSoftBuf[ch][b] = (s16*)linearAlloc(SOFT_BLK * 4))) return;
+		softBlock(ch, gSoftBuf[ch][b]);
+		DSP_FlushDataCache(gSoftBuf[ch][b], SOFT_BLK * 4);
+		memset(w, 0, sizeof(*w)); w->data_vaddr = gSoftBuf[ch][b]; w->nsamples = SOFT_BLK;
+		ndspChnWaveBufAdd(ch, w);
+	}
+}
+static void softRender(void) {   // the DSP's audio callback, every frame; no voice lock
+	if (!gSoftInit) return;
+	u64 t0 = svcGetSystemTick(); int any = 0;
+	LightLock_Lock(&gSoftLock);
+	for (int ch = 0; ch < NCH; ch++) {
+		SoftCh* S = &gSoftC[ch]; if (!S->on) continue; any = 1;
+		if (S->out == -1) {   // faded out: once its last block has played, the channel is free
+			int busy = 0; for (int b = 0; b < SOFT_NB; b++) if (gSoftWB[ch][b].status == NDSP_WBUF_QUEUED || gSoftWB[ch][b].status == NDSP_WBUF_PLAYING) busy = 1;
+			if (!busy) { ndspChnWaveBufClear(ch); S->on = 0; S->out = 0; gDspOwner[ch] = -1;
+				if (gQScream > 0.001f && ch < 24) { ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, 0, 0, 0, 0, 0); gChClean[ch] = 1; } }   // (SCREAM: its filter flushed while silent, as stopCh does)
+			continue;
+		}
+		softQueue(ch);
+	}
+	LightLock_Unlock(&gSoftLock);
+	if (any) { float f = (float)(svcGetSystemTick() - t0) / (268111856.0f * SOFT_BLK / 32728.0f); gSoftCpu += (f - gSoftCpu) * 0.05f; }
+}
+static void softCutAll(void) {
+	if (!gSoftInit) return;
+	LightLock_Lock(&gSoftLock);
+	for (int ch = 0; ch < NCH; ch++) if (gSoftC[ch].on) { ndspChnWaveBufClear(ch); gSoftC[ch].on = 0; gSoftC[ch].out = 0; if (gDspOwner[ch] == -3) gDspOwner[ch] = -1;
+		if (gQScream > 0.001f) { ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, 0, 0, 0, 0, 0); gChClean[ch] = 1; } }
+	LightLock_Unlock(&gSoftLock);
+}
+static int softStop(int ch) {   // stopCh: a carrier fades instead of cutting (1 = handled)
+	if (ch < 0 || ch >= NCH || !gSoftInit || !gSoftC[ch].on) return 0;
+	LightLock_Lock(&gSoftLock);
+	if (gSoftC[ch].on && !gSoftC[ch].out) {
+		if (gAudioClock) { gSoftC[ch].out = SOFT_FADE + SOFT_BLK; gDspOwner[ch] = -3; }
+		else { ndspChnWaveBufClear(ch); gSoftC[ch].on = 0; gDspOwner[ch] = -1; }
+	}
+	LightLock_Unlock(&gSoftLock);
+	if (ch < NCH) { gWbPend[ch] = 0; gMixLive[ch] = 0; }
+	return 1;
+}
 // TRANCE GATE: the voices chopped in time with the clock by a 16-step on / off pattern. Each lit step opens
 // for its first 60%; DEPTH is how far it closes (100% = silence between). Runs in the audio tick with the ramps.
 #define NGATE 8
@@ -822,8 +932,10 @@ static void mixRampTick(void) {   // audio tick, voice lock held
 		if (moved) { float m[12]; for (int k = 0; k < 12; k++) m[k] = gMixCur[c][k] * g; ndspChnSetMix(c, m); }
 	}
 }
+static int softStop(int ch);
 static void stopCh(int bk, int ch) {
 	if (bk == BK_DSP) {
+		if (softStop(ch)) return;   // a SOFT carrier: it fades out (half-cosine) in the render, then lets the channel go
 		ndspChnWaveBufClear(ch); gDspOwner[ch] = -1; if (ch >= 0 && ch < NCH) { gWbPend[ch] = 0; gMixLive[ch] = 0; }
 		if (gQScream > 0.001f && ch < 24) { ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, 0, 0, 0, 0, 0); gChClean[ch] = 1; }   // flush while silent: no gap on the next note
 	}
@@ -849,7 +961,7 @@ static int echoReserved(int c);
 static int csUsable(int c) { return gCsndOK && (csndChannels & BIT(c)) && !tapeReserved(c) && !drumReserved(c) && !chipReserved(c) && !echoReserved(c); }
 static int freeCount(int bk) {
 	int n = 0;
-	if (bk == BK_DSP) { for (int c = 0; c < NCH; c++) if (dspUsable(c) && gDspOwner[c] < 0) n++; }
+	if (bk == BK_DSP) { for (int c = 0; c < NCH; c++) if (dspUsable(c) && (gDspOwner[c] == -1 || gDspOwner[c] == -3)) n++; }   // (-3: a SOFT carrier fading out: takeCh can have it)
 	else for (int c = 0; c < NCS; c++) if (csUsable(c) && gCsOwner[c] == -1) n++;
 	return n;
 }
@@ -873,7 +985,12 @@ static int stealFor(int bk, int n, int self) {
 	return 1;
 }
 static int takeCh(int bk, int vi) {
-	if (bk == BK_DSP) { for (int c = 0; c < NCH; c++) if (dspUsable(c) && gDspOwner[c] < 0) { gDspOwner[c] = vi; return c; } }
+	if (bk == BK_DSP) {
+		for (int c = 0; c < NCH; c++) if (dspUsable(c) && gDspOwner[c] == -1) { gDspOwner[c] = vi; return c; }
+		for (int c = 0; c < NCH; c++) if (dspUsable(c) && gDspOwner[c] == -3) {   // only fading SOFT carriers left: cut one short
+			LightLock_Lock(&gSoftLock); ndspChnWaveBufClear(c); gSoftC[c].on = 0; gSoftC[c].out = 0; LightLock_Unlock(&gSoftLock);
+			gDspOwner[c] = vi; return c; }
+	}
 	else for (int c = 0; c < NCS; c++) if (csUsable(c) && gCsOwner[c] == -1) { gCsOwner[c] = vi; return c; }
 	return -1;
 }
@@ -937,9 +1054,11 @@ static float roleFreq(const SVoice* v, int role) {
 	return f * oscTune(gOsc[0].on ? 0 : 1);
 }
 
+static void softStart(SVoice* v, int ch);
 static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 	int ch = takeCh(bk, vi);
 	v->ch[i] = ch; v->bk[i] = bk; v->role[i] = role;
+	if (role == R_SOFT) { v->lev[i] = 0; if (ch >= 0) softStart(v, ch); return; }
 	float f = roleFreq(v, role);
 	v->lev[i] = (role == R_TAP || (role == R_SUB && gCsndOK)) ? levelDamped(f, baseCutoff() * v->cutMul + 200) : levelFor(f * 1.03f);   // (a SUB sounds the same on either chip)
 	Mips* m = roleMips(role);
@@ -999,6 +1118,37 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 	}
 }
 
+static void softStart(SVoice* v, int ch) {   // a SOFT carrier: its layers' tables and phases; the main loop sets pitches and levels
+	softInit();
+	const s16* tab[SOFT_L]; int bits[SOFT_L];
+	for (int k = 0; k < gSoftPendN; k++) {   // each layer's mip level, built if it isn't (as startLayer does)
+		int r = gSoftPend[k]; float f = roleFreq(v, r); int lev = levelFor(f * 1.03f); Mips* m = roleMips(r);
+		if (!gInAudioTick) LightLock_Lock(&gMipsLock);
+		if (!(m->built & (1u << lev))) {
+			if (gInAudioTick) { int L = lev + 1; while (L < NLEV && !(m->built & (1u << L))) L++; if (L < NLEV) lev = L; else if (!gTickNoMips) mipsBuildLevel(m, lev); }
+			else mipsBuildLevel(m, lev);
+		}
+		if (!gInAudioTick) LightLock_Unlock(&gMipsLock);
+		tab[k] = m->lev[lev]; int N = LEVN[lev], b = 0; while ((1 << b) < N) b++; bits[k] = b;
+	}
+	LightLock_Lock(&gSoftLock);
+	SoftCh* S = &gSoftC[ch]; memset(S, 0, sizeof(*S));
+	S->n = gSoftPendN;
+	for (int k = 0; k < S->n; k++) {
+		int r = gSoftPend[k], u = r <= R_A2 ? r - R_A0 : r - R_B0;
+		S->role[k] = r; S->tab[k] = tab[k]; S->sh[k] = 32 - bits[k]; S->mask[k] = (1u << bits[k]) - 1;
+		S->ph[k] = 0; (void)u;   // every layer from the cycle's start, as the hardware layers do (the unison attack keeps its punch and the patches their level)
+	}
+	for (int b = 0; b < SOFT_NB; b++) gSoftWB[ch][b].status = NDSP_WBUF_DONE;
+	ndspChnWaveBufClear(ch); ndspChnReset(ch); ndspChnSetFormat(ch, NDSP_FORMAT_STEREO_PCM16);
+	ndspChnSetInterp(ch, NDSP_INTERP_NONE); ndspChnSetRate(ch, 32728);
+	{ float mix[12] = {0}; ndspChnSetMix(ch, mix); }
+	filterSet(ch, 2000, 0);
+	gMixLive[ch] = 1; memset(gMixCur[ch], 0, sizeof(gMixCur[ch])); gSoftFresh[ch] = 1; gWbPend[ch] = 0;
+	if (ch < 24) gChClean[ch] = 0;
+	S->on = 1;
+	LightLock_Unlock(&gSoftLock);
+}
 static void chipStart(SVoice* v, int vi);
 static int freeCount(int bk);
 static int subBk(int dspNeeded) {   // SUB on a DSP channel when there's room (its starts / stops ramp sample-smooth there: the
@@ -1018,6 +1168,15 @@ static void startVoice(int vi) {
 		else {
 		for (int o = 0; o < 2; o++) if (gOsc[o].on) for (int u = 0; u < gOsc[o].uni; u++) { roles[nr] = (o ? R_B0 : R_A0) + u; bks[nr++] = BK_DSP; }
 		if (gSubLevel > 0.01f) { roles[nr] = R_SUB; bks[nr++] = subBk(nr); }
+		}
+	}
+	if (!v->isEcho && gSoftMode && gAudioClock && gSoftCpu < 0.6f && gQScream < 0.001f) {   // SOFT LAYERS: the oscillator layers ride one channel (SCREAM wants a filter per layer: hardware)
+		int no = 0; for (int i = 0; i < nr; i++) if (roles[i] <= R_B2) no++;
+		if (no >= 2) {
+			int k = 0, r2[R_COUNT], b2[R_COUNT], n2 = 0; gSoftPendN = 0;
+			for (int i = 0; i < nr; i++) if (roles[i] <= R_B2) { if (k < SOFT_L) gSoftPend[k++] = roles[i]; } else { r2[n2] = roles[i]; b2[n2++] = bks[i]; }
+			gSoftPendN = k; roles[0] = R_SOFT; bks[0] = BK_DSP; nr = 1;
+			for (int i = 0; i < n2; i++) { roles[nr] = r2[i]; bks[nr++] = b2[i]; }
 		}
 	}
 	for (int i = 0; i < nr; i++) { if (bks[i] == BK_DSP) nd++; else nc++; }
@@ -1280,7 +1439,8 @@ static void voicesUpdate(float dt, float bend) {
 	gChorusPh += dt * 0.7f * TWO_PI;
 	noiseChannel(gNoiseLevel > 0.01f);
 	static float dL[NCH], dR[NCH], cL[NCS], cR[NCS];
-	for (int c = 0; c < NCH; c++) dL[c] = dR[c] = -1;
+	for (int c = 0; c < NCH; c++) { dL[c] = dR[c] = -1; gSoftLive[c] = 0; }
+	gSoftLimS = 0; gSoftLimA = 0;
 	for (int c = 0; c < NCS; c++) cL[c] = cR[c] = -1;
 	float gl = gGlide > 0 ? 1.0f - expf(-dt / (gGlide * 0.35f)) : 1.0f;
 	float noiseAmt = 0;
@@ -1316,6 +1476,22 @@ static void voicesUpdate(float dt, float bend) {
 
 		for (int k = 0; k < v->nch; k++) {
 			int ch = v->ch[k], role = v->role[k]; if (ch < 0) continue;
+			if (role == R_SOFT) {   // SOFT LAYERS: each layer's level, pan and pitch go to the render; the channel is the filter
+				SoftCh* S = &gSoftC[ch];
+				for (int j = 0; j < S->n; j++) {
+					int r = S->role[j], o = r >= R_B0, u = r - (o ? R_B0 : R_A0); float det = 0, pan = 0.5f, ug = 1;
+					uniParams(&gOsc[o], u, &det, &pan, &ug); ug /= sqrtf((float)gOsc[o].uni);
+					if (gChorus > 0 && gOsc[o].uni > 1 && u > 0) det += gChorus * 12.0f * sinf(gChorusPh + u * 2.1f + o);
+					pan += v->pan + panMod; if (pan < 0) pan = 0; if (pan > 1) pan = 1;
+					float g = vg * ug * (o ? bLev : aLev) * fcomp, L = g * sqrtf(1 - pan) * 1.41f, R = g * sqrtf(pan) * 1.41f;
+					float rate = roleFreq(v, r) * pm * powf(2.0f, det / 1200.0f);   // cycles a second
+					S->gl[j] = L; S->gr[j] = R; S->inc[j] = (u32)(rate / 32728.0f * 4294967296.0f);
+					gSoftLimS += L * L + R * R; gSoftLimA += L > R ? L : R;
+				}
+				S->armed = 1; dL[ch] = dR[ch] = SOFT_HEAD; gSoftLive[ch] = 1;
+				filterSet(ch, cutoff, res);
+				continue;
+			}
 			float det = 0, pan = 0.5f, ug = 1, lv = 1, f = roleFreq(v, role);
 			if (role <= R_B2) {
 				int o = role >= R_B0, u = role - (o ? R_B0 : R_A0);
@@ -1358,7 +1534,8 @@ static void voicesUpdate(float dt, float bend) {
 	}
 	// limiter across every channel (DSP + CSND): estimate the summed peak, scale everything together
 	float sl = 0, sr = 0, al = 0, ar = 0;
-	for (int c = 0; c < NCH; c++) if (dL[c] >= 0) { sl += dL[c] * dL[c]; sr += dR[c] * dR[c]; al += dL[c]; ar += dR[c]; }
+	for (int c = 0; c < NCH; c++) if (dL[c] >= 0 && !gSoftLive[c]) { sl += dL[c] * dL[c]; sr += dR[c] * dR[c]; al += dL[c]; ar += dR[c]; }
+	sl += gSoftLimS * 0.5f; sr += gSoftLimS * 0.5f; al += gSoftLimA; ar += gSoftLimA;   // SOFT carriers: what their layers add up to
 	for (int c = 0; c < NCS; c++) if (cL[c] >= 0) { sl += cL[c] * cL[c]; sr += cR[c] * cR[c]; al += cL[c]; ar += cR[c]; }
 	float estL = sqrtf(sl) * 0.9f + al * 0.5f, estR = sqrtf(sr) * 0.9f + ar * 0.5f;
 	float est = estL > estR ? estL : estR;
@@ -1384,6 +1561,7 @@ static void voicesUpdate(float dt, float bend) {
 			gMixLive[c] = !echo;
 		}
 		{ float ig = gAutoGain > 1e-4f ? 1.0f / gAutoGain : 0; for (int k = 0; k < 12; k++) gMixTgt[c][k] = mix[k] * ig; }   // the ramp moves the envelope; the limiter gain applies straight
+		if (gSoftFresh[c]) { gSoftFresh[c] = 0; memcpy(gMixCur[c], gMixTgt[c], sizeof(gMixCur[c])); ndspChnSetMix(c, mix); }   // a SOFT carrier: its level is in the stream (faded in there)
 		if (!gMixLive[c] || !gAudioClock) { memcpy(gMixCur[c], gMixTgt[c], sizeof(mix)); ndspChnSetMix(c, mix); }   // channels outside the voices (noise) and no audio clock: as before
 	}
 	int any = 0;
@@ -2226,6 +2404,7 @@ static void csRampTick(void) {   // audio tick, voice lock held: SUB layers on t
 static void progTick(void); static void bassTick(float dt);
 static void audioTick(void* data) {
 	(void)data;
+	softRender();   // SOFT LAYERS first, and without the voice lock: a block it can't render is a gap
 	if (!gAudioClock) return;
 	// time comes from the DSP's own frame counter, not from how often this callback ran: when the ndsp thread or
 	// the voice lock makes us miss frames, the clock still advances by exactly the audio that played, so the
@@ -3742,7 +3921,7 @@ static Param P_MASTER[] = {
 	PF("OTT", &gOtt, 0, 1, 0.02f, "%", 0), PF("PUMP", &gPump, 0, 1, 0.02f, "%", 0), PE("PUMP RATE", &gPumpRate, 4, PUMP_NAMES, 0),
 	PE("LOFI BITS", &gLofiBits, 6, BITS_NAMES, 0), PF("LOFI RATE", &gLofiRate, 0, 1, 0.02f, "%", 0),
 	PF("3D ORBIT", &gOrbit, 0, 1, 0.02f, "%", 0), PF("ORBIT RATE", &gOrbitRate, 0, 2, 0.02f, "HZ", 0),
-	PE("CIRCLE PAD", &gStickMode, 4, STICK_NAMES, 0), PE("NEW 3DS CONTROLS", &gN3, 2, ONOFF, 0), PE("XY GLIDE", &gXyGlide, 4, XYG_NAMES, 0), PE("SPEAKER EQ", &gSpkEq, 3, SPK_NAMES, 0), PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
+	PE("CIRCLE PAD", &gStickMode, 4, STICK_NAMES, 0), PE("NEW 3DS CONTROLS", &gN3, 2, ONOFF, 0), PE("XY GLIDE", &gXyGlide, 4, XYG_NAMES, 0), PE("SPEAKER EQ", &gSpkEq, 3, SPK_NAMES, 0), PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("LAYERS", &gSoftMode, 2, SOFTMODE_NAMES, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
 	PEND};
 static Param P_DRUMS[] = {
 	// (patterns, BEAT, MIC TAP, tune, chance and euclid live on the DRUMS grid now: its buttons, hold a step, hold a name)
@@ -4304,7 +4483,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS; KICK = SIDECHAIN FROM THE DRUMS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM PART ON / OFF: IT PLAYS WITH PLAY"}, {"KIT", "DRUM SOUNDS"}, {"ACCENT", "HOW MUCH LOUDER ACC STEPS HIT"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"CLICK", "METRONOME: COUNT-IN / RECORDING / ALWAYS (NEVER ON TAPE)"}, {"CLICK LEVEL", "METRONOME VOLUME"}, {"SEQ RATE", "A STEP IS A 16TH, A 32ND OR AN 8TH"}, {"REC QUANT", "16TH, 8TH, 32ND, OR OFF (KEEPS YOUR TIMING)"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"CLICK", "METRONOME: COUNT-IN / RECORDING / ALWAYS (NEVER ON TAPE)"}, {"CLICK LEVEL", "METRONOME VOLUME"}, {"SEQ RATE", "A STEP IS A 16TH, A 32ND OR AN 8TH"}, {"REC QUANT", "16TH, 8TH, 32ND, OR OFF (KEEPS YOUR TIMING)"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"LAYERS", "SOFT: A NOTE'S UNISON ON ONE CHANNEL (MANY MORE NOTES)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -9145,6 +9324,7 @@ static void panicRest(void);
 static int gPanicClr = 0;   // frames left to keep emptying the FX: audio already on its way in refills them
 static void panicAll(void) {
 	for (int i = 0; i < NVS; i++) if (gV[i].active) freeVoice(&gV[i]);
+	softCutAll();   // PANIC: no fade-outs either
 	gHeldN = 0; gArpN = 0; gArpOnN = 0; gStrN = 0; gMidiHeldN = 0; gSqNn = 0; gStrumOffN = 0; gSlideOn = 0; gBassNote = -1; gBassStep = -1;
 	gFreeze = 0; fxTailsClear(); gPanicClr = 15;
 	if (gGrains) { gGrains = 0; grainsChanged(); }
