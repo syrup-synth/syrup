@@ -2464,7 +2464,9 @@ static void playSet(const int* notes, int n, float vel) {
 // fl: 1 accent, 2 slide into the next step. Per-step locks (0 = none): gate % (0 = SEQ GATE), skip = chance in % that
 // the step doesn't play, cut / res -100..100 on top of the patch, pitch in semitones, nudge -50..50 % of a step
 typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; u8 gate, skip; s8 cut, res, pitch, nudge; u8 len[4]; u8 rat; } StepV2;   // seq.bin before conditions
-typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; u8 gate, skip; s8 cut, res, pitch, nudge; u8 len[4]; u8 rat; u8 cond; } Step;   // cond: an Elektron-style trig condition (COND_NAMES)   // len: steps each note lasts (0 = 1); rat: hits in the step (0/1 = one, 2-4 = a roll)
+typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; u8 gate, skip; s8 cut, res, pitch, nudge; u8 len[4]; u8 rat; u8 cond; } StepV3;   // seq.bin before parameter locks
+#define NLOCK 3
+typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; u8 gate, skip; s8 cut, res, pitch, nudge; u8 len[4]; u8 rat; u8 cond; u8 lk[NLOCK], lv[NLOCK]; } Step;   // lk: PARAMETER LOCKS (1 + PLK_NAMES index, 0 = none), lv: the value 0-255   // cond: an Elektron-style trig condition (COND_NAMES)   // len: steps each note lasts (0 = 1); rat: hits in the step (0/1 = one, 2-4 = a roll)
 typedef struct { s8 n; u8 note[4]; u8 vel; u8 fl; u8 gate, skip; s8 cut, res, pitch, nudge; } StepV1;   // seq.bin before note lengths
 #define NSTEP 64   // up to 4 pages of 16
 #define NSTEP16 16   // the step count of files from before pages
@@ -2479,7 +2481,8 @@ static int gSeqKeys = 0; static const char* SEQKEYS_NAMES[2] = {"PLAY", "TRANSPO
 #define NPAT 16
 #define NSONG 64
 typedef struct { Step st[NSTEP]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8], rowNote[8]; } SeqPat;
-typedef struct { Step st[NSTEP16]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8], rowNote[8]; } SeqPat16;   // before pages
+typedef struct { StepV3 st[NSTEP16]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8], rowNote[8]; } SeqPat16;   // before pages
+typedef struct { StepV3 st[NSTEP]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8], rowNote[8]; } SeqPatV3;   // before parameter locks
 typedef struct { StepV2 st[NSTEP16]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8], rowNote[8]; } SeqPatV2;   // rowNote: the pitch a rhythm row plays
 typedef struct { StepV1 st[NSTEP16]; s16 len, base; u8 rowLen[8], rowHits[8], rowRot[8]; } SeqPatV1;
 static SeqPat gPat[NPAT];
@@ -2534,10 +2537,16 @@ static void seqLoad(void) {
 	u32 m = 0; int hdr[4]; static SeqPat tmp[NPAT]; static SeqPatV1 old[NPAT]; u8 song[NSONG]; int ok = 0;
 	if (fread(&m, 4, 1, f) == 1 && m == SEQ_MAGIC && fread(hdr, sizeof(hdr), 1, f) == 1) {
 		if (hdr[3] == (int)sizeof(SeqPat)) ok = fread(tmp, sizeof(tmp), 1, f) == 1;
+		else if (hdr[3] == (int)sizeof(SeqPatV3)) {   // before parameter locks: the same steps, none locked
+			static SeqPatV3 v3[NPAT];
+			if (fread(v3, sizeof(v3), 1, f) == 1) { memset(tmp, 0, sizeof(tmp)); ok = 1;
+				for (int p = 0; p < NPAT; p++) { for (int k = 0; k < NSTEP; k++) memcpy(&tmp[p].st[k], &v3[p].st[k], sizeof(StepV3));
+					tmp[p].len = v3[p].len; tmp[p].base = v3[p].base; memcpy(tmp[p].rowLen, v3[p].rowLen, 8); memcpy(tmp[p].rowHits, v3[p].rowHits, 8); memcpy(tmp[p].rowRot, v3[p].rowRot, 8); memcpy(tmp[p].rowNote, v3[p].rowNote, 8); } }
+		}
 		else if (hdr[3] == (int)sizeof(SeqPat16)) {   // before pages: 16 steps, the rest of the 64 empty
 			static SeqPat16 s16[NPAT];
 			if (fread(s16, sizeof(s16), 1, f) == 1) { memset(tmp, 0, sizeof(tmp)); ok = 1;
-				for (int p = 0; p < NPAT; p++) { memcpy(tmp[p].st, s16[p].st, sizeof(s16[p].st)); tmp[p].len = s16[p].len; tmp[p].base = s16[p].base;
+				for (int p = 0; p < NPAT; p++) { for (int k = 0; k < NSTEP16; k++) memcpy(&tmp[p].st[k], &s16[p].st[k], sizeof(StepV3)); tmp[p].len = s16[p].len; tmp[p].base = s16[p].base;
 					memcpy(tmp[p].rowLen, s16[p].rowLen, 8); memcpy(tmp[p].rowHits, s16[p].rowHits, 8); memcpy(tmp[p].rowRot, s16[p].rowRot, 8); memcpy(tmp[p].rowNote, s16[p].rowNote, 8); } }
 		}
 		else if (hdr[3] == (int)sizeof(SeqPatV2)) {   // before trig conditions: the same steps, every one ALWAYS
@@ -2600,7 +2609,8 @@ static void sqRelease(SqN* q) { if (!q->rel) { voiceOff(q->note); q->rel = 1; } 
 static void sqCompact(void) { int k = 0; for (int i = 0; i < gSqNn; i++) if (!(gSqN[i].rel && gSqN[i].left <= 0)) gSqN[k++] = gSqN[i]; gSqNn = k; }
 static void sqAllOff(void) { for (int i = 0; i < gSqNn; i++) sqRelease(&gSqN[i]); gSqNn = 0; }
 static int gSlideOn;   // the step before asked to slide into this one
-static void seqStop(void) { if (gSeqPlaying) { sqAllOff(); if (gArp) playSet(NULL, 0, 0.8f); } gSlideOn = 0; gSeqPlaying = 0; gSeqPos = -1; gSeqPh = 0; gLockCut = gLockRes = 0; gPendFire = -1; gEarlyDone = 0; gFireOff = 0; }
+static void plockApply(const Step* s);
+static void seqStop(void) { plockApply(NULL); if (gSeqPlaying) { sqAllOff(); if (gArp) playSet(NULL, 0, 0.8f); } gSlideOn = 0; gSeqPlaying = 0; gSeqPos = -1; gSeqPh = 0; gLockCut = gLockRes = 0; gPendFire = -1; gEarlyDone = 0; gFireOff = 0; }
 static int gridNote(int row);
 static int rowCustom(int r) { return gRowLen[r] || gRowHits[r]; }
 static int rowLenOf(int r) { int L = gRowLen[r] ? gRowLen[r] : gSeqLen; return L < 1 ? 1 : L > NSTEP ? NSTEP : L; }
@@ -2648,8 +2658,10 @@ static int condTest(int c, int cyc, int* pre, int nei) {
 	return ok;
 }
 static int gSeqPre = 0;
+static void plockApply(const Step* s);
 static void seqFireAt(int idx, unsigned clock, int early, float off0) {
 	Step* s = &gSeq[idx];
+	plockApply(s);   // PARAMETER LOCKS: this step's values on, the last step's off
 	gLockCut = s->cut * 0.006f; gLockRes = s->res * 0.01f;
 	float g = s->gate ? s->gate * 0.01f : gSeqGate; gStepGate = g;
 	int notes[8], lens[8], n = 0, skip = s->skip && rand() % 100 < s->skip;
@@ -3933,6 +3945,53 @@ static Param P_DRUMS[] = {
 #define NPAGES 12
 static Param* PAGES[NPAGES] = {P_PRESET, P_OSCA, P_OSCB, P_SUBN, P_FILT, P_MOD, P_VOICE, P_PLAY, P_VIS, P_HW, P_MASTER, P_DRUMS};
 static const int NAV[NPAGES] = {0, 1, 2, 3, 4, 5, 6, 10, 7, 11, 8, 9};   // X / Y order: tabs left to right
+// ---- PARAMETER LOCKS: hold a note in the piano roll and the top screen shows the LOCK list: up / down a setting,
+// left / right its value for THAT step (you hear it as you set it). Up to 3 per step. While the sequence plays, a
+// locked step sets its values and the next step puts them back. Hold the note + B: that step's locks go.
+#define NPLK 15
+static int gSeqSaveDue = 0;   // the patterns changed: the main loop writes seq.bin once it has let go of the voice lock
+static float paramNorm(const Param* p); static void paramSetNorm(const Param* p, float t); static void undoMark(void);
+static const char* PLK_NAMES[NPLK] = {"CUTOFF", "RES", "WT POS", "LEVEL", "DETUNE", "ENV1 DEC", "ENV1 REL", "ENV2 DEC", "MACRO 1", "MACRO 2", "MACRO 3", "MACRO 4", "SUB LEVEL", "FX MIX", "DRIVE AMT"};
+static const Param* gPlkP[NPLK];
+static const Param* plkParam(int k) {
+	if (k < 0 || k >= NPLK) return NULL;
+	if (!gPlkP[k]) for (int pg = 0; pg < NPAGES && !gPlkP[k]; pg++) for (int i = 0; PAGES[pg][i].name; i++) if (!strcmp(PAGES[pg][i].name, PLK_NAMES[k]) && PAGES[pg][i].type == PT_F) { gPlkP[k] = &PAGES[pg][i]; break; }
+	return gPlkP[k];
+}
+static struct { int on; float base, set; } gPlkLive[NPLK];   // locks the sequencer has put on: the value under them, and what it set
+static void plockApply(const Step* s) {   // audio tick (or STOP): the last step's locks off, this one's on
+	int want[NPLK] = {0}; float val[NPLK];
+	if (s) for (int j = 0; j < NLOCK; j++) if (s->lk[j] && s->lk[j] <= NPLK) { want[s->lk[j] - 1] = 1; val[s->lk[j] - 1] = s->lv[j] / 255.0f; }
+	for (int k = 0; k < NPLK; k++) {
+		const Param* p = plkParam(k); if (!p) continue;
+		if (gPlkLive[k].on && !want[k]) { if (fabsf(paramNorm(p) - gPlkLive[k].set) < 0.002f) paramSetNorm(p, gPlkLive[k].base); gPlkLive[k].on = 0; }   // (moved by hand meanwhile: it stays where you put it)
+		if (want[k]) { if (!gPlkLive[k].on) { gPlkLive[k].base = paramNorm(p); gPlkLive[k].on = 1; } paramSetNorm(p, val[k]); gPlkLive[k].set = paramNorm(p); }
+	}
+}
+// editing: the step held, the setting picked, and what each setting was before this hold changed it
+static int gPlkStep = -1, gPlkSel = 0; static float gPlkBase[NPLK]; static u8 gPlkTouched[NPLK];
+static int plkFind(const Step* s, int k) { for (int j = 0; j < NLOCK; j++) if (s->lk[j] == k + 1) return j; return -1; }
+static void plkBegin(int step) { gPlkStep = step; memset(gPlkTouched, 0, sizeof(gPlkTouched)); }
+static void plkEnd(void) {   // let go of the note: what you heard while holding it goes back to the patch's value
+	if (gPlkStep < 0) return;
+	for (int k = 0; k < NPLK; k++) if (gPlkTouched[k]) { const Param* p = plkParam(k); if (p) paramSetNorm(p, gPlkBase[k]); }
+	gPlkStep = -1;
+}
+static void plkNudge(int dir, int fast) {   // left / right in the LOCK list
+	if (gPlkStep < 0) return; Step* s = &gSeq[gPlkStep]; int k = gPlkSel; const Param* p = plkParam(k); if (!p) return;
+	int j = plkFind(s, k);
+	if (j < 0) { for (int i = 0; i < NLOCK; i++) if (!s->lk[i]) { j = i; break; } if (j < 0) { say("3 LOCKS ON THIS STEP ALREADY (HOLD + B CLEARS THEM)"); return; }
+		undoMark(); s->lk[j] = (u8)(k + 1); s->lv[j] = (u8)(paramNorm(p) * 255); }
+	if (!gPlkTouched[k]) { gPlkTouched[k] = 1; gPlkBase[k] = paramNorm(p); }
+	int v = s->lv[j] + dir * (fast ? 6 : 2); if (v < 0) v = 0; if (v > 255) v = 255; s->lv[j] = (u8)v;
+	paramSetNorm(p, v / 255.0f);   // hear it
+	char m[48]; snprintf(m, sizeof(m), "STEP %d LOCK: %s %d%%", gPlkStep + 1, PLK_NAMES[k], v * 100 / 255); say(m); gSeqSaveDue = 1;
+}
+static void plkClear(void) {
+	if (gPlkStep < 0) return; Step* s = &gSeq[gPlkStep]; undoMark();
+	for (int j = 0; j < NLOCK; j++) { s->lk[j] = 0; s->lv[j] = 0; }
+	say("STEP LOCKS CLEARED"); gSeqSaveDue = 1;
+}
 static int navStep(int page, int dir) { int i = 0; while (NAV[i] != page) i++; return NAV[(i + dir + NPAGES) % NPAGES]; }
 // L / R: PATCH, OSC A, FILT+ENV, LFO+MOD, VOICE+FX, MASTER FX, SEQ. OSC B, SUB+NOISE, DRUMS, VIS and HW are a chip
 // tap or X / Y away. From one of those, L / R go to the main page next to it.
@@ -4535,7 +4594,7 @@ static int skipRecent(void) {   // a clock skip in the last 3 s (the count itsel
 	if (gClockSkips != last) { last = gClockSkips; t = now ? now : 1; }
 	return t && now - t < SYSCLOCK_ARM11 * 3;
 }
-static int gPageMarkDue = 0, gSeqSaveDue = 0;   // SD writes the main loop makes once it has let go of the voice lock
+static int gPageMarkDue = 0;   // SD writes the main loop makes once it has let go of the voice lock
 static const Param* gStickP = NULL;   // the param stickNudge last moved (for the value pop-up)
 static void pagePair(int page, float** px_, float** py_) {   // the two values a stick moves on each page
 	switch (page) {
@@ -4740,6 +4799,20 @@ static void drawTop(int page, int sel, int oct, int latch) {
 	}
 	if (first > 0) text(388, 30, "^", 1, TXT);
 	if (first + rows < n) text(388, 216, "v", 1, TXT);
+	if (gPlkStep >= 0 && page == 7) {   // PARAMETER LOCKS: the list for the step you're holding, over the settings
+		rect(200, 28, 200, 190, BG); outline(200, 28, 200, 190, HI);
+		char h[32]; snprintf(h, sizeof(h), "STEP %d LOCKS", gPlkStep + 1); rect(201, 29, 198, 11, HI); text(206, 31, h, 1, HITXT);
+		const Step* st = &gSeq[gPlkStep];
+		for (int k = 0; k < NPLK; k++) {
+			int y = 43 + k * 11, j = plkFind(st, k), cur = k == gPlkSel; const Param* pp = plkParam(k);
+			float t = j >= 0 ? st->lv[j] / 255.0f : (pp ? paramNorm(pp) : 0);
+			if (cur) rect(202, y - 1, 196, 11, HI);
+			text(206, y, PLK_NAMES[k], 1, cur ? HITXT : j >= 0 ? TXT : DIM);
+			int bx = 316, bw = 60; rect(bx, y + 3, bw, 3, LINE); rect(bx, y + 3, (int)(bw * t), 3, j >= 0 ? (cur ? HITXT : VAL) : DIM);
+			if (j >= 0) text(382, y, "L", 1, cur ? HITXT : WARN);
+		}
+		text(204, 209, "^v PICK  <> LOCK  B CLEAR", 1, DIM);
+	}
 	drawFooter(page, sel);
 	if (!visActive(page)) scanlines();
 }
@@ -5046,13 +5119,13 @@ static void drawGrid(void) {
 			if (p->fl & 2) rectP(x + w, y + ROLL_RH / 2 - 2, 3, 2, TH->keyOn);   // slide into the next note
 			{   // the step's locks as letters inside the note, tracker-style: C cutoff, R res, P pitch, G gate, N nudge, % chance
 				char lk[8]; int n = 0;
-				if (p->cond) lk[n++] = '?'; if (p->cut) lk[n++] = 'C'; if (p->res) lk[n++] = 'R'; if (p->pitch) lk[n++] = 'P'; if (p->gate) lk[n++] = 'G'; if (p->nudge) lk[n++] = 'N'; if (p->skip) lk[n++] = '%';
+				if (p->cond) lk[n++] = '?'; if (p->lk[0] || p->lk[1] || p->lk[2]) lk[n++] = 'L'; if (p->cut) lk[n++] = 'C'; if (p->res) lk[n++] = 'R'; if (p->pitch) lk[n++] = 'P'; if (p->gate) lk[n++] = 'G'; if (p->nudge) lk[n++] = 'N'; if (p->skip) lk[n++] = '%';
 				int lx = x + (p->fl & 1 ? 7 : 3), fit = (x + w - lx) / 8; if (n > fit) n = fit; lk[n] = 0;
 				if (n > 0) { rectP(lx, y, n * 8, ROLL_RH - 3, TH->txt); text(lx, y + 1, lk, 1, RGB3(TH->bg)); }
 			}
 		}
 		if (!rollIn(st)) continue;
-		if (p->gate || p->skip || p->cut || p->res || p->pitch || p->nudge || p->rat > 1 || p->cond) rectP(rollX(st) + (int)ROLL_CW / 2 - 1, ROLL_TOP - 2, 3, 2, TH->keyOn);   // the step has locks
+		if (p->gate || p->skip || p->cut || p->res || p->pitch || p->nudge || p->rat > 1 || p->cond || p->lk[0] || p->lk[1] || p->lk[2]) rectP(rollX(st) + (int)ROLL_CW / 2 - 1, ROLL_TOP - 2, 3, 2, TH->keyOn);   // the step has locks
 		if (p->rat > 1) for (int k = 0; k < p->rat; k++) rectP(rollX(st) + 2 + k * 4, ROLL_TOP - 5, 2, 2, TH->warn);   // ratchet dots
 	}
 	for (int r = 0; r < 8; r++) if (rowCustom(r) && rollRow(gRowNote[r]) >= 0) {   // rhythm rows: their own length and hits
@@ -11152,11 +11225,27 @@ int main(void) {
 #endif
 		if (startAct == 3) { helpOn = 1; gHelpSlide = 0; topDirty = botDirty = 1; }
 		if (startAct == 5) { learnArm(page, sel[page]); topDirty = 1; }
+		{   // PARAMETER LOCKS: a note held in the piano roll (its step editor open, the finger still down) takes the pad
+			int hold = page == 7 && gGridOn && (kHeld & KEY_TOUCH) && gGtLong && gStepEd >= 0 && gPatView == 0;
+			if (hold && gPlkStep != gStepEd) { plkEnd(); plkBegin(gStepEd); topDirty = 1; }
+			if (!hold && gPlkStep >= 0) { plkEnd(); topDirty = 1; }
+			if (gPlkStep >= 0) {
+				static float rep = 0; int d = 0, fast = 0;
+				if (kDown & KEY_DUP) { gPlkSel = (gPlkSel + NPLK - 1) % NPLK; topDirty = 1; }
+				if (kDown & KEY_DDOWN) { gPlkSel = (gPlkSel + 1) % NPLK; topDirty = 1; }
+				if (kDown & KEY_B) { plkClear(); topDirty = botDirty = 1; }
+				if (kDown & (KEY_DLEFT | KEY_DRIGHT)) { d = (kDown & KEY_DRIGHT) ? 1 : -1; rep = 0.35f; }
+				else if (kHeld & (KEY_DLEFT | KEY_DRIGHT)) { rep -= dt; if (rep <= 0) { d = (kHeld & KEY_DRIGHT) ? 1 : -1; rep = 0.05f; fast = 1; } }
+				if (d) { plkNudge(d, fast); topDirty = botDirty = 1; }
+				kDown &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT | KEY_B); kHeld &= ~(KEY_DLEFT | KEY_DRIGHT | KEY_DUP | KEY_DDOWN);
+			}
+		}
 		{   // CIRCLE PAD in the editors (see curShown)
 			int mode = 0;
 			if ((gDrumOnB || gDrumInSeq) && !gPads) mode = gDgEd ? 3 : 2;
 			else if (page == 7 && gGridOn && !gPatView && !gPads) mode = gStepEd >= 0 ? 1 : 4;
 			if (kHeld & KEY_SELECT) mode = 0;   // SELECT held: the pad is the QUICK ring
+			if (mode == 1 && (kHeld & KEY_TOUCH) && gGtLong) mode = 0;   // the note still held: its PARAMETER LOCKS have the pad and B
 			gEdStick = mode != 0;
 			static float ax = 0, ay = 0; static int hx = 0, hy = 0; static u64 aT = 0; static int aHeld = 0, aDone = 0;
 			if (mode) {
