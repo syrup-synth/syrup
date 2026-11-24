@@ -2401,7 +2401,9 @@ static void csRampTick(void) {   // audio tick, voice lock held: SUB layers on t
 	}
 	if (any) csndExecCmds(false);
 }
-static volatile u32 gClkMiss = 0, gClkWait = 0;   // audio ticks that found the main loop holding the voices: skipped / waited for
+static volatile u32 gClkMiss = 0, gClkWait = 0;
+static volatile int gAudioWants = 0;
+#define BREATHE() do { if (gAudioWants) { LightLock_Unlock(&gVoiceLock); for (int _b = 0; _b < 40 && gAudioWants; _b++) svcSleepThread(50000); LightLock_Lock(&gVoiceLock); } } while (0)   // audio tick is waiting for gVoiceLock: the main loop lets go at its next BREATHE()   // audio ticks that found the main loop holding the voices: skipped / waited for
 static void progTick(void); static void bassTick(float dt);
 static void audioTick(void* data) {
 	(void)data;
@@ -2426,7 +2428,9 @@ static void audioTick(void* data) {
 	if (LightLock_TryLock(&gVoiceLock)) {   // main loop busy: wait for it a little (it's on this core, below us: sleeping lets it
 		// finish) - a miss used to cost the sequencer a whole 5 ms frame. From zp12: the playing should never wait a frame
 		int got = 0;
+		gAudioWants = 1;
 		for (int w = 0; w < 20 && !got; w++) { svcSleepThread(100000); if (!LightLock_TryLock(&gVoiceLock)) got = 1; }   // up to 2 ms
+		gAudioWants = 0;
 		if (!got) { CLK_MISS; gClkMiss++; return; }   // still busy after 2 ms: the frames are counted next time
 		gClkWait++;
 	}
@@ -11152,7 +11156,7 @@ int main(void) {
 		if (startAct == START_QUIT) break;   // QUIT
 		WHERE("WAKE"); wakeTick();
 		WHERE("VOICE LOCK"); LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
-		WHERE("MOTION / CAMERA");
+		WHERE("MOTION / CAMERA"); BREATHE();
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
 		if (gVoiceMode == 7 && !gSafeMode) {   // PERC KIT: shake the console, it plays the shaker
 			static int armed = 1; static u64 lastHit = 0, lastTouch = 0; u64 tnow = osGetTime();
@@ -11415,6 +11419,7 @@ int main(void) {
 			was = TTOUCH;
 		}
 #endif
+		BREATHE();
 		// parameter editing
 		int n = pageLen(page);
 		if (kDown & KEY_DUP)   { sel[page] = (sel[page] + n - 1) % n; topDirty = 1; }
@@ -11549,7 +11554,7 @@ int main(void) {
 			}
 			cx = 0; gStick = 0;
 		}
-		WHERE("C-STICK"); if (gN3 < 0) { bool n3 = false; APT_CheckNew3DS(&n3); gN3 = n3 ? 1 : 0; }
+		WHERE("C-STICK"); BREATHE(); if (gN3 < 0) { bool n3 = false; APT_CheckNew3DS(&n3); gN3 = n3 ? 1 : 0; }
 		if (gN3) {   // NEW 3DS CONTROLS: the C-stick is STICK 2 (a mod source); routed nowhere, it moves this page's two values
 			circlePosition cs; hidCstickRead(&cs);
 			float qx = DZ(cs.dx / 150.0f, 0.12f), qy = gCsList ? 0 : DZ(cs.dy / 150.0f, 0.12f);   // (up / down is the list's on PRESETS, SEQ, DRUMS) if (qx > 1) qx = 1; if (qx < -1) qx = -1; if (qy > 1) qy = 1; if (qy < -1) qy = -1;
@@ -11751,6 +11756,7 @@ int main(void) {
 			if (gMirVis && page != 8) { page = 8; topDirty = 1; }
 			cx = gMirBend; gMidiBend = 0;
 		}
+		BREATHE();
 		if (gAudioOK) voicesUpdate(dt, cx + gMidiBend);
 		// effect-bus self check: if notes are sending but the DSP never delivers aux audio, fall back to taps
 		if (gBusOK && !gBusFail && !gBusSeen && (masterActive() || busSend(0) > 0 || busSend(1) > 0)) {
