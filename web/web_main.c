@@ -21,12 +21,28 @@ EMSCRIPTEN_KEEPALIVE void web_quick(void) { gQuickOpen = !gQuickOpen; }   // QUI
 EMSCRIPTEN_KEEPALIVE void web_cstick(int x, int y) { W_CSX = (short)x; W_CSY = (short)y; }
 // LINK: browser tabs / windows on one device share transport, tempo and the drum machine (shell.html carries it on a BroadcastChannel)
 EMSCRIPTEN_KEEPALIVE int web_link_get(void) { return (gSeqMode == 1 ? 1 : 0) | (gDrums ? 2 : 0) | (gBPM << 4); }
-EMSCRIPTEN_KEEPALIVE void web_link_set(int st) {
-	int play = st & 1, dr = (st >> 1) & 1, bpm = st >> 4;
+EMSCRIPTEN_KEEPALIVE void web_link_set(int st) {   // PLAY / STOP (the one transport: notes + drums) and the BPM
+	int play = st & 1, bpm = st >> 4;
 	if (bpm >= 40 && bpm <= 240) gBPM = bpm;
-	if (play && gSeqMode != 1) { seqStop(); gSongPos = 0; gSeqMode = 1; if (gSeqBase < 0) gSeqBase = gridNote(0); }
-	else if (!play && gSeqMode == 1) { gSeqMode = 0; seqStop(); }
-	if (dr != (gDrums ? 1 : 0)) { gDrums = dr; drumsChanged(); }
+	if (play != (gSeqMode == 1)) { if (play) { seqStop(); gSongPos = 0; } transportToggle(); }
+}
+// MASTER CLOCK: the master sends where its sequence is (in steps since PLAY); a follower pulls its own toward it,
+// a little each time (no audible jump), or jumps there if it's more than a step and a half out (joined late)
+EMSCRIPTEN_KEEPALIVE double web_link_clock(void) {
+	if (!gSeqPlaying) return -1;
+	float l = stepLen(gSeqPos < 0 ? 0 : gSeqPos); return (double)gSeqClock + (l > 0 ? gSeqPh / l : 0);
+}
+EMSCRIPTEN_KEEPALIVE double web_link_follow(double target) {   // returns how far out it was, in steps
+	if (!gSeqPlaying || target < 0) return 0;
+	float l = stepLen(gSeqPos < 0 ? 0 : gSeqPos); double mine = (double)gSeqClock + (l > 0 ? gSeqPh / l : 0), d = target - mine;
+	if (fabs(d) > 1.5) {
+		long n = (long)floor(target); int L = gSeqLen < 1 ? 1 : gSeqLen;
+		gSeqClock = (unsigned)n; gSeqPos = (int)(n % L); gSeqPh = (float)(target - n) * stepLen(gSeqPos); gPendFire = -1; gEarlyDone = 0; gFireOff = 0;
+		return d;
+	}
+	float c = (float)d * 0.3f; if (c > 0.06f) c = 0.06f; if (c < -0.06f) c = -0.06f;
+	gSeqPh += c * l; if (gSeqPh < 0) gSeqPh = 0;
+	return d;
 }
 // SAMPLES: the page wrote WAVs into sd/kits/WEB; use them
 static int W_KITRL = 0;
@@ -59,7 +75,7 @@ static void SCRIPT(int fr) { (void)fr; webMirDrain(); if (W_KITRL) { W_KITRL = 0
 int main(void) {
 	FILE* f = fopen("default_font.bin", "rb"); if (f) { if (fread(FONT, 1, 2048, f) != 2048) {} fclose(f); }
 	mkdir("sd", 0777);
-	FRMAX = 0x7FFFFFFF;
+	FRMAX = 0x7FFFFFFF; FAKE_NEW3DS = 1;   // the web has the C-stick (a controller's right stick, or the on-screen one) and ZL / ZR
 	gFakeHP = true;
 	gN3 = 1;   // the browser has the second stick (gamepad right stick / the small one on screen) and ZL / ZR
 	app_main();

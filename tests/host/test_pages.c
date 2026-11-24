@@ -38,7 +38,7 @@ static void SCRIPT(int fr) {
 		if (gDgPg != 1 || gDrLen[0] != 32 || gMyDrum[0][16] != 230) fail("DRUM PAGE 2: rows grow to 32, repeating (page %d len %d hit %d)", gDgPg, gDrLen[0], gMyDrum[0][16]);
 		drumGridTouch(DG_LX + (int)(4.5f * (320 - DG_LX - 2) / 16.0f), DG_TOP + 1 * DG_RH + 5, 1); drumGridRelease();
 		if (!gMyDrum[1][20]) fail("a tap on drum page 2 should set step 21");
-		gDgFollow = 1; gDrums = 1; drumsChanged();
+		gDgFollow = 1; gDrums = 1; drumsChanged(); gSeqMode = 1;   // PLAY: the drums run with the transport
 	}
 	if (fr > 200 && fr < 400 && gDrIdx[0] > maxDr) maxDr = gDrIdx[0];
 	if (fr == 400) {

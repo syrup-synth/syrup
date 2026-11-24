@@ -147,7 +147,7 @@
   </div>
 </div>
 <button class="b" id="tapsnd">TAP FOR SOUND</button>
-<div id="lkpanel" class="phpanel"><div>LINK DEVICES: open Syrup on the other device, tap LINK there, and type this code (or type its code here)</div><div class="code" id="lkcode">......</div><div><input id="lkin" inputmode="numeric" maxlength="6" placeholder="code" style="font:inherit;font-size:20px;width:8em;text-align:center;background:#000;color:var(--hot);border:1px solid var(--line);border-radius:6px;padding:6px"> <button class="b" id="lkgo">JOIN</button></div><div id="lkst" class="u"></div><button class="b" id="lkclose">CLOSE</button></div>
+<div id="lkpanel" class="phpanel"><div>LINK DEVICES: open Syrup on the other device, tap LINK there, and type this code (or type its code here)</div><div class="code" id="lkcode">......</div><div><input id="lkin" inputmode="numeric" maxlength="6" placeholder="code" style="font:inherit;font-size:20px;width:8em;text-align:center;background:#000;color:var(--hot);border:1px solid var(--line);border-radius:6px;padding:6px"> <button class="b" id="lkgo">JOIN</button></div><div id="lkst" class="u"></div><div><button class="b" id="lkmaster">MAKE THIS THE MASTER</button> <button class="b" id="lkoff">UNLINK</button> <button class="b" id="lkclose">CLOSE</button></div></div>
 <div id="phpanel"><div>PHONE LINK: on the phone, scan this (or open the address)</div><div id="phqr"></div><div class="code" id="phcode"></div><div class="u" id="phurl"></div><div id="phst" class="u"></div><button class="b" id="phclose">CLOSE</button></div>
 <!--REMOTE_HTML-->
 <script>
@@ -361,28 +361,56 @@ setInterval(function () {
     })  .catch(function () { camBusy = false; camNo = true; msg.textContent = 'No camera (allow it in the browser to use CAMERA)'; });
   } else if (!want && camStream) { camStream.getTracks().forEach(function (t) { t.stop(); }); camStream = null; msg.textContent = 'Camera off'; }
 }, 300);
-// ---- LINK: windows / tabs on this device play together: PLAY / STOP, BPM and the drums follow whichever changes
+// ---- LINK: windows / tabs on this device (BroadcastChannel) and other devices (WebRTC, by a 6-digit code) play as one.
+// PLAY / STOP and BPM from any of them reach all of them; one is the MASTER: the others keep their sequence on its clock.
 var linkBtn = document.getElementById('link'), lch = null, lastLink = -1, linkPeers = {}, myId = Math.random().toString(36).slice(2);
+var lkPeer = null, lkConns = [], lkMaster = null, lkSeen = {}, lkRtt = 0, lkPingT = {}, lkOut = 0;
+function lkOn() { return !!lch || lkConns.length > 0; }
+function lkSend(d, skip) {   // to every window and device; d.id = who said it, d.n = a number so a relayed message is taken once
+  if (!d.id) d.id = myId; if (d.n === undefined) d.n = Math.random();
+  if (lch && skip !== 'bc') lch.postMessage(d);
+  lkConns.forEach(function (c) { if (c.open && c !== skip) c.send(d); });
+}
+function lkSt() {
+  var n = Object.keys(linkPeers).length + 1 + lkConns.length, m = lkMaster === myId;
+  linkBtn.textContent = lkOn() ? 'LINK ' + n + (n > 1 ? (m ? ' M' : ' F') : '') : 'LINK';
+  var st = document.getElementById('lkst'), mb = document.getElementById('lkmaster');
+  st.textContent = (lkConns.length ? lkConns.length + ' device' + (lkConns.length > 1 ? 's' : '') + ' linked. ' : '') + (n > 1 ? (m ? 'This one is the MASTER clock.' : 'Following the master' + (lkOut ? ' (' + lkOut.toFixed(2) + ' steps)' : '') + '.') : '');
+  mb.textContent = m ? 'MASTER' : 'MAKE THIS THE MASTER'; mb.classList.toggle('on', m);
+}
+function lkClaim() { lkMaster = myId; lkSend({ m: myId }); lkSt(); }
+function lkGot(d, from) {   // from: 'bc' or the connection it came on
+  if (!d || d.id === myId || lkSeen[d.n]) return; lkSeen[d.n] = 1;
+  if (d.to && d.to !== myId) { lkSend(d, from); return; }
+  if (!d.to) lkSend(d, from);   // pass it on (a tab with a device link relays between the two)
+  if (d.hi) { linkPeers[d.id] = 1; if (d.hi === 1) lkSend({ hi: 2 }); if (lkMaster === myId) lkSend({ m: myId }); }
+  if (d.bye) { delete linkPeers[d.id]; if (d.id === lkMaster) { lkMaster = null; setTimeout(function () { if (!lkMaster && lkOn()) lkClaim(); }, 300 + Math.random() * 300); } }
+  if (d.m) lkMaster = d.m;
+  if (d.st !== undefined && ready) { Module._web_link_set(d.st); lastLink = Module._web_link_get(); }
+  if (d.ping && lkMaster === myId) lkSend({ pong: d.ping, to: d.id });
+  if (d.pong && lkPingT[d.pong]) { var r = performance.now() - lkPingT[d.pong]; delete lkPingT[d.pong]; lkRtt = lkRtt ? lkRtt * 0.7 + r * 0.3 : r; }
+  if (d.clk !== undefined && d.id === lkMaster && lkMaster !== myId && ready) {   // the master's clock: steps since PLAY, + the trip here
+    var bpm = Module._web_link_get() >> 4, ahead = (lkRtt / 2) / 1000 * bpm / 60 * 4;
+    lkOut = Module._web_link_follow(d.clk + ahead);
+  }
+  lkSt();
+}
 function linkOn(on) {
   if (on && !lch && window.BroadcastChannel) {
     lch = new BroadcastChannel('syrup-link'); linkPeers = {};
-    lch.onmessage = function (ev) { var d = ev.data; if (!d || d.id === myId) return;
-      if (d.hi) { linkPeers[d.id] = 1; if (d.hi === 1) lch.postMessage({ id: myId, hi: 2 }); }
-      if (d.bye) delete linkPeers[d.id];
-      if (d.st !== undefined && ready) { Module._web_link_set(d.st); lastLink = d.st; }
-      linkBtn.textContent = 'LINK ' + (Object.keys(linkPeers).length + 1); };
-    lch.postMessage({ id: myId, hi: 1 }); linkBtn.classList.add('on'); linkBtn.textContent = 'LINK 1';
-    msg.textContent = 'Linked: open Syrup in another tab or window and tap LINK there too.';
-  } else if (!on && lch) { lch.postMessage({ id: myId, bye: 1 }); lch.close(); lch = null; linkBtn.classList.remove('on'); linkBtn.textContent = 'LINK'; }
-  else if (on && !window.BroadcastChannel) msg.textContent = 'This browser can\'t link windows.';
+    lch.onmessage = function (ev) { lkGot(ev.data, 'bc'); };
+    linkBtn.classList.add('on'); lkSend({ hi: 1 });
+    setTimeout(function () { if (!lkMaster) lkClaim(); }, 400);   // nobody answered as master: this one is
+    msg.textContent = 'Linked: open Syrup in another tab, window or device and tap LINK there too.';
+  } else if (!on && lch) { lkSend({ bye: 1 }); lch.close(); lch = null; linkBtn.classList.remove('on'); if (lkMaster === myId) lkMaster = null; }
+  else if (on && !window.BroadcastChannel) msg.textContent = 'This browser can\'t link windows (devices still can, by code).';
+  lkSt();
 }
-// ...and other DEVICES (no Wi-Fi MIDI in a browser): peer to peer over WebRTC, found by a 6-digit code (PeerJS's free
-// server only introduces them). The same messages: PLAY / STOP, BPM, the drums.
-var lkPeer = null, lkConns = [];
-function lkSt() { var n = Object.keys(linkPeers).length + 1 + lkConns.length; linkBtn.textContent = lch ? 'LINK ' + n : 'LINK'; document.getElementById('lkst').textContent = lkConns.length ? lkConns.length + ' device' + (lkConns.length > 1 ? 's' : '') + ' linked' : ''; }
 function lkHook(c) {
-  c.on('open', function () { lkConns.push(c); lkSt(); msg.textContent = 'Linked with another device'; if (ready) c.send({ st: Module._web_link_get() }); });
-  c.on('data', function (d) { if (d && d.st !== undefined && ready) { Module._web_link_set(d.st); lastLink = d.st; if (lch) lch.postMessage({ id: myId, st: d.st }); } });
+  c.on('open', function () { lkConns.push(c); linkBtn.classList.add('on'); msg.textContent = 'Linked with another device';
+    c.send({ id: myId, n: Math.random(), hi: 1 }); if (lkMaster === myId) c.send({ id: myId, n: Math.random(), m: myId });
+    if (ready && lkMaster === myId) c.send({ id: myId, n: Math.random(), st: Module._web_link_get() }); lkSt(); });
+  c.on('data', function (d) { lkGot(d, c); });
   c.on('close', function () { lkConns = lkConns.filter(function (x) { return x !== c; }); lkSt(); });
 }
 function lkStart() {
@@ -394,11 +422,27 @@ function lkStart() {
     lkPeer.on('error', function (e) { if (e.type === 'unavailable-id') { lkPeer.destroy(); lkPeer = null; lkStart(); } else document.getElementById('lkst').textContent = 'link: ' + (e.type || 'error'); });
   }).catch(function () { document.getElementById('lkst').textContent = 'Linking devices needs the internet'; });
 }
-document.getElementById('lkgo').onclick = function () { var v = document.getElementById('lkin').value.replace(/\D/g, ''); if (v.length !== 6 || !lkPeer) return; lkHook(lkPeer.connect('syrup-lk-' + v, { reliable: true })); document.getElementById('lkst').textContent = 'joining ' + v + '...'; };
+document.getElementById('lkgo').onclick = function () { var v = document.getElementById('lkin').value.replace(/\D/g, ''); if (v.length !== 6 || !lkPeer) return;
+  if (lkMaster === myId && !Object.keys(linkPeers).length) lkMaster = null;   // joining someone: their side keeps the clock
+  lkHook(lkPeer.connect('syrup-lk-' + v, { reliable: true })); document.getElementById('lkst').textContent = 'joining ' + v + '...'; };
 document.getElementById('lkclose').onclick = function () { document.getElementById('lkpanel').style.display = 'none'; };
-linkBtn.onclick = function () { var on = !lch; linkOn(on); var pn = document.getElementById('lkpanel'); pn.style.display = on ? 'block' : 'none'; if (on) lkStart(); lkSt(); };
+document.getElementById('lkmaster').onclick = function () { lkClaim(); msg.textContent = 'This Syrup is the master clock'; };
+linkBtn.onclick = function () { var pn = document.getElementById('lkpanel');
+  if (!lch) { linkOn(true); pn.style.display = 'block'; lkStart(); }
+  else if (pn.style.display !== 'block') pn.style.display = 'block';   // linked: LINK opens the panel; UNLINK in it turns it off
+  lkSt(); };
+document.getElementById('lkoff').onclick = function () { linkOn(false); lkConns.forEach(function (c) { c.close(); }); lkConns = []; document.getElementById('lkpanel').style.display = 'none'; lkSt(); };
 addEventListener('beforeunload', function () { linkOn(false); });
-setInterval(function () { if ((!lch && !lkConns.length) || !ready) return; var st = Module._web_link_get(); if (st !== lastLink) { if (lastLink !== -1) { if (lch) lch.postMessage({ id: myId, st: st }); lkConns.forEach(function (c) { if (c.open) c.send({ st: st }); }); } lastLink = st; } }, 20);
+setInterval(function () {   // transport changes go out from whichever unit made them
+  if (!lkOn() || !ready) return; var st = Module._web_link_get();
+  if ((st & ~2) !== (lastLink & ~2)) { if (lastLink !== -1) lkSend({ st: st }); }   // (the drums' on / off stays each unit's own)
+  lastLink = st;
+}, 20);
+setInterval(function () {   // the master's clock, 8 times a second; followers time the trip to it
+  if (!lkOn() || !ready) return;
+  if (lkMaster === myId) { var c = Module._web_link_clock(); if (c >= 0) lkSend({ clk: c }); }
+  else if (lkMaster && lkConns.length) { var k = Math.random(); lkPingT[k] = performance.now(); lkSend({ ping: k }); }
+}, 125);
 // ---- MIRROR / STREAM: this page was opened from a 3DS (WI-FI MIDI on, http://<the 3DS>:8080/mirror or /stream).
 // It runs Syrup muted and plays / draws exactly what the 3DS sends; STREAM is the clean view for OBS (browser source).
 // /stream?ov=pckb (overlays: Patch, Chord, Keys, Bpm; ov= for none) &bg=clear (see-through background) &sound=1

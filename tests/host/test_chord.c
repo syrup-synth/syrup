@@ -39,7 +39,7 @@ static void SCRIPT(int fr) {
 		liveUp(); playSet(NULL, 0, 0.8f); gPadBass = 0;
 	}
 	if (fr == 66) {   // PADS SLIDE: drag from pad 1 to pad 4, the chord follows
-		gPadBass = 0; float v; int y = PAD_Y + PAD_H / 2; padsTouch(48, 2 + 22, y, 1, &v); padsTouch(48, 2 + 45 + 22, y, 0, &v); padsTouch(48, 2 + 3 * 45 + 22, y, 0, &v);
+		gPadBass = 0; float v; int y = PAD_Y + PAD_H / 2; padsTouch(48, 2 + 22, y, 1, &v); padsTouch(48, 2 + 45 + 22, y, 0, &v); padsTouch(48, 2 + 3 * 45 + 22, y, 0, &v); padsSettle(1);   // (a slide plays the pad it settles on)
 		if (gPadSel != 3) fail("PADS: sliding across should play the pad under the finger (%d)", gPadSel);
 		{ int moved = 0; for (int k = 0; k < NVS; k++) if (gV[k].active && gV[k].slide == 2) moved++; if (gPadMorph > 0 && moved < 2) fail("PADS MORPH: the voices should glide to the new chord, not restart (%d gliding)", moved); }
 		liveUp(); playSet(NULL, 0, 0.8f); gPadSel = -1; memset(gSeq, 0, sizeof(gSeq));
@@ -53,9 +53,9 @@ static void SCRIPT(int fr) {
 		gProgAuto = 0; gProg = 0; gLiveRec = 0; gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f);
 	}
 	// NEW 3DS CONTROLS: C-stick moves the page's values, ZR plays / stops, ZL arms live REC
-	if (fr == 335) { gN3 = 1; gMacro[1] = 0.2f; c0 = gMacro[1]; if (gCurPage != 0) fail("expected the PATCH page (%d)", gCurPage); }
-	if (fr >= 336 && fr < 350) { CSY = 150; }
-	if (fr == 350) { CSY = 0; if (gMacro[1] <= c0) fail("C-stick up on PATCH should raise MACRO 2 (%.3f -> %.3f)", c0, gMacro[1]); s0 = gSeqMode; }
+	if (fr == 335) { gN3 = 1; gMacro[0] = 0.2f; c0 = gMacro[0]; if (gCurPage != 0) fail("expected the PATCH page (%d)", gCurPage); }
+	if (fr >= 336 && fr < 350) { CSX = 150; }   // (up / down is the browser's on PATCH)
+	if (fr == 350) { CSX = 0; if (gMacro[0] <= c0) fail("C-stick right on PATCH should raise MACRO 1 (%.3f -> %.3f)", c0, gMacro[0]); s0 = gSeqMode; }
 	if (fr == 352) HD = KEY_ZR;
 	if (fr == 354 && gSeqMode == s0) fail("ZR should start / stop the sequence");
 	if (fr == 356) HD = KEY_ZR;

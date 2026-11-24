@@ -11,7 +11,7 @@ static void SCRIPT(int fr) {
 	// SELECT tap: stops the sequencer and the drums, PLAY brings both back
 	if (fr == 6) { gSeqMode = 1; }
 	press(fr, 8, KEY_SELECT);
-	if (fr == 12) { if (gSeqMode == 1) fail("SELECT should stop the sequencer"); if (gDrums) fail("SELECT should stop the drums too"); }
+	if (fr == 12) { if (gSeqMode == 1) fail("SELECT should stop the sequencer"); }
 	press(fr, 13, KEY_SELECT);
 	if (fr == 17) { if (gSeqMode != 1) fail("SELECT again should play"); if (!gDrums) fail("PLAY should bring the drums back"); }
 	// SELECT+DOWN: panic (and no PLAY/STOP on release)

@@ -15,17 +15,17 @@ static int len0, len2, timer0, timerUp;
 static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0; gFxCore2 = 0;
 	// 120 BPM: a 16th = 7.5 frames, a bar = 120 frames
-	if (fr == 3) { SPatch p; patchInit(&p); patchApply(&p); gBPM = 120; gSwing = 0; gSeqMode = 0; gDrums = 1; drumsChanged(); }
-	if (fr == 20) { only(0, 0, 3, 0); gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); mark(); }   // RATCHET 4 on the kick's first step
+	if (fr == 3) { SPatch p; patchInit(&p); patchApply(&p); gBPM = 120; gSwing = 0; gSeqMode = 1; memset(gSeq, 0, sizeof(gSeq)); gDrums = 1; drumsChanged(); }   // the drums play with PLAY (one transport)
+	if (fr == 20) { only(0, 0, 3, 0); gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); seqStop(); mark(); }   // RATCHET 4 on the kick's first step
 	if (fr == 20 + 240) { if (hits(0) != 8) fail("RATCHET 4: two bars should give 8 kicks (%d)", hits(0)); }
-	if (fr == 262) { only(0, 0, 0, 6); gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); mark(); }   // 1:2
+	if (fr == 262) { only(0, 0, 0, 6); gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); seqStop(); mark(); }   // 1:2
 	if (fr == 262 + 480) { if (hits(0) != 2) fail("1:2: four bars should give 2 kicks (%d)", hits(0)); }
-	if (fr == 744) { only(4, 0, 0, 15); gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); mark(); }   // FILL: none until held
+	if (fr == 744) { only(4, 0, 0, 15); gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); seqStop(); mark(); }   // FILL: none until held
 	if (fr == 744 + 240) { if (hits(4)) fail("FILL: no claps without FILL (%d)", hits(4)); gDrFill = 1; mark(); }
 	if (fr == 984 + 240) { if (hits(4) != 2) fail("FILL held: a clap a bar (%d)", hits(4)); gDrFill = 0; }
-	if (fr == 1226) { only(5, 0, 0, 0); gDrLen[5] = 3; gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); mark(); }   // LENGTH 3: every 3 16ths
+	if (fr == 1226) { only(5, 0, 0, 0); gDrLen[5] = 3; gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); seqStop(); mark(); }   // LENGTH 3: every 3 16ths
 	if (fr == 1226 + 118) { if (hits(5) != 6) fail("LENGTH 3: one bar should give 6 rims (%d)", hits(5)); }
-	if (fr == 1346) { only(6, 0, 0, 0); gDrRate[6] = 1; gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); mark(); }   // RATE 1/2: once every 2 bars
+	if (fr == 1346) { only(6, 0, 0, 0); gDrRate[6] = 1; gDrums = 0; drumsChanged(); gDrums = 1; drumsChanged(); seqStop(); mark(); }   // RATE 1/2: once every 2 bars
 	if (fr == 1346 + 238) { if (hits(6) != 1) fail("RATE 1/2: two bars should give 1 tom (%d)", hits(6)); }
 	if (fr == 1346 + 478) { if (hits(6) != 2) fail("RATE 1/2: four bars should give 2 toms (%d)", hits(6)); }
 	// SOUND: DECAY 200 makes the kick about twice as long, 50 half; TUNE +12 doubles the playback rate
