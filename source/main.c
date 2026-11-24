@@ -4390,7 +4390,7 @@ static void drawHeader(int page) {
 			rect(x - 4, 13, w + 8, 1, BG);
 			rect(x - 4, 7, 1, 7, LINE); rect(x + w + 3, 7, 1, 7, LINE);
 			rect(x - 4, 7, 3, 1, LINE); rect(x + w + 1, 7, 3, 1, LINE);
-			text(x, 3, SECT_NAMES[i], 1, TXT);
+			rect(x - 2, 2, w + 4, 10, HI); text(x, 3, SECT_NAMES[i], 1, HITXT);   // (lit: the menu you're in)
 		} else text(x, 3, SECT_NAMES[i], 1, DIM);
 		x += w + 11;
 	}
@@ -11094,6 +11094,19 @@ int main(void) {
 				else if (TTX >= 86 && TTX < 200) { int i = (TTY - 32) / 11, n = presetCount(gStyle) + (gStyle == NSTYLES - 1);
 					if (i < n) { gPreset = i - 1; if (browseStep(0, 1, 1)) { curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; } }
 			}
+			if (TTOUCH && !was && TTY < 28) {   // the TABS: a menu (tapping the one you're in steps through its pages), or one of its pages
+				int sect = PAGE_SECT[page];
+				if (TTY < 14) { int x = 58;
+					for (int i = 0; i < 7; i++) { int w = strlen(SECT_NAMES[i]) * 8;
+						if (TTX >= x - 5 && TTX < x + w + 6) {
+							int first = -1, next = -1, seen = 0;
+							for (int q = 0; q < NPAGES; q++) { int p = NAV[q]; if (PAGE_SECT[p] != i) continue; if (first < 0) first = p; if (seen && next < 0) next = p; if (p == page) seen = 1; }
+							gPageWant = i == sect ? (next >= 0 ? next : first) : first; break; }
+						x += w + 11; } }
+				else { int sx = 8;
+					for (int q = 0; q < NPAGES; q++) { int p = NAV[q]; if (PAGE_SECT[p] != sect) continue; int w = strlen(SUB_NAMES[p]) * 8;
+						if (TTX >= sx - 4 && TTX < sx + w + 6) { gPageWant = p; break; } sx += w + 16; } }
+			}
 			if (TTOUCH && !was && TTX < 200 && ((page == 7 && rollChordTouch(TTX, TTY)) || (page == 11 && beatListTouch(TTX, TTY)))) { topDirty = botDirty = 1; }
 			if (TTOUCH && page != 0 && TTX >= 204 && TTY >= 30 && TTY < 214) {
 				int np = pageLen(page), first = sel[page] - 14; if (first < 0) first = 0;
@@ -11370,7 +11383,7 @@ int main(void) {
 		}
 		if (gVoiceMode >= 3 && (gDrumBuilt != gVoiceMode - 3 || gDrumCh[3] < 0)) { kitEnsure(); botDirty = 1; }
 		{ static float st = 0; if (gDrumBuilt == 5 && waveSig() != gWaveSig) { st += 1.0f / 60; if (st > 0.25f) { gDrumWant = 105; gWaveSig = waveSig(); st = 0; } } else st = 0; }   // WAVE kit: the drums follow OSC A's table and WT POS (rebuilt once it settles)
-		if (gPageWant >= 0) { page = gPageWant; gPageWant = -1; gPads = 0; topDirty = botDirty = 1; }
+		if (gPageWant >= 0) { page = gPageWant; gPageWant = -1; topDirty = botDirty = 1; }
 		if (page != gCurPage) { gCurPage = page; botDirty = 1; }
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; if (!g) { gStepEd = -1; gSeqSaveDue = 1; } } }
 		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }
