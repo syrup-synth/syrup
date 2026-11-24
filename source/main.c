@@ -745,7 +745,10 @@ static SVoice gV[NVS];
 static float gPressAll = 0, gSlideAll = 0;   // the latest channel pressure / CC 74 (for notes not on their own channel)
 static int gMidiChNow = -1, gMpe = 0;   // the channel of the MIDI note being started; MPE mode (VOICE+FX)
 static float gMpeRange = 48;
-static int gDspOwner[NCH], gCsOwner[NCS];
+static int gDspOwner[NCH], gCsOwner[NCS];   // -1 free, -3 a SUB layer still fading out (busy until it's silent)
+// SUB RAMP: second-chip SUB layers move their volume in the audio tick (every 5 ms, like the DSP's mix ramp) rather
+// than jumping once a screen frame, and fade out before they stop: their starts and stops clicked
+static float gCsCur[NCS][2], gCsTgt[NCS][2]; static u8 gCsRamp[NCS];
 static unsigned gAge = 0, gIdc = 0;
 static ndspWaveBuf gWB[NCH];
 // SOFT START: a note's first few cycles play from a one-shot copy that fades in from silence, then the looping cycle
@@ -820,7 +823,9 @@ static void stopCh(int bk, int ch) {
 		ndspChnWaveBufClear(ch); gDspOwner[ch] = -1; if (ch >= 0 && ch < NCH) { gWbPend[ch] = 0; gMixLive[ch] = 0; }
 		if (gQScream > 0.001f && ch < 24) { ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, 0, 0, 0, 0, 0); gChClean[ch] = 1; }   // flush while silent: no gap on the next note
 	}
-	else { if (ch < 0 || ch >= NCS) return; if (gCsndOK) CSND_SetPlayState(ch, 0); gCsOwner[ch] = -1; }   // (-1 would land on channel 31: the looper)
+	else { if (ch < 0 || ch >= NCS) return;   // (-1 would land on channel 31: the looper)
+		if (gCsRamp[ch] && gAudioClock && gCsndOK && (gCsCur[ch][0] > 0.004f || gCsCur[ch][1] > 0.004f)) { gCsTgt[ch][0] = gCsTgt[ch][1] = 0; gCsOwner[ch] = -3; return; }   // fades, then stops (csRampTick)
+		if (gCsndOK) CSND_SetPlayState(ch, 0); gCsOwner[ch] = -1; gCsRamp[ch] = 0; }
 }
 
 static void chipStop(SVoice* v);
@@ -841,7 +846,7 @@ static int csUsable(int c) { return gCsndOK && (csndChannels & BIT(c)) && !tapeR
 static int freeCount(int bk) {
 	int n = 0;
 	if (bk == BK_DSP) { for (int c = 0; c < NCH; c++) if (dspUsable(c) && gDspOwner[c] < 0) n++; }
-	else for (int c = 0; c < NCS; c++) if (csUsable(c) && gCsOwner[c] < 0) n++;
+	else for (int c = 0; c < NCS; c++) if (csUsable(c) && gCsOwner[c] == -1) n++;
 	return n;
 }
 static int voiceUses(const SVoice* v, int bk) { for (int i = 0; i < v->nch; i++) if (v->bk[i] == bk) return 1; return 0; }
@@ -865,7 +870,7 @@ static int stealFor(int bk, int n, int self) {
 }
 static int takeCh(int bk, int vi) {
 	if (bk == BK_DSP) { for (int c = 0; c < NCH; c++) if (dspUsable(c) && gDspOwner[c] < 0) { gDspOwner[c] = vi; return c; } }
-	else for (int c = 0; c < NCS; c++) if (csUsable(c) && gCsOwner[c] < 0) { gCsOwner[c] = vi; return c; }
+	else for (int c = 0; c < NCS; c++) if (csUsable(c) && gCsOwner[c] == -1) { gCsOwner[c] = vi; return c; }
 	return -1;
 }
 
@@ -985,6 +990,7 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 		if (timer > 0xFFFF) timer = 0xFFFF;
 		u32 flags = SOUND_FORMAT_16BIT | SOUND_REPEAT | (gQGrit == 2 ? 0 : SOUND_LINEAR_INTERP) | SOUND_ENABLE | SOUND_CHANNEL(ch) | (timer << 16);
 		CSND_SetChnRegs(flags, pa, pa, N * 2, 0, 0);
+		gCsRamp[ch] = role == R_SUB; gCsCur[ch][0] = gCsCur[ch][1] = gCsTgt[ch][0] = gCsTgt[ch][1] = 0;   // SUB RAMP: from silence
 	}
 }
 
@@ -1373,6 +1379,7 @@ static void voicesUpdate(float dt, float bend) {
 		float l = cL[c] * gAutoGain, r = cR[c] * gAutoGain;
 		if (l > 1) l = 1;
 		if (r > 1) r = 1;
+		if (gCsRamp[c] && gAudioClock) { gCsTgt[c][0] = l; gCsTgt[c][1] = r; continue; }   // SUB RAMP: the audio tick moves it
 		u32 vol = (u32)(l * 0x8000) | ((u32)(r * 0x8000) << 16);
 		CSND_SetVol(c, gThruOn ? 0 : csMono(vol), csSend(l, r)); any = 1;   // CHIP > FX: heard only through the DSP
 	}
@@ -2169,13 +2176,23 @@ static void arpTick(float dt) {
 static LightLock gVoiceLock;   // voices are touched by the main loop and by the audio thread
 // HANG REPORT: the main loop leaves a note of where it is; if it stops for 3 s, a watcher thread writes that (and
 // what the audio threads are doing) on the bottom screen and to 3ds/syrup/hang.txt, so a freeze can be photographed
-static volatile const char* gWhere = "START"; static volatile u32 gBeat = 0, gHung = 0;
+static volatile const char* gWhere = "START"; static volatile u32 gBeat = 0, gHung = 0, gAway = 0;   // gAway: asleep or in the HOME menu: no report (the loop waits on purpose)
 #define WHERE(s) (gWhere = (s))
 static float gClockDebt = 0; static volatile int gClockSkips = 0;   // HARDWARE page shows skips
 static void arpTick(float dt);
 static void seqTick(float dt); static void tapeSeqStarted(void); static void clickTick(void);
 static void drumTick(float dt); static void shakeQTick(void);
 static int tqDrain(int inTick); static int mqDrain(int inTick); static volatile int gTickMidi; static volatile int gTqUi;
+static void csRampTick(void) {   // audio tick, voice lock held: SUB layers on the second chip glide to their level
+	if (!gCsndOK) return; int any = 0;
+	for (int c = 0; c < NCS; c++) if (gCsRamp[c]) {
+		int moved = 0;
+		for (int k = 0; k < 2; k++) { float d = gCsTgt[c][k] - gCsCur[c][k]; if (d > 1e-4f || d < -1e-4f) { gCsCur[c][k] += fabsf(d) < 0.003f ? d : d * 0.45f; moved = 1; } }
+		if (gCsOwner[c] == -3 && gCsCur[c][0] < 0.004f && gCsCur[c][1] < 0.004f) { CSND_SetPlayState(c, 0); gCsOwner[c] = -1; gCsRamp[c] = 0; any = 1; continue; }   // faded: now it stops
+		if (moved) { float l = gCsCur[c][0], r = gCsCur[c][1]; u32 vol = (u32)(l * 0x8000) | ((u32)(r * 0x8000) << 16); CSND_SetVol(c, gThruOn ? 0 : csMono(vol), csSend(l, r)); any = 1; }
+	}
+	if (any) csndExecCmds(false);
+}
 static void audioTick(void* data) {
 	(void)data;
 	if (!gAudioClock) return;
@@ -2214,7 +2231,7 @@ static void audioTick(void* data) {
 		shakeQTick();
 		gateTick(d, seqStepNow());
 	}
-	mixRampTick();
+	mixRampTick(); csRampTick();
 	gInAudioTick = 0; gTickNoMips = 0;
 	if (mipsOk) LightLock_Unlock(&gMipsLock);
 	LightLock_Unlock(&gVoiceLock);
@@ -6890,7 +6907,7 @@ static void clickNow(int acc) {   // a short tick on a free second-chip channel 
 		for (int i = 0; i < 1200; i++) { float t = i / 32728.0f; gClickBuf[k][i] = (s16)(sinf(TWO_PI * (k ? 2000 : 1300) * t) * expf(-t * 110) * 0.7f * 32767); }
 		CSND_FlushDataCache(gClickBuf[k], 1200 * 2);
 	}
-	int c = -1; for (int i = NCS - 1; i >= 0; i--) if (csUsable(i) && gCsOwner[i] < 0) { c = i; break; }
+	int c = -1; for (int i = NCS - 1; i >= 0; i--) if (csUsable(i) && gCsOwner[i] == -1) { c = i; break; }
 	if (c < 0) return;
 	gClickN++; gClickCh = c;
 	u32 v = (u32)((acc ? 0x7000 : 0x4400) * gClickLevel * 1.4f); if (v > 0x7FFF) v = 0x7FFF;   // straight to the speakers: no capture send, so CHIP > FX can't put it on tape
@@ -8908,10 +8925,10 @@ static void drumHit(int d, float vel) {   // from the audio thread (voice lock h
 	if (!(gKit == 3 && d >= 1 && d <= 2)) {
 		static int alt[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, onAlt[NDCH], lastD[NDCH] = {-1, -1, -1, -1, -1, -1, -1};
 		int slot = gDrumCh[ch] >= 0 ? ch : ch % 3, main_ = gDrumCh[slot];
-		int ok = alt[slot] >= 0 && csUsable(alt[slot]) && gCsOwner[alt[slot]] < 0 && alt[slot] != main_;
+		int ok = alt[slot] >= 0 && csUsable(alt[slot]) && gCsOwner[alt[slot]] == -1 && alt[slot] != main_;
 		for (int k = 0; ok && k < NDCH; k++) if (gDrumCh[k] == alt[slot] || (k != slot && alt[k] == alt[slot])) ok = 0;
 		if (!ok) { alt[slot] = -1; onAlt[slot] = 0;
-			for (int i = 8; i < NCS && alt[slot] < 0; i++) if (csUsable(i) && gCsOwner[i] < 0) { int used = 0; for (int k = 0; k < NDCH; k++) if (gDrumCh[k] == i || alt[k] == i) used = 1; if (!used) alt[slot] = i; } }
+			for (int i = 8; i < NCS && alt[slot] < 0; i++) if (csUsable(i) && gCsOwner[i] == -1) { int used = 0; for (int k = 0; k < NDCH; k++) if (gDrumCh[k] == i || alt[k] == i) used = 1; if (!used) alt[slot] = i; } }
 		if (alt[slot] >= 0 && main_ >= 0) {
 			int was = onAlt[slot] ? alt[slot] : main_;
 			c = onAlt[slot] ? main_ : alt[slot]; onAlt[slot] = !onAlt[slot];
@@ -9048,7 +9065,7 @@ static void panicRest(void) {
 	tapeStopPlay(); echoStop();
 	if (gDrums) { gDrums = 0; drumsChanged(); }
 	gShakePend = 0; gProgAuto = 0;
-	if (gCsndOK) { for (int c = 0; c < NCS; c++) if ((csndChannels & BIT(c)) && gCsOwner[c] < 0) CSND_SetPlayState(c, 0); csndExecCmds(false); }
+	if (gCsndOK) { for (int c = 0; c < NCS; c++) if ((csndChannels & BIT(c)) && gCsOwner[c] < 0) { CSND_SetPlayState(c, 0); gCsOwner[c] = -1; gCsRamp[c] = 0; } csndExecCmds(false); }
 }
 // ---- DRUM KIT patches (voice MODE 808 KIT .. CHIP KIT): every key is a drum. Notes follow General MIDI from C1 (36)
 // up, folded every two octaves, so an FM-1, a DAW or Drambo plays the right drums and the keyboard always has a full kit.
@@ -10403,6 +10420,8 @@ static void sleepHook(APT_HookType h, void* p) {
 			if (gLink) { gLinkResume = gLink; linkStop(); gLink = gLinkPrev = 0; }
 		}
 	} else if (h == APTHOOK_ONWAKEUP) gWoke = 1;
+	if (h == APTHOOK_ONSLEEP || h == APTHOOK_ONSUSPEND) gAway = 1;
+	if (h == APTHOOK_ONWAKEUP || h == APTHOOK_ONRESTORE) { gAway = 0; gBeat++; }
 }
 static void wakeTick(void) {   // main loop, after a wake: Wi-Fi MIDI and the IR / local link back as they were
 	if (!gWoke) return;
@@ -10545,7 +10564,7 @@ static void hangWatch(void* a) {   // HANG REPORT (see gWhere)
 	(void)a; u32 last = gBeat; u64 t0 = osGetTime();
 	for (;;) {
 		svcSleepThread(250000000LL);
-		if (gBeat != last) { last = gBeat; t0 = osGetTime(); gHung = 0; continue; }
+		if (gBeat != last || gAway) { last = gBeat; t0 = osGetTime(); gHung = 0; continue; }
 		if (gHung || osGetTime() - t0 < 3000 || !strcmp((const char*)gWhere, "LOOP") || !strcmp((const char*)gWhere, "START")) continue;   // LOOP: in aptMainLoop (HOME menu, sleep)
 		gHung = 1;
 		char l[6][48]; extern u16 ndspFrameId;
