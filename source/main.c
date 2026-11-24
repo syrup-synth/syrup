@@ -2163,11 +2163,21 @@ static void arpStep(void) {
 	int note = s[k % n] + 12 * (k / n);
 	voiceOn(note, gArpVel); gArpOn[gArpOnN++] = note;
 }
+static float transportPos16(void);   // where the transport is, in 16ths since PLAY (with the sequencer's swing)
+static int gSeqPlaying;
 static void arpTick(float dt) {
 	if (!gArp || !gArpN) { if (gArpOnN || gStrN) arpRelease(); gArpPh = 0; return; }
 	for (int i = 0; i < gStrN; i++) if ((gStrT[i] -= dt) <= 0) {   // strummed strings arriving
 		if (gArpOnN < 8) { voiceOn(gStrQ[i], gStrV[i]); gArpOn[gArpOnN++] = gStrQ[i]; }
 		gStrN--; gStrQ[i] = gStrQ[gStrN]; gStrT[i] = gStrT[gStrN]; gStrV[i] = gStrV[gStrN]; i--;
+	}
+	if (gSeqPlaying) {   // ONE TRANSPORT: while it plays, the arp's steps sit on its grid (the first note of a new chord still goes at once)
+		float len = RATE_BEATS[gArpRate] * 4, pos = transportPos16() / len; long idx = (long)floorf(pos); float fr = pos - idx;
+		static long lastIdx = -1;
+		if (gArpFresh) { gArpFresh = 0; lastIdx = idx; arpStep(); gBeatFlash = 1; gArpPh = fr; return; }
+		if (idx != lastIdx) { lastIdx = idx; gArpPh = fr; arpStep(); gBeatFlash = 1; return; }
+		if (gArpPh < gArpGate && fr >= gArpGate && gArpGate < 0.99f) arpRelease();
+		gArpPh = fr; return;
 	}
 	float stepsPerSec = gBPM / 60.0f / RATE_BEATS[gArpRate];
 	if (gArpFresh) { gArpFresh = 0; gArpPh = 0; arpStep(); gBeatFlash = 1; return; }
@@ -2205,6 +2215,7 @@ static void csRampTick(void) {   // audio tick, voice lock held: SUB layers on t
 	}
 	if (any) csndExecCmds(false);
 }
+static void progTick(void); static void bassTick(float dt);
 static void audioTick(void* data) {
 	(void)data;
 	if (!gAudioClock) return;
@@ -2237,7 +2248,7 @@ static void audioTick(void* data) {
 	gTickMidi = 1; if (mqDrain(1)) gTqUi = 1;   // network, IR and remote MIDI: as soon as it arrives, not at the next screen frame
 	while (dt > 1e-6f) {   // missed frames: catch up in frame-sized pieces so every step still fires, in order
 		float d = dt > 160.0f / DSPRATE ? 160.0f / DSPRATE : dt; dt -= d;
-		if (!gMirror) { arpTick(d); seqTick(d); }   // a mirror plays only what the 3DS sends
+		if (!gMirror) { seqTick(d); arpTick(d); progTick(); bassTick(d); }   // a mirror plays only what the 3DS sends; ONE TRANSPORT: the arp, the pads' AUTO progression and bass lines all count its 16ths
 		drumTick(d);
 		clickTick();
 		shakeQTick();
@@ -2423,6 +2434,11 @@ static int noteOnCustomRow(int nt) { return rowOfNote(nt) >= 0; }
 // SEQ RATE: what one sequencer step is. 1/32 runs the steps twice as fast (a 16-step pattern is half a bar), 1/8 half
 static const char* SEQRATE_NAMES[3] = {"1/16", "1/32", "1/8"};
 static float seqDiv(void) { return gSeqRate == 1 ? 0.5f : gSeqRate == 2 ? 2.0f : 1.0f; }   // a step, in 16ths
+static float transportPos16(void) {
+	if (!gSeqPlaying) return 0;
+	float d = seqDiv(); unsigned c = gSeqClock;
+	return (c / 2) * 2 * d + ((c & 1) ? (1.0f + gSwing) * d : 0) + gSeqPh;
+}
 static float stepLen(int i) { return ((i & 1) ? 1.0f - gSwing : 1.0f + gSwing) * seqDiv(); }   // in 16ths
 // trig conditions, shared by the sequencer and the drums: 0 ALWAYS, 1-5 chance, 6-14 A:B (loop A of every B), FILL,
 // !FILL, PRE / !PRE (the last condition here), NEI / !NEI (the neighbour's), 1ST / !1ST (the first loop after start)
@@ -2500,10 +2516,10 @@ static void seqAdvance(void) {   // to the next step; at the end of the pattern 
 static int seqStepNow(void) { return gSeqPlaying ? gSeqPos : -1; }
 // ONE TRANSPORT: PLAY / STOP runs the piano roll and the drum sequencer together (SELECT, the roll's PLAY, the drum
 // grid's PLAY, the quick ring and LINK are all this)
-static void liveRecStop(void); static int drumCellOn(int r, int i); static void say(const char* m);
+static void liveRecStop(void); static int drumCellOn(int r, int i); static void say(const char* m); static int gProgAuto, gProgAt; static void playSet(const int* n, int k, float vel);
 static void transportToggle(void) {
 	gSeqMode = gSeqMode == 1 ? 0 : 1; if (gSeqMode == 1 && gSeqBase < 0) gSeqBase = gridNote(0);
-	if (gSeqMode == 0) { seqStop(); if (gLiveRec || gPreFor == 2) liveRecStop(); }
+	if (gSeqMode == 0) { seqStop(); if (gLiveRec || gPreFor == 2) liveRecStop(); if (gProgAuto) { playSet(NULL, 0, 0.8f); gProgAt = -1; } }   // AUTO's chord stops with the transport
 	else { int any = 0; for (int r = 0; r < 10 && !any; r++) for (int i = 0; i < DSTEP; i++) if (drumCellOn(r, i)) { any = 1; break; }
 		if (any && !gDrums) { gDrums = 1; drumsChanged(); } }   // drums drawn in: they play
 	say(gSeqMode == 1 ? "PLAY" : "STOP");
@@ -5456,7 +5472,7 @@ static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 
 		if (x >= 94 && x < 128) { gPadBass = (gPadBass + 1) % NBASS; bassStop(); say(BASS_LONG[gPadBass]); return 1; }
 		if (x < 94) { gProg = (gProg + 1) % NPROG; gProgAt = -1; if (!gProg && gProgAuto) { gProgAuto = 0; playSet(NULL, 0, 0.8f); } return 1; }
 		if (!gProg) return 0;
-		if (x >= 280) { gProgAuto = !gProgAuto; gProgAt = -1; gProgBar = 1; if (!gProgAuto) playSet(NULL, 0, 0.8f); return 1; }
+		if (x >= 280) { gProgAuto = !gProgAuto; gProgAt = -1; if (!gProgAuto) playSet(NULL, 0, 0.8f); else if (gSeqMode != 1) transportToggle(); say(gProgAuto ? "AUTO: A CHORD A BAR, WITH PLAY" : "AUTO OFF"); return 1; }   // AUTO rides the one transport (and starts it)
 		int k = (x - 128) / 38; if (x < 128 || k > 3) return 0;
 		progGo(base, k, 0); *velOut = 0.8f;
 		return 1;
@@ -5495,9 +5511,8 @@ static int bassNoteOf(char c) {   // a line's letter -> a note, from the pad tha
 static void bassTick(float dt) {   // BASS LINES: while a pad chord sounds, the line plays on the 16ths (the sequencer's, or its own at BPM)
 	int on = gPadBass >= 2 && gPadSel >= 0 && gHeldN > 0;   // (not only with the pads up: a latched chord keeps its line on the DRUMS page too)
 	if (!on) { if (gBassNote >= 0 || gBassStep >= 0) bassStop(); return; }
-	int st;
-	if (gSeqPlaying) st = gSeqPos & 15;
-	else { if (gBassStep < 0) gBassPh = 0; else gBassPh += dt * gBPM / 60.0f * 4.0f; st = ((int)gBassPh) & 15; }
+	(void)dt; if (!gSeqPlaying) { if (gBassNote >= 0 || gBassStep >= 0) bassStop(); return; }   // ONE TRANSPORT: bass lines play with PLAY, on its 16ths
+	int st = ((int)floorf(transportPos16())) & 15;
 	if (st == gBassStep) return;
 	gBassStep = st;
 	char c = BASS_PAT[gPadBass][st];
@@ -5506,17 +5521,18 @@ static void bassTick(float dt) {   // BASS LINES: while a pad chord sounds, the 
 	if (c == '-') return;
 	gBassNote = bassNoteOf(c); gSubBassNote = gBassNote; trkLiveNote(1, gBassNote, 0.8f); voiceOn(gBassNote, st % 4 == 0 ? 0.9f : 0.75f);
 }
+static void progTick(void) {   // audio tick: AUTO plays the progression's next chord on each bar of the transport - only while it plays
+	static long lastBar = -1;
+	if (!gProg || !gProgAuto || !gSeqPlaying) { lastBar = -1; return; }
+	long bar = (long)floorf(transportPos16() / 16.0f);
+	if (bar == lastBar) return;
+	lastBar = bar; gProgAt = (int)(bar % 4); gPadSel = PROGS[gProg][gProgAt]; gPadN = padChord(gPadBase, gPadSel, 0, 1, gPadNotes); padPlay(gPadBase, gPadNotes, gPadN, 0.8f, 1); gProgDirty = 1;
+}
 static void padsTick(float dt) {   // strummed notes ring for a moment, then let go
 	{ static int lastRow = -1; if (!gSeqPlaying) gTrkLivePh += dt * gBPM / 60.0f * 4.0f; if (gTrkLivePh >= 16) gTrkLivePh -= 16;   // TRACKER LIVE: its rows' clock
 	  int r = trkLiveRow(); if (r != lastRow) { lastRow = r; gTrkLiveN++; }
 	  static float idle = 0; if (gHeldN || gBassNote >= 0) idle = 0; else if (gTrkLiveOn && (idle += dt) > 4) { gTrkLiveOn = 0; idle = 0; } }
 	if (padsSettle(0)) gProgDirty = 1;   // a slide that came to rest (the remote's slides have no touch frames after them)
-	if (gProg && gProgAuto) {   // AUTO: the next chord on every bar (on the sequencer's bar line when it plays)
-		static int lastPos = -1; int next = 0;
-		if (gSeqPlaying) { if (gSeqPos == 0 && lastPos != 0) next = 1; lastPos = gSeqPos; }
-		else { gProgBar += dt * gBPM / 60.0f / 4.0f; if (gProgBar >= 1) { gProgBar -= 1; next = 1; } }
-		if (next) { gProgAt = (gProgAt + 1) % 4; gPadSel = PROGS[gProg][gProgAt]; gPadN = padChord(gPadBase, gPadSel, 0, 1, gPadNotes); padPlay(gPadBase, gPadNotes, gPadN, 0.8f, 1); gProgDirty = 1; }
-	}
 	for (int i = 0; i < gStrumOffN; i++) if ((gStrumOff[i].t -= dt) <= 0) { voiceOff(gStrumOff[i].note); gStrumOff[i] = gStrumOff[--gStrumOffN]; i--; }
 }
 
@@ -5541,8 +5557,10 @@ static void motTick(float dt) {   // main thread, inside the voice lock
 	int any = gMotRec >= 0; for (int l = 0; l < NMOT; l++) any |= gMotOn[l];
 	if (!any) return;
 	float prev = gMotPh;
-	gMotPh += dt * gBPM / 60.0f / (4.0f * MOT_BARS[gMotBars]);
-	int wrapped = gMotPh >= 1; if (wrapped) gMotPh -= floorf(gMotPh);
+	int wrapped;
+	if (gSeqPlaying) {   // ONE TRANSPORT: the lanes loop on its bars while it plays
+		float L = 16.0f * MOT_BARS[gMotBars], p = transportPos16() / L; gMotPh = p - floorf(p); wrapped = gMotPh < prev;
+	} else { gMotPh += dt * gBPM / 60.0f / (4.0f * MOT_BARS[gMotBars]); wrapped = gMotPh >= 1; if (wrapped) gMotPh -= floorf(gMotPh); }
 	if (wrapped && gMotRec >= 0) {
 		if (gMotRecArmed) { gMotRecArmed = 0; say("MOTION: RECORDING - MOVE THE CIRCLE PAD"); }
 		else { gMotOn[gMotRec] = 1; gMotRec = -1; say("MOTION: LANE RECORDED"); }
@@ -11275,7 +11293,7 @@ int main(void) {
 		if (prevTouch && !touching && grainEdTouch(0, 0, 0, 1)) botDirty = 1;
 		if (gDrumOnB && prevTouch && !touching && drumGridRelease()) botDirty = 1;   // let go of the grain editor: SCAN carries on from there
 		if (gPads && prevTouch && !touching) { if (latch || gLiveRec || gSeqMode == 2) padsSettle(1); else gPadPend = 0; gStrumZone = -1; if (gLiveRec) liveUp(); if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
-		padsTick(dt); bassTick(dt); if (gProgDirty) { gProgDirty = 0; if (gPads) botDirty = 1; }
+		padsTick(dt); if (!gAudioClock) { progTick(); bassTick(dt); } if (gProgDirty) { gProgDirty = 0; if (gPads) botDirty = 1; }
 		int freshPress = touching && !prevTouch;   // a new tap restrikes the key even if it's the one still held (LATCH, drum pads)
 		prevTouch = touching;
 		{ static int f = 0; if (gAddDirty && (++f % 6 == 0 || !touching)) { gAddDirty = 0; addApply(); topDirty = 1; } }   // additive editor: rebuild a few times a second while drawing

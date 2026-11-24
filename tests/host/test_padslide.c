@@ -34,7 +34,14 @@ static void SCRIPT(int fr) {
 		playSet(NULL, 0, 0.8f); gPadBassSub = 2; gOsc[0].on = 1; padPlay(48, gPadNotes, gPadN, 0.8f, 1);
 		int okA = 0; for (int k = 0; k < NVS; k++) { SVoice* v = &gV[k]; if (v->active && !v->isEcho && v->stage != 4 && v->note == bn) { okA = v->nch >= 1; for (int j = 0; j < v->nch; j++) if (v->role[j] > R_A2) okA = 0; } }
 		if (!okA) fail("PAD BASS SOUND OSC A: the bass note should be OSC A's layers alone");
-		playSet(NULL, 0, 0.8f); gPadBass = 0; gPadBassSub = 1; done = 1;
+		playSet(NULL, 0, 0.8f); gPadBass = 0; gPadBassSub = 1;
 	}
+	// ONE TRANSPORT: AUTO starts PLAY and changes chord on the transport's bars, and stops with it
+	static int pat0;
+	if (fr == 140) { gProg = 1; gProgAuto = 0; gSeqMode = 0; seqStop(); gBPM = 120; }
+	if (fr == 142 || fr == 143) { TOUCH = 1; TX = 300; TY = PROG_Y + 6; }   // AUTO
+	if (fr == 146) { if (gSeqMode != 1) fail("AUTO should start the transport"); pat0 = gProgAt; }
+	if (fr == 146 + 130) { if (gProgAt == pat0 || gProgAt != (int)(floorf(transportPos16() / 16) ) % 4) fail("AUTO: the chord should follow the transport's bar (at %d, bar %.1f)", gProgAt, transportPos16() / 16); transportToggle(); }
+	if (fr == 146 + 136) { int n = 0; for (int k = 0; k < NVS; k++) if (gV[k].active && !gV[k].isEcho && gV[k].stage != 4) n++; if (n) fail("AUTO: STOP should stop its chord (%d)", n); gProgAuto = 0; gProg = 0; done = 1; }
 }
-int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 145; app_main(); if (!done) fail("PAD SLIDE: didn't run"); printf("padslide: chords crossed on a slide don't play\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 290; app_main(); if (!done) fail("PAD SLIDE: didn't run"); printf("padslide: chords crossed on a slide don't play\n"); return gFails ? 1 : 0; }
