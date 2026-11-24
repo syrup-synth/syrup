@@ -125,7 +125,7 @@ static int EU_IDX_(int r) { return r ? 7 : 8; }   // EUCLID in the KICK / SNARE 
 static const char* BEAT_NAMES_[NBEAT_] = {"HOUSE", "BOOM BAP", "TRAP", "DNB", "BREAK", "DISCO", "FUNK", "HALFTIME", "DEMBOW", "AFROBEAT", "2-STEP", "ELECTRO", "ROCK", "SHUFFLE", "CUMBIA", "BOSSA", "SAMBA", "RUMBA", "BEGUINE", "CHA-CHA", "TANGO", "MAMBO", "MARCH", "SWING", "SLOW ROCK", "WALTZ", "REGGAE", "FOXTROT", "TECHNO", "GO-GO"};
 static int gDrumSel[3] = {1, 1, 1}; static int gBeatSel = 0; static void beatPaste(int b); static void drumPaste(int r, int v, int undo); static void drumGridMark(void); static const char* KIT_NAMES[7]; static const char* KICKP_NAMES[9]; static const char* SNAREP_NAMES[8]; static const char* HATP_NAMES[8]; static int gEuHits[3], gEuRot[3], gEuLen; static int gDrumRec; static const char* DREC_NAMES[4];
 // live drum shaping: TUNE (semitones, applied at each hit: no rebuild), CHANCE (each hit of the row plays this often), MUTE (rows, bit 1 kick 2 snare 4 hat)
-static float gDrumTune[3] = {0, 0, 0}, gDrumChance[3] = {1, 1, 1}; static int gDrumMute = 0; static int gDrumPoly;
+static float gDrumTune[3] = {0, 0, 0}, gDrumChance[3] = {1, 1, 1}; static int gDrumMute = 0; static int gDrumPoly = 1;   // DRUM POLY: on (the = 1 had ended up inside a comment)
 static const char* DMUTE_NAMES[8] = {"NONE", "KICK", "SNARE", "KICK+SNARE", "HAT", "KICK+HAT", "SNARE+HAT", "ALL"};
 #define NVISM 11
 static const char* VISM_NAMES[NVISM] = {"AUTO", "WAVETABLE", "SCOPES", "ORBIT", "SPECTRUM", "TRACKER", "TRACKER VU", "TUNNEL", "KALEIDO", "RIPPLES", "PLASMA"};
@@ -390,9 +390,11 @@ static int loadWav(Table* tb, const char* path) {
 		long o = 12;
 		while (o + 8 <= len) {
 			u32 cl = rd32(b + o + 4);
-			if (!memcmp(b + o, "fmt ", 4)) { fmt = rd16(b + o + 8); ch = rd16(b + o + 10); bits = rd16(b + o + 22); }
-			else if (!memcmp(b + o, "clm ", 4) && cl >= 7) { int fs = atoi((const char*)b + o + 8 + 3); if (fs >= 64 && fs <= 8192) frameSize = fs; }
-			else if (!memcmp(b + o, "data", 4)) { data = b + o + 8; dlen = cl; if (o + 8 + (long)dlen > len) dlen = len - o - 8; }
+			int isData = !memcmp(b + o, "data", 4);
+			if (!isData && cl > (u32)(len - o - 8)) break;   // a chunk that runs past the file: corrupt, stop (no reading off the end, no wrap)
+			if (!memcmp(b + o, "fmt ", 4) && cl >= 16) { fmt = rd16(b + o + 8); ch = rd16(b + o + 10); bits = rd16(b + o + 22); }
+			else if (!memcmp(b + o, "clm ", 4) && cl >= 7) { char t[16]; int n = (int)cl - 3 < 15 ? (int)cl - 3 : 15; memcpy(t, b + o + 8 + 3, n); t[n] = 0; int fs = atoi(t); if (fs >= 64 && fs <= 8192) frameSize = fs; }
+			else if (isData) { data = b + o + 8; dlen = cl; if (o + 8 + (long)dlen > len) { dlen = len - o - 8; break; } }
 			o += 8 + cl + (cl & 1);
 		}
 	}
@@ -758,7 +760,7 @@ static int gSeqPart = 0; static u8 gPartMute[4]; static int gDrMuteNow = 0;
 static int gMixOn = 0;   // MIX: the mixer is up on the bottom screen
 static SVoice gV[NVS];
 static int gVoicePart = 0;
-static float partGain(int p) { if (p < 0 || p > 2) return 1; if (gPartMute[p] && p) return 0; if (gSoloAny() && !gPartSolo[p]) return 0; return gPartLvl[p]; }   // (the SYNTH part's mute stops its sequence; its live keys still sound)   // the part starting / stopping notes right now (CHORD and BASS play poly, whatever the patch's MONO)
+static float partGain(int p) { if (p < 0 || p > 2) return 1; if (gPartMute[p]) return 0; if (gSoloAny() && !gPartSolo[p]) return 0; return gPartLvl[p]; }   // (a muted part is silent: its sequence and its live keys)   // the part starting / stopping notes right now (CHORD and BASS play poly, whatever the patch's MONO)
 static float gPressAll = 0, gSlideAll = 0;   // the latest channel pressure / CC 74 (for notes not on their own channel)
 static int gMidiChNow = -1, gMpe = 0;   // the channel of the MIDI note being started; MPE mode (VOICE+FX)
 static float gMpeRange = 48;
@@ -962,6 +964,13 @@ static void freeVoice(SVoice* v) {
 	chipStop(v);
 	if (v->started) for (int i = 0; i < v->nch; i++) if (v->ch[i] >= 0) { stopCh(v->bk[i], v->ch[i]); v->ch[i] = -1; }
 	v->active = 0; v->started = 0;
+}
+static void stealCh(int bk, int c) {   // the echo / tape / kit / grains take a channel: the voice playing on it goes too (else it keeps
+	// writing the channel's pitch and level every frame, and cuts the new sound when it lets go) - and the channel stops now, no fade
+	int ow = bk == BK_DSP ? (c >= 0 && c < NCH ? gDspOwner[c] : -1) : (c >= 0 && c < NCS ? gCsOwner[c] : -1);
+	if (ow >= 0 && ow < NVS && gV[ow].active) freeVoice(&gV[ow]);
+	if (bk == BK_DSP) { if (c >= 0 && c < NCH && gDspOwner[c] >= 0) stopCh(BK_DSP, c); }
+	else if (c >= 0 && c < NCS) { if (gCsndOK) CSND_SetPlayState(c, 0); gCsOwner[c] = -1; gCsRamp[c] = 0; }
 }
 
 #define THRU_CH0 19   // CHIP > FX plays the second chip's capture on DSP channels 19 (left) and 20 (right)
@@ -1229,7 +1238,7 @@ static void lfoTrig(void) { for (int i = 0; i < 2; i++) if (gLfo[i].mode == 1) g
 
 static int busActive(void);
 static int gDry = 0;   // DRY check (FX ORDER view): every effect off for a listen, the OUT FILTER and limiter stay; not saved
-static void addTaps(SVoice* v) {
+static void addTaps(SVoice* v) {   // (each tap keeps the note's part: MIX level / FX send)
 	if (gDry || fxMixEff() < 0.002f) return;
 	if (busActive() && (gFx == 1 || gFx == 3)) return;   // reverb / echo run on the DSP effect buses
 	int ne = 0; float t[8], g[8], p[8], c[8], rm[8], dt[8];
@@ -1249,7 +1258,7 @@ static void addTaps(SVoice* v) {
 	}
 	for (int k = 0; k < ne; k++) {
 		SVoice* e = newVoice(); initVoice(e);
-		e->note = v->note; e->freq = v->freq; e->cur = v->freq; e->vel = v->vel;
+		e->note = v->note; e->freq = v->freq; e->cur = v->freq; e->vel = v->vel; e->part = v->part;
 		e->gain = g[k] * mix; e->pan = p[k]; e->cutMul = c[k]; e->startDelay = t[k]; e->isEcho = 1; e->parent = v->id;
 		e->relMul = rm[k]; e->tapDet = dt[k];
 	}
@@ -1539,7 +1548,7 @@ static void voicesUpdate(float dt, float bend) {
 		}
 		if (v->chipCh >= 8 && v->chipCh <= 13) {   // CHIP layer: hardware square, pitch and level from the same voice
 			float pan = v->pan + panMod + 0.5f; if (pan < 0) pan = 0; if (pan > 1) pan = 1;
-			float g = vg * gChipLevel * 0.6f;
+			float g = vg * gChipLevel * 0.6f * partGain(v->part);   // (MIX: the part's level / mute / solo, like its other layers)
 			cL[v->chipCh] = g * sqrtf(1 - pan) * 1.41f; cR[v->chipCh] = g * sqrtf(pan) * 1.41f;
 			u32 timer = CSND_TIMER(chipRate(v->cur * pm)); if (timer < 0x42) timer = 0x42; if (timer > 0xFFFF) timer = 0xFFFF;
 			CSND_SetTimer(v->chipCh, timer);
@@ -7409,7 +7418,7 @@ static void echoStart(void) {
 	for (int c = NCS - 1; c > 18 && n < 2; c--) if (csndChannels & BIT(c)) {
 		if (top < 2) { top++; continue; }
 		if (tapeReserved(c) || drumReserved(c) || chipReserved(c)) continue;
-		gCsRamp[c] = 0; if (gCsOwner[c] >= 0) stopCh(BK_CSND, c);
+		stealCh(BK_CSND, c);
 		gEchoCh[n++] = c;
 	}
 	if (n < 2) { for (int k = 0; k < 2; k++) CSND_ReleaseCapUnit(gEchoUnits[k]); return; }
@@ -7562,7 +7571,7 @@ static void tapeStartPlay(int except) {   // every track on tape (but the one re
 		if (gTapeCh[t * 2 + 1] < 0) { short_ = 1; continue; }
 		u32 l = gTpMute[t] || (gSoloAny() && !gPartSolo[4 + t]) ? 0 : (u32)(gTpLevel[t] * 0x8000);
 		for (int k = 0; k < 2; k++) {
-			int c = gTapeCh[t * 2 + k]; gCsRamp[c] = 0; stopCh(BK_CSND, c);   // (now, not a SUB fade-out: the fade would stop the tape and pull its volume to 0 - MUTE never came back)
+			int c = gTapeCh[t * 2 + k]; stealCh(BK_CSND, c);   // (now, not a SUB fade-out: the fade would stop the tape and pull its volume to 0 - MUTE never came back)
 			float sp = TSPD[gTpSpd[t]];   // every track loops; at a bar-multiple speed it keeps landing on the bar
 			u32 flags = SOUND_FORMAT_ADPCM | SOUND_REPEAT | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(c) | (CSND_TIMER((int)lroundf(32728 * sp)) << 16);
 			CSND_SetAdpcmState(c, 0, 0, 0); CSND_SetAdpcmState(c, 1, 0, 0); CSND_SetAdpcmReload(c, true);
@@ -7905,14 +7914,15 @@ static int mixTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (press) {
 		if (y >= MX_BY && y < MX_BY + 14 && k < 8) {   // M / S
 			int xx = x - k * w;
-			if (xx < w / 2) { if (k < 4) partMuteToggle(k); else gTpMute[k - 4] = !gTpMute[k - 4]; }
-			else { gPartSolo[k] = !gPartSolo[k]; say(gPartSolo[k] ? "SOLO" : "SOLO OFF"); }
+			if (xx < w / 2) { if (k < 4) partMuteToggle(k); else { gTpMute[k - 4] = !gTpMute[k - 4]; tapeVol(k - 4); } }
+			else { gPartSolo[k] = !gPartSolo[k]; say(gPartSolo[k] ? "SOLO" : "SOLO OFF"); for (int t = 0; t < NTRK; t++) tapeVol(t); }   // (the tape keeps its volume in the channels: set it now)
 			return 1;
 		}
 		gMixDrag = k; gMixDragK = y >= MX_SY - 4 && y < MX_SY + 12 && k < 3 ? 1 : 0;
 	}
 	if (gMixDragK) { float t = (x - (k * w + 3)) / (float)(w - 6); gPartSend[k] = t < 0 ? 0 : t > 1 ? 1 : t; return 1; }
 	float t = (MX_FB - y) / (float)(MX_FB - MX_FT); t = t < 0 ? 0 : t > 1 ? 1 : t; *mixLvl(k) = t * mixMax(k);
+	if (k >= 4 && k < 8) tapeVol(k - 4);
 	if (k == 3) gEdited = 1; if (k == 8) gEdited = 1;
 	return 1;
 }
@@ -7932,8 +7942,8 @@ static void thruStop(void) {
 static void thruMix(void) {
 	for (int k = 0; k < 2; k++) {
 		float mix[12] = {0}; mix[k] = 2.0f;   // back to full level (the capture ran at half)
-		float s0 = busSend(0), s1 = busSend(1);
-		mix[4] = mix[0] * s0; mix[5] = mix[1] * s0; mix[8] = mix[0] * s1; mix[9] = mix[1] * s1;
+		if (masterActive()) { mix[4] = mix[0]; mix[5] = mix[1]; mix[0] = mix[1] = 0; }   // MASTER FX on: through the chain, like the voices (else it was heard dry)
+		else { float s0 = busSend(0), s1 = busSend(1); mix[4] = mix[0] * s0; mix[5] = mix[1] * s0; mix[8] = mix[0] * s1; mix[9] = mix[1] * s1; }
 		ndspChnSetMix(THRU_CH0 + k, mix);
 	}
 }
@@ -8088,7 +8098,7 @@ static void grainsTick(void) {   // main thread, every frame
 static void grainsChanged(void) {
 	if (!gAudioOK) return;
 	for (int c = GR_CH0; c <= GR_CH0 + 1; c++) {
-		if (gDspOwner[c] >= 0) stopCh(BK_DSP, c);
+		stealCh(BK_DSP, c);
 		ndspChnWaveBufClear(c);
 		if (gGrains) { ndspChnReset(c); ndspChnSetInterp(c, NDSP_INTERP_LINEAR); ndspChnSetFormat(c, NDSP_FORMAT_MONO_PCM16); }
 	}
@@ -8592,7 +8602,7 @@ static void cliHttp(Cli* c) {   // request complete in c->buf
 	char* key = strstr(c->buf, "Sec-WebSocket-Key:");
 	if (key) {
 		key += 18; while (*key == ' ') key++;
-		char k[80]; int i = 0; while (key[i] && key[i] != '\r' && key[i] != '\n' && i < 60) { k[i] = key[i]; i++; } k[i] = 0;
+		char k[100]; int i = 0; while (key[i] && key[i] != '\r' && key[i] != '\n' && i < 60) { k[i] = key[i]; i++; } k[i] = 0;
 		strcat(k, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
 		u8 h[20]; char acc[40]; sha1((const u8*)k, strlen(k), h); b64(h, 20, acc);
 		char r[256]; int n = snprintf(r, sizeof(r), "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", acc);
@@ -9303,7 +9313,8 @@ static float gDrumLevel = 0.8f;
 #define NDCH 7
 static int gDrumCh[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, gDrumStep = -1;
 static float gDrumPh = 0;
-static s16* gDrumSmp[NDRUM]; static s16* gDrumBack[NDRUM]; static int gDrumLen[NDRUM]; static volatile int gDrumWant = -1;   // kits build into the back set, then swap: hits never read a half-built drum static int gDrumPoly = 1;   // DRUM POLY
+static s16* gDrumSmp[NDRUM]; static s16* gDrumBack[NDRUM]; static int gDrumLen[NDRUM]; static volatile int gDrumWant = -1;   // kits build into the back set, then swap: hits never read a half-built drum
+static u64 gDrumSwapT = 0;   // when the last swap was: the retired set may still be ringing (a crash tails ~1.4 s), so it isn't rebuilt over before then
 static const char* KIT_NAMES[NKIT] = {"808", "909", "LOFI", "CHIP", "PERC", "WAVE", "SAMPLE"};
 static const char* KICKP_NAMES[9] = {"OFF", "FOUR FLOOR", "BREAK", "TRAP", "DNB", "HALFTIME", "BOOM BAP", "MINE", "EUCLID"};
 static const char* SNAREP_NAMES[8] = {"OFF", "BACKBEAT", "BREAK", "TRAP", "DNB", "CLAP 2+4", "MINE", "EUCLID"};
@@ -9349,8 +9360,8 @@ static float gTapLevel = 0, gTapHold = 0;
 static const u8 HATVEL[16] = {255, 120, 200, 110, 255, 120, 200, 140, 255, 120, 200, 110, 255, 130, 220, 160};
 static int gNzCh[2] = {-1, -1}; static float gNzVol[2];   // hardware noise drums: retired (they wedged the sound chip); CHIP kit is now sampled LFSR noise
 static int drumReserved(int c) {
-	if (gVoiceMode >= 3) { for (int k = 0; k < NDCH; k++) if (c == gDrumCh[k]) return 1; return 0; }   // kit patch: all 7
-	return gDrums && (c == gDrumCh[0] || c == gDrumCh[1] || c == gDrumCh[2]);
+	if (gVoiceMode >= 3 || gDrums) { for (int k = 0; k < NDCH; k++) if (c == gDrumCh[k]) return 1; return 0; }   // kit patch or drums on: all 7 (the drum machine plays on 3..6 too)
+	return 0;
 }
 static u32 csSend(float l, float r);
 
@@ -9422,9 +9433,10 @@ static int wavMono(const char* path, float* out, int cap) {   // any WAV -> mono
 	int fmt = 1, ch = 1, bits = 16; u32 rate = 32728; const u8* data = NULL; u32 dlen = 0;
 	if (!memcmp(b, "RIFF", 4) && !memcmp(b + 8, "WAVE", 4)) {
 		long o = 12;
-		while (o + 8 <= len) { u32 cl = rd32(b + o + 4);
-			if (!memcmp(b + o, "fmt ", 4)) { fmt = rd16(b + o + 8); ch = rd16(b + o + 10); rate = rd32(b + o + 12); bits = rd16(b + o + 22); if (fmt == 0xFFFE && cl >= 26) fmt = rd16(b + o + 32); }
-			else if (!memcmp(b + o, "data", 4)) { data = b + o + 8; dlen = cl; if (o + 8 + (long)dlen > len) dlen = len - o - 8; }
+		while (o + 8 <= len) { u32 cl = rd32(b + o + 4); int isData = !memcmp(b + o, "data", 4);
+			if (!isData && cl > (u32)(len - o - 8)) break;   // corrupt chunk: stop
+			if (!memcmp(b + o, "fmt ", 4) && cl >= 16) { fmt = rd16(b + o + 8); ch = rd16(b + o + 10); rate = rd32(b + o + 12); bits = rd16(b + o + 22); if (fmt == 0xFFFE && cl >= 26) fmt = rd16(b + o + 32); }
+			else if (isData) { data = b + o + 8; dlen = cl; if (o + 8 + (long)dlen > len) { dlen = len - o - 8; break; } }
 			o += 8 + cl + (cl & 1); }
 	}
 	int n = 0;
@@ -9484,7 +9496,13 @@ static int drumShape(float* x, int n, int L0, const DVoice* dv, float sr, int ca
 	int f = len < 256 ? len / 4 : 64; for (int i = 0; i < f; i++) x[len - 1 - i] *= i / (float)f;   // no click at the end
 	return len;
 }
+static void drumFade(int c, int frames);
 static void drumBuild(int kitArg) {   // synthesise kick / snare / hat into linear memory for CSND
+	if (gDrumSmp[0] && osGetTime() - gDrumSwapT < 1500 && gCsndOK) {   // the set about to be built over may still be ringing (a crash
+		// tails ~1.4 s): fade the drum channels out first, so nothing plays it while it's rewritten
+		LightLock_Lock(&gVoiceLock); for (int k = 0; k < NDCH; k++) if (gDrumCh[k] >= 0) drumFade(gDrumCh[k], 2); LightLock_Unlock(&gVoiceLock);
+		svcSleepThread(15000000);
+	}
 	if (kitArg == KIT_SAMPLE) kitScanDirs();
 	int kit = kitArg == KIT_SAMPLE ? 0 : kitArg;   // SAMPLE: the 808 drums under the files (for any drum without one)
 	const float sr = 32728;
@@ -9638,11 +9656,13 @@ static void drumBuild(int kitArg) {   // synthesise kick / snare / hat into line
 		}
 		if (gCsndOK) CSND_FlushDataCache(out, len[d] * 2);
 	}
+	LightLock_Lock(&gVoiceLock);   // the swap under the lock: a hit never gets a new buffer with the old length
 	for (int d = 0; d < NDRUM; d++) { s16* t = gDrumSmp[d]; gDrumSmp[d] = gDrumBack[d]; gDrumBack[d] = t; gDrumLen[d] = len[d]; }   // swap in (the old set keeps ringing out)
-	gDrumBuilt = kitArg;
+	gDrumBuilt = kitArg; gDrumSwapT = osGetTime();
+	LightLock_Unlock(&gVoiceLock);
 }
 static void kitToTable(void) {   // KIT > TABLE: the drum kit you have (with your SOUND edits) as a wavetable, 8 drums x 8 frames
-	if (gDrumBuilt != gKit || !gDrumSmp[0]) drumBuild(gKit);
+	if (gDrumBuilt != gKit || !gDrumSmp[0]) { LightLock_Unlock(&gVoiceLock); drumBuild(gKit); LightLock_Lock(&gVoiceLock); }   // (built off the lock: called with it held)
 	if (!gDrumSmp[0]) { say("NO DRUM KIT TO TAKE"); return; }
 	static const int D[DT_N] = {0, 1, 6, 4, 2, 5, 8, 9}; float* sig[DT_N]; int len[DT_N]; int ok = 1;
 	for (int g = 0; g < DT_N; g++) { int d = D[g], n = gDrumLen[d]; sig[g] = n > 0 ? (float*)malloc(sizeof(float) * n) : NULL; len[g] = n; if (!sig[g]) { ok = 0; continue; } for (int i = 0; i < n; i++) sig[g][i] = gDrumSmp[d][i] / 32768.0f; }
@@ -9659,7 +9679,7 @@ static void drumPickChannels(void) {
 	gNzCh[0] = gNzCh[1] = -1;
 	int n = 0;
 	for (int k = 0; k < NDCH; k++) gDrumCh[k] = -1;
-	for (int c = 16; c < NCS && n < NDCH; c++) if (gCsndOK && (csndChannels & BIT(c)) && !chipReserved(c) && !echoReserved(c)) gDrumCh[n++] = c;
+	for (int c = 16; c < NCS && n < NDCH; c++) if (gCsndOK && (csndChannels & BIT(c)) && !chipReserved(c) && !echoReserved(c) && !tapeReserved(c)) gDrumCh[n++] = c;
 }
 static int gDrumHitN[NDRUM];   // hits played per drum (the tests count them)
 static int gDrumLastCh = -1; static u8 gChFade[32]; static float gChG[32]; static u32 gChVol[32], gChCap[32];   // a channel fading out: frames left, its gain, the volumes it started at
@@ -9861,7 +9881,7 @@ static void kitEnsure(void) {   // main thread: build the patch's kit and claim 
 	int kit = gVoiceMode - 3;
 	if (gDrumBuilt != kit || gKit != kit) { gKit = kit; gDrumWant = kit; }
 	if (gDrumCh[NDCH - 1] < 0 && gDrumCh[3] < 0) drumPickChannels();
-	for (int k = 0; k < NDCH; k++) if (gDrumCh[k] >= 0 && gCsOwner[gDrumCh[k]] >= 0) { CSND_SetPlayState(gDrumCh[k], 0); gCsOwner[gDrumCh[k]] = -1; }
+	for (int k = 0; k < NDCH; k++) if (gDrumCh[k] >= 0 && gCsOwner[gDrumCh[k]] >= 0) stealCh(BK_CSND, gDrumCh[k]);
 }
 // ONE KIT: a kit patch (voice MODE 808 KIT .. WAVE KIT) and the drum machine play the same kit. They used to build
 // over each other (only one kit fits in memory at a time), so the drums skipped and switched sounds. Whichever you
