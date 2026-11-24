@@ -749,7 +749,7 @@ static SVoice gV[NVS];
 static float gPressAll = 0, gSlideAll = 0;   // the latest channel pressure / CC 74 (for notes not on their own channel)
 static int gMidiChNow = -1, gMpe = 0;   // the channel of the MIDI note being started; MPE mode (VOICE+FX)
 static float gMpeRange = 48;
-static int gDspOwner[NCH], gCsOwner[NCS];   // -1 free, -3 a SUB layer still fading out (busy until it's silent)
+static int gDspOwner[NCH], gCsOwner[NCS]; static u8 gDspSub[24];   // -1 free, -3 a SUB layer still fading out (busy until it's silent)
 // SUB RAMP: second-chip SUB layers move their volume in the audio tick (every 5 ms, like the DSP's mix ramp) rather
 // than jumping once a screen frame, and fade out before they stop: their starts and stops clicked
 static float gCsCur[NCS][2], gCsTgt[NCS][2]; static u8 gCsRamp[NCS];
@@ -941,7 +941,7 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 	int ch = takeCh(bk, vi);
 	v->ch[i] = ch; v->bk[i] = bk; v->role[i] = role;
 	float f = roleFreq(v, role);
-	v->lev[i] = (role == R_TAP || (role == R_SUB && bk == BK_CSND)) ? levelDamped(f, baseCutoff() * v->cutMul + 200) : levelFor(f * 1.03f);
+	v->lev[i] = (role == R_TAP || (role == R_SUB && gCsndOK)) ? levelDamped(f, baseCutoff() * v->cutMul + 200) : levelFor(f * 1.03f);   // (a SUB sounds the same on either chip)
 	Mips* m = roleMips(role);
 	if (!gInAudioTick) LightLock_Lock(&gMipsLock);   // the audio clock already holds it
 	if (!(m->built & (1u << v->lev[i]))) {
@@ -1000,6 +1000,13 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 }
 
 static void chipStart(SVoice* v, int vi);
+static int freeCount(int bk);
+static int subBk(int dspNeeded) {   // SUB on a DSP channel when there's room (its starts / stops ramp sample-smooth there: the
+	// second chip's volume steps clicked however small); the second chip only when the DSP is full
+	if (!gCsndOK) return BK_DSP;
+	if (gQScream > 0.001f || gOfType != 0) return BK_CSND;   // SCREAM and the OUTPUT FILTER would bend it on the DSP: those patches want it clean
+	return freeCount(BK_DSP) > dspNeeded ? BK_DSP : BK_CSND;
+}
 static void startVoice(int vi) {
 	SVoice* v = &gV[vi];
 	int roles[R_COUNT], bks[R_COUNT], nr = 0, nd = 0, nc = 0;
@@ -1007,10 +1014,10 @@ static void startVoice(int vi) {
 	else {
 		int bo = v->subOnly == 2 ? 0 : v->subOnly == 3 ? 1 : -1;   // PADS BASS on OSC A / OSC B: that oscillator's layers alone
 		if (bo >= 0 && gOsc[bo].on) for (int u = 0; u < gOsc[bo].uni; u++) { roles[nr] = (bo ? R_B0 : R_A0) + u; bks[nr++] = BK_DSP; }
-		else if (v->subOnly) { roles[nr] = R_SUB; bks[nr++] = gCsndOK ? BK_CSND : BK_DSP; }   // PADS BASS: the sub alone (or the osc picked is off)
+		else if (v->subOnly) { roles[nr] = R_SUB; bks[nr++] = subBk(nr); }   // PADS BASS: the sub alone (or the osc picked is off)
 		else {
 		for (int o = 0; o < 2; o++) if (gOsc[o].on) for (int u = 0; u < gOsc[o].uni; u++) { roles[nr] = (o ? R_B0 : R_A0) + u; bks[nr++] = BK_DSP; }
-		if (gSubLevel > 0.01f) { roles[nr] = R_SUB; bks[nr++] = gCsndOK ? BK_CSND : BK_DSP; }
+		if (gSubLevel > 0.01f) { roles[nr] = R_SUB; bks[nr++] = subBk(nr); }
 		}
 	}
 	for (int i = 0; i < nr; i++) { if (bks[i] == BK_DSP) nd++; else nc++; }
@@ -1322,13 +1329,13 @@ static void voicesUpdate(float dt, float bend) {
 			if (pan < 0) pan = 0;
 			if (pan > 1) pan = 1;
 			float g = vg * ug * lv;
-			if (v->bk[k] == BK_DSP) g *= fcomp;
+			if (v->bk[k] == BK_DSP && !(role == R_SUB && gCsndOK)) g *= fcomp;
 			float L = g * sqrtf(1 - pan) * 1.41f, R = g * sqrtf(pan) * 1.41f;
 			float rate = f * pm * powf(2.0f, det / 1200.0f) * LEVN[v->lev[k]];
 			if (v->bk[k] == BK_DSP) {
-				dL[ch] = L; dR[ch] = R;
+				dL[ch] = L; dR[ch] = R; gDspSub[ch] = role == R_SUB && gCsndOK;
 				ndspChnSetRate(ch, rate);
-				filterSet(ch, role == R_SUB ? cutoff * 0.6f + 300 : cutoff, res);
+				filterSet(ch, role == R_SUB ? (gCsndOK ? 20000.0f : cutoff * 0.6f + 300) : cutoff, role == R_SUB && gCsndOK ? 0 : res);   // a SUB moved onto the DSP keeps the second chip's sound: unfiltered
 			} else {
 				cL[ch] = L; cR[ch] = R;
 				u32 timer = CSND_TIMER(rate); if (timer < 0x42) timer = 0x42; if (timer > 0xFFFF) timer = 0xFFFF;
@@ -2201,6 +2208,7 @@ static int tqDrain(int inTick); static int mqDrain(int inTick); static volatile 
 static void csRampTick(void) {   // audio tick, voice lock held: SUB layers on the second chip glide to their level
 	if (!gCsndOK) return; int any = 0;
 	for (int c = 0; c < NCS; c++) if (gCsRamp[c]) {
+		if (!csUsable(c)) { gCsRamp[c] = 0; if (gCsOwner[c] == -3) gCsOwner[c] = -1; continue; }   // the tape / echo / drums took it: theirs now
 		int moved = 0;
 		if (gCsRamp[c] == 2) {   // not started yet: start it at its level now (the wave begins at 0)
 			if (gCsOwner[c] == -3) { gCsOwner[c] = -1; gCsRamp[c] = 0; continue; }
@@ -6785,7 +6793,7 @@ static void echoStart(void) {
 	for (int c = NCS - 1; c > 18 && n < 2; c--) if (csndChannels & BIT(c)) {
 		if (top < 2) { top++; continue; }
 		if (tapeReserved(c) || drumReserved(c) || chipReserved(c)) continue;
-		if (gCsOwner[c] >= 0) stopCh(BK_CSND, c);
+		gCsRamp[c] = 0; if (gCsOwner[c] >= 0) stopCh(BK_CSND, c);
 		gEchoCh[n++] = c;
 	}
 	if (n < 2) { for (int k = 0; k < 2; k++) CSND_ReleaseCapUnit(gEchoUnits[k]); return; }
@@ -6938,7 +6946,7 @@ static void tapeStartPlay(int except) {   // every track on tape (but the one re
 		if (gTapeCh[t * 2 + 1] < 0) { short_ = 1; continue; }
 		u32 l = gTpMute[t] ? 0 : (u32)(gTpLevel[t] * 0x8000);
 		for (int k = 0; k < 2; k++) {
-			int c = gTapeCh[t * 2 + k]; stopCh(BK_CSND, c);
+			int c = gTapeCh[t * 2 + k]; gCsRamp[c] = 0; stopCh(BK_CSND, c);   // (now, not a SUB fade-out: the fade would stop the tape and pull its volume to 0 - MUTE never came back)
 			float sp = TSPD[gTpSpd[t]];   // every track loops; at a bar-multiple speed it keeps landing on the bar
 			u32 flags = SOUND_FORMAT_ADPCM | SOUND_REPEAT | SOUND_LINEAR_INTERP | SOUND_ENABLE | SOUND_CHANNEL(c) | (CSND_TIMER((int)lroundf(32728 * sp)) << 16);
 			CSND_SetAdpcmState(c, 0, 0, 0); CSND_SetAdpcmState(c, 1, 0, 0); CSND_SetAdpcmReload(c, true);
@@ -9112,7 +9120,8 @@ static int midiDrumPad(int a, int on, int vel, int inTick) {   // channel 10 (Ge
 static void myDrumLoad(void);
 static void drumsChanged(void) {   // main thread
 	myDrumLoad();
-	{ int pt[3] = {gKickPat, gSnarePat, gHatPat}; for (int r = 0; r < 3; r++) if (pt[r] != MINE_IDX[r]) drumPaste(r, pt[r], 0); }   // a factory pattern set directly: into the grid
+	// (no pasting here any more: the grid is what plays and what you see; patterns are pasted when picked or when a patch
+	// brings them. Pasting again on DRUMS ON / PLAY / a first tap filled the grid with notes out of nowhere)
 	if (gDrums) {
 		if (!gCsndOK) { say("DRUMS NEED THE SECOND SOUND CHIP"); gDrums = 0; return; }
 		if (gDrumBuilt != gKit) gDrumWant = gKit;   // built after the lock is let go (drumService)
@@ -9564,7 +9573,7 @@ static void drumSnapSet(const u8* in) { int p[3];
 	#define SNG(x) memcpy(x, in, sizeof(x)); in += sizeof(x);
 	SNG(gMyDrum) SNG(gDrumX) memcpy(p, in, 12); in += 12; SNG(gDrRat) SNG(gDrCond) SNG(gDrRate) SNG(gDrLen) SNG(gDrAcc)
 	#undef SNG
-	gKickPat = p[0]; gSnarePat = p[1]; gHatPat = p[2]; gDrumSaveDue = 1;
+	gKickPat = p[0]; gSnarePat = p[1]; gHatPat = p[2]; for (int r = 0; r < 3; r++) gDrumSel[r] = p[r]; gDrumSaveDue = 1;
 }
 static float gVisT = 0;
 // ---- MIRROR: the snapshots the 3DS sends (main loop) and what a mirror does with everything it gets
@@ -10754,6 +10763,7 @@ int main(void) {
 #endif
 	if (gSplash) for (int k = 0; k < 2; k++) { splashBottomReady(); gfxFlushBuffers(); gfxSwapBuffers(); gspWaitForVBlank(); }
 	saverStart();
+	if (gCsndOK && gDrumBuilt != gKit && gDrumWant < 0) gDrumWant = gKit;   // the kit is made now, not on the first drum tap (that took a second)
 #ifndef SYRUP_HOST
 	{ s32 pr = 0x30; svcGetThreadPriority(&pr, CUR_THREAD_HANDLE); threadCreate(hangWatch, NULL, 0x2000, pr > 0x19 ? pr - 1 : pr, 0, true); }
 #endif
