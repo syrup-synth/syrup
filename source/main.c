@@ -752,8 +752,13 @@ static int gStrumVox = 2; static const char* STRUMVOX_NAMES[4] = {"2", "3", "4",
 // tracker's rows as they play, so the TRACKER view shows them too, not only the sequence
 static s16 gTrkLive[64][2]; static u8 gTrkLiveV[64][2]; static u32 gTrkLiveClk[64][2]; static float gTrkLivePh = 0; static u32 gTrkLiveN = 1000; static int gTrkLiveOn = 0;
 static int gSubBassNote = -1, gPadBassSub = 1; static const char* BASSSND_NAMES[4] = {"PATCH", "SUB OSC", "OSC A", "OSC B"};   // PAD BASS SOUND   // the pads' bass note right now: voiceOn makes it a SUB-only voice
+static float gPartLvl[3] = {1, 1, 1}, gPartSend[3] = {1, 1, 1}; static u8 gPartSolo[8];   // MIX: LEAD / CHORD / BASS levels and FX sends; solos (4 parts, 4 tape tracks)
+static int gSoloAny(void) { for (int i = 0; i < 8; i++) if (gPartSolo[i]) return 1; return 0; }
+static int gSeqPart = 0; static u8 gPartMute[4]; static int gDrMuteNow = 0;
+static int gMixOn = 0;   // MIX: the mixer is up on the bottom screen
 static SVoice gV[NVS];
-static int gVoicePart = 0;   // the part starting / stopping notes right now (CHORD and BASS play poly, whatever the patch's MONO)
+static int gVoicePart = 0;
+static float partGain(int p) { if (p < 0 || p > 2) return 1; if (gPartMute[p] && p) return 0; if (gSoloAny() && !gPartSolo[p]) return 0; return gPartLvl[p]; }   // (the SYNTH part's mute stops its sequence; its live keys still sound)   // the part starting / stopping notes right now (CHORD and BASS play poly, whatever the patch's MONO)
 static float gPressAll = 0, gSlideAll = 0;   // the latest channel pressure / CC 74 (for notes not on their own channel)
 static int gMidiChNow = -1, gMpe = 0;   // the channel of the MIDI note being started; MPE mode (VOICE+FX)
 static float gMpeRange = 48;
@@ -1557,11 +1562,12 @@ static void voicesUpdate(float dt, float bend) {
 	gAutoGain += (target - gAutoGain) * (target < gAutoGain ? 0.6f : 0.05f);
 	for (int c = 0; c < NCH; c++) if (dL[c] >= 0) {
 		float mix[12] = {0};
-		mix[0] = dL[c] * gAutoGain; mix[1] = dR[c] * gAutoGain;
+		int pt = gDspOwner[c] >= 0 && gDspOwner[c] < NVS ? gV[gDspOwner[c]].part : -1; float pg = pt >= 0 ? partGain(pt) : 1, ps = pt >= 0 ? gPartSend[pt] : 1;   // MIX: the part's level and FX send
+		mix[0] = dL[c] * gAutoGain * pg; mix[1] = dR[c] * gAutoGain * pg;
 		if (gQMixDrive > 0.001f && masterActive()) { float k = 1.0f + gQMixDrive * 15.0f; mix[0] *= k; mix[1] *= k; }   // MIX OVERDRIVE
-		if (masterActive()) { mix[4] = mix[0]; mix[5] = mix[1]; mix[0] = mix[1] = 0; }   // whole sound through the master chain
+		if (masterActive()) { mix[4] = mix[0] * ps; mix[5] = mix[1] * ps; mix[0] *= 1 - ps; mix[1] *= 1 - ps; }   // the sound through the master chain (the part's FX send: the rest dry)
 		else {
-			float s0 = busSend(0), s1 = busSend(1);   // per-channel sends to the DSP effect buses
+			float s0 = busSend(0) * ps, s1 = busSend(1) * ps;   // per-channel sends to the DSP effect buses
 			mix[4] = mix[0] * s0; mix[5] = mix[1] * s0;
 			mix[8] = mix[0] * s1; mix[9] = mix[1] * s1;
 		}
@@ -1581,6 +1587,7 @@ static void voicesUpdate(float dt, float bend) {
 	int any = 0;
 	for (int c = 0; c < NCS; c++) if (cL[c] >= 0) {
 		float l = cL[c] * gAutoGain, r = cR[c] * gAutoGain;
+		{ int ow = gCsOwner[c]; if (ow >= 0 && ow < NVS) { float pg = partGain(gV[ow].part); l *= pg; r *= pg; } }   // MIX: the part's level
 		if (l > 1) l = 1;
 		if (r > 1) r = 1;
 		if (gCsRamp[c] && gAudioClock) { gCsTgt[c][0] = l; gCsTgt[c][1] = r; continue; }   // SUB RAMP: the audio tick moves it
@@ -2421,7 +2428,8 @@ static volatile int gAudioWants = 0;
 static void progTick(void); static void bassTick(float dt);
 // PARTS (SEQ): one part at a time on the one transport - 0 SYNTH (the roll), 1 CHORD (the progression), 2 BASS (the line),
 // 3 DRUMS (the drum grid). gPartMute: a held part button mutes it
-static int gSeqPart = 0; static u8 gPartMute[4]; static int gDrMuteNow = 0;
+static int gPnl = 0;   // the PANEL is up (OSC / FILT / FX: sliders + a small keyboard)
+static void partMuteToggle(int k);
 #define PRB (gSeqPart == 1 || gSeqPart == 2)
 static int gNdSt = -1, gNdNt = 0, gCgSel = -1, gBsSel = -1;   // NUDGE: the note / chord / bass hit you wrote or moved last
 static int nudgeArmed(void); static int nudgeDo(int dir);   // the roll shows the CHORD or the BASS part
@@ -2552,8 +2560,8 @@ static int patUsed(int i) { const SeqPat* p = i == gPatCur ? NULL : &gPat[i]; fo
 static const char* SEQ_PATH = "sdmc:/3ds/syrup/seq.bin";
 #define SEQ_MAGIC 0x53455131   // "SEQ1"
 static SeqPat gSnapPat[NPAT]; static u8 gSnapSong[NSONG]; static int gSnapHdr[4];
-typedef struct { u32 m; int prog, autoOn, bass; s8 ct[64]; u8 cl[64], cq[64]; char line[17]; u8 mute[4]; } PartSnap;   // after the song: the CHORD / BASS parts
-#define PART_MAGIC 0x32545250   // "PRT2"
+typedef struct { u32 m; int prog, autoOn, bass; s8 ct[64]; u8 cl[64], cq[64]; char line[17]; u8 mute[4]; float lvl[3], send[3]; } PartSnap;   // after the song: the CHORD / BASS parts
+#define PART_MAGIC 0x33545250   // "PRT3"
 static PartSnap gSnapPart; static void partSnapGet(PartSnap* q); static void partSnapSet(const PartSnap* q);
 static void seqSnap(void) {   // copy what gets saved (hold the voice lock: the audio tick can switch patterns)
 	patStore(); memcpy(gSnapPat, gPat, sizeof(gPat)); memcpy(gSnapSong, gSong, sizeof(gSong));
@@ -4071,9 +4079,9 @@ static int coreStep(int page, int dir) {
 	int p = page; for (int k = 0; k < NPAGES; k++) { p = navStep(p, dir); for (int i = 0; i < NCORE; i++) if (CORE[i] == p) return p; }
 	return 0;
 }
-#define NCHIP 7
+#define NCHIP 8
 static int gCurPage = 0;   // the page on the top screen (the bottom chips light up for it)
-static int chipOfPage(int pg) { switch (pg) { case 1: case 2: case 3: return 0; case 4: return 1; case 5: return 2; case 6: return 3; case 10: case 11: return 4; case 7: return 5; default: return -1; } }
+static int chipOfPage(int pg) { switch (pg) { case 1: case 2: case 3: return 0; case 4: return 1; case 5: return 2; case 6: return 3; case 10: return 4; case 7: case 11: return 5; default: return -1; } }
 static const char* PAGE_NAMES[NPAGES] = {"PRESETS", "OSC A", "OSC B", "SUB+NOISE", "FILT+ENV", "LFO+MOD", "VOICE+FX", "ARP+SEQ", "VISUALIZER", "HARDWARE", "MASTER FX", "DRUMS"};
 static int pageLen(int pg) { int n = 0; while (PAGES[pg][n].name) n++; return n; }
 
@@ -4687,18 +4695,17 @@ static int stickNudge(float* v, float d) {   // move a float param by d of its r
 	float n = *v + d; n = n < 0 ? 0 : n > 1 ? 1 : n; if (n != *v) { *v = n; return 1; } return 0;
 }
 static int gLatchShow = 0;
+static const u8 PNL_ACC_T[3][3] = {{92, 200, 255}, {255, 170, 70}, {180, 120, 255}};
 static void drawHeader(int page) {
-	text(4, 3, "SYRUP", 1, TXT);
-	rect(0, 13, 400, 1, LINE);
-	int x = 58, sect = PAGE_SECT[page];
+	int sect = PAGE_SECT[page], ps = page >= 1 && page <= 3 ? 0 : page == 4 ? 1 : page == 10 ? 2 : -1;
+	const u8* acc = ps >= 0 ? PNL_ACC_T[ps] : TH->keyOn;   // the section's colour (OSC blue, FILTER orange, FX purple), else the theme's
+	rect(0, 0, 400, 14, 10, 12, 17);
+	text(4, 3, "SYRUP", 1, acc[0], acc[1], acc[2]);
+	int x = 58;
 	for (int i = 0; i < 7; i++) {
 		int w = strlen(SECT_NAMES[i]) * 8;
-		if (i == sect) {   // the active tab breaks the line, Pip-Boy style
-			rect(x - 4, 13, w + 8, 1, BG);
-			rect(x - 4, 7, 1, 7, LINE); rect(x + w + 3, 7, 1, 7, LINE);
-			rect(x - 4, 7, 3, 1, LINE); rect(x + w + 1, 7, 3, 1, LINE);
-			rect(x - 2, 2, w + 4, 10, HI); text(x, 3, SECT_NAMES[i], 1, HITXT);   // (lit: the menu you're in)
-		} else text(x, 3, SECT_NAMES[i], 1, DIM);
+		if (i == sect) { text(x, 3, SECT_NAMES[i], 1, 230, 232, 240); rect(x, 12, w, 2, acc[0], acc[1], acc[2]); }   // the menu you're in: lit, underlined
+		else text(x, 3, SECT_NAMES[i], 1, 95, 102, 122);
 		x += w + 11;
 	}
 	char pn[16]; snprintf(pn, sizeof(pn), "%.9s", gPatchName);
@@ -4707,8 +4714,8 @@ static void drawHeader(int page) {
 	int sx = 8;
 	for (int q = 0; q < NPAGES; q++) { int p = NAV[q]; if (PAGE_SECT[p] != sect) continue;
 		int w = strlen(SUB_NAMES[p]) * 8;
-		if (p == page) { rect(sx - 3, 16, w + 6, 11, HI); text(sx, 18, SUB_NAMES[p], 1, HITXT); }
-		else text(sx, 18, SUB_NAMES[p], 1, DIM);
+		if (p == page) { rect(sx - 4, 16, w + 8, 11, acc[0], acc[1], acc[2]); text(sx, 18, SUB_NAMES[p], 1, 14, 16, 22); }
+		else text(sx, 18, SUB_NAMES[p], 1, 120, 128, 150);
 		sx += w + 16;
 	}
 	// status, right side of the sub-tab row: tempo, notes playing, CPU, transport
@@ -4737,6 +4744,7 @@ static void drawFooter(int page, int sel) {
 	text(4, 230, m, 1, DIM);
 }
 
+static void drawPanelCard(int page, int sel);
 static void drawTop(int page, int sel, int oct, int latch) {
 	gLatchShow = latch;
 	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
@@ -4840,6 +4848,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		if (!visActive(page)) scanlines();
 		return;
 	}
+	if (gPnl) { drawPanelCard(page, sel); drawFooter(page, sel); if (!visActive(page)) scanlines(); return; }   // the sliders are below: a card for what's in hand
 	// parameter list: inverse bar on the selected row, meters for continuous values, < > on choices
 	Param* P = PAGES[page]; int n = pageLen(page);
 	int rows = 15, first = sel - rows + 1; if (first < 0) first = 0;
@@ -4956,13 +4965,14 @@ static void drawHelp(void) {   // L / R flip the slides; any other button closes
 #define XY_Y  22
 #define XY_H  94
 #define PAD_ROW ((240 - KB_Y) / 2)   // drum pad row height
-#define BLK_H 58                     // black key height
+#define BLK_H (gPnl ? 28 : 58)      // black key height (the PANEL's small keyboard: 28)
 #define BLK_GRACE 3                  // extra touch width each side of a black key (more and D / G / A lose their top)
 #define KEY_HOLD 3                   // a held key keeps the stylus until it is this far into another key
 #define WORK_B 118   // bottom of the work area; the PERF row sits under it, then the keyboard
-#define KB_Y  136
-#define KB_X  36    // the keys start here: OCT+ / OCT- / CHORD / LATCH stand in a column to their left
-#define KB_WW ((320.0f - KB_X) / 14)
+#define KB_Y  (gPnl ? 192 : 136)
+#define KB_X  (gPnl ? 0 : 36)    // the keys start here: OCT+ / OCT- / CHORD / LATCH stand in a column to their left
+#define NKEYS (gPnl ? 21 : 14)
+#define KB_WW ((320.0f - KB_X) / NKEYS)
 #define SIDE_H ((240 - KB_Y) / 4)
 #define NDRUM 10
 static volatile float gPadFlash[NDRUM];   // drum pads light when they're hit: taps, MIDI and the drum machine
@@ -4976,15 +4986,15 @@ static int keyAt(int x, int y, int base) {
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
 	static const int BL[7] = {1, 1, 0, 1, 1, 1, 0};
 	float ww = KB_WW;
-	if (gScale) { int i = (int)(x / ww); if (i > 13) i = 13; if (i < 0) i = 0; gKeyDeg = i; return scaleNote(base + gRoot, i); }
+	if (gScale) { int i = (int)(x / ww); if (i > NKEYS - 1) i = NKEYS - 1; if (i < 0) i = 0; gKeyDeg = i; return scaleNote(base + gRoot, i); }
 	if (y < KB_Y + BLK_H + 2)
-		for (int i = 0; i < 14; i++) {
+		for (int i = 0; i < NKEYS; i++) {
 			if (!BL[i % 7]) continue;
 			int bx = (int)((i + 1) * ww - ww * 0.3f);
 			// the touch area is wider than the drawn key (resistive screen + stylus): BLK_GRACE px into the white keys each side
 			if (x >= bx - BLK_GRACE && x < bx + (int)(ww * 0.6f) + BLK_GRACE) return base + (i / 7) * 12 + WN[i % 7] + 1;
 		}
-	int i = (int)(x / ww); if (i > 13) i = 13; if (i < 0) i = 0;
+	int i = (int)(x / ww); if (i > NKEYS - 1) i = NKEYS - 1; if (i < 0) i = 0;
 	return base + (i / 7) * 12 + WN[i % 7];
 }
 
@@ -6513,7 +6523,7 @@ static u16* gCamImg; static int gCamOn;   // (camera, further down)
 static int gVisOnB = 0, gHwOnB = 0, gDrumOnB = 0, gDrumClrArm = 0; static u64 gDrumClrT = 0;   // VIS / HW / DRUMS pages: their own view where the XY pad goes
 static void drawDrumGrid(void);
 static int gDrumInSeq = 0;   // the SEQ page's DRUMS view is up
-static int xyShown(void) { return !gPads && !gModOn && !gGridOn && !gAddEdit && !gShapeOn && !gChainOn && !gVisOnB && !gHwOnB && !gDrumOnB; }
+static int xyShown(void) { return !gPads && !gModOn && !gGridOn && !gAddEdit && !gShapeOn && !gChainOn && !gVisOnB && !gHwOnB && !gDrumOnB && !gPnl && !gMixOn; }
 // XY PAD modes: what the two axes move, and the matrix destination that can push them (for the ghost)
 static void xyAxes(float** xp, float** yp, int* xd, int* yd) {
 	switch (gXyMode) {
@@ -6714,16 +6724,231 @@ static void drawSeqStrip(void) {
 		x += w;
 	}
 }
+// ---- PANEL (OSC / FILT / FX): the section's settings as sliders on the touch screen, a smaller keyboard under them.
+// A section has sub-pages (OSC A | OSC B | SUB+NOISE, FILTER | ENV 1 | ..., LOFI | MOD | ...): a row of choices (tap the
+// left / right of one: back / on) and up to 8 sliders (drag). Each setting goes through the same path as the D-pad.
+typedef struct { const char* tab; int page; const char* ch[3]; const char* fd[8]; } PnlSub;
+static const PnlSub PNL_OSC[3] = {
+	{"OSC A", 1, {"ON", "TABLE", "WARP"}, {"WT POS", "WARP AMT", "LEVEL", "DETUNE", "OCTAVE", "SEMI", "UNISON", "BLEND"}},
+	{"OSC B", 2, {"ON", "TABLE", "WARP"}, {"WT POS", "WARP AMT", "LEVEL", "DETUNE", "OCTAVE", "SEMI", "UNISON", "BLEND"}},
+	{"SUB+NOISE", 3, {"SUB SHAPE", "NOISE TYPE", "CHIP WIDTH"}, {"SUB LEVEL", "SUB OCTAVE", "NOISE LEVEL", "CHIP SQUARE", "CHIP OCTAVE", "FINE"}}};
+static const PnlSub PNL_FILT[4] = {
+	{"FILTER", 4, {"FILTER", "FILTER 2", "OUT FILTER"}, {"CUTOFF", "RES", "KEYTRACK", "LOW CUT", "DRIVE AMT", "OUT CUTOFF", "OUT RES", "OUT DRIVE"}},
+	{"ENV 1", 4, {"DRIVE"}, {"ENV1 ATK", "ENV1 HOLD", "ENV1 DEC", "ENV1 SUS", "ENV1 REL"}},
+	{"ENV 2", 4, {"DRIVE"}, {"ENV2 ATK", "ENV2 DEC", "ENV2 SUS", "ENV2 REL", "OUT ENV2"}},
+	{"ENV 3+4", 4, {0}, {"ENV3 ATK", "ENV3 DEC", "ENV3 SUS", "ENV3 REL", "ENV4 ATK", "ENV4 DEC", "ENV4 SUS", "ENV4 REL"}}};
+static const PnlSub PNL_FX[5] = {
+	{"LOFI", 10, {"LOFI BITS", "DSP GRIT", "MASTER FX"}, {"LOFI RATE", "MIX OVERDRIVE", "FILTER SCREAM"}},
+	{"MOD", 10, {"MOD FX"}, {"MOD RATE", "MOD DEPTH", "MOD MIX", "FX COLOR", "CHORUS"}},
+	{"EQ", 10, {"SPEAKER EQ"}, {"EQ LOW", "EQ MID", "EQ HIGH", "3D ORBIT", "ORBIT RATE"}},
+	{"SPACE", 10, {"REVERB TYPE", "DELAY TYPE", "DELAY SYNC"}, {"REVERB MIX", "REV SIZE", "REV DAMP", "DELAY MIX", "TAPE WOW", "TAPE SAT", "FX MIX"}},
+	{"OTT", 10, {"PUMP RATE", "SHIMMER", "FREEZE"}, {"OTT", "PUMP", "MASTER"}}};
+static int gPnlSub[3] = {0, 0, 3};   // FILT / FX: the sub-page (OSC's is its page)
+static Param* gPnlReq = NULL; static float gPnlReqT = 0; static int gPnlReqDir = 0;   // a slider / choice asks the main loop
+static int gPnlSubDrag = -1, gPnlSubTo = -1, gPnlSubX0 = 0;   // FX: a block of the chain being dragged
+static int gPnlDrag = -1, gPnlHot = -1; static const Param* gPnlHotP = NULL;
+static const u8 PNL_ACC[3][3] = {{92, 200, 255}, {255, 170, 70}, {180, 120, 255}};
+#define PC_BG 14, 16, 22
+#define PC_PANEL 24, 28, 38
+#define PC_LINE 48, 55, 72
+#define PC_TXT 220, 224, 235
+#define PC_DIM 120, 128, 150
+static int pnlSec(void) { int p = gCurPage; return p >= 1 && p <= 3 ? 0 : p == 4 ? 1 : p == 10 ? 2 : -1; }
+static const PnlSub* pnlCur(int* n) {
+	int s = pnlSec();
+	if (s == 0) { if (n) *n = 3; return &PNL_OSC[gCurPage - 1]; }
+	if (s == 1) { if (n) *n = 4; return &PNL_FILT[gPnlSub[1] & 3]; }
+	if (n) *n = 5; return &PNL_FX[gPnlSub[2] % 5];
+}
+static Param* pnlFind(const char* name, int page) {
+	if (!name) return NULL;
+	for (int i = 0; PAGES[page][i].name; i++) if (!strcmp(PAGES[page][i].name, name)) return &PAGES[page][i];
+	for (int pg = 0; pg < NPAGES; pg++) for (int i = 0; PAGES[pg][i].name; i++) if (!strcmp(PAGES[pg][i].name, name)) return &PAGES[pg][i];
+	return NULL;
+}
+static void rrect(int x, int y, int w, int h, int rad, u8 r, u8 g, u8 b) {   // a rounded rectangle
+	if (w <= 0 || h <= 0) return; if (rad * 2 > h) rad = h / 2; if (rad * 2 > w) rad = w / 2;
+	rect(x + rad, y, w - 2 * rad, h, r, g, b);
+	for (int i = 0; i < rad; i++) { int d = rad - i, k = rad - (int)sqrtf((float)(rad * rad - d * d)); rect(x + k, y + i, rad - k, 1, r, g, b); rect(x + k, y + h - 1 - i, rad - k, 1, r, g, b); rect(x + w - rad, y + i, rad - k, 1, r, g, b); rect(x + w - rad, y + h - 1 - i, rad - k, 1, r, g, b); }
+	rect(x, y + rad, rad, h - 2 * rad, r, g, b); rect(x + w - rad, y + rad, rad, h - 2 * rad, r, g, b);
+}
+static const char* pnlShort(const char* n) {   // a slider's name in 4 letters
+	static const char* L[][2] = {{"WT POS", "POS"}, {"WARP AMT", "WARP"}, {"LEVEL", "LVL"}, {"DETUNE", "DTUN"}, {"OCTAVE", "OCT"}, {"UNISON", "UNI"}, {"BLEND", "BLND"},
+		{"SUB LEVEL", "SUB"}, {"SUB OCTAVE", "SOCT"}, {"NOISE LEVEL", "NOIS"}, {"CHIP SQUARE", "CHIP"}, {"CHIP OCTAVE", "COCT"}, {"CUTOFF", "CUT"}, {"KEYTRACK", "KEY"},
+		{"LOW CUT", "LOW"}, {"DRIVE AMT", "DRV"}, {"OUT CUTOFF", "OCUT"}, {"OUT RES", "ORES"}, {"OUT DRIVE", "ODRV"}, {"OUT ENV2", "OENV"}, {"LOFI RATE", "RATE"},
+		{"MIX OVERDRIVE", "OVDR"}, {"FILTER SCREAM", "SCRM"}, {"MOD RATE", "RATE"}, {"MOD DEPTH", "DPTH"}, {"MOD MIX", "MIX"}, {"FX COLOR", "COLR"}, {"CHORUS", "CHOR"},
+		{"EQ LOW", "LOW"}, {"EQ MID", "MID"}, {"EQ HIGH", "HIGH"}, {"3D ORBIT", "ORBT"}, {"ORBIT RATE", "ORAT"}, {"REVERB MIX", "REV"}, {"REV SIZE", "SIZE"},
+		{"REV DAMP", "DAMP"}, {"DELAY MIX", "DLY"}, {"TAPE WOW", "WOW"}, {"TAPE SAT", "SAT"}, {"FX MIX", "FX"}, {"MASTER", "VOL"}, {"PUMP", "PUMP"}, {"OTT", "OTT"}};
+	for (unsigned i = 0; i < sizeof(L) / sizeof(L[0]); i++) if (!strcmp(L[i][0], n)) return L[i][1];
+	if (!strncmp(n, "ENV", 3) && strlen(n) > 5) return n + 5;   // ENV1 ATK -> ATK
+	return n;
+}
+#define PNL_SUB_Y 24
+#define PNL_CH_Y 44
+#define PNL_FD_Y 66
+#define PNL_TT (PNL_FD_Y + 14)
+#define PNL_TB (PNL_FD_Y + 84)
+#define PNL_KR_Y 172   // the keys' row: OCT- OCT+ CHORD LATCH SCALE PLAY PANIC
+#define PNL_KB_Y 192
+static int pnlFaders(const PnlSub* s);
+static void pnlFmt(const Param* p, char* v, int len) {   // a value in 5 letters: 4971HZ -> 5.0K
+	paramFmt(p, v, len); int n = (int)strlen(v);
+	if (n > 2 && !strcmp(v + n - 2, "HZ")) { float f = (float)atof(v); if (f >= 1000) snprintf(v, len, "%.1fK", f / 1000); else snprintf(v, len, "%d", (int)f); }
+	else if (n > 1 && v[n - 1] == 'S' && strchr(v, '.')) { float f = (float)atof(v); if (f < 1) snprintf(v, len, "%dMS", (int)lroundf(f * 1000)); else snprintf(v, len, "%.2fS", f); }
+	if ((int)strlen(v) > 5) v[5] = 0;
+}
+static const char* pnlChName(const char* n) {
+	static const char* L[][2] = {{"FILTER", "TYPE"}, {"FILTER 2", "F2"}, {"OUT FILTER", "OUT"}, {"REVERB TYPE", "REV"}, {"DELAY TYPE", "DLY"}, {"DELAY SYNC", "SYNC"},
+		{"SUB SHAPE", "SUB"}, {"NOISE TYPE", "NOISE"}, {"CHIP WIDTH", "CHIP"}, {"LOFI BITS", "BITS"}, {"DSP GRIT", "GRIT"}, {"MASTER FX", "FX"}, {"MOD FX", "TYPE"},
+		{"SPEAKER EQ", "SPKR"}, {"PUMP RATE", "PUMP"}, {"SHIMMER", "SHIM"}, {"FREEZE", "FRZ"}};
+	for (unsigned i = 0; i < sizeof(L) / sizeof(L[0]); i++) if (!strcmp(L[i][0], n)) return L[i][1];
+	return n;
+}
+static void drawPanelCard(int page, int sel) {   // the top screen's right side when the sliders are below: what you're on, big
+	(void)page; int s = pnlSec(); if (s < 0) return; const u8* A = PNL_ACC[s]; const PnlSub* S = pnlCur(NULL);
+	rrect(204, 30, 194, 194, 8, PC_PANEL);
+	text(214, 38, S->tab, 1, A[0], A[1], A[2]);
+	const Param* p = gPnlHotP ? gPnlHotP : &PAGES[gCurPage][sel];
+	char v[24]; paramFmt(p, v, sizeof(v));
+	text(214, 58, p->name, 1, PC_DIM);
+	int sc = strlen(v) <= 10 ? 2 : 1; text(214, 72, v, sc, PC_TXT);
+	if (p->type != PT_E && p->mx > p->mn) { float t = paramNorm(p); rrect(214, 94, 174, 6, 3, PC_LINE); rrect(214, 94, 6 + (int)(168 * t), 6, 3, A[0], A[1], A[2]); }
+	rect(214, 108, 174, 1, PC_LINE);
+	int nf = pnlFaders(S);
+	for (int i = 0; i < nf; i++) {   // the sliders below, at a glance
+		Param* q = pnlFind(S->fd[i], S->page); if (!q) continue; char vv[16]; pnlFmt(q, vv, sizeof(vv));
+		int x = 214 + (i & 1) * 90, y = 116 + (i / 2) * 14, hot = q == p;
+		text(x, y, pnlShort(q->name), 1, hot ? A[0] : 120, hot ? A[1] : 128, hot ? A[2] : 150); text(x + 84 - (int)strlen(vv) * 8, y, vv, 1, PC_TXT);
+	}
+	text(214, 210, "D-PAD + SLIDERS BELOW", 1, 70, 76, 95);
+}
+static int pnlFaders(const PnlSub* s) { int n = 0; while (n < 8 && s->fd[n]) n++; return n; }
+static int pnlChoices(const PnlSub* s) { int n = 0; while (n < 3 && s->ch[n]) n++; return n; }
+static void drawPanel(void) {
+	int ns, sec = pnlSec(); const PnlSub* S = pnlCur(&ns); const u8* A = PNL_ACC[sec];
+	rect(0, TAB_H, 320, PNL_KB_Y - TAB_H, PC_BG);
+	rrect(4, PNL_SUB_Y, 312, 16, 8, PC_PANEL);   // the sub-pages
+	const PnlSub* L = sec == 0 ? PNL_OSC : sec == 1 ? PNL_FILT : PNL_FX;
+	for (int j = 0; j < ns; j++) {
+		int i = sec == 2 ? gFxOrder[j] : j;   // FX: the blocks in the order the sound goes through them (drag one to move it)
+		if (sec == 2 && gPnlSubDrag >= 0 && j == gPnlSubTo) i = gFxOrder[gPnlSubDrag];
+		else if (sec == 2 && gPnlSubDrag >= 0) { int k = j; if (gPnlSubDrag < gPnlSubTo && j >= gPnlSubDrag && j < gPnlSubTo) k = j + 1; if (gPnlSubDrag > gPnlSubTo && j > gPnlSubTo && j <= gPnlSubDrag) k = j - 1; i = gFxOrder[k]; }
+		int x = 4 + j * 312 / ns, w = 312 / ns, on = &L[i] == S; const char* t = L[i].tab;
+		if (sec == 2 && j) text(x - 4, PNL_SUB_Y + 4, ">", 1, 70, 76, 95);
+		if (on) { rrect(x + 2, PNL_SUB_Y + 2, w - 4, 12, 6, A[0], A[1], A[2]); text(x + w / 2 - (int)strlen(t) * 4, PNL_SUB_Y + 4, t, 1, PC_BG); }
+		else text(x + w / 2 - (int)strlen(t) * 4, PNL_SUB_Y + 4, t, 1, PC_DIM);
+	}
+	int nc = pnlChoices(S);
+	rrect(4, PNL_CH_Y, 312, 18, 8, PC_PANEL);
+	for (int i = 0; i < nc; i++) {
+		Param* p = pnlFind(S->ch[i], S->page); if (!p) continue;
+		int x = 8 + i * 308 / nc, w = 308 / nc; char v[24]; paramFmt(p, v, sizeof(v));
+		char sh[8]; snprintf(sh, sizeof(sh), "%.5s", pnlChName(p->name));
+		int room = (w - 8) / 8 - (int)strlen(sh) - 1; if (room < 3) room = 3; if ((int)strlen(v) > room) v[room] = 0;
+		text(x, PNL_CH_Y + 5, sh, 1, PC_DIM); text(x + ((int)strlen(sh) + 1) * 8, PNL_CH_Y + 5, v, 1, A[0], A[1], A[2]);
+	}
+	int nf = pnlFaders(S), fw = nf ? 312 / nf : 312; if (fw > 52) fw = 52; int x0 = 160 - fw * nf / 2;
+	for (int i = 0; i < nf; i++) {
+		Param* p = pnlFind(S->fd[i], S->page); if (!p) continue;
+		int cx = x0 + i * fw + fw / 2, hot = p == gPnlHotP; float t = paramNorm(p); char v[16]; pnlFmt(p, v, sizeof(v));
+		text(cx - (int)strlen(v) * 4, PNL_FD_Y, v, 1, hot ? A[0] : 220, hot ? A[1] : 224, hot ? A[2] : 235);
+		rrect(cx - 3, PNL_TT, 6, PNL_TB - PNL_TT, 3, PC_LINE);
+		int yv = PNL_TB - (int)((PNL_TB - PNL_TT) * t), bip = p->mn < 0;
+		if (bip) { int mid = (PNL_TT + PNL_TB) / 2, a = yv < mid ? yv : mid, b = yv < mid ? mid : yv; rrect(cx - 3, a, 6, b - a + 1, 3, A[0], A[1], A[2]); }
+		else rrect(cx - 3, yv, 6, PNL_TB - yv, 3, A[0], A[1], A[2]);
+		rrect(cx - 12, yv - 4, 24, 9, 3, 236, 238, 244); rect(cx - 8, yv - 1, 16, 2, A[0], A[1], A[2]);
+		const char* sh = pnlShort(p->name); text(cx - (int)strlen(sh) * 4, PNL_TB + 7, sh, 1, hot ? A[0] : 120, hot ? A[1] : 128, hot ? A[2] : 150);
+	}
+}
+static float gOctFlash[2];
+static const char* PKR[7] = {"OCT-", "OCT+", "CHRD", "LTCH", "SCAL", "PLAY", "PANC"};
+static void drawPanelKeyRow(void) {
+	const u8* A = PNL_ACC[pnlSec() < 0 ? 0 : pnlSec()];
+	for (int i = 0; i < 7; i++) {
+		int x = 2 + i * 45, on = (i == 2 && gChord) || (i == 3 && gLatchShow) || (i == 4 && gScale) || (i == 5 && gSeqPlaying) || (i < 2 && gOctFlash[i == 0 ? 0 : 1] > 0);
+		const char* t = i == 5 && gSeqPlaying ? "STOP" : PKR[i];
+		if (on) rrect(x, PNL_KR_Y, 42, 16, 6, A[0], A[1], A[2]); else rrect(x, PNL_KR_Y, 42, 16, 6, PC_PANEL);
+		text(x + 21 - (int)strlen(t) * 4, PNL_KR_Y + 4, t, 1, on ? 14 : 150, on ? 16 : 156, on ? 22 : 175);
+	}
+}
+static int pnlKeyRowAt(int x, int y) { if (y < PNL_KR_Y || y >= PNL_KR_Y + 16) return -1; int i = (x - 2) / 45; return i < 0 ? 0 : i > 6 ? 6 : i; }
+static int pnlTouch(int x, int y, int press, int release) {   // 1 = redraw
+	int ns, sec = pnlSec(); const PnlSub* S = pnlCur(&ns);
+	if (release) {
+		gPnlDrag = -1;
+		if (gPnlSubDrag >= 0) {   // FX: let go of a block - moved, or a tap (its settings)
+			int a = gPnlSubDrag, b = gPnlSubTo; gPnlSubDrag = -1;
+			if (a != b) { u8 o[NFXB]; int k = 0, m = gFxOrder[a]; for (int j = 0; j < NFXB; j++) if (j != a) o[k++] = (u8)gFxOrder[j];
+				for (int j = NFXB - 1; j > b; j--) o[j] = o[j - 1]; o[b] = (u8)m; fxOrderSet(o); gEdited = 1; say("FX CHAIN: NEW ORDER"); }
+			else gPnlSub[2] = gFxOrder[a];
+			gPnlHotP = NULL; return 1;
+		}
+		return 0;
+	}
+	if (gPnlSubDrag >= 0) { int j = (x - 4) * ns / 312; j = j < 0 ? 0 : j >= ns ? ns - 1 : j; if (abs(x - gPnlSubX0) < 12) j = gPnlSubDrag; if (j != gPnlSubTo) { gPnlSubTo = j; return 1; } return 0; }
+	if (press && y >= PNL_SUB_Y && y < PNL_SUB_Y + 16) {
+		int i = (x - 4) * ns / 312; if (i < 0) i = 0; if (i >= ns) i = ns - 1;
+		if (sec == 2) { gPnlSubDrag = gPnlSubTo = i; gPnlSubX0 = x; return 1; }
+		if (sec == 0) gPageWant = i + 1; else gPnlSub[sec] = i;
+		gPnlHotP = NULL; return 1;
+	}
+	if (press && y >= PNL_CH_Y && y < PNL_CH_Y + 18) {
+		int nc = pnlChoices(S); if (!nc) return 0; int i = (x - 8) * nc / 308; if (i < 0) i = 0; if (i >= nc) i = nc - 1;
+		Param* p = pnlFind(S->ch[i], S->page); if (!p) return 0;
+		int w = 308 / nc, rx = x - 8 - i * w; gPnlReq = p; gPnlReqDir = rx < w * 2 / 5 ? -1 : 1; gPnlHotP = p; gSelReq = p->name; return 1;
+	}
+	int nf = pnlFaders(S), fw = nf ? 312 / nf : 312; if (fw > 52) fw = 52; int x0 = 160 - fw * nf / 2;
+	if (press) { if (y < PNL_FD_Y || y >= PNL_KR_Y || x < x0 || x >= x0 + fw * nf) return 0; gPnlDrag = (x - x0) / fw; }
+	if (gPnlDrag < 0 || gPnlDrag >= nf) return 0;
+	Param* p = pnlFind(S->fd[gPnlDrag], S->page); if (!p) return 0;
+	float t = (PNL_TB - y) / (float)(PNL_TB - PNL_TT); t = t < 0 ? 0 : t > 1 ? 1 : t;
+	if (p->type == PT_I || p->type == PT_E) { int n = (int)(p->mx - p->mn); if (n > 0) t = roundf(t * n) / n; }
+	gPnlHotP = p; gSelReq = p->name;
+	if (fabsf(t - paramNorm(p)) < 0.002f) return press;
+	gPnlReq = p; gPnlReqT = t; gPnlReqDir = 0; return 1;
+}
+static int pnlApply(Param* p) {   // the main loop: what a slider / choice asked for
+	if (gPnlReqDir) { int d = gPnlReqDir; gPnlReqDir = 0; return paramChange(p, d, 0); }
+	float was = paramNorm(p); paramSetNorm(p, gPnlReqT); return fabsf(paramNorm(p) - was) > 0.0001f || p->type == PT_F;
+}
+static void drawMiniKeys(int base, const u8* on) {   // 3 octaves under the sliders
+	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
+	const u8* A = PNL_ACC[pnlSec() < 0 ? 0 : pnlSec()];
+	int y = PNL_KB_Y, h = 240 - y; float ww = KB_WW;
+	rect(0, y - 2, 320, h + 2, PC_BG); rect(0, y - 1, 320, 1, PC_LINE);
+	for (int i = 0; i < NKEYS; i++) {
+		int n = gScale ? scaleNote(base + gRoot, i) : base + (i / 7) * 12 + WN[i % 7], x = (int)(i * ww), lit = n < 128 && on[n];
+		if (lit) rrect(x + 1, y + 1, (int)ww - 1, h - 2, 2, A[0], A[1], A[2]); else rrect(x + 1, y + 1, (int)ww - 1, h - 2, 2, 232, 234, 240);
+		if (gScale && i % scaleLen() == 0 && !lit) rect(x + 2, 240 - 6, (int)ww - 3, 3, A[0], A[1], A[2]);
+	}
+	if (!gScale) for (int i = 0; i < NKEYS; i++) {
+		if (i % 7 == 2 || i % 7 == 6) continue;
+		int n = base + (i / 7) * 12 + WN[i % 7] + 1, bx = (int)((i + 1) * ww - ww * 0.3f), lit = n < 128 && on[n];
+		if (lit) rrect(bx, y + 1, (int)(ww * 0.6f), BLK_H, 2, A[0] * 4 / 5, A[1] * 4 / 5, A[2] * 4 / 5); else rrect(bx, y + 1, (int)(ww * 0.6f), BLK_H, 2, 20, 22, 28);
+	}
+	char c[6]; snprintf(c, sizeof(c), "C%d", base / 12 - 1); if (!gScale) text(3, 240 - 10, c, 1, 70, 74, 90);
+}
+static void drawPanelTabs(void) {   // the section chips, quieter: names on a dark bar, the one you're in underlined
+	static const char* T[NCHIP] = {"OSC", "FILT", "MOD", "VOICE", "FX", "SEQ", "PADS", "MIX"};
+	int s = pnlSec(); const u8* A = gMixOn ? (const u8*)"\xe6\x96\x5a" : PNL_ACC[s < 0 ? 0 : s];
+	rect(0, 0, 320, TAB_H, 10, 12, 17);
+	for (int i = 0; i < NCHIP; i++) {
+		int x = i * 320 / NCHIP, w = 320 / NCHIP, on = i == 7 ? gMixOn : i == 6 ? gPads : i == chipOfPage(gCurPage) && !gPads && !gMixOn;
+		text(x + w / 2 - (int)strlen(T[i]) * 4, 6, T[i], 1, on ? 220 : 120, on ? 224 : 128, on ? 235 : 150);
+		if (on) rect(x + 6, TAB_H - 3, w - 12, 2, A[0], A[1], A[2]);
+	}
+}
+static void drawMixer(void); static int mixTouch(int x, int y, int press, int release);
 static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	(void)helpOn;
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	rect(0, 0, 320, KB_Y, BG);
 	// JUMP chips: one tap to each part of the synth; tap the lit one again for the next view in it (OSC A / B / SUB,
 	// the MOD views). PADS lays chord pads over any page.
-	const char* TABS[NCHIP] = {"OSC", "FILT", "MOD", "VOICE", "FX", "SEQ", "PADS"};
+	const char* TABS[NCHIP] = {"OSC", "FILT", "MOD", "VOICE", "FX", "SEQ", "PADS", "MIX"};
 	if (!gPads && gCurPage >= 1 && gCurPage <= 3) TABS[0] = gCurPage == 1 ? "OSC A" : gCurPage == 2 ? "OSC B" : "SUB";
 	for (int i = 0; i < NCHIP; i++) {
-		int x = i * 320 / NCHIP, lit = i == 6 ? gPads : !gPads && chipOfPage(gCurPage) == i;
+		int x = i * 320 / NCHIP, lit = i == 7 ? gMixOn : i == 6 ? gPads : !gPads && !gMixOn && chipOfPage(gCurPage) == i;
 		int w = strlen(TABS[i]) * 8, bw = 320 / NCHIP - 4, cx = x + 160 / NCHIP;
 		if (TH->ega) {
 			if (lit) { rect(x + 2, 1, bw, TAB_H - 3, HI); text(cx - w / 2, 6, TABS[i], 1, HITXT); }
@@ -6733,10 +6958,12 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 			else { rect(x + 2, 1, bw, TAB_H - 2, RGB3(TH->tab)); text(cx - w / 2, 7, TABS[i], 1, RGB3(TH->tabTxt)); }
 		}
 	}
+	if (gMixOn) { drawPanelTabs(); drawMixer(); return; }   // MIX: the strips (or the tape)
 	if (gPads && !gGridOn) { drawPads(base); return; }   // chord pads take the whole screen under the tabs
 	if (gModOn) { drawModView(); return; }               // MOD page: route / drawn LFOs / motion
 	if (gGridOn) { drawGrid(); return; }   // the piano roll takes the whole screen under the tabs
 	if (gDrumOnB) { drawDrumGrid(); if (gDgEd) drawDgEd(); else drawPartStrip(); return; }   // so does the drum sequencer
+	if (gPnl) { drawPanelTabs(); drawPanel(); drawPanelKeyRow(); drawMiniKeys(base, on); return; }   // OSC / FILT / FX: sliders + small keys
 	if (gAddEdit) drawAdd(); else if (gCurPage == 0) drawBrowser(); else {
 	drawXyPad();
 	}
@@ -6849,7 +7076,7 @@ static int themePickTouch(int x, int y) {   // 1 = picked or closed
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	if (gThemePick) { drawThemePick(); return; }
 	drawBottomMain(base, on, helpOn, latch);
-	if ((gPads && !gGridOn) || gModOn || gGridOn || gDrumOnB) return;
+	if ((gPads && !gGridOn) || gModOn || gGridOn || gDrumOnB || gPnl || gMixOn) return;
 	if (gShapeOn && !gGridOn && !gAddEdit) drawShapeEditor();
 	if (gChainOn && !gGridOn && !gAddEdit) drawChainView();
 	if (gVisOnB && !gGridOn && !gAddEdit) drawVisTiles();
@@ -7317,7 +7544,7 @@ static int tapeAlloc(int t) {
 }
 static void tapeVol(int t) {
 	if (!gTapePlay || gTapeCh[t * 2 + 1] < 0) return;
-	u32 l = gTpMute[t] ? 0 : (u32)(gTpLevel[t] * 0x8000);
+	u32 l = gTpMute[t] || (gSoloAny() && !gPartSolo[4 + t]) ? 0 : (u32)(gTpLevel[t] * 0x8000);
 	CSND_SetVol(gTapeCh[t * 2], csMono(l), 0); CSND_SetVol(gTapeCh[t * 2 + 1], csMono(l << 16), 0); csndExecCmds(false);
 }
 static void tapeStopPlay(void) {
@@ -7333,7 +7560,7 @@ static void tapeStartPlay(int except) {   // every track on tape (but the one re
 	for (int t = 0; t < NTRK; t++) {
 		if (!gTpHave[t] || t == except) continue;
 		if (gTapeCh[t * 2 + 1] < 0) { short_ = 1; continue; }
-		u32 l = gTpMute[t] ? 0 : (u32)(gTpLevel[t] * 0x8000);
+		u32 l = gTpMute[t] || (gSoloAny() && !gPartSolo[4 + t]) ? 0 : (u32)(gTpLevel[t] * 0x8000);
 		for (int k = 0; k < 2; k++) {
 			int c = gTapeCh[t * 2 + k]; gCsRamp[c] = 0; stopCh(BK_CSND, c);   // (now, not a SUB fade-out: the fade would stop the tape and pull its volume to 0 - MUTE never came back)
 			float sp = TSPD[gTpSpd[t]];   // every track loops; at a bar-multiple speed it keeps landing on the bar
@@ -7528,7 +7755,7 @@ static void tapeExport(void) {   // each track and the mix, 16-bit WAV at the co
 		int m = gTapeLen - p < 2048 ? gTapeLen - p : 2048; memset(mx, 0, sizeof(float) * m * 2);
 		for (int t = 0; t < NTRK; t++) {
 			if (!gTpHave[t]) continue;
-			float g = gTpMute[t] ? 0 : gTpLevel[t], sp = TSPD[gTpSpd[t]];
+			float g = gTpMute[t] || (gSoloAny() && !gPartSolo[4 + t]) ? 0 : gTpLevel[t], sp = TSPD[gTpSpd[t]];
 			for (int k = 0; k < 2; k++) for (int i = 0; i < m; i++) {   // at its TRACK SPEED: read ahead / hold, faster ones wrap
 				double src = (double)(p + i) * sp; long long si = (long long)src;
 				if (sp > 1.001f) si %= gTapeLen;
@@ -7627,6 +7854,67 @@ static int tapeTouch(int x, int y, int press, int release) {
 	if (press && x >= 208 && x < 286) gTpDrag = t;
 	if (gTpDrag >= 0) { float v = (x - 212) / 69.0f; gTpLevel[gTpDrag] = v < 0 ? 0 : v > 1 ? 1 : v; tapeVol(gTpDrag); return 1; }
 	return press;
+}
+// ---- MIX: a strip per part - LEAD, CHORD, BASS (their own FX send: how much goes through the master FX / the effect
+// buses), DRUMS, the 4 TAPE tracks - and the MASTER. Level faders, M(ute) and S(olo). Sub-tab TAPE: the tape recorder.
+static int gMixSub = 0, gMixDrag = -1, gMixDragK = 0;
+#define NMIXS 9
+static const char* MIX_NAMES[NMIXS] = {"LEAD", "CHRD", "BASS", "DRUM", "T1", "T2", "T3", "T4", "MSTR"};
+static const u8 MIX_COL[NMIXS][3] = {{85, 255, 255}, {255, 85, 255}, {255, 255, 85}, {85, 255, 85}, {230, 150, 90}, {230, 150, 90}, {230, 150, 90}, {230, 150, 90}, {220, 224, 235}};
+#define MX_FT 58
+#define MX_FB 156
+#define MX_SY 166
+#define MX_BY 180
+static float* mixLvl(int k) { return k < 3 ? &gPartLvl[k] : k == 3 ? &gDrumLevel : k < 8 ? &gTpLevel[k - 4] : &gMaster; }
+static float mixMax(int k) { return k == 8 ? 1.5f : k == 3 ? 1.0f : k < 3 ? 1.5f : 1.0f; }
+static int mixMuted(int k) { return k < 4 ? gPartMute[k] : k < 8 ? gTpMute[k - 4] : 0; }
+static void drawMixer(void) {
+	rect(0, TAB_H, 320, 240 - TAB_H, PC_BG);
+	rrect(4, 22, 312, 16, 8, PC_PANEL);
+	static const char* ST[2] = {"MIXER", "TAPE"};
+	for (int i = 0; i < 2; i++) { int x = 4 + i * 156, on = i == gMixSub; if (on) { rrect(x + 2, 24, 152, 12, 6, 230, 150, 90); text(x + 78 - (int)strlen(ST[i]) * 4, 26, ST[i], 1, PC_BG); } else text(x + 78 - (int)strlen(ST[i]) * 4, 26, ST[i], 1, PC_DIM); }
+	if (gMixSub == 1) { drawTapeView(); return; }
+	int w = 320 / NMIXS, solo = gSoloAny();
+	for (int k = 0; k < NMIXS; k++) {
+		int x = k * w, cx = x + w / 2; const u8* c = MIX_COL[k]; int off = mixMuted(k) || (solo && k < 8 && !gPartSolo[k]);
+		if (k == 8) rect(x, 42, 1, 196, PC_LINE);
+		text(cx - (int)strlen(MIX_NAMES[k]) * 4, 44, MIX_NAMES[k], 1, off ? c[0] / 3 : c[0], off ? c[1] / 3 : c[1], off ? c[2] / 3 : c[2]);
+		float t = *mixLvl(k) / mixMax(k); if (t > 1) t = 1;
+		rrect(cx - 3, MX_FT, 6, MX_FB - MX_FT, 3, PC_LINE);
+		int yv = MX_FB - (int)((MX_FB - MX_FT) * t);
+		rrect(cx - 3, yv, 6, MX_FB - yv, 3, off ? c[0] / 3 : c[0], off ? c[1] / 3 : c[1], off ? c[2] / 3 : c[2]);
+		rrect(cx - 11, yv - 4, 22, 9, 3, 236, 238, 244);
+		if (k < 3) {   // FX SEND: a small bar, drag across
+			rrect(x + 3, MX_SY, w - 6, 8, 3, PC_LINE); rrect(x + 3, MX_SY, 4 + (int)((w - 10) * gPartSend[k]), 8, 3, 180, 120, 255);
+		} else if (k < 8) text(cx - 12, MX_SY, "DRY", 1, 70, 76, 95);
+		if (k < 8) {
+			int m = mixMuted(k), s = gPartSolo[k];
+			rrect(x + 2, MX_BY, w / 2 - 3, 14, 4, m ? 255 : 40, m ? 80 : 46, m ? 80 : 60); text(x + 2 + (w / 2 - 3) / 2 - 4, MX_BY + 3, "M", 1, m ? 14 : 150, m ? 16 : 156, m ? 22 : 175);
+			rrect(x + w / 2 + 1, MX_BY, w / 2 - 3, 14, 4, s ? 255 : 40, s ? 210 : 46, s ? 80 : 60); text(x + w / 2 + 1 + (w / 2 - 3) / 2 - 4, MX_BY + 3, "S", 1, s ? 14 : 150, s ? 16 : 156, s ? 22 : 175);
+		}
+		char v[8]; snprintf(v, sizeof(v), "%d", (int)lroundf(t * 100)); text(cx - (int)strlen(v) * 4, 200, v, 1, PC_DIM);
+	}
+	text(6, 214, "FX: HOW MUCH GOES THROUGH THE FX", 1, 70, 76, 95);
+	text(6, 226, "DRUMS / TAPE PLAY DRY", 1, 70, 76, 95);
+}
+static int mixTouch(int x, int y, int press, int release) {   // 1 = redraw
+	if (release) { gMixDrag = -1; return 0; }
+	if (press && y >= 22 && y < 38) { gMixSub = x >= 160; return 1; }
+	if (gMixSub == 1) return tapeTouch(x, y, press, release);
+	int w = 320 / NMIXS, k = press ? x / w : gMixDrag; if (k < 0 || k >= NMIXS) return 0;
+	if (press) {
+		if (y >= MX_BY && y < MX_BY + 14 && k < 8) {   // M / S
+			int xx = x - k * w;
+			if (xx < w / 2) { if (k < 4) partMuteToggle(k); else gTpMute[k - 4] = !gTpMute[k - 4]; }
+			else { gPartSolo[k] = !gPartSolo[k]; say(gPartSolo[k] ? "SOLO" : "SOLO OFF"); }
+			return 1;
+		}
+		gMixDrag = k; gMixDragK = y >= MX_SY - 4 && y < MX_SY + 12 && k < 3 ? 1 : 0;
+	}
+	if (gMixDragK) { float t = (x - (k * w + 3)) / (float)(w - 6); gPartSend[k] = t < 0 ? 0 : t > 1 ? 1 : t; return 1; }
+	float t = (MX_FB - y) / (float)(MX_FB - MX_FT); t = t < 0 ? 0 : t > 1 ? 1 : t; *mixLvl(k) = t * mixMax(k);
+	if (k == 3) gEdited = 1; if (k == 8) gEdited = 1;
+	return 1;
 }
 // ---- CHIP > FX: the second sound chip's parts (sub, chip square, drums and kits, chip effects) skip the speakers and
 // go to its two capture units instead; DSP channels 19 / 20 replay that capture through a filter and the master
@@ -9466,7 +9754,7 @@ static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the
 		frac = gDrumPh / len; if (frac > 0.999f) frac = 0.999f;
 	}
 	if (clk < 0) return;
-	gDrClk = clk; gDrMuteNow = gPartMute[3];   // the DRUMS part muted: the clock runs, the hits stay quiet
+	gDrClk = clk; gDrMuteNow = gPartMute[3] || (gSoloAny() && !gPartSolo[3]);   // the DRUMS part muted: the clock runs, the hits stay quiet
 	int any = 0;
 	if (step >= 0) {
 		gDrumStep = step;
@@ -10476,6 +10764,7 @@ static int partTopTouch(int x, int y) {   // web: the BASS lines on the top scre
 static void partSnapGet(PartSnap* q) {
 	memset(q, 0, sizeof(*q)); q->m = PART_MAGIC; q->prog = gProg; q->autoOn = gProgAuto; q->bass = gPadBass;
 	memcpy(q->ct, gCtDeg, CT_N); memcpy(q->cl, gCtLen, CT_N); memcpy(q->cq, gCtQ, CT_N); memcpy(q->line, gBassUser, 17); memcpy(q->mute, gPartMute, 4);
+	for (int i = 0; i < 3; i++) { q->lvl[i] = gPartLvl[i]; q->send[i] = gPartSend[i]; }
 }
 static int nudgeArmed(void) {
 	if (gSeqPart == 1) return gProg == PROG_CUSTOM && gCgSel >= 0 && gCgSel < CT_N && gCtDeg[gCgSel] >= 0;
@@ -10506,6 +10795,7 @@ static void partSnapSet(const PartSnap* q) {
 	for (int i = 0; i < CT_N; i++) { gCtDeg[i] = q->ct[i] >= 0 && q->ct[i] < 7 ? q->ct[i] : -1; gCtLen[i] = q->cl[i] ? q->cl[i] : 1; gCtQ[i] = q->cq[i] < NCTQ ? q->cq[i] : 0; }
 	for (int i = 0; i < 16; i++) { char c = q->line[i]; gBassUser[i] = strchr("R357O-_", c) && c ? c : '-'; } gBassUser[16] = 0;
 	for (int i = 0; i < 4; i++) gPartMute[i] = q->mute[i] ? 1 : 0;
+	for (int i = 0; i < 3; i++) { gPartLvl[i] = q->lvl[i] >= 0 && q->lvl[i] <= 1.5f ? q->lvl[i] : 1; gPartSend[i] = q->send[i] >= 0 && q->send[i] <= 1 ? q->send[i] : 1; }
 }
 static void drawRollChords(void) {
 	text(10, RC_Y - 2, "ROLL CHORD: A TAP WRITES", 1, RGB3(TH->dim));
@@ -11349,7 +11639,7 @@ static void sessionClear(void) {   // voice lock held: a clean start
 	myDrumLoad(); memset(gMyDrum, 0, sizeof(gMyDrum)); memset(gDrumX, 0, sizeof(gDrumX)); memset(gDrRat, 0, sizeof(gDrRat)); memset(gDrCond, 0, sizeof(gDrCond)); memset(gDrAcc, 0, sizeof(gDrAcc));
 	for (int r = 0; r < 3; r++) { *DPAT[r] = MINE_IDX[r]; gDrumSel[r] = MINE_IDX[r]; } gDrums = 0; drumsChanged(); gBeatFromPatch = 0;
 	for (int t = 0; t < NTRK; t++) if (gTpHave[t]) tapeErase(t);
-	gPads = 0; gProg = 0; gProgAuto = 0; gPadBass = 0; memset(gPartMute, 0, sizeof(gPartMute)); memset(gCtDeg, -1, sizeof(gCtDeg)); memcpy(gBassUser, "R---------------", 17);
+	gPads = 0; gProg = 0; gProgAuto = 0; gPadBass = 0; memset(gPartMute, 0, sizeof(gPartMute)); memset(gPartSolo, 0, sizeof(gPartSolo)); for (int i = 0; i < 3; i++) gPartLvl[i] = gPartSend[i] = 1; memset(gCtDeg, -1, sizeof(gCtDeg)); memcpy(gBassUser, "R---------------", 17);
 	SPatch ip; patchInit(&ip); initWire(&ip); patchApply(&ip); gEdited = 0; gGuard = 0;
 	gSeqSaveDue = 1; gDrumSaveDue = 1; gSessAt = -1;
 	say("NEW SESSION: INIT PATCH, EMPTY PATTERNS");
@@ -11754,14 +12044,16 @@ int main(void) {
 		}
 		if (gN3 > 0 && (kDown & KEY_ZL)) { liveRecToggle(); topDirty = botDirty = 1; }   // ZL: live REC (with the count-in)
 		if (kDown & (KEY_L | KEY_R)) {   // shoulders: the bottom screen's tabs, left / right (OSC FILT MOD VOICE FX SEQ PADS); octaves are the OCT buttons
-			int d = (kDown & KEY_R) ? 1 : -1, cur = gPads ? 6 : chipOfPage(page), b = cur < 0 ? (d > 0 ? 0 : NCHIP - 1) : (cur + d + NCHIP) % NCHIP;
-			if (b == 6) { gPads = 1; gPadSel = -1; if (page == 7) page = 1; if (!latch) playSet(NULL, 0, 0.8f); }
+			int d = (kDown & KEY_R) ? 1 : -1, cur = gMixOn ? 7 : gPads ? 6 : chipOfPage(page), b = cur < 0 ? (d > 0 ? 0 : NCHIP - 1) : (cur + d + NCHIP) % NCHIP;
+			gMixOn = b == 7;
+			if (b == 7) gPads = 0;
+			else if (b == 6) { gPads = 1; gPadSel = -1; if (page == 7) page = 1; if (!latch) playSet(NULL, 0, 0.8f); }
 			else {
 				gPads = 0;
 				static const int PG[6] = {1, 4, 5, 6, 10, 7}; page = PG[b];
 				if (b == 2) { gMxDrag = -1; gMxPick = -1; gLfPick = -1; }
 			}
-			static const char* TN[NCHIP] = {"OSC", "FILTER", "MOD", "VOICE", "FX", "SEQ", "PADS"}; say(TN[b]);
+			static const char* TN[NCHIP] = {"OSC", "FILTER", "MOD", "VOICE", "FX", "SEQ", "PADS", "MIX"}; say(TN[b]);
 			topDirty = botDirty = 1;
 		}
 		if (startAct == 0) { browseSave(); if (gSaveArm >= 0) browseSave(); }   // one press from the menu: no "A again"
@@ -11845,8 +12137,9 @@ int main(void) {
 			}
 		}
 		if (dir && PAGES[page][sel[page]].p == &gTheme) { dir = 0; gThemePick = !gThemePick; botDirty = 1; }   // THEME: < or > opens the picker
-		if (dir) {
-			Param* p = &PAGES[page][sel[page]];
+		Param* pnlP = gPnlReq; gPnlReq = NULL;   // a PANEL slider / choice: through the same path as the D-pad
+		if (dir || pnlP) {
+			Param* p = pnlP ? pnlP : &PAGES[page][sel[page]]; if (pnlP) dir = 0;
 			if ((p->dirty & (D_LOOPTAB | D_MICTAB | D_CAMTAB | D_DLWT | D_UPDATE)) && dir > 0 && !fast) {
 				if (p->dirty & D_UPDATE) upStart();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "NET > TABLE")) netTabStart();
@@ -11873,7 +12166,7 @@ int main(void) {
 				curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = 1;
 			} else if ((p->dirty & (D_PRESET | D_STYLE)) && gEdited && !gGuard && !fast) {
 				gGuard = 1; say("PATCH EDITED: PRESS AGAIN TO LEAVE IT (SAVE IT IN USER)"); topDirty = 1;
-			} else if ((page != 0 && p->names != PRESS_RIGHT ? patchMark(p) : (void)0), paramChange(p, dir, fast)) {
+			} else if ((page != 0 && p->names != PRESS_RIGHT ? patchMark(p) : (void)0), pnlP ? pnlApply(p) : paramChange(p, dir, fast)) {
 				if (page != 0 && p->names != PRESS_RIGHT) {   // VALUE HUD: the new value, big, for a moment
 					snprintf(gCallCtx, sizeof(gCallCtx), "%s > %s", PAGE_NAMES[page], p->name);   // which control this is
 					paramFmt(p, gCallTxt, sizeof(gCallTxt));   // (paramFmt knows the TABLE / PRESET name stand-ins; indexing names[] directly read past them)
@@ -11986,11 +12279,12 @@ int main(void) {
 			else if (t.py < TAB_H) {
 				if (!prevTouch) {
 					int b = t.px * NCHIP / 320, again = !gPads && chipOfPage(page) == b;
-					if (b == 6) { gPads = !gPads; gPadSel = -1; if (gPads && page == 7) page = 1; /* the piano roll owns the whole screen: leave it for the pads */ if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: LOW = TRIAD, MID = 7TH, TOP = 9TH; EDGES = INVERSION / SUS4"); }
+					if (b == 7) { gMixOn = !gMixOn; if (gMixOn) gPads = 0; }
+					else if (b == 6) { gMixOn = 0; gPads = !gPads; gPadSel = -1; if (gPads && page == 7) page = 1; /* the piano roll owns the whole screen: leave it for the pads */ if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: LOW = TRIAD, MID = 7TH, TOP = 9TH; EDGES = INVERSION / SUS4"); }
 					else {
-						gPads = 0;
-						if (b == 0) page = again ? (page % 3) + 1 : 1;   // OSC A -> OSC B -> SUB+NOISE
-						if (b == 1) { if (again) gShapeView = (gShapeView + 1) % 3; page = 4; }
+						gPads = 0; gMixOn = 0;
+						if (b == 0) page = again ? (page % 3) + 1 : 1;   // OSC A -> OSC B -> SUB+NOISE (the sub-tabs say which)
+						if (b == 1) { if (again) gPnlSub[1] = (gPnlSub[1] + 1) % 4; page = 4; }   // FILTER -> ENV 1 -> ENV 2 -> ENV 3+4
 						if (b == 2) { if (again) gModView = (gModView + 1) % 5; page = 5; gMxDrag = -1; gMxPick = -1; gLfPick = -1; }
 						if (b == 3) page = 6;
 						if (b == 4) page = 10;
@@ -12000,6 +12294,21 @@ int main(void) {
 				}
 			} else if (page == 0 && !gPads && t.py < WORK_B) {   // PATCH page: the browser
 				if (!prevTouch) { if (browserTouch(t.px, t.py)) { curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
+			} else if (gMixOn) {   // MIX
+				if (mixTouch(t.px, t.py, !prevTouch, 0)) botDirty = 1;
+			} else if (gPnl && t.py < KB_Y) {   // OSC / FILT / FX: the sliders
+				int kb = pnlKeyRowAt(t.px, t.py);
+				if (kb >= 0 && gPnlDrag < 0) { if (!prevTouch) {   // the keys' row: what the column by the big keyboard and the PERF row did
+					if (kb == 1 && oct < 3) { oct++; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
+					if (kb == 0 && oct > -3) { oct--; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; }
+					if (kb <= 1) gOctFlash[kb == 0 ? 0 : 1] = 1;
+					if (kb == 2) { if (gChord) { gChordLast = gChord; gChord = 0; } else gChord = gChordLast; char m[32]; snprintf(m, sizeof(m), "CHORD: %s", gChord ? CHORD_NAMES[gChord] : "OFF"); say(m); }
+					if (kb == 3) { latch = !latch; gLatchShow = latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } }
+					if (kb == 4) { if (gScale) { gScaleLast = gScale; gScale = 0; } else gScale = gScaleLast; char m[40]; snprintf(m, sizeof(m), "SCALE: %s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); say(m); }
+					if (kb == 5) transportToggle();
+					if (kb == 6) { latch = 0; gLatchShow = 0; if (gSeqMode == 1) gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f); curKey = -1; gProgAuto = 0; panicAll(); say("PANIC: EVERYTHING STOPPED"); }
+					topDirty = botDirty = 1; } }
+				else if (pnlTouch(t.px, t.py, !prevTouch, 0)) botDirty = 1;
 			} else if (gDrumOnB && !gPads) {   // DRUMS page: the drum sequencer has the whole screen
 				if (partStripShown() && ((!prevTouch && t.py >= PART_Y) || gPtHold)) { if (partTouch(t.px, t.py, !prevTouch, 0, page)) topDirty = botDirty = 1; }
 				else if (drumGridTouch(t.px, t.py, !prevTouch)) topDirty = botDirty = 1;
@@ -12058,7 +12367,9 @@ int main(void) {
 			}
 		}
 		if (gModOn && !gPads && prevTouch && !touching && modViewTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
-		if (gShapeOn && prevTouch && !touching && shapeTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
+		if (gPnl && prevTouch && !touching) { pnlTouch(0, 0, 0, 1); botDirty = 1; }
+		if (gMixOn && prevTouch && !touching) { mixTouch(gLastTX, gLastTY, 0, 1); botDirty = 1; }
+		if (!gPnl && gShapeOn && prevTouch && !touching && shapeTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gChainOn && prevTouch && !touching && chainTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gChainOn && !gSelReq) { int b = fxbOfParam(PAGES[page][sel[page]].name); if (b >= 0 && b != gChSel) { gChSel = b; botDirty = 1; } }   // and the other way: the top selection picks the block
 		if (gSelReq) { int n = pageLen(page); for (int i = 0; i < n; i++) if (!strcmp(PAGES[page][i].name, gSelReq)) { sel[page] = i; break; } gSelReq = NULL; topDirty = 1; }   // a bottom-screen editor asked for this setting up top
@@ -12092,7 +12403,7 @@ int main(void) {
 		if (gVoiceMode >= 3 && (gDrumBuilt != gVoiceMode - 3 || gDrumCh[3] < 0)) { kitEnsure(); botDirty = 1; }
 		{ static float st = 0; if (gDrumBuilt == 5 && waveSig() != gWaveSig) { st += 1.0f / 60; if (st > 0.25f) { gDrumWant = 105; gWaveSig = waveSig(); st = 0; } } else st = 0; }   // WAVE kit: the drums follow OSC A's table and WT POS (rebuilt once it settles)
 		if (gPageWant >= 0) { page = gPageWant; gPageWant = -1; topDirty = botDirty = 1; }
-		if (page != gCurPage) { gCurPage = page; botDirty = 1; }
+		if (page != gCurPage) { gCurPage = page; botDirty = 1; gPnlHotP = NULL; }
 		if (page == 11 && gSeqPart != 3) { if (gSeqPart < 3) gPartLow[gSeqPart] = gRollLow; gSeqPart = 3; partListSync(); }   // PARTS follow the page
 		if (page == 7 && gSeqPart == 3) { gSeqPart = 0; partListSync(); }
 		if (sel[page] >= pageLen(page)) sel[page] = 0;
@@ -12100,6 +12411,7 @@ int main(void) {
 		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }
 		{ int m = page == 4; if (m != gShapeOn) { gShapeOn = m; gShDrag = -1; botDirty = 1; } }
 		{ int m = page == 10; if (m != gChainOn) { gChainOn = m; gChDrag = -1; botDirty = 1; } }
+		{ int m = (page >= 1 && page <= 4 || page == 10) && !gPads && !gAddEdit && gVoiceMode < 3; if (m != gPnl) { gPnl = m; gPnlDrag = -1; botDirty = 1; } }   // the PANEL
 		{ int m = page == 8; if (m != gVisOnB) { gVisOnB = m; botDirty = 1; } m = page == 9; if (m != gHwOnB) { gHwOnB = m; botDirty = 1; } m = page == 11; if (m != gDrumOnB) { gDrumOnB = m; botDirty = 1; if (!m) gDgEd = 0; if (!m && gTapRow >= 0) { gTapRow = -1; gDrumRec = 0; gDrumSaveDue = 1; } }
 		  { static int ls = -2; int st = gSeqPlaying ? (gSeqPos & 15) : (gDrums ? gDrumStep : -1); if ((gDrumOnB || gDrumInSeq) && st != ls) { ls = st; botDirty = 1; } }
 		  gDrumInSeq = page == 7 && gGridOn && gPatView == 3 && !gPads;
@@ -12244,7 +12556,7 @@ int main(void) {
 				}
 				if (gQuickBar >= 0 || gQuickOpen) drawQuick(page);
 				else if (gStartMenu) { WHERE("DRAW MENU"); drawStartMenu(); }
-				else if (gCallT > 0 && page != 8) {   // big value pop-up, drawn last so the visuals don't cover it
+				else if (gCallT > 0 && page != 8 && !gPnl) {   // big value pop-up, drawn last so the visuals don't cover it
 					fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
 					const Param* cp = (const Param*)gCallP; int bar = cp && cp->type != PT_E && cp->mx > cp->mn;
 					int w = (int)strlen(gCallTxt) * 16 + 16; if (bar && w < 160) w = 160;

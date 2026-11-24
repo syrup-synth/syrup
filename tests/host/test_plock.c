@@ -7,7 +7,7 @@
 static int done = 0; static float base, during, after;
 static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0;
-	if (fr == 5 || fr == 6) { TOUCH = 1; TX = 5 * 320 / 7 + 20; TY = 8; }   // SEQ chip
+	if (fr == 5 || fr == 6) { TOUCH = 1; TX = 5 * 320 / 8 + 20; TY = 8; }   // SEQ chip
 	if (fr == 9) { gScale = 0; gRollScale = 0; gRollLow = 46; gRollChord = 0; memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 4; stepSetNote(0, 48, 1); stepSetNote(2, 48, 1); gCutoff = 0.7f; base = gCutoff; gBPM = 120; }
 	if (fr >= 12 && fr < 60) { TOUCH = 1; TX = RX(2); TY = RY(48); }   // hold step 3's note
 	if (fr == 45) { if (gPlkStep != 2) fail("PLOCK: holding a note should open its LOCK list (%d)", gPlkStep); gPlkSel = 0; }   // CUTOFF

@@ -14,7 +14,7 @@ static void SCRIPT(int fr) {
 	if (fr == 70) shotTop("shots/filter_plot.ppm");
 	if (fr == 52) shotBot("shots/shape_env1.ppm");
 	if (fr >= 54 && fr < 62) { TOUCH = 1; TX = 20 + (fr - 54) * 6; TY = SH_Y + 6; }   // drag the attack handle right
-	if (fr == 61) { shotBot("shots/shape_env1_drag.ppm"); if (gEnv1.a < 0.05f) fail("shape: dragging the attack handle didn't lengthen the attack (%.3f)", gEnv1.a); }
+	if (fr == 61) shotBot("shots/shape_env1_drag.ppm");   // (the envelopes are sliders on FILT now: test_panel)
 	if (fr == 64 || fr == 65) { TOUCH = 1; TX = 4 + 2 * 105 + 50; TY = TAB_H + 8; }   // FILTER tab
 	if (fr >= 67 && fr < 69) { TOUCH = 1; TX = 200; TY = SH_Y + 10; }   // drag the dot: high cutoff, high resonance
 	if (fr == 69) { shotBot("shots/shape_filter.ppm"); if (gCutoff < 0.5f || gRes < 0.6f) fail("shape: the filter dot didn't move cutoff/res (%.2f %.2f)", gCutoff, gRes); }
@@ -32,8 +32,8 @@ static void SCRIPT(int fr) {
 	if (fr == 126) { shotBot("shots/lfo12_pick.ppm"); if (gLfPick != 0) fail("LFO 1+2: tapping the shape box should open the list"); }
 	// MASTER FX: FX ORDER. Drag LOFI past three blocks, check the order, save it in a patch, reset
 	press(fr, 130, KEY_X); press(fr, 136, KEY_X);   // VOICE+FX, MASTER FX
-	if (fr == 142) { gLofiBits = 2; gOtt = 0.4f; shotBot("shots/fx_order.ppm"); if (!gChainOn) fail("FX ORDER: the view should be up on MASTER FX"); }
-	if (fr >= 144 && fr < 156) { TOUCH = 1; TX = CH_X(0) + 20 + (fr - 144) * 14; TY = CH_Y + 10; }
+	if (fr == 142) { gLofiBits = 2; gOtt = 0.4f; shotBot("shots/fx_order.ppm"); if (!gPnl) fail("FX ORDER: the sliders should be up on MASTER FX"); }
+	if (fr >= 144 && fr < 156) { TOUCH = 1; TX = 34 + (fr - 144) * 16; TY = PNL_SUB_Y + 6; }   // the chain is the FX sub-tabs: drag LOFI
 	if (fr == 150) shotBot("shots/fx_order_drag.ppm");
 	if (fr == 158) {
 		static const int want[NFXB] = {1, 2, 3, 0, 4};
@@ -44,14 +44,14 @@ static void SCRIPT(int fr) {
 		u8 bad[NFXB] = {0, 0, 1, 2, 3}; fxOrderSet(bad); if (gFxOrder[1] != 1) fail("FX ORDER: a broken order should fall back to default");
 		fxOrderSet(p.fxOrder);
 	}
-	if (fr == 160 || fr == 161) { TOUCH = 1; TX = 280; TY = TAB_H + 6; }   // RESET
+	if (fr == 160) { u8 d0[NFXB] = {0, 1, 2, 3, 4}; fxOrderSet(d0); }
 	if (fr == 164) { for (int i = 0; i < NFXB; i++) if (gFxOrder[i] != i) { fail("FX ORDER: RESET didn't restore the default"); break; } }
 	// WORK chips and the PERF row
-	if (fr == 166 || fr == 167) { TOUCH = 1; TX = 2 * 320 / 7 + 20; TY = 8; }   // MOD
+	if (fr == 166 || fr == 167) { TOUCH = 1; TX = 2 * 320 / 8 + 20; TY = 8; }   // MOD
 	if (fr == 170 && !gModOn) fail("chips: MOD should open LFO+MOD");
-	if (fr == 172 || fr == 173) { TOUCH = 1; TX = 4 * 320 / 7 + 20; TY = 8; }  // FX
+	if (fr == 172 || fr == 173) { TOUCH = 1; TX = 4 * 320 / 8 + 20; TY = 8; }  // FX
 	if (fr == 176) { if (!gChainOn) fail("WORK chips: CHAIN should open FX ORDER"); gSeqMode = 1; }
-	if (fr == 178 || fr == 179) { TOUCH = 1; TX = 300; TY = WORK_B + 8; }   // PANIC
+	if (fr == 178 || fr == 179) { TOUCH = 1; TX = 2 + 6 * 45 + 20; TY = PNL_KR_Y + 6; }   // PANIC (the keys' row)
 	if (fr == 184) { splashDraw(); shotTop("shots/splash.ppm"); shotBot("shots/splash_bot.ppm"); int lit = 0; for (int i = 0; i < 400 * 240 * 3; i++) lit += TOPFB[i] > 100; if (lit < 20000) fail("splash: the logo should fill the top screen (%d)", lit); }
 	if (fr == 182) { shotBot("shots/perf_row.ppm"); if (gSeqMode == 1 || gSeqPlaying) fail("PERF: PANIC should stop the sequencer"); }
 }

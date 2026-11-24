@@ -7,7 +7,7 @@
 static int done = 0, root, heard = 0, bassHeard = 0;
 static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0;
-	if (fr == 5 || fr == 6) { TOUCH = 1; TX = 5 * 320 / 7 + 20; TY = 8; }   // SEQ chip
+	if (fr == 5 || fr == 6) { TOUCH = 1; TX = 5 * 320 / 8 + 20; TY = 8; }   // SEQ chip
 	if (fr == 10) { gScale = 0; gRoot = 0; gPadBase = 48; gProg = 0; gProgAuto = 0; gPadBass = 0; memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 16; stepSetNote(0, 72, 1); stepSetNote(8, 74, 1); root = padDeg(gPadBase, 0); gBPM = 120; }
 	if (fr == 12) STRIP(1);
 	if (fr == 16) { if (gSeqPart != 1) fail("PARTS: a tap on CHORD should pick it (%d)", gSeqPart); if (PAGES[7] != P_PCHORD) fail("PARTS: the list on top should be the CHORD part's"); shotBot("shots/part_chord_empty.ppm"); }

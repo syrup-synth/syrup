@@ -6,8 +6,8 @@ static void press(int fr, int at, u32 k) { if (fr == at || fr == at + 1) HD = k;
 static float cut0, pos0;
 static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0; gFxCore2 = 0; CX = 0; CY = 0;
-	if (fr == 3) { int st, ix; if (findPreset("REESE CRATE", &st, &ix)) presetLoad(st, ix); }
-	if (fr == 5) { gXyGlide = 0; if (!xyShown()) fail("settings: should start on OSC A (saved page) with the XY pad"); gXyMode = 0; }
+	if (fr == 3) { int st, ix; if (findPreset("REESE CRATE", &st, &ix)) presetLoad(st, ix); gPageWant = 6; }   // the XY pad: on VOICE (OSC / FILT / FX have sliders)
+	if (fr == 5) { gXyGlide = 0; if (!xyShown()) fail("VOICE should show the XY pad"); gXyMode = 0; }
 	// XY mode button steps the mode; PERF: sliders over the pad; CUTOFF + RES mode moves both
 	if (fr == 8) { TOUCH = 1; TX = 300; TY = XY_Y + 6; }
 	if (fr == 10) { if (gXyMode != 1) fail("XY mode button should step the XY PAD mode (%d)", gXyMode); gXyMode = 6; }
@@ -22,6 +22,7 @@ static void SCRIPT(int fr) {
 	if (fr == 34) { gXyMode = 0; gMod[2].src = SRC_LFO1; gMod[2].dst = DST_CUTOFF; gMod[2].amt = 0.8f; midiPush(0x90, 50, 100); }
 	if (fr == 60) { shotBot("shots/xy_ghost.ppm"); if (!xyModulated()) fail("XY ghost: an LFO on cutoff should show"); midiPush(0x80, 50, 0); gMod[2].src = SRC_OFF; }
 	// circle pad PAGE mode on OSC A: X pushes WT POS
+	if (fr == 34) gPageWant = 1;
 	if (fr == 35) { gStickMode = SM_PAGE; for (int m = 0; m < NMOD; m++) if (gMod[m].src == SRC_STICK) gMod[m].src = SRC_OFF; pos0 = gOsc[0].pos; if (pos0 > 0.8f) gOsc[0].pos = pos0 = 0.2f; }
 	if (fr >= 36 && fr < 66) CX = 150;
 	if (fr == 50) { shotTop("shots/stick_hud.ppm"); if (gCallT <= 0 || !strstr(gCallTxt, "WT POS")) fail("CIRCLE PAD PAGE: the pop-up should show what it moves (%s)", gCallTxt); }
@@ -30,14 +31,14 @@ static void SCRIPT(int fr) {
 	if (fr == 70 && fabsf(gOsc[0].pos - pos0) > 0.001f) fail("CIRCLE PAD PAGE: a patch that routes STICK should keep bend + STICK");
 	if (fr == 70) { gStickMode = SM_DATA; gMod[7].src = SRC_OFF; gMod[7].amt = 0; }
 	// matrix: long-press the source box clears the slot, a short tap opens the list
-	if (fr == 70) { TOUCH = 1; TX = 2 * 320 / 7 + 20; TY = 8; }   // MOD chip
+	if (fr == 70) { TOUCH = 1; TX = 2 * 320 / 8 + 20; TY = 8; }   // MOD chip
 	if (fr == 74) { gMod[0].src = SRC_LFO1; gMod[0].dst = DST_CUTOFF; gMod[0].amt = 0.5f; gMod[1].src = SRC_ENV2; gMod[1].amt = 0.3f; }
 	if (fr >= 76 && fr < 110) { TOUCH = 1; TX = MX_LX + 20; TY = MX_Y + MX_PITCH + 8; }   // hold slot 2
 	if (fr == 112) { if (gMod[1].src != SRC_OFF) fail("MATRIX: holding a slot should clear it"); if (gMxPick >= 0) fail("MATRIX: a hold shouldn't open the list"); }
 	if (fr == 114) { TOUCH = 1; TX = MX_LX + 20; TY = MX_Y + 8; }   // tap slot 1
 	if (fr == 117) { if (gMxPick != 0) fail("MATRIX: a tap should open the source list (%d)", gMxPick); gMxPick = -1; }
 	// HUD with the modulation ghost: FILT+ENV, CUTOFF row, change it
-	if (fr == 120) { TOUCH = 1; TX = 1 * 320 / 7 + 20; TY = 8; }   // FILT chip
+	if (fr == 120) { TOUCH = 1; TX = 1 * 320 / 8 + 20; TY = 8; }   // FILT chip
 	if (fr == 123) midiPush(0x90, 45, 100);
 	press(fr, 126, KEY_DDOWN); press(fr, 132, KEY_DLEFT);
 	if (fr == 136) shotTop("shots/hud_mod.ppm");
@@ -80,18 +81,19 @@ static void SCRIPT(int fr) {
 	// circle pad DATA (the default): left / right edits the selected value on the page you're on (FILT+ENV here)
 	{ static float snap[64]; static int pg;
 	  if (fr == 220) { pg = 4; gStickMode = SM_DATA; Param* P = PAGES[pg]; for (int i = 0; P[i].name && i < 64; i++) snap[i] = P[i].type == PT_F ? *(float*)P[i].p : (float)*(int*)P[i].p; }
-	  if (fr == 221) { TOUCH = 1; TX = 1 * 320 / 7 + 20; TY = 8; }   // FILT chip
+	  if (fr == 221) { TOUCH = 1; TX = 1 * 320 / 8 + 20; TY = 8; }   // FILT chip
 	  if (fr >= 224 && fr < 250) CX = -150;
 	  if (fr == 252) { int ch = 0; Param* P = PAGES[pg]; for (int i = 0; P[i].name && i < 64; i++) { float v = P[i].type == PT_F ? *(float*)P[i].p : (float)*(int*)P[i].p; if (v != snap[i]) ch++; }
 	    if (ch != 1) fail("circle pad DATA: holding left should change the selected value only (%d changed)", ch); } }
 	// FX CHAIN through the screen: CHAIN chip, tap SPACE, tap a reverb type; the top screen follows
-	if (fr == 256 || fr == 257) { TOUCH = 1; TX = 4 * 320 / 7 + 20; TY = 8; }   // FX chip
-	{ static int at; if (fr == 260) { for (int i = 0; i < NFXB; i++) if (gFxOrder[i] == 3) at = i; }
-	  if (fr == 262 || fr == 263) { TOUCH = 1; TX = CH_X(at) + 20; TY = CH_Y + 10; } }
-	if (fr == 267 || fr == 268) { TOUCH = 1; int x0, y0, w; ctRect(1, 2, 2, NREVT, &x0, &y0, &w); TX = x0 + 4; TY = y0 + 5; }   // REVERB: PLATE
-	if (fr == 272) { shotBot("shots/fx_chain_sel.ppm"); shotTop("shots/fx_chain_top.ppm"); if (gChSel != 3 || gRevType != 2) fail("FX CHAIN screen: SPACE + PLATE (sel %d, rev %d)", gChSel, gRevType); }
+	if (fr == 256 || fr == 257) { TOUCH = 1; TX = 4 * 320 / 8 + 20; TY = 8; }   // FX chip
+	{ static int at, rv; if (fr == 260) { for (int i = 0; i < NFXB; i++) if (gFxOrder[i] == 3) at = i; }
+	  if (fr == 262) { TOUCH = 1; TX = 4 + at * 312 / 5 + 30; TY = PNL_SUB_Y + 6; }   // the SPACE block (a tap: its sliders)
+	  if (fr == 266) rv = gRevType;
+	  if (fr == 267) { TOUCH = 1; TX = 8 + 308 / 3 - 12; TY = PNL_CH_Y + 6; }   // REVERB type: the right of it = next
+	  if (fr == 272) { shotBot("shots/fx_chain_sel.ppm"); shotTop("shots/fx_chain_top.ppm"); if (gPnlSub[2] != 3 || gRevType != (rv + 1) % NREVT) fail("FX: SPACE's sliders, the reverb type stepped (sub %d, rev %d -> %d)", gPnlSub[2], rv, gRevType); } }
 	// chips: OSC, OSC again = OSC B, again = SUB+NOISE; R from there goes on to FILT+ENV (L / R skip the side pages)
-	{ static int pg[3]; int xo = 0 * 320 / 7 + 20;
+	{ static int pg[3]; int xo = 0 * 320 / 8 + 20;
 	  if (fr == 276 || fr == 279 || fr == 282) { TOUCH = 1; TX = xo; TY = 8; }
 	  if (fr == 278) pg[0] = gCurPage; if (fr == 281) pg[1] = gCurPage; if (fr == 284) pg[2] = gCurPage;
 	  if (fr == 285) { HD = KEY_X; if (pg[0] != 1 || pg[1] != 2 || pg[2] != 3) fail("OSC chip should step OSC A / OSC B / SUB (%d %d %d)", pg[0], pg[1], pg[2]); }

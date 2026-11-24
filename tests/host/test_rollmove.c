@@ -7,7 +7,7 @@ static int done = 0;
 static void tap(int fr, int at, int x, int y) { if (fr == at) { TOUCH = 1; TX = x; TY = y; } }
 static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0;
-	tap(fr, 5, 5 * 320 / 7 + 20, 8);   // SEQ chip
+	tap(fr, 5, 5 * 320 / 8 + 20, 8);   // SEQ chip
 	if (fr == 9) { gScale = 0; gRollScale = 0; gGridOct = 0; gRollLow = 46; gRollChord = 0; memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 16; stepSetNote(1, 48, 1); stepSetLen(1, 48, 3); stepSetNote(5, 48, 1); }   // a 3-step note, and a note further along its row
 	if (fr >= 12 && fr < 30) { TOUCH = 1; TY = RY(48); TX = RX(1) + (fr - 12) * (RX(8) - RX(1)) / 17; }   // drag the long note by its head along the row, over the other one, to step 9
 	if (fr == 34) {

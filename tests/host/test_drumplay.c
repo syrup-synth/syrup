@@ -16,7 +16,7 @@ static void SCRIPT(int fr) {
 	if (fr == 170 || fr == 171) { TOUCH = 1; TX = 10; TY = DG_TOP + 1 * DG_RH + 4; }   // SNARE's name
 	if (fr == 176) { int n = 0; for (int i = 0; i < DSTEP; i++) n += gMyDrum[1][i] != 0; if (n != 1) fail("a drum's name tapped while recording should record one hit (%d)", n); gTapRow = -1; }
 	// SEQ's DRUM button: the DRUMS page (its settings on top)
-	if (fr == 180 || fr == 181) { TOUCH = 1; TX = 5 * 320 / 7 + 20; TY = 8; }   // SEQ chip
+	if (fr == 180 || fr == 181) { TOUCH = 1; TX = 5 * 320 / 8 + 20; TY = 8; }   // SEQ chip
 	if (fr == 186 || fr == 187) { TOUCH = 1; TX = 4 * 320 / GRID_BTNS + 20; TY = XY_Y + 5; }   // DRUM
 	if (fr == 192) { if (gCurPage != 11) fail("SEQ > DRUM should bring up the DRUMS page (%d)", gCurPage); done = 1; }
 }
