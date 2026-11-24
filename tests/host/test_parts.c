@@ -33,9 +33,9 @@ static void SCRIPT(int fr) {
 	if (fr == 54) { TOUCH = 1; TX = rollX(24) + 4; TY = rollY(partBassNote(5, '5')) + 4; }
 	if (fr == 58) { if (gPadBass != BASS_USER || gBassUser[0] != 'R' || gBassUser[8] != '5') fail("BASS: a USER line with R and 5 (%d %s)", gPadBass, gBassUser); shotBot("shots/part_bass.ppm"); shotTop("shots/part_bass_top.ppm"); }
 	// play: the chord part's chords and the bass sound on the bars
-	if (fr == 60) transportToggle();
-	if (fr > 60 && fr < 200) { if (gPadSel == 5) heard = 1; if (gBassNote >= 0) bassHeard = 1; }
-	if (fr == 200) { if (!heard) fail("PLAY: bar 2's vi should play"); if (!bassHeard) fail("PLAY: the bass line should play"); }
+	if (fr == 60) { gVoiceMode = 1; transportToggle(); }   // a MONO lead patch: the chords and the bass still play, on their own voices
+	if (fr > 60 && fr < 200) { int c = 0, b = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].stage != 4) { if (gV[i].part == 1) c++; if (gV[i].part == 2) b++; } if (c >= 3) heard = 1; if (b) bassHeard = 1; }
+	if (fr == 200) { gVoiceMode = 0; if (!heard) fail("PLAY: the chords should sound (3 voices) on a mono patch"); if (!bassHeard) fail("PLAY: the bass should sound on its own voice"); }
 	// hold SYNTH: muted (the strip stays where it is)
 	if (fr >= 202 && fr < 240) STRIP(0);
 	if (fr == 242) { if (!gPartMute[0] || gSeqPart != 2) fail("MUTE: holding SYNTH should mute it and stay on BASS (%d %d)", gPartMute[0], gSeqPart); shotBot("shots/part_mute.ppm"); }
@@ -46,11 +46,15 @@ static void SCRIPT(int fr) {
 	if (fr == 266) { if (gSeqPart != 0 || !gGridOn) fail("PARTS: SYNTH should go back to the roll"); gRollLow = 47; shotBot("shots/part_synth.ppm"); shotTop("shots/part_synth_top.ppm"); }
 	// RIFF: with chords, 4 bars, every note in the chord under it
 	if (fr == 267) { gPartMute[0] = 0; TOUCH = 1; TX = 6 * 320 / GRID_BTNS + 10; TY = XY_Y + 5; }
-	if (fr == 268) { int bad = 0, n = 0; for (int st = 0; st < 64; st++) for (int k = 0; k < gSeq[st].n; k++) { n++; int d = partDegAt(st), nt[5], c = ctNotes(d, partQAt(st), nt), in = 0; for (int i = 0; i < c; i++) if (((gSeq[st].note[k] - nt[i]) % 12 + 12) % 12 == 0) in = 1; if (!in) bad++; }
-		if (gSeqLen != 64 || !n || bad) fail("RIFF: 4 bars, chord tones only (len %d, %d notes, %d off)", gSeqLen, n, bad); }
+	if (fr == 268) { int bad = 0, n = 0; for (int st = 0; st < 64; st++) for (int k = 0; k < gSeq[st].n; k++) { n++; int pc = ((gSeq[st].note[k] - gRoot) % 12 + 12) % 12; if (pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10) bad++; if (partDegAt(st) < 0) bad++; }
+		if (gSeqLen != 64 || !n || bad) fail("RIFF: 4 bars, in key, only under chords (len %d, %d notes, %d off)", gSeqLen, n, bad); }
 	if (fr == 269) shotBot("shots/part_riff.ppm");
 	// HICHORD: back to CHORD, REC on, the transport playing: hold V, push the stick up (7th) - written as long as it's held
+	// NUDGE: the last note written moves a step with <NDG / NDG>
+	if (fr == 269) { memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 16; stepSetNote(4, 60, 1); gSeq[4].vel = 150; gNdSt = 4; gNdNt = 60; gridButtons(3 * 320 / GRID_BTNS + 5); gridButtons(3 * 320 / GRID_BTNS + 5); gridButtons(2 * 320 / GRID_BTNS + 5);
+		if (!stepHasNote(5, 60) || stepHasNote(4, 60) || gSeq[5].vel != 150) fail("NUDGE: the note should be one step later, velocity kept"); }
 	if (fr == 270) STRIP(1);
+	if (fr == 273) { memset(gCtDeg, -1, sizeof(gCtDeg)); ctSet(8, 3, 4, 0); gCgSel = 8; nudgeDo(-1); nudgeDo(-1); if (gCtDeg[6] != 3 || gCtLen[6] != 4 || gCtDeg[8] != -1) fail("NUDGE: the chord should be 2 steps earlier (%d %d)", gCtDeg[6], gCtLen[6]); }
 	if (fr == 274) { memset(gCtDeg, -1, sizeof(gCtDeg)); gLiveRec = 1; gRollPg = 0; }
 	if (fr >= 276 && fr < 300) { TOUCH = 1; TX = 10; TY = CG_Y + (6 - 4) * CG_RH + 6; if (fr > 280) CY = 120; }
 	if (fr == 290) { if (gCgBtn != 4 || gCgQ != 1) fail("HICHORD: holding V with the stick up = V7 (%d %d)", gCgBtn, gCgQ); shotBot("shots/part_hichord.ppm"); shotTop("shots/part_hichord_top.ppm"); }

@@ -49,7 +49,7 @@ static void SCRIPT(int fr) {
 	}
 	if (fr == 330) {
 		int any = 0; for (int i = 0; i < 16; i++) if (stepN(i) >= 3) any++;
-		if (!any) fail("AUTO progression while recording should write chords");
+		if (any) fail("AUTO progression while recording: the chords are the CHORD part's now, not written into the synth roll");
 		gProgAuto = 0; gProg = 0; gLiveRec = 0; gSeqMode = 0; seqStop(); playSet(NULL, 0, 0.8f);
 	}
 	// NEW 3DS CONTROLS: C-stick moves the page's values, ZR plays / stops, ZL arms live REC
