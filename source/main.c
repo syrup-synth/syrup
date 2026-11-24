@@ -3577,8 +3577,9 @@ static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound
 }
 // START: a quick menu over the top screen (no more quitting by accident)
 static int gStartMenu = 0, gStartSel = 0;
-#define NSTART 7
-static const char* START_NAMES[NSTART] = {"SAVE PATCH", "BROWSER", "PANIC", "HELP", "THEME", "MIDI LEARN", "QUIT"};
+#define NSTART 10
+static const char* START_NAMES[NSTART] = {"SAVE PATCH", "BROWSER", "PANIC", "HELP", "THEME", "MIDI LEARN", "SAVE SESSION", "LOAD SESSION", "NEW SESSION", "QUIT"};
+#define START_QUIT 9
 static void browseSave(void) {
 	int slot = (gStyle == NSTYLES - 1 && gPreset < NUSER) ? gPreset : -1;
 	if (slot < 0) { for (int i = 0; i < NUSER; i++) if (gUser[i].magic != PATCH_MAGIC) { slot = i; break; } if (slot < 0) slot = gSaveSlot; }
@@ -5798,11 +5799,11 @@ static const float ENV_SEGW[5] = {64, 34, 64, 34, 80};   // A, H, D, sustain hol
 static const float ENV_MAXT[5] = {4, 2, 4, 0, 5};
 static void drawStartMenu(void) {
 	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
-	int mw = 200, mh = NSTART * 22 + 44, mx = 200 - mw / 2, my = 120 - mh / 2;
+	int mw = 200, mh = NSTART * 18 + 44, mx = 200 - mw / 2, my = 120 - mh / 2;
 	rect(mx, my, mw, mh, RGB3(TH->bg)); outline(mx, my, mw, mh, RGB3(TH->line)); outline(mx + 2, my + 2, mw - 4, mh - 4, RGB3(TH->grid));
 	text(200 - 5 * 8, my + 8, "MENU", 2, RGB3(TH->val));
 	for (int i = 0; i < NSTART; i++) {
-		int y = my + 30 + i * 22, on = i == gStartSel;
+		int y = my + 30 + i * 18, on = i == gStartSel;
 		if (on) rect(mx + 10, y - 3, mw - 20, 16, RGB3(TH->keyOn));
 		const u8* c = on ? TH->ink : TH->txt;
 		char nm[32]; if (i == 4) snprintf(nm, sizeof(nm), "< THEME: %s >", THEME_NAMES[gTheme]); else snprintf(nm, sizeof(nm), "%s", START_NAMES[i]);   // THEME shows which, < > / L R change it
@@ -10623,6 +10624,49 @@ static int dspAsk(void) {   // the first start without the firmware: say what Sy
 	return 0;
 #endif
 }
+// SESSIONS (START menu): a session is the sound (last.bin), the patterns + song (seq.bin) and the drum grid
+// (mydrums.bin), kept together as sessions/Snn-*.bin. SAVE adds the next number; LOAD steps through them (newest
+// first); NEW saves this one, then starts clean: INIT patch, no notes, no drums, an empty tape.
+static int gSessDue = 0, gSessClear = 0, gSessAt = -1; static void saverIdle(void);
+static const char* SESS_F[3] = {"last.bin", "seq.bin", "mydrums.bin"};
+static int fileCopy(const char* a, const char* b) {
+	FILE* i = fopen(a, "rb"); if (!i) return 0; FILE* o = fopen(b, "wb"); if (!o) { fclose(i); return 0; }
+	static u8 buf[8192]; size_t n; int ok = 1; while ((n = fread(buf, 1, sizeof(buf), i)) > 0) if (fwrite(buf, 1, n, o) != n) { ok = 0; break; }
+	fclose(i); fclose(o); return ok;
+}
+static int sessionCount(void) {
+	int n = 0; for (int k = 1; k < 100; k++) { char p[96]; snprintf(p, sizeof(p), "sdmc:/3ds/syrup/sessions/S%02d-seq.bin", k); FILE* f = fopen(p, "rb"); if (!f) break; fclose(f); n = k; }
+	return n;
+}
+static int sessionSaveNow(void) {   // main loop, voice lock let go: write what's live, then copy it into the next slot
+	saverIdle();   // (the SAVER isn't halfway through one of these files)
+	lastWrite(); seqWriteSnap(); myDrumLoad(); myDrumSave();
+	int k = sessionCount() + 1; if (k > 99) return 0;
+	mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777); mkdir("sdmc:/3ds/syrup/sessions", 0777);
+	int ok = 1; for (int f = 0; f < 3; f++) { char a[96], b[96]; snprintf(a, sizeof(a), "sdmc:/3ds/syrup/%s", SESS_F[f]); snprintf(b, sizeof(b), "sdmc:/3ds/syrup/sessions/S%02d-%s", k, SESS_F[f]); if (!fileCopy(a, b) && f == 1) ok = 0; }
+	gSessAt = k; return ok ? k : 0;
+}
+static void tapeErase(int t); static void seqLoad(void);
+static void sessionLoadNext(void) {   // voice lock held
+	int n = sessionCount(); if (!n) { say("NO SAVED SESSIONS YET (START > SAVE SESSION)"); return; }
+	gSessAt = gSessAt <= 1 || gSessAt > n ? n : gSessAt - 1;   // newest first, then back
+	if (gSeqMode == 1) transportToggle();
+	for (int f = 0; f < 3; f++) { char a[96], b[96]; snprintf(a, sizeof(a), "sdmc:/3ds/syrup/sessions/S%02d-%s", gSessAt, SESS_F[f]); snprintf(b, sizeof(b), "sdmc:/3ds/syrup/%s", SESS_F[f]); fileCopy(a, b); }
+	playSet(NULL, 0, 0.8f); lastLoad(); seqLoad(); gMyDrumLoaded = 0; myDrumLoad();
+	char m[48]; snprintf(m, sizeof(m), "SESSION %d OF %d (LOAD AGAIN: THE ONE BEFORE)", gSessAt, n); say(m);
+}
+static void sessionClear(void) {   // voice lock held: a clean start
+	if (gSeqMode == 1) transportToggle();
+	playSet(NULL, 0, 0.8f); panicAll();
+	memset(gPat, 0, sizeof(gPat)); seqClear(); gPatCur = 0; gSongLen = 0; gSongOn = 0; gSeqLen = 16;
+	myDrumLoad(); memset(gMyDrum, 0, sizeof(gMyDrum)); memset(gDrumX, 0, sizeof(gDrumX)); memset(gDrRat, 0, sizeof(gDrRat)); memset(gDrCond, 0, sizeof(gDrCond)); memset(gDrAcc, 0, sizeof(gDrAcc));
+	for (int r = 0; r < 3; r++) { *DPAT[r] = MINE_IDX[r]; gDrumSel[r] = MINE_IDX[r]; } gDrums = 0; drumsChanged(); gBeatFromPatch = 0;
+	for (int t = 0; t < NTRK; t++) if (gTpHave[t]) tapeErase(t);
+	gPads = 0; gProg = 0; gProgAuto = 0; gPadBass = 0;
+	SPatch ip; patchInit(&ip); initWire(&ip); patchApply(&ip); gEdited = 0; gGuard = 0;
+	gSeqSaveDue = 1; gDrumSaveDue = 1; gSessAt = -1;
+	say("NEW SESSION: INIT PATCH, EMPTY PATTERNS");
+}
 // SAVER: SD writes off the main loop (a write can take 100+ ms on the 3DS SD card, and the loop runs the voices).
 // The main loop asks (saverWant); this thread, lower priority than it, writes. Without a thread (web): written there and then.
 enum { SV_PAGE = 1, SV_DRUM = 2, SV_LEARN = 4, SV_LAST = 8, SV_SEQ = 16 };   // (SV_WT = 32: a table capture)
@@ -10645,6 +10689,7 @@ static void saverMain(void* a) {
 		if (gSaverQuit) break;
 	}
 }
+static void saverIdle(void) { for (int t = 0; t < 300 && (gSaveBusy || gSaveWant); t++) svcSleepThread(10000000); }
 static void saverWant(int w) {
 	if (!gSaver) { saverRun(w); return; }
 	__atomic_or_fetch(&gSaveWant, w, __ATOMIC_SEQ_CST); LightEvent_Signal(&gSaveEv);
@@ -10823,7 +10868,7 @@ int main(void) {
 			if (!gStartMenu) topDirty = topAgain = botDirty = 1;
 			kDown &= KEY_TOUCH; kHeld &= KEY_TOUCH;
 		}
-		if (startAct == 6) break;   // QUIT
+		if (startAct == START_QUIT) break;   // QUIT
 		WHERE("WAKE"); wakeTick();
 		WHERE("VOICE LOCK"); LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		WHERE("MOTION / CAMERA");
@@ -11020,6 +11065,12 @@ int main(void) {
 			panicAll();
 			say("PANIC: EVERYTHING STOPPED"); }
 		if (startAct == 4) { gThemePick = 1; botDirty = 1; }   // THEME: the picker, every theme at once
+		if (startAct == 6) { gSessDue = 1; say("SAVING THE SESSION..."); }
+		if (startAct == 7) { gSessDue = 3; }
+		if (startAct == 8) { static u64 armT = 0; u64 tn = osGetTime();
+			if (!armT || tn - armT > 4000) { armT = tn; say("NEW SESSION: CHOOSE IT AGAIN (THIS ONE IS SAVED FIRST)"); }
+			else { armT = 0; gSessDue = 2; say("SAVING, THEN A NEW SESSION..."); } }
+		if (gSessClear) { gSessClear = 0; sessionClear(); latch = 0; curKey = -1; topDirty = botDirty = 1; }
 		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
 
 		if (page == 0) {   // preset browser: the D-pad moves through the list itself
@@ -11418,6 +11469,10 @@ int main(void) {
 		if (gLearnSaveDue) { gLearnSaveDue = 0; saverWant(SV_LEARN); }
 		{ static u64 at = 0; u64 tn = osGetTime(); if (tn - at > 5000) { at = tn; if (!(gSaveBusy & SV_LAST) && lastSnap()) saverWant(SV_LAST); gSeqSaveDue = 1; } }   // AUTOSAVE: the sound and the sequences every 5 s
 		if (gBrightSaveDue) { gBrightSaveDue = 0; gSavePage = page; gSaveMark[0] = 0; saverWant(SV_PAGE); }
+		if (gSessDue) { int w = gSessDue; gSessDue = 0;   // SESSIONS: the file work, with the voice lock let go
+			if (w == 3) { LightLock_Lock(&gVoiceLock); sessionLoadNext(); LightLock_Unlock(&gVoiceLock); topDirty = botDirty = 1; }
+			else { LightLock_Lock(&gVoiceLock); seqSnap(); lastSnap(); LightLock_Unlock(&gVoiceLock); int n = sessionSaveNow(); char m[40];
+				if (w == 2) { gSessClear = 1; snprintf(m, sizeof(m), "SAVED AS SESSION %d - NEW SESSION", n); } else snprintf(m, sizeof(m), n > 0 ? "SESSION %d SAVED" : "COULDN'T SAVE THE SESSION", n); say(m); } }
 		if (gSeqSaveDue && !(gSaveBusy & SV_SEQ)) { gSeqSaveDue = 0; LightLock_Lock(&gVoiceLock); seqSnap(); LightLock_Unlock(&gVoiceLock); saverWant(SV_SEQ); }
 		{ static int sk = 0; int now = skipRecent(); if (now != sk) { sk = now; topDirty = 1; } }
 
