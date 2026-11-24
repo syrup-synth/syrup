@@ -23,7 +23,15 @@ static void SCRIPT(int fr) {
 		if (at0 != 0) fail("PROGRESSION: a tap should play its first chord (%d)", at0);
 		if (seenP) fail("PROGRESSION SLIDE: the chords crossed on the way should not play");
 		if (gProgAt != 3 || gPadSel != PROGS[1][3]) fail("PROGRESSION SLIDE: the chord it rests on should play (%d)", gProgAt);
-		done = 1;
+	}
+	if (fr == 134) { playSet(NULL, 0, 0.8f); gPadBass = 1; gPadBassSub = 1; gPadSel = 0; gPadN = padChord(48, 0, 0, 1, gPadNotes); padPlay(48, gPadNotes, gPadN, 0.8f, 1); }
+	if (fr == 136) {   // PAD BASS SOUND = SUB OSC: the bass note is one SUB layer, the chord the full patch
+		int bn = padDeg(48, 0) - 12, ok = 0, chordFull = 0;
+		for (int k = 0; k < NVS; k++) { SVoice* v = &gV[k]; if (!v->active || v->isEcho || v->stage == 4) continue;
+			if (v->note == bn) ok = v->subOnly && v->nch == 1 && v->role[0] == R_SUB; else if (!v->subOnly && v->nch >= 1) chordFull = 1; }
+		if (!ok) fail("PAD BASS SOUND SUB: the bass note should play on the SUB osc alone");
+		if (!chordFull) fail("PAD BASS SOUND SUB: the chord should still be the whole patch");
+		playSet(NULL, 0, 0.8f); gPadBass = 0; done = 1;
 	}
 }
-int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 140; app_main(); if (!done) fail("PAD SLIDE: didn't run"); printf("padslide: chords crossed on a slide don't play\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 145; app_main(); if (!done) fail("PAD SLIDE: didn't run"); printf("padslide: chords crossed on a slide don't play\n"); return gFails ? 1 : 0; }

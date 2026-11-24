@@ -738,7 +738,9 @@ typedef struct {
 	float rnd;    // RANDOM mod source, set per note
 	int mch;      // the MIDI channel the note came in on (-1: not MIDI) - MPE sends each note on its own
 	float mbend, press, mslide;   // per note: MPE bend (semitones), pressure (aftertouch), slide (CC 74), 0..1
+	int subOnly;  // PADS BASS: the bass note plays on the SUB oscillator alone (its shape), not the whole patch
 } SVoice;
+static int gSubBassNote = -1, gPadBassSub = 1; static const char* BASSSND_NAMES[2] = {"PATCH", "SUB OSC"};   // the pads' bass note right now: voiceOn makes it a SUB-only voice
 static SVoice gV[NVS];
 static float gPressAll = 0, gSlideAll = 0;   // the latest channel pressure / CC 74 (for notes not on their own channel)
 static int gMidiChNow = -1, gMpe = 0;   // the channel of the MIDI note being started; MPE mode (VOICE+FX)
@@ -922,7 +924,7 @@ static float roleFreq(const SVoice* v, int role) {
 	float f = v->cur;
 	if (role <= R_A2) return f * oscTune(0);
 	if (role <= R_B2) return f * oscTune(1);
-	if (role == R_SUB) return f * powf(2.0f, (float)gSubOct);
+	if (role == R_SUB) return v->subOnly ? f : f * powf(2.0f, (float)gSubOct);   // (the pads' bass is already an octave under)
 	return f * oscTune(gOsc[0].on ? 0 : 1);
 }
 
@@ -992,8 +994,11 @@ static void startVoice(int vi) {
 	int roles[R_COUNT], bks[R_COUNT], nr = 0, nd = 0, nc = 0;
 	if (v->isEcho) { if (!gOsc[0].on && !gOsc[1].on) { v->active = 0; return; } roles[nr] = R_TAP; bks[nr++] = gCsndOK ? BK_CSND : BK_DSP; }
 	else {
+		if (v->subOnly) { roles[nr] = R_SUB; bks[nr++] = gCsndOK ? BK_CSND : BK_DSP; }   // PADS BASS: the sub alone
+		else {
 		for (int o = 0; o < 2; o++) if (gOsc[o].on) for (int u = 0; u < gOsc[o].uni; u++) { roles[nr] = (o ? R_B0 : R_A0) + u; bks[nr++] = BK_DSP; }
 		if (gSubLevel > 0.01f) { roles[nr] = R_SUB; bks[nr++] = gCsndOK ? BK_CSND : BK_DSP; }
+		}
 	}
 	for (int i = 0; i < nr; i++) { if (bks[i] == BK_DSP) nd++; else nc++; }
 	if ((nr == 0 && (v->isEcho || gChipLevel <= 0.001f)) || (nd && !stealFor(BK_DSP, nd, vi)) || (nc && !stealFor(BK_CSND, nc, vi))) { v->active = 0; return; }
@@ -1008,7 +1013,7 @@ static void startVoice(int vi) {
 	}
 	for (int i = 0; i < nr; i++) startLayer(v, vi, i, roles[i], bks[i]);
 	v->started = 1;
-	chipStart(v, vi);
+	if (!v->subOnly) chipStart(v, vi);
 }
 
 static SVoice* newVoice(void) {
@@ -1098,9 +1103,10 @@ static void voiceOn(int note, float vel) {
 	}
 	SVoice* v = newVoice(); initVoice(v);
 	v->note = note; v->freq = mtof((float)note); v->cur = v->freq; v->vel = vel; v->rnd = (rand() % 2001) / 1000.0f - 1; v->mch = gMidiChNow;
+	v->subOnly = gPadBassSub && note == gSubBassNote;
 	lfoTrig();
 	startVoice(v - gV);
-	if (v->active) addTaps(v);
+	if (v->active && !v->subOnly) addTaps(v);
 }
 
 static void voiceOff(int note) {
@@ -1297,7 +1303,7 @@ static void voicesUpdate(float dt, float bend) {
 				lv = o ? bLev : aLev;
 				ug /= sqrtf((float)gOsc[o].uni);
 				if (gChorus > 0 && gOsc[o].uni > 1 && u > 0) det += gChorus * 12.0f * sinf(gChorusPh + u * 2.1f + o);
-			} else if (role == R_SUB) lv = gSubLevel;
+			} else if (role == R_SUB) lv = v->subOnly ? 0.9f : gSubLevel;
 			else { lv = gOsc[0].on ? aLev : bLev; det = v->tapDet; }
 			pan += v->pan + panMod;
 			if (pan < 0) pan = 0;
@@ -3637,7 +3643,7 @@ static Param P_PRESET[] = {
 static Param P_PLAY[] = {
 	// most-reached first: tempo and the transport, then the arp, the key, then the details
 	PE("ROLL CHORD", &gRollChord, NCHORD, CHORD_NAMES, 0), PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
-	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("SEQ KEYS", &gSeqKeys, 2, SEQKEYS_NAMES, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0), PE("ROLL SCALE", &gRollScale, 3, RSC_NAMES, 0), PE("STRUM NOTES", &gStrumScale, 2, STRN_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
+	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("SEQ KEYS", &gSeqKeys, 2, SEQKEYS_NAMES, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0), PE("PAD BASS SOUND", &gPadBassSub, 2, BASSSND_NAMES, 0), PE("ROLL SCALE", &gRollScale, 3, RSC_NAMES, 0), PE("STRUM NOTES", &gStrumScale, 2, STRN_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
 	PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0), PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0),
 	PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PE("REC QUANT", &gRecQ, 4, RQ_NAMES, 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("CLICK", &gClick, 4, CLICK_NAMES, 0), PF("CLICK LEVEL", &gClickLevel, 0, 1, 0.05f, "%", 0), PI_("TAPE ALIGN", &gTapeAlign, -50, 50, 0), PE("TAPE DRUMS", &gTapeDrums, 2, ONOFF, 0),
 	PE("SHAKE QUANT", &gShakeQ, 3, SHQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
@@ -4222,7 +4228,7 @@ static const char* paramHelp(const char* n) {
 		{"REV DAMP", "DARKER REVERB TAIL"}, {"FX MIX", "HOW MUCH EFFECT"}, {"DRIVE", "DISTORTION TYPE"}, {"DRIVE AMT", "HOW MUCH DISTORTION"},
 		{"MASTER", "OUTPUT VOLUME"}, {"ROOT", "KEY OF THE SCALE"}, {"SCALE", "LOCK THE KEYS TO A SCALE"}, {"ARP", "ARPEGGIATOR PATTERN"},
 		{"ARP RATE", "ARPEGGIATOR SPEED"}, {"ARP OCTAVES", "OCTAVES THE ARP CLIMBS"}, {"ARP GATE", "ARP NOTE LENGTH"}, {"ARP STRUM", "CHORD ARP: TIME BETWEEN STRINGS"}, {"STRUM DIR", "DOWN, UP, OR BOTH LIKE A GUITAR"}, {"BPM", "TEMPO"},
-		{"SEQ GATE", "STEP NOTE LENGTH"}, {"SEQ KEYS", "KEYS PLAY ALONG OR TRANSPOSE"}, {"PAD MORPH", "PADS: SLIDE GLIDES TO THE NEXT CHORD (0 = RETRIGGER)"}, {"ROLL SCALE", "PIANO ROLL: SHOW THE SCALE, OR ONLY ITS NOTES"}, {"STRUM NOTES", "PADS STRUM STRIP: CHORD TONES OR THE SCALE"},
+		{"SEQ GATE", "STEP NOTE LENGTH"}, {"SEQ KEYS", "KEYS PLAY ALONG OR TRANSPOSE"}, {"PAD MORPH", "PADS: SLIDE GLIDES TO THE NEXT CHORD (0 = RETRIGGER)"}, {"PAD BASS SOUND", "PADS BASS: ON THE SUB OSC ALONE, OR THE WHOLE PATCH"}, {"ROLL SCALE", "PIANO ROLL: SHOW THE SCALE, OR ONLY ITS NOTES"}, {"STRUM NOTES", "PADS STRUM STRIP: CHORD TONES OR THE SCALE"},
 		{"SWING", "SHUFFLE FEEL"},
 		{"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},
 		{"THEME", "COLOUR SCHEME"},
@@ -5288,7 +5294,7 @@ static void chordMorph(const int* notes, int n, float vel) {
 // a pad chord sounds (and, while recording, goes into the sequencer: live REC onto the grid, step REC one step each)
 static void padPlay(int base, const int* notes, int n, float vel, int sound) {
 	int all[6], k = 0;
-	if (gPadBass == 1 && gPadSel >= 0) all[k++] = padDeg(base, gPadSel) - 12;
+	if (gPadBass == 1 && gPadSel >= 0) { all[k++] = padDeg(base, gPadSel) - 12; gSubBassNote = all[0]; }
 	for (int i = 0; i < n && k < 6; i++) all[k++] = notes[i];
 	int morph = sound == 2 && !gArp && gHeldN > 0;   // gliding from the held chord: the step before slides into this one
 	if (gLiveRec) { int prev = gLvN ? gLvStep : -1; liveDown(all, k, vel); if (morph && prev >= 0 && gSeqPlaying && prev != gLvStep) gSeq[prev].fl |= 2; }
@@ -5420,7 +5426,7 @@ static void bassTick(float dt) {   // BASS LINES: while a pad chord sounds, the 
 	if (c == '_') return;   // held
 	if (gBassNote >= 0) { voiceFade(gBassNote, 0.03f); gBassNote = -1; }
 	if (c == '-') return;
-	gBassNote = bassNoteOf(c); voiceOn(gBassNote, st % 4 == 0 ? 0.9f : 0.75f);
+	gBassNote = bassNoteOf(c); gSubBassNote = gBassNote; voiceOn(gBassNote, st % 4 == 0 ? 0.9f : 0.75f);
 }
 static void padsTick(float dt) {   // strummed notes ring for a moment, then let go
 	if (padsSettle(0)) gProgDirty = 1;   // a slide that came to rest (the remote's slides have no touch frames after them)
