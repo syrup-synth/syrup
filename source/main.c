@@ -546,10 +546,15 @@ static const char* LFO_SHAPES[NLFOSH] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "S
 static const char* SYNC_NAMES[NSYNC] = {"OFF", "4 BARS", "2 BARS", "1 BAR", "1/2", "1/4", "1/8", "1/16", "1/8T", "1/16T"};
 static const float SYNC_BEATS[NSYNC] = {0, 16, 8, 4, 2, 1, 0.5f, 0.25f, 1.0f / 3, 1.0f / 6};
 static const char* LFO_MODES[2] = {"FREE", "TRIG"};
-enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_TWIST, SRC_SHAKE, SRC_CAML, SRC_CAMC, SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_RAND, SRC_NOTE, SRC_LFO3, SRC_LFO4, SRC_SPINX, SRC_SPINY, SRC_MICBRT, SRC_CAMMOVE, SRC_PRESS, SRC_MSLIDE, SRC_STK2X, SRC_STK2Y, SRC_COUNT };
-static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y", "TILT L/R", "TILT F/B", "BREATH", "TWIST", "SHAKE", "CAM LIGHT", "CAM COLOR", "MACRO 1", "MACRO 2", "MACRO 3", "MACRO 4", "CHAOS X", "CHAOS Y", "RANDOM", "NOTE", "LFO 3", "LFO 4", "SPIN F/B", "SPIN L/R", "VOICE BRIGHT", "CAM MOTION", "PRESSURE", "MPE SLIDE", "STICK 2 X", "STICK 2 Y"};   // PRESSURE: aftertouch (per note with poly AT / MPE); MPE SLIDE: CC 74 per note
+enum { SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_ENV2, SRC_VEL, SRC_STICK, SRC_XY, SRC_TILTX, SRC_TILTY, SRC_MIC, SRC_TWIST, SRC_SHAKE, SRC_CAML, SRC_CAMC, SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_RAND, SRC_NOTE, SRC_LFO3, SRC_LFO4, SRC_SPINX, SRC_SPINY, SRC_MICBRT, SRC_CAMMOVE, SRC_PRESS, SRC_MSLIDE, SRC_STK2X, SRC_STK2Y, SRC_ENV3, SRC_ENV4, SRC_COUNT };
+static const char* SRC_NAMES[SRC_COUNT] = {"OFF", "LFO 1", "LFO 2", "ENV 2", "VELOCITY", "STICK", "XY Y", "TILT L/R", "TILT F/B", "BREATH", "TWIST", "SHAKE", "CAM LIGHT", "CAM COLOR", "MACRO 1", "MACRO 2", "MACRO 3", "MACRO 4", "CHAOS X", "CHAOS Y", "RANDOM", "NOTE", "LFO 3", "LFO 4", "SPIN F/B", "SPIN L/R", "VOICE BRIGHT", "CAM MOTION", "PRESSURE", "MPE SLIDE", "STICK 2 X", "STICK 2 Y", "ENV 3", "ENV 4"};   // PRESSURE: aftertouch (per note with poly AT / MPE); MPE SLIDE: CC 74 per note
 // LFO 3 and 4 are drawn: 64 points you paint with the stylus on the MOD page
 static float gDl[2][64]; static float gDlRate[2] = {1.0f, 0.5f}, gDlPh[2], gDlVal[2]; static int gDlSync[2] = {0, 0};
+// TRIG: FREE runs on its own (all notes share it), NOTE restarts for every note, ONCE plays the shape once per note and holds
+// the last point - a drawn envelope
+static int gDlTrig[2] = {0, 0}; static const char* DLTRIG_NAMES[3] = {"FREE", "NOTE", "ONCE"};
+static float dlAt(int k, float ph) { if (ph >= 1) return gDl[k][63]; float x = ph * 64; int i = (int)x; float u = x - i; return gDl[k][i & 63] * (1 - u) + gDl[k][i < 63 ? i + 1 : (gDlTrig[k] == 2 ? 63 : 0)] * u; }
+static float dlHz(int k);
 static float gChaosX = 0, gChaosY = 0, gChaosRate = 0.3f;   // a Lorenz attractor, slowly wandering, never repeating
 static float gMacro[4] = {0, 0, 0, 0};
 #define NMOD 8
@@ -584,6 +589,7 @@ static int gSubShape = 0, gSubOct = -1, gNoiseType = 0, gFiltType = 0;
 static float gSubLevel = 0.0f, gNoiseLevel = 0.0f;
 static float gCutoff = 0.75f, gRes = 0.1f, gKeytrack = 0.3f;
 static AHDSR gEnv1 = {0.005f, 0.0f, 0.6f, 0.7f, 0.35f}, gEnv2 = {0.002f, 0.0f, 0.45f, 0.2f, 0.4f};
+static AHDSR gEnv3 = {0.0f, 0.0f, 0.3f, 0.0f, 0.2f}, gEnv4 = {0.5f, 0.0f, 1.0f, 0.5f, 0.8f};   // ENV 3 / 4: mod-only envelopes (a pluck and a swell to start with)
 static LFO gLfo[2] = {{0, 0, 0.6f, 0, 0, 0}, {1, 1, 4.0f, 0, 0, 0}};
 static int gLfoCC[2] = {0, 0};   // LFO1/2 CC OUT: send the LFO as this CC (0 = off) to the Network MIDI session, channel 1
 static ModSlot gMod[8] = {{SRC_ENV2, DST_CUTOFF, 0.35f}, {SRC_STICK, DST_APOS, 0.5f}, {SRC_LFO1, DST_BPOS, 0.0f}, {SRC_OFF, DST_PITCH, 0.0f}};
@@ -729,9 +735,9 @@ static void buildNoise(void) {
 enum { R_A0, R_A1, R_A2, R_B0, R_B1, R_B2, R_SUB, R_TAP, R_SOFT, R_COUNT };   // R_SOFT: one DSP channel carrying a note's oscillator layers mixed in software (SOFT LAYERS)
 enum { BK_DSP, BK_CSND };
 typedef struct {
-	int active, started, note, stage, stage2, isEcho, nch;
+	int active, started, note, stage, stage2, stage3, stage4, isEcho, nch;
 	int ch[R_COUNT], bk[R_COUNT], role[R_COUNT], lev[R_COUNT];
-	float env, env2, freq, cur, gain, pan, cutMul, startDelay, gate, held, vel, hold1, hold2, relMul, tapDet;
+	float env, env2, env3, env4, hold3, hold4, dlPh[2], freq, cur, gain, pan, cutMul, startDelay, gate, held, vel, hold1, hold2, relMul, tapDet;
 	unsigned parent, id, age;
 	int chipCh;   // PSG square channel for the CHIP layer, -1 if none
 	int slide;    // 303 slide: glide to the new pitch quickly, no retrigger
@@ -1208,7 +1214,7 @@ static void initVoice(SVoice* v) {
 	memset(v, 0, sizeof(*v));
 	v->chipCh = -1;
 	for (int i = 0; i < R_COUNT; i++) v->ch[i] = -1;
-	v->active = 1; v->stage = 1; v->stage2 = 1; v->age = gAge++; v->id = ++gIdc; v->gate = -1;
+	v->active = 1; v->stage = 1; v->stage2 = 1; v->stage3 = v->stage4 = 1; v->age = gAge++; v->id = ++gIdc; v->gate = -1;
 	v->gain = 1; v->cutMul = 1; v->relMul = 1; v->mch = -1;
 }
 
@@ -1332,6 +1338,7 @@ static void lfoFill(LFO* l, const float* cyc, float peak) {
 	for (int i = 0; i < LFON; i++) l->tab[i] /= pk;
 }
 static float lfoValue(LFO* l) { return lfoShapeAt(l, l->ph); }
+static float dlHz(int k) { return gDlSync[k] > 0 ? gBPM / 60.0f / SYNC_BEATS[gDlSync[k]] : gDlRate[k]; }
 static float lfoRateHz(const LFO* l, int bpm) { return l->sync > 0 ? bpm / 60.0f / SYNC_BEATS[l->sync] : l->rate; }
 
 static float srcValue(int src, const SVoice* v) {
@@ -1339,6 +1346,8 @@ static float srcValue(int src, const SVoice* v) {
 	case SRC_LFO1: return gLfo[0].val;
 	case SRC_LFO2: return gLfo[1].val;
 	case SRC_ENV2: return v ? v->env2 : 0;
+	case SRC_ENV3: return v ? v->env3 : 0;
+	case SRC_ENV4: return v ? v->env4 : 0;
 	case SRC_VEL: return v ? v->vel : 0;
 	case SRC_STICK: return gStick;
 	case SRC_XY: return gXYmod;
@@ -1354,8 +1363,8 @@ static float srcValue(int src, const SVoice* v) {
 	case SRC_CHAOSY: return gChaosY;
 	case SRC_RAND: return v ? v->rnd : 0;   // a new random value for every note
 	case SRC_NOTE: { float x = v ? (v->note - 60) / 24.0f : 0; return x > 1 ? 1 : x < -1 ? -1 : x; }   // keytrack: C3 = 0
-	case SRC_LFO3: return gDlVal[0];
-	case SRC_LFO4: return gDlVal[1];
+	case SRC_LFO3: return v && gDlTrig[0] ? dlAt(0, v->dlPh[0]) : gDlVal[0];
+	case SRC_LFO4: return v && gDlTrig[1] ? dlAt(1, v->dlPh[1]) : gDlVal[1];
 	case SRC_SPINX: return gSpinX;
 	case SRC_SPINY: return gSpinY;
 	case SRC_MICBRT: return gMicBright;
@@ -1421,7 +1430,7 @@ static void voicesUpdate(float dt, float bend) {
 		l->val = lfoValue(l);
 	}
 	for (int k = 0; k < 2; k++) {   // drawn LFOs: read the painted shape, smoothly
-		float hz = gDlSync[k] > 0 ? gBPM / 60.0f / SYNC_BEATS[gDlSync[k]] : gDlRate[k];
+		float hz = dlHz(k);
 		gDlPh[k] += dt * hz; if (gDlPh[k] >= 1) gDlPh[k] -= floorf(gDlPh[k]);
 		float x = gDlPh[k] * 64; int i = (int)x; float u = x - i;
 		gDlVal[k] = gDl[k][i & 63] * (1 - u) + gDl[k][(i + 1) & 63] * u;
@@ -1453,6 +1462,9 @@ static void voicesUpdate(float dt, float bend) {
 		if (v->gate >= 0 && v->stage != 4) { v->gate -= dt; if (v->gate <= 0) v->stage = v->stage2 = 4; }
 		envStep(&v->env, &v->stage, &gEnv1, dt, &v->hold1, v->relMul);
 		envStep(&v->env2, &v->stage2, &gEnv2, dt, &v->hold2, 1);
+		if (v->stage == 4) v->stage3 = v->stage4 = 4;   // ENV 3 / 4 let go with the note
+		for (int k = 0; k < 2; k++) if (gDlTrig[k]) { v->dlPh[k] += dt * dlHz(k); if (v->dlPh[k] >= 1) v->dlPh[k] = gDlTrig[k] == 2 ? 1 : v->dlPh[k] - floorf(v->dlPh[k]); }   // drawn LFOs, per note
+		envStep(&v->env3, &v->stage3, &gEnv3, dt, &v->hold3, 1); envStep(&v->env4, &v->stage4, &gEnv4, dt, &v->hold4, 1);
 		if (v->stage == 4 && v->env <= 0) { freeVoice(v); continue; }
 		if (v->stage == 3 && gEnv1.s <= 0.001f) { freeVoice(v); continue; }
 		v->cur += (v->freq - v->cur) * (v->slide == 2 ? 1.0f - expf(-dt / (gPadMorph * 0.35f + 0.001f)) : v->slide ? 1.0f - expf(-dt / 0.03f) : gl);   // 2: a pad MORPH
@@ -2809,8 +2821,11 @@ typedef struct {
 	u8 fxOrder[8];   // v13: master FX chain order (first 5 used)
 	int arpStrumDir; float arpStrum;   // v14: ARP STRUM
 	int gatePat, gateRate; float gateDepth;   // v15: TRANCE GATE
+	AHDSR env3, env4; int dlTrig[2];   // v16: ENV 3 / 4, drawn LFO 3 / 4 trigger (FREE / NOTE / ONCE)
 } SPatch;
-#define PATCH_MAGIC 0x5359523F   // "SYR?" (v15)
+#define PATCH_MAGIC 0x53595240   // "SYR@" (v16)
+#define PATCH_MAGIC15 0x5359523F // v15 (no ENV 3 / 4)
+#define PATCH_V15_SIZE offsetof(SPatch, env3)
 #define PATCH_MAGIC14 0x5359523E // v14 (no trance gate)
 #define PATCH_V14_SIZE offsetof(SPatch, gatePat)
 #define PATCH_MAGIC13 0x5359523D // v13 (no arp strum)
@@ -2854,6 +2869,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->filtType = 0; p->cutoff = 0.8f; p->res = 0.1f; p->keytrack = 0.3f;
 	p->env1 = (AHDSR){0.005f, 0, 0.6f, 0.7f, 0.35f};
 	p->env2 = (AHDSR){0.002f, 0, 0.45f, 0.2f, 0.4f};
+	p->env3 = (AHDSR){0.0f, 0, 0.3f, 0.0f, 0.2f}; p->env4 = (AHDSR){0.5f, 0, 1.0f, 0.5f, 0.8f};
 	p->lfoShape[0] = 0; p->lfoRate[0] = 0.6f; p->lfoShape[1] = 0; p->lfoRate[1] = 5.0f;
 	p->mod[0] = (ModSlot){SRC_ENV2, DST_CUTOFF, 0.0f};
 	p->mod[1] = (ModSlot){SRC_STICK, DST_APOS, 0.5f};
@@ -3545,12 +3561,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER) || len == (long)(PATCH_V11_SIZE * NUSER) || len == (long)(PATCH_V12_SIZE * NUSER) || len == (long)(PATCH_V13_SIZE * NUSER) || len == (long)(PATCH_V14_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER) || len == (long)(PATCH_V11_SIZE * NUSER) || len == (long)(PATCH_V12_SIZE * NUSER) || len == (long)(PATCH_V13_SIZE * NUSER) || len == (long)(PATCH_V14_SIZE * NUSER) || len == (long)(PATCH_V15_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10 || t.magic == PATCH_MAGIC11 || t.magic == PATCH_MAGIC12 || t.magic == PATCH_MAGIC13 || t.magic == PATCH_MAGIC14)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10 || t.magic == PATCH_MAGIC11 || t.magic == PATCH_MAGIC12 || t.magic == PATCH_MAGIC13 || t.magic == PATCH_MAGIC14 || t.magic == PATCH_MAGIC15)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -3576,7 +3592,7 @@ static void patchCapture(SPatch* p) {
 	}
 	p->subShape = gSubShape; p->subOct = gSubOct; p->noiseType = gNoiseType; p->filtType = gFiltType;
 	p->subLevel = gSubLevel; p->noiseLevel = gNoiseLevel; p->cutoff = gCutoff; p->res = gRes; p->keytrack = gKeytrack;
-	p->env1 = gEnv1; p->env2 = gEnv2;
+	p->env1 = gEnv1; p->env2 = gEnv2; p->env3 = gEnv3; p->env4 = gEnv4; p->dlTrig[0] = gDlTrig[0]; p->dlTrig[1] = gDlTrig[1];
 	for (int i = 0; i < 2; i++) { p->lfoShape[i] = gLfo[i].shape; p->lfoMode[i] = gLfo[i].mode; p->lfoRate[i] = gLfo[i].rate; p->lfoSync[i] = gLfo[i].sync; p->lfoTable[i] = gLfo[i].table; p->lfoPos[i] = gLfo[i].pos; }
 	for (int i = 0; i < 4; i++) { p->mod[i] = gMod[i]; p->mod2[i] = gMod[i + 4]; p->macro[i] = gMacro[i]; }
 	for (int i = 0; i < 8; i++) p->modCurve[i] = gModCurve[i];
@@ -3624,7 +3640,7 @@ static void patchApplyRaw(const SPatch* p) {
 	int subChg = p->subShape != gSubShape, noiseChg = p->noiseType != gNoiseType;
 	gSubShape = p->subShape; gSubOct = p->subOct; gNoiseType = p->noiseType % 6; gFiltType = p->filtType;
 	gSubLevel = p->subLevel; gNoiseLevel = p->noiseLevel; gCutoff = p->cutoff; gRes = p->res; gKeytrack = p->keytrack;
-	gEnv1 = p->env1; gEnv2 = p->env2;
+	gEnv1 = p->env1; gEnv2 = p->env2; gEnv3 = p->env3; gEnv4 = p->env4; gDlTrig[0] = p->dlTrig[0] % 3; gDlTrig[1] = p->dlTrig[1] % 3;
 	for (int i = 0; i < 2; i++) { gLfo[i].shape = p->lfoShape[i] < NLFOSH ? p->lfoShape[i] : 0; gLfo[i].mode = p->lfoMode[i]; gLfo[i].rate = p->lfoRate[i]; gLfo[i].sync = p->lfoSync[i] < NSYNC ? p->lfoSync[i] : 0; gLfo[i].table = p->lfoTable[i] < T_BUILTIN ? p->lfoTable[i] : 0; gLfo[i].pos = p->lfoPos[i]; gLfo[i].tabKey = -1; }
 	for (int i = 0; i < 4; i++) { gMod[i] = p->mod[i]; gMod[i + 4] = p->mod2[i]; gMacro[i] = p->macro[i]; }
 	for (int i = 0; i < 8; i++) gModCurve[i] = p->modCurve[i] & 3;
@@ -3729,7 +3745,9 @@ static void lastWrite(void) {
 }
 static int lastLoad(void) {
 	FILE* f = safeRead(LAST_PATH); if (!f) return 0;
-	int h[4] = {0}; static SPatch p; int ok = fread(h, sizeof(h), 1, f) == 1 && h[0] == LAST_MAGIC && fread(&p, sizeof(p), 1, f) == 1 && p.magic == PATCH_MAGIC;
+	int h[4] = {0}; static SPatch p; patchInit(&p); SPatch d = p;
+	int ok = fread(h, sizeof(h), 1, f) == 1 && h[0] == LAST_MAGIC && fread(&p, 1, sizeof(p), f) >= PATCH_V15_SIZE && (p.magic == PATCH_MAGIC || p.magic == PATCH_MAGIC15);
+	if (ok && p.magic == PATCH_MAGIC15) { memcpy((char*)&p + PATCH_V15_SIZE, (char*)&d + PATCH_V15_SIZE, sizeof(SPatch) - PATCH_V15_SIZE); p.magic = PATCH_MAGIC; }   // v15: ENV 3 / 4 get defaults
 	fclose(f); if (!ok) return 0;
 	if (h[1] >= 0 && h[1] < NSTYLES) { gStyle = gStyleCur = h[1]; gPreset = gPresetCur = h[2] >= 0 ? h[2] : 0; }
 	patchApply(&p); gEdited = h[3] ? 1 : 0; gGuard = 0;
@@ -3852,6 +3870,10 @@ static Param P_FILT[] = {
 	PF("ENV1 REL", &gEnv1.r, 0.01f, 5, 0.02f, "S", 0),
 	PF("ENV2 ATK", &gEnv2.a, 0, 4, 0.005f, "S", 0), PF("ENV2 DEC", &gEnv2.d, 0.01f, 4, 0.02f, "S", 0),
 	PF("ENV2 SUS", &gEnv2.s, 0, 1, 0.01f, "%", 0), PF("ENV2 REL", &gEnv2.r, 0.01f, 5, 0.02f, "S", 0),
+	PF("ENV3 ATK", &gEnv3.a, 0, 4, 0.005f, "S", 0), PF("ENV3 DEC", &gEnv3.d, 0.01f, 4, 0.02f, "S", 0),
+	PF("ENV3 SUS", &gEnv3.s, 0, 1, 0.01f, "%", 0), PF("ENV3 REL", &gEnv3.r, 0.01f, 5, 0.02f, "S", 0),
+	PF("ENV4 ATK", &gEnv4.a, 0, 4, 0.005f, "S", 0), PF("ENV4 DEC", &gEnv4.d, 0.01f, 4, 0.02f, "S", 0),
+	PF("ENV4 SUS", &gEnv4.s, 0, 1, 0.01f, "%", 0), PF("ENV4 REL", &gEnv4.r, 0.01f, 5, 0.02f, "S", 0),
 	PEND};
 static int gXyMode = 0;
 #define NXY 8
@@ -3863,7 +3885,7 @@ static float gStickDX = 0;   // DATA: circle pad left / right, edits the selecte
 static Param P_MOD[] = {
 	PF("MACRO 1", &gMacro[0], 0, 1, 0.02f, "%", 0), PF("MACRO 2", &gMacro[1], 0, 1, 0.02f, "%", 0), PF("MACRO 3", &gMacro[2], 0, 1, 0.02f, "%", 0), PF("MACRO 4", &gMacro[3], 0, 1, 0.02f, "%", 0),
 	PE("XY PAD", &gXyMode, NXY, XY_NAMES, D_THEME), PF("CHAOS RATE", &gChaosRate, 0, 1, 0.02f, "%", 0),
-	PF("LFO3 RATE", &gDlRate[0], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO3 SYNC", &gDlSync[0], NSYNC, SYNC_NAMES, 0), PF("LFO4 RATE", &gDlRate[1], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO4 SYNC", &gDlSync[1], NSYNC, SYNC_NAMES, 0),
+	PF("LFO3 RATE", &gDlRate[0], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO3 SYNC", &gDlSync[0], NSYNC, SYNC_NAMES, 0), PE("LFO3 TRIG", &gDlTrig[0], 3, DLTRIG_NAMES, 0), PF("LFO4 RATE", &gDlRate[1], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO4 SYNC", &gDlSync[1], NSYNC, SYNC_NAMES, 0), PE("LFO4 TRIG", &gDlTrig[1], 3, DLTRIG_NAMES, 0),
 	PI_("LFO1 CC OUT", &gLfoCC[0], 0, 127, 0), PI_("LFO2 CC OUT", &gLfoCC[1], 0, 127, 0),
 	PE("LFO1 SHAPE", &gLfo[0].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO1 RATE", &gLfo[0].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO1 SYNC", &gLfo[0].sync, NSYNC, SYNC_NAMES, 0),
 	PE("LFO1 MODE", &gLfo[0].mode, 2, LFO_MODES, 0), PE("LFO1 TABLE", &gLfo[0].table, T_BUILTIN, BUILTIN_NAMES, 0), PF("LFO1 WT POS", &gLfo[0].pos, 0, 1, 0.02f, "%", 0),
@@ -5919,7 +5941,8 @@ static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 matr
 // MATRIX view: the 8 mod slots as two columns, source on the left, destination on the right, a line between them.
 // Tap a box to pick from a list; drag along the line to set the amount (centre 0, right +100, left -100).
 // The dot on each line rides the source's live value.
-static const int MX_SRCS[30] = {SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_VEL, SRC_NOTE, SRC_RAND, SRC_STICK, SRC_XY,
+#define NMXS 32
+static const int MX_SRCS[NMXS] = {SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_ENV3, SRC_ENV4, SRC_VEL, SRC_NOTE, SRC_RAND, SRC_STICK, SRC_XY,
 	SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_TILTX, SRC_TILTY, SRC_TWIST, SRC_SPINX, SRC_SPINY, SRC_SHAKE,
 	SRC_MIC, SRC_MICBRT, SRC_CAML, SRC_CAMC, SRC_CAMMOVE, SRC_PRESS, SRC_MSLIDE};
 static const u8 MX_COL[8] = {13, 11, 14, 10, 12, 9, 6, 15};   // EGA colours per slot
@@ -5939,7 +5962,7 @@ static void drawMatrix(void) {
 	if (gMxPick >= 0) {   // picker: sources in 3 x 10, destinations in 3 x 5
 		snprintf(t, sizeof(t), "SLOT %d %s", gMxPick + 1, gMxPickDst ? "DESTINATION" : "SOURCE"); text(6, 40, t, 1, RGB3(TH->val));
 		rect(256, 37, 60, 13, RGB3(TH->tab)); text(262, 40, "CANCEL", 1, RGB3(TH->tabTxt));
-		int n = gMxPickDst ? DST_COUNT : 30, bh = gMxPickDst ? 30 : 15, pitch = bh + 2, cur = gMxPickDst ? gMod[gMxPick].dst : gMod[gMxPick].src;
+		int n = gMxPickDst ? DST_COUNT : NMXS, bh = gMxPickDst ? 30 : 15, pitch = bh + 2, cur = gMxPickDst ? gMod[gMxPick].dst : gMod[gMxPick].src;
 		for (int i = 0; i < n; i++) {
 			int x = 4 + (i % 3) * 105, y = 53 + (i / 3) * pitch, v = gMxPickDst ? i : MX_SRCS[i];
 			const char* nm = gMxPickDst ? DST_NAMES[i] : SRC_NAMES[v]; int on = v == cur;
@@ -5984,7 +6007,7 @@ static int matrixTouch(int x, int y, int press, int release) {
 	if (gMxPick >= 0) {
 		if (!press) return 0;
 		if (y < 52) { if (x >= 256) { gMxPick = -1; return 1; } return 0; }
-		int bh = gMxPickDst ? 30 : 15, c = (x - 4) / 105, r = (y - 53) / (bh + 2), i = r * 3 + c, n = gMxPickDst ? DST_COUNT : 30;
+		int bh = gMxPickDst ? 30 : 15, c = (x - 4) / 105, r = (y - 53) / (bh + 2), i = r * 3 + c, n = gMxPickDst ? DST_COUNT : NMXS;
 		if (c < 0 || c > 2 || i < 0 || i >= n) return 0;
 		ModSlot* ms = &gMod[gMxPick];
 		if (gMxPickDst) ms->dst = i;
@@ -6257,7 +6280,8 @@ static void drawModView(void) {
 		int px2 = x0 + (int)(gDlPh[k] * w); rect(px2, y0, 1, h, RGB3(TH->keyOn));
 		static const char* SH[5] = {"SINE", "RAMP", "STEPS", "RANDOM", "FLAT"};
 		for (int i = 0; i < 5; i++) { int x = 8 + i * 61; rect(x, 202, 57, 16, RGB3(TH->tab)); text(x + 28 - (int)strlen(SH[i]) * 4, 206, SH[i], 1, RGB3(TH->tabTxt)); }
-		text(8, 224, "PAINT THE SHAPE. RATE / SYNC: MOD PAGE", 1, RGB3(TH->dim));
+		text(8, 225, "PAINT IT. RATE: MOD PAGE", 1, RGB3(TH->dim));
+		{ char t[16]; snprintf(t, sizeof(t), "TRIG %s", DLTRIG_NAMES[gDlTrig[k]]); int on = gDlTrig[k] != 0; rect(214, 221, 98, 16, RGB3(on ? TH->keyOn : TH->tab)); text(263 - (int)strlen(t) * 4, 225, t, 1, RGB3(on ? TH->ink : TH->tabTxt)); }
 	}
 }
 static int modViewTouch(int x, int y, int press, int release) {   // 1 = redraw
@@ -6266,6 +6290,8 @@ static int modViewTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (gModView == 0) return matrixTouch(x, y, press, release);
 	if (gModView == 1) return lfo12Touch(x, y, press, release);
 	int k = gModView - 2;
+	if (press && y >= 220 && x >= 214) { gDlTrig[k] = (gDlTrig[k] + 1) % 3; gEdited = 1;
+		say(gDlTrig[k] == 0 ? "TRIG FREE: RUNS ON ITS OWN" : gDlTrig[k] == 1 ? "TRIG NOTE: RESTARTS FOR EACH NOTE" : "TRIG ONCE: PLAYS ONCE PER NOTE, LIKE AN ENVELOPE"); return 1; }
 	if (press && y >= 202 && y < 218) {   // shape presets
 		int b = (x - 8) / 61;
 		for (int i = 0; i < 64; i++) {
