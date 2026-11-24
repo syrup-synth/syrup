@@ -2417,6 +2417,12 @@ static volatile u32 gClkMiss = 0, gClkWait = 0;
 static volatile int gAudioWants = 0;
 #define BREATHE() do { if (gAudioWants) { LightLock_Unlock(&gVoiceLock); for (int _b = 0; _b < 40 && gAudioWants; _b++) svcSleepThread(50000); LightLock_Lock(&gVoiceLock); } } while (0)   // audio tick is waiting for gVoiceLock: the main loop lets go at its next BREATHE()   // audio ticks that found the main loop holding the voices: skipped / waited for
 static void progTick(void); static void bassTick(float dt);
+// PARTS (SEQ): one part at a time on the one transport - 0 SYNTH (the roll), 1 CHORD (the progression), 2 BASS (the line),
+// 3 DRUMS (the drum grid). gPartMute: a held part button mutes it
+static int gSeqPart = 0; static u8 gPartMute[4]; static int gDrMuteNow = 0;
+#define PRB (gSeqPart == 1 || gSeqPart == 2)   // the roll shows the CHORD or the BASS part
+static int partStripShown(void); static void drawPartStrip(void); static int partTouch(int x, int y, int press, int release, int curPage); static void drawPartNotes(int k, int full);
+static int ctNotes(int d, int q, int* out); static void drawPartLane(void); static void drawChordLane(void); static int partDegAt(int st); static int partQAt(int st); static int partHasChords(void); static void drawChordGrid(void); static int chordGridTouch(int x, int y, int press, int release); static int partRollTouch(int x, int y, int press); static void drawPartsHead(int x0, int y0, int w); static void drawPartTopInfo(void); static int partTopTouch(int x, int y); static void partListSync(void);   // gPageWant: a touch asks the main loop for another page
 static void audioTick(void* data) {
 	(void)data;
 	softRender();   // SOFT LAYERS first, and without the voice lock: a block it can't render is a gap
@@ -2542,16 +2548,19 @@ static int patUsed(int i) { const SeqPat* p = i == gPatCur ? NULL : &gPat[i]; fo
 static const char* SEQ_PATH = "sdmc:/3ds/syrup/seq.bin";
 #define SEQ_MAGIC 0x53455131   // "SEQ1"
 static SeqPat gSnapPat[NPAT]; static u8 gSnapSong[NSONG]; static int gSnapHdr[4];
+typedef struct { u32 m; int prog, autoOn, bass; s8 ct[64]; u8 cl[64], cq[64]; char line[17]; u8 mute[4]; } PartSnap;   // after the song: the CHORD / BASS parts
+#define PART_MAGIC 0x32545250   // "PRT2"
+static PartSnap gSnapPart; static void partSnapGet(PartSnap* q); static void partSnapSet(const PartSnap* q);
 static void seqSnap(void) {   // copy what gets saved (hold the voice lock: the audio tick can switch patterns)
 	patStore(); memcpy(gSnapPat, gPat, sizeof(gPat)); memcpy(gSnapSong, gSong, sizeof(gSong));
-	gSnapHdr[0] = gPatCur; gSnapHdr[1] = gSongLen; gSnapHdr[2] = gSongOn; gSnapHdr[3] = (int)sizeof(SeqPat);
+	gSnapHdr[0] = gPatCur; gSnapHdr[1] = gSongLen; gSnapHdr[2] = gSongOn; gSnapHdr[3] = (int)sizeof(SeqPat); partSnapGet(&gSnapPart);
 }
 static void seqWriteSnap(void) {   // the slow part, done without the lock; skipped when nothing changed since the last write
-	static SeqPat prevPat[NPAT]; static u8 prevSong[NSONG]; static int prevHdr[4], have = 0;
-	if (have && !memcmp(prevPat, gSnapPat, sizeof(prevPat)) && !memcmp(prevSong, gSnapSong, sizeof(prevSong)) && !memcmp(prevHdr, gSnapHdr, sizeof(prevHdr))) return;
-	memcpy(prevPat, gSnapPat, sizeof(prevPat)); memcpy(prevSong, gSnapSong, sizeof(prevSong)); memcpy(prevHdr, gSnapHdr, sizeof(prevHdr)); have = 1;
+	static SeqPat prevPat[NPAT]; static u8 prevSong[NSONG]; static int prevHdr[4], have = 0; static PartSnap prevPart;
+	if (have && !memcmp(prevPat, gSnapPat, sizeof(prevPat)) && !memcmp(prevSong, gSnapSong, sizeof(prevSong)) && !memcmp(prevHdr, gSnapHdr, sizeof(prevHdr)) && !memcmp(&prevPart, &gSnapPart, sizeof(prevPart))) return;
+	prevPart = gSnapPart; memcpy(prevPat, gSnapPat, sizeof(prevPat)); memcpy(prevSong, gSnapSong, sizeof(prevSong)); memcpy(prevHdr, gSnapHdr, sizeof(prevHdr)); have = 1;
 	FILE* f = safeOpen(SEQ_PATH); if (!f) return;
-	u32 m = SEQ_MAGIC; int ok = fwrite(&m, 4, 1, f) == 1 && fwrite(gSnapHdr, sizeof(gSnapHdr), 1, f) == 1 && fwrite(gSnapPat, sizeof(gSnapPat), 1, f) == 1 && fwrite(gSnapSong, sizeof(gSnapSong), 1, f) == 1;
+	u32 m = SEQ_MAGIC; int ok = fwrite(&m, 4, 1, f) == 1 && fwrite(gSnapHdr, sizeof(gSnapHdr), 1, f) == 1 && fwrite(gSnapPat, sizeof(gSnapPat), 1, f) == 1 && fwrite(gSnapSong, sizeof(gSnapSong), 1, f) == 1 && fwrite(&gSnapPart, sizeof(gSnapPart), 1, f) == 1;
 	safeClose(f, SEQ_PATH, ok);
 }
 static void seqSave(void) { seqSnap(); seqWriteSnap(); }
@@ -2590,6 +2599,7 @@ static void seqLoad(void) {
 			ok = 1;
 		}
 		memset(song, 0, sizeof(song)); ok = ok && fread(song, 1, sizeof(song), f) >= 32;   // files from before the song grew to 64 hold 32
+		PartSnap ps; if (ok && fread(&ps, sizeof(ps), 1, f) == 1 && ps.m == PART_MAGIC) partSnapSet(&ps);   // (older files: no parts saved)
 	}
 	if (ok) {
 		memcpy(gPat, tmp, sizeof(gPat)); memcpy(gSong, song, sizeof(gSong));
@@ -2693,6 +2703,7 @@ static void seqFireAt(int idx, unsigned clock, int early, float off0) {
 		for (int i = 0; i < s->n && n < 8; i++) { if (noteOnCustomRow(s->note[i])) continue; lens[n] = noteLen(s, i); notes[n++] = snapScale(s->note[i] + gSeqTr + s->pitch); }
 		for (int r = 0; r < 8 && n < 8; r++) if (rowCustom(r) && rowCellOn(r, clock % rowLenOf(r))) { lens[n] = 1; notes[n++] = snapScale(gRowNote[r] + gSeqTr + s->pitch); }
 	}
+	if (gPartMute[0]) n = 0;   // the SYNTH part is muted
 	float vel = s->n ? s->vel / 255.0f : 0.8f;
 	if (s->fl & 1) vel = 1.0f;   // accent
 	gBeatFlash = 1;
@@ -4763,12 +4774,11 @@ static void drawTop(int page, int sel, int oct, int latch) {
 	} else if (page == 7) {   // scale / arp / sequencer
 		char s[40];
 		frame(4, 30, 196, 194);
-		snprintf(s, sizeof(s), "%s %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale]); text(10, 36, s, 1, VAL);
-		snprintf(s, sizeof(s), "ARP %s %s X%d", ARP_NAMES[gArp], RATE_NAMES[gArpRate], gArpOct); text(10, 48, s, 1, TXT);
-		snprintf(s, sizeof(s), "%d BPM  SWING %d%%", gBPM, (int)(gSwing * 100 + 0.5f)); text(10, 60, s, 1, TXT);
-		snprintf(s, sizeof(s), "PAT %c  %s", 'A' + gPatCur, gSeqPlaying ? "PLAYING" : "STOPPED"); text(10, 72, s, 1, gSeqPlaying ? VAL : DIM);
-		if (gSongOn && gSongLen) { snprintf(s, sizeof(s), "SONG %d/%d", gSongPos + 1, gSongLen); text(10, 84, s, 1, VAL); }
-		drawRollChords();
+		drawPartsHead(10, 34, 186);   // PARTS: the four lanes over four bars
+		if (gSongOn && gSongLen) snprintf(s, sizeof(s), "%s %s  SONG %d/%d", NOTE_NAMES[gRoot], SCALE_NAMES[gScale], gSongPos + 1, gSongLen);
+		else snprintf(s, sizeof(s), "%s %s  PAT %c  %s", NOTE_NAMES[gRoot], SCALE_NAMES[gScale], 'A' + gPatCur, gSeqPlaying ? "PLAY" : "STOP");
+		text(10, 80, s, 1, gSeqPlaying ? VAL : DIM);
+		if (gSeqPart == 1 || gSeqPart == 2) drawPartTopInfo(); else drawRollChords();
 	} else if (page == 1 || page == 2) {
 		Osc* o = &gOsc[focus];
 		if (!visActive(page)) {
@@ -4991,7 +5001,9 @@ static int gridNote(int row) {   // row 0 = bottom; follows the scale (major ste
 }
 static void rectP(int x, int y, int w, int h, const u8* c) { rect(x, y, w, h, c[0], c[1], c[2]); }
 #define GRID_BTNS 8
-static int gPatView = 0, gStepEd = -1, gStepEdRow = 0, gPageWant = -1;   // gPageWant: a touch asks the main loop for another page
+static int gPatView = 0, gStepEd = -1, gStepEdRow = 0, gPageWant = -1;
+#define PART_Y 228
+static int gPtHold = 0, gPartLow[3] = {-1, -1, -1};
 static int gUndoOk = 0, gUndoIdx = 0;   // the UNDO button on PAT: the newest history step is a pattern edit
 // HISTORY: SELECT+L undo, SELECT+R redo. Pattern edits (notes, RIFF, CLEAR, the tools) and patch edits
 // (a run of turns on one control is one step) go on one list, newest last.
@@ -5032,9 +5044,9 @@ static void drawStepEd(void);
 // Hold a cell: the step editor. Drag the keys up / down to scroll; OCT- / OCT+ jump an octave.
 #define ROLL_KW (gVoiceMode >= 3 ? 58 : 24)   // a kit patch: wider, the drum names down the side
 #define ROLL_TOP (XY_Y + 16)
-#define ROLL_RH 13
+#define ROLL_RH 12
 #define VEL_Y (ROLL_TOP + ROLL_ROWS * ROLL_RH + 3)   // the velocity lane under the roll: a bar per step, drag to set
-#define VEL_H (238 - VEL_Y - 13)   // (under it: the PAGE strip)
+#define VEL_H (238 - VEL_Y - 13 - 12)   // (under it: the PAGE strip, then the PARTS strip)
 #define PG_Y (VEL_Y + VEL_H + 2)
 #define ROLL_ROWS 12   // one octave on screen, taller rows (the keys drag to scroll; L / R jump an octave)
 #define ROLL_VIEW 16   // steps on screen: one page
@@ -5140,6 +5152,7 @@ static void drawGrid(void) {
 	if (gStepEd >= 0) { drawStepEd(); return; }
 	if (gPatView == 2) { drawTapeView(); return; }
 	if (gPatView) { drawPatView(); return; }
+	if (gSeqPart == 1) { drawChordGrid(); drawPartLane(); drawPageStrip(); drawPartStrip(); return; }   // CHORD: chords of any length, the pages are the bars
 	int below = 0, above = 0;
 	for (int r = 0; r < ROLL_ROWS; r++) {   // lanes and the keyboard down the side
 		int nt = rollNote(r), y = ROLL_TOP + (ROLL_ROWS - 1 - r) * ROLL_RH, kit = gVoiceMode >= 3;
@@ -5156,7 +5169,14 @@ static void drawGrid(void) {
 	}
 	if (curShown() && rollRow(gRcN) >= 0 && rollIn(gRcS)) { int x = rollX(gRcS), y = rollY(gRcN); outline(x, y, (int)ROLL_CW, ROLL_RH - 1, RGB3(TH->keyOn)); }   // the circle pad's cursor
 	if (gSeqPlaying && gSeqPos >= 0 && rollIn(gSeqPos)) { int x = rollX(gSeqPos); rectP(x, ROLL_TOP, (int)ROLL_CW, 1, TH->keyOn); rectP(x, ROLL_TOP + ROLL_ROWS * ROLL_RH - 1, (int)ROLL_CW, 1, TH->keyOn); }
-	for (int st = 0; st < NSTEP; st++) {   // the notes, as bars as long as they last
+	drawChordLane();   // CHORD TONES LIT: the chord at each step, tinted in the roll
+	if (!PRB) drawPartNotes(2, 0);   // the BASS part, as a ghost
+	else {   // CHORD / BASS: the synth's notes are the ghosts, the other of the two too, this part's notes on top
+		for (int st = RP0; st < RP0 + ROLL_VIEW && st < NSTEP; st++) { const Step* p = &gSeq[st]; for (int k = 0; k < p->n; k++) { int nt = p->note[k]; if (rollRow(nt) < 0) continue; int L = noteLen(p, k), e = st + L > RP0 + ROLL_VIEW ? RP0 + ROLL_VIEW : st + L;
+			int x = rollX(st) + 1, w = rollX(e - 1) + (int)ROLL_CW - x - 1; rect(x, rollY(nt) + 4, w, ROLL_RH - 9, 34, 102, 102); } }
+		drawPartNotes(2, 1);
+	}
+	if (!PRB) for (int st = 0; st < NSTEP; st++) {   // the notes, as bars as long as they last
 		const Step* p = &gSeq[st];
 		for (int k = 0; k < p->n; k++) {
 			int nt = p->note[k];
@@ -5182,7 +5202,7 @@ static void drawGrid(void) {
 		if (p->gate || p->skip || p->cut || p->res || p->pitch || p->nudge || p->rat > 1 || p->cond || p->lk[0] || p->lk[1] || p->lk[2]) rectP(rollX(st) + (int)ROLL_CW / 2 - 1, ROLL_TOP - 2, 3, 2, TH->keyOn);   // the step has locks
 		if (p->rat > 1) for (int k = 0; k < p->rat; k++) rectP(rollX(st) + 2 + k * 4, ROLL_TOP - 5, 2, 2, TH->warn);   // ratchet dots
 	}
-	for (int r = 0; r < 8; r++) if (rowCustom(r) && rollRow(gRowNote[r]) >= 0) {   // rhythm rows: their own length and hits
+	for (int r = 0; r < 8; r++) if (!PRB && rowCustom(r) && rollRow(gRowNote[r]) >= 0) {   // rhythm rows: their own length and hits
 		int L = rowLenOf(r), y = rollY(gRowNote[r]) + 1;
 		for (int i = RP0; i < RP0 + ROLL_VIEW; i++) {
 			int x = rollX(i) + 1, w = (int)ROLL_CW - 2, head = gSeqPlaying && (int)(gSeqClock % L) == i;
@@ -5192,7 +5212,7 @@ static void drawGrid(void) {
 	}
 	if (above) { int x = 312; rectP(x, ROLL_TOP + 1, 5, 2, TH->warn); rectP(x + 1, ROLL_TOP, 3, 1, TH->warn); }   // more notes up there
 	if (below) { int x = 312, y = ROLL_TOP + ROLL_ROWS * ROLL_RH - 4; rectP(x, y, 5, 2, TH->warn); rectP(x + 1, y + 2, 3, 1, TH->warn); }
-	{   // THE LANE under the notes: VEL / GATE / PROB as bars (drag up / down, or across), ACCENT / SLIDE as switches.
+	if (PRB) drawPartLane(); else {   // THE LANE under the notes: VEL / GATE / PROB as bars (drag up / down, or across), ACCENT / SLIDE as switches.
 		// Tap its name to step through them.
 		rectP(0, VEL_Y - 2, 320, 240 - VEL_Y + 2, TH->bg);
 		rectP(0, VEL_Y, ROLL_KW - 1, VEL_H, TH->tab); text(ROLL_KW / 2 - (int)strlen(LANE_NAMES[gLane]) * 4, VEL_Y + VEL_H / 2 - 4, LANE_NAMES[gLane], 1, RGB3(TH->tabTxt));
@@ -5211,6 +5231,7 @@ static void drawGrid(void) {
 		}
 	}
 	drawPageStrip();
+	if (partStripShown()) drawPartStrip();
 }
 // pattern + song view (PAT button): 16 patterns, COPY / CLEAR, and a song chain of up to 32 patterns
 #define PV_Y (XY_Y + 18)
@@ -5441,6 +5462,19 @@ static void acidGen(void) {
 	for (int st = 0; st < 16; st++) if ((gSeq[st].fl & 2) && !gSeq[(st + 1) % 16].n) gSeq[st].fl &= ~2;   // no slide into a rest
 	if (!gSeq[0].n) { gSeq[0].n = 1; gSeq[0].note[0] = (u8)base; gSeq[0].vel = 190; gSeq[0].fl = 1; }
 	gSeqLen = 16; gSeqBase = base; gSeqTr = 0;
+	if (partHasChords()) {   // CHORDS: the riff runs 4 bars and its notes come from the chord under each step (roots on the beat)
+		for (int b = 1; b < 4; b++) memcpy(&gSeq[b * 16], &gSeq[0], sizeof(Step) * 16);
+		for (int st = 0; st < 64; st++) {
+			Step* sp = &gSeq[st]; if (!sp->n) continue;
+			int d = partDegAt(st); if (d < 0) { memset(sp, 0, sizeof(*sp)); continue; }
+			int nt[5], n = ctNotes(d, partQAt(st), nt), k = rand() % 100, pick = st % 4 == 0 ? (k < 60 ? 0 : k < 85 ? 2 : 1) : (k < 35 ? 0 : k < 60 ? 1 : k < 85 ? 2 : n - 1);
+			if (pick >= n) pick = 0;
+			int pc = nt[pick], note = base + ((pc - base) % 12 + 12) % 12;
+			if (k > 92 && !(st % 4)) note += 12;   // now and then the octave up
+			sp->note[0] = (u8)note;
+		}
+		gSeqLen = 64;
+	}
 }
 static void gridButtons(int x) {
 	int b = x * GRID_BTNS / 320;
@@ -5471,12 +5505,17 @@ static int gGtX0 = 0, gGtVel = 0, gGtV0 = 0;   // drag up / down on a note: its 
 static int gGtMove = 0, gMvSt = -1, gMvNt = 0, gMvLen = 1, gMvSt0 = 0, gMvNt0 = 0;   // dragging a note to a new step / pitch
 static int gGtErase = 0, gRollKeyOn = 0;   // gRollKeyOn: a key of the roll is held (its chord sounding)
 static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
+	if (partStripShown() && ((press && y >= PART_Y) || gPtHold)) return partTouch(x, y, press, release, 7);   // the PARTS strip
 	if (gStepEd >= 0 && gPatView != 3 && !(press && y < XY_Y + 15)) return stepEdTouch(x, y, press, release);
 	if (press && y < XY_Y + 15) { gridButtons(x); return 1; }
 	if (gPatView == 3) { gDgShift = 16; int r = release ? drumGridRelease() : drumGridTouch(x, y, press); gDgShift = 0; return r; }
 	if (gPatView == 2) return tapeTouch(x, y, press, release);
 	if (gPatView) { if (press) patViewTouch(x, y); return press; }
+	if (PRB && y >= PG_Y) { if (!press) return 0; int i = (x - ROLL_KW) / PG_W; if (x >= ROLL_KW && i >= 0 && i < 4) { gRollPg = i; gRollFollow = 0; return 1; } return 0; }   // CHORD / BASS: pages = bars
 	if (y >= PG_Y) return press ? pageStripTouch(x) : 0;   // the PAGE strip
+	if (PRB && y >= VEL_Y - 2) return 0;
+	if (gSeqPart == 1) return chordGridTouch(x, y, press, release);
+	if (PRB && x >= ROLL_KW) return partRollTouch(x, y, press);
 	if (press && y >= VEL_Y - 2 && x < ROLL_KW) { gLane = (gLane + 1) % 5; return 1; }   // the lane's name: the next lane
 	if (y >= VEL_Y - 2 && x >= ROLL_KW && !gGtKeys && (press || gGtSt == -2)) {   // the lane
 		static int paint = -1;
@@ -5642,13 +5681,28 @@ static void padName(int base, int pad, char* o, int len) {
 	if (a == 3) for (char* c = rn; *c; c++) *c = (char)(*c - 'A' + 'a');   // minor chords in lower case, the usual way
 	snprintf(o, len, "%s|%s%s", rn, NOTE_NAMES[r % 12], q);
 }
-#define NPROG 20
+#define NPROG 21
+#define PROG_CUSTOM 20   // the progression written in the CHORD part
 static int gPadBase = 48;
 static int gProg = 0, gProgAt = -1, gProgAuto = 0, gProgDirty = 0; static float gProgBar = 0;
 static const char* PROG_NAMES[NPROG] = {"PROG: OFF", "I V vi IV", "vi IV I V", "I vi IV V", "ii V I I", "I IV V IV", "i VI III VII", "i iv v i",
-	"I IV vi V", "vi V IV V", "I iii IV V", "ii V I vi", "vi ii V I", "IV V iii vi", "I V IV I", "IV I V vi", "i VII VI VII", "i VI VII i", "i iv VII III", "i v VI iv"};
-static const int PROGS[NPROG][4] = {{0, 0, 0, 0}, {0, 4, 5, 3}, {5, 3, 0, 4}, {0, 5, 3, 4}, {1, 4, 0, 0}, {0, 3, 4, 3}, {0, 5, 2, 6}, {0, 3, 4, 0},
-	{0, 3, 5, 4}, {5, 4, 3, 4}, {0, 2, 3, 4}, {1, 4, 0, 5}, {5, 1, 4, 0}, {3, 4, 2, 5}, {0, 4, 3, 0}, {3, 0, 4, 5}, {0, 6, 5, 6}, {0, 5, 6, 0}, {0, 3, 6, 2}, {0, 4, 5, 3}};   // scale degrees (pads)
+	"I IV vi V", "vi V IV V", "I iii IV V", "ii V I vi", "vi ii V I", "IV V iii vi", "I V IV I", "IV I V vi", "i VII VI VII", "i VI VII i", "i iv VII III", "i v VI iv", "CUSTOM"};
+static int PROGS[NPROG][4] = {{0, 0, 0, 0}, {0, 4, 5, 3}, {5, 3, 0, 4}, {0, 5, 3, 4}, {1, 4, 0, 0}, {0, 3, 4, 3}, {0, 5, 2, 6}, {0, 3, 4, 0},
+	{0, 3, 5, 4}, {5, 4, 3, 4}, {0, 2, 3, 4}, {1, 4, 0, 5}, {5, 1, 4, 0}, {3, 4, 2, 5}, {0, 4, 3, 0}, {3, 0, 4, 5}, {0, 6, 5, 6}, {0, 5, 6, 0}, {0, 3, 6, 2}, {0, 4, 5, 3}, {0, 0, 0, 0}};   // scale degrees (pads)
+// the CHORD part's own track: chords of any length over 4 bars (64 steps). gCtDeg: the chord (scale degree) starting on the
+// step, -1 none; gCtLen: how many steps it lasts. One chord at a time.
+#define CT_N 64
+static s8 gCtDeg[CT_N] = {[0 ... CT_N - 1] = -1}; static u8 gCtLen[CT_N], gCtQ[CT_N]; static int gCtGap = 0;
+#define NCTQ 5   // a chord's colour (HICHORD's stick): 0 triad, 1 7th, 2 9th, 3 sus4, 4 inversion
+static const char* CTQ_SUF[NCTQ] = {"", "7", "9", "SUS", "/I"};
+static int ctNotes(int d, int q, int* out) { return padChord(gPadBase, d, q == 1 ? 1 : q == 2 ? 2 : 0, q == 3 ? 2 : q == 4 ? 0 : 1, out); }
+static int ctAt(int st, int* start) { for (int i = st; i >= 0; i--) if (gCtDeg[i] >= 0) { if (i + gCtLen[i] > st) { if (start) *start = i; return gCtDeg[i]; } return -1; } return -1; }
+static void ctSet(int st, int d, int L, int q) {   // a chord on st for L steps: what was under it goes, a chord running into it is cut short
+	if (st < 0 || st >= CT_N) return; if (L < 1) L = 1; if (st + L > CT_N) L = CT_N - st;
+	int a; if (ctAt(st, &a) >= 0 && a < st) gCtLen[a] = (u8)(st - a);
+	for (int i = st; i < st + L; i++) gCtDeg[i] = -1;
+	gCtDeg[st] = (s8)d; gCtLen[st] = (u8)L; gCtQ[st] = (u8)(q % NCTQ);
+}
 static int gPadBass = 0;   // BASS: 0 off, 1 HOLD (the root an octave under the chord), 2.. a bass LINE playing a rhythm
 static void bassStop(void);
 static void padPreset(int style, int idx) {   // CHORD 13-18 (PADS + BASS): their bass style and progression, on the pads
@@ -5657,12 +5711,14 @@ static void padPreset(int style, int idx) {   // CHORD 13-18 (PADS + BASS): thei
 	bassStop(); gPadBass = PB[idx - 12][0]; gProg = PB[idx - 12][1]; gProgAt = -1; gPads = 1;
 }
 // BASS LINES: 16 steps a bar. R root, 3 / 5 / 7 the chord's third, fifth, seventh, O the octave, - rest, _ the note goes on
-#define NBASS 12
-static const char* BASS_NAMES[NBASS] = {"BASS", "HOLD", "PULS", "OFFB", "R+5", "OCTV", "WALK", "FUNK", "TRES", "REGG", "ARP", "GALP"};
+#define NBASS 13
+#define BASS_USER 12   // the line written in the BASS part
+static char gBassUser[17] = "R---------------";
+static const char* BASS_NAMES[NBASS] = {"BASS", "HOLD", "PULS", "OFFB", "R+5", "OCTV", "WALK", "FUNK", "TRES", "REGG", "ARP", "GALP", "USER"};
 static const char* BASS_LONG[NBASS] = {"BASS OFF", "BASS: HOLD THE ROOT", "BASS: 8TH PULSE", "BASS: OFFBEATS", "BASS: ROOT + FIFTH", "BASS: OCTAVES (DISCO)", "BASS: WALKING",
-	"BASS: FUNK", "BASS: TRESILLO 3-3-2", "BASS: ONE DROP (REGGAE)", "BASS: ARPEGGIO", "BASS: GALLOP"};
+	"BASS: FUNK", "BASS: TRESILLO 3-3-2", "BASS: ONE DROP (REGGAE)", "BASS: ARPEGGIO", "BASS: GALLOP", "BASS: YOUR LINE (BASS PART)"};
 static const char* BASS_PAT[NBASS] = {"", "", "R-R-R-R-R-R-R-R-", "--R---R---R---R-", "R___5___R___5___", "R-O-R-O-R-O-R-O-", "R___3___5___O___",
-	"R--R--O-R-5--R7-", "R__R__R_R__R__R_", "------R_---R-5--", "R-3-5-O-R-3-5-O-", "R-RRR-RRR-RRR-RR"};
+	"R--R--O-R-5--R7-", "R__R__R_R__R__R_", "------R_---R-5--", "R-3-5-O-R-3-5-O-", "R-RRR-RRR-RRR-RR", gBassUser};
 static int gBassNote = -1; static float gBassPh = 0; static int gBassStep = -1; static void bassStop(void);
 // MORPH (pads slide): the held chord turns into the new one by gliding - voice i of the old chord (low to high) bends
 // to note i of the new one over PAD MORPH seconds; extra notes start, spare ones let go. No retrigger.
@@ -5824,7 +5880,7 @@ static int bassNoteOf(char c) {   // a line's letter -> a note, from the pad tha
 	switch (c) { case '3': return padDeg(b, p + 2) - 12; case '5': return padDeg(b, p + 4) - 12; case '7': return padDeg(b, p + 6) - 12; case 'O': return r + 12; default: return r; }
 }
 static void bassTick(float dt) {   // BASS LINES: while a pad chord sounds, the line plays on the 16ths (the sequencer's, or its own at BPM)
-	int on = gPadBass >= 2 && gPadSel >= 0 && gHeldN > 0;   // (not only with the pads up: a latched chord keeps its line on the DRUMS page too)
+	int on = gPadBass >= 2 && gPadSel >= 0 && (gHeldN > 0 || (gPartMute[1] && gProg && gProgAuto && gSeqPlaying && !gCtGap)) && !gPartMute[2];   // (a muted CHORD part still leads the bass)   // (not only with the pads up: a latched chord keeps its line on the DRUMS page too)
 	if (!on) { if (gBassNote >= 0 || gBassStep >= 0) bassStop(); return; }
 	(void)dt; if (!gSeqPlaying) { if (gBassNote >= 0 || gBassStep >= 0) bassStop(); return; }   // ONE TRANSPORT: bass lines play with PLAY, on its 16ths
 	int st = ((int)floorf(transportPos16())) & 15;
@@ -5837,11 +5893,18 @@ static void bassTick(float dt) {   // BASS LINES: while a pad chord sounds, the 
 	gBassNote = bassNoteOf(c); gSubBassNote = gBassNote; trkLiveNote(1, gBassNote, 0.8f); voiceOn(gBassNote, st % 4 == 0 ? 0.9f : 0.75f);
 }
 static void progTick(void) {   // audio tick: AUTO plays the progression's next chord on each bar of the transport - only while it plays
-	static long lastBar = -1;
-	if (!gProg || !gProgAuto || !gSeqPlaying) { lastBar = -1; return; }
+	static long lastBar = -1; static int lastSt = -1, ctOn = 0;
+	if (!gProg || !gProgAuto || !gSeqPlaying) { lastBar = -1; lastSt = -1; ctOn = 0; gCtGap = 0; return; }
+	if (gProg == PROG_CUSTOM) {   // the CHORD part's track: each chord on its own step, for its own length
+		int s16 = ((int)floorf(transportPos16())) % CT_N; if (s16 == lastSt) return; lastSt = s16;
+		int a, d = ctAt(s16, &a);
+		if (d >= 0 && a == s16) { gProgAt = s16 / 16; gPadSel = d; gCtGap = 0; gPadN = ctNotes(d, gCtQ[a], gPadNotes); if (!gPartMute[1]) padPlay(gPadBase, gPadNotes, gPadN, 0.8f, 1); gProgDirty = 1; ctOn = 1; }
+		else if (d < 0 && (ctOn || lastBar < 0)) { ctOn = 0; gCtGap = 1; playSet(NULL, 0, 0.8f); gProgDirty = 1; lastBar = 0; }   // a gap: the chord lets go
+		return;
+	}
 	long bar = (long)floorf(transportPos16() / 16.0f);
 	if (bar == lastBar) return;
-	lastBar = bar; gProgAt = (int)(bar % 4); gPadSel = PROGS[gProg][gProgAt]; gPadN = padChord(gPadBase, gPadSel, 0, 1, gPadNotes); padPlay(gPadBase, gPadNotes, gPadN, 0.8f, 1); gProgDirty = 1;
+	lastBar = bar; gProgAt = (int)(bar % 4); gPadSel = PROGS[gProg][gProgAt]; gPadN = padChord(gPadBase, gPadSel, 0, 1, gPadNotes); if (!gPartMute[1]) padPlay(gPadBase, gPadNotes, gPadN, 0.8f, 1); gProgDirty = 1;
 }
 static void padsTick(float dt) {   // strummed notes ring for a moment, then let go
 	{ static int lastRow = -1; if (!gSeqPlaying) gTrkLivePh += dt * gBPM / 60.0f * 4.0f; if (gTrkLivePh >= 16) gTrkLivePh -= 16;   // TRACKER LIVE: its rows' clock
@@ -5942,9 +6005,9 @@ static int gModView = 0, gModOn = 0, gLastTX = 0, gLastTY = 0;   // view: 0 matr
 // Tap a box to pick from a list; drag along the line to set the amount (centre 0, right +100, left -100).
 // The dot on each line rides the source's live value.
 #define NMXS 32
-static const int MX_SRCS[NMXS] = {SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_ENV3, SRC_ENV4, SRC_VEL, SRC_NOTE, SRC_RAND, SRC_STICK, SRC_XY,
+static const int MX_SRCS[NMXS] = {SRC_OFF, SRC_LFO1, SRC_LFO2, SRC_LFO3, SRC_LFO4, SRC_ENV2, SRC_VEL, SRC_NOTE, SRC_RAND, SRC_STICK, SRC_XY,
 	SRC_M1, SRC_M2, SRC_M3, SRC_M4, SRC_CHAOSX, SRC_CHAOSY, SRC_TILTX, SRC_TILTY, SRC_TWIST, SRC_SPINX, SRC_SPINY, SRC_SHAKE,
-	SRC_MIC, SRC_MICBRT, SRC_CAML, SRC_CAMC, SRC_CAMMOVE, SRC_PRESS, SRC_MSLIDE};
+	SRC_MIC, SRC_MICBRT, SRC_CAML, SRC_CAMC, SRC_CAMMOVE, SRC_PRESS, SRC_MSLIDE, SRC_ENV3, SRC_ENV4};
 static const u8 MX_COL[8] = {13, 11, 14, 10, 12, 9, 6, 15};   // EGA colours per slot
 #define MX_Y 40
 #define MX_PITCH 25
@@ -6658,7 +6721,7 @@ static void drawBottomMain(int base, const u8* on, int helpOn, int latch) {
 	if (gPads && !gGridOn) { drawPads(base); return; }   // chord pads take the whole screen under the tabs
 	if (gModOn) { drawModView(); return; }               // MOD page: route / drawn LFOs / motion
 	if (gGridOn) { drawGrid(); return; }   // the piano roll takes the whole screen under the tabs
-	if (gDrumOnB) { drawDrumGrid(); if (gDgEd) drawDgEd(); return; }   // so does the drum sequencer
+	if (gDrumOnB) { drawDrumGrid(); if (gDgEd) drawDgEd(); else drawPartStrip(); return; }   // so does the drum sequencer
 	if (gAddEdit) drawAdd(); else if (gCurPage == 0) drawBrowser(); else {
 	drawXyPad();
 	}
@@ -9309,6 +9372,7 @@ static int drumFadeTick(void) {   // audio thread, each 5 ms frame: fading chann
 	return any;
 }
 static void drumHit(int d, float vel) {   // from the audio thread (voice lock held)
+	if (gDrMuteNow) return;
 	mirNote('D', d, vel);
 	if (d >= 0 && d < NDRUM && vel > 0.05f) { gPadFlash[d] = 1; gDrumHitN[d]++; }
 	static const int DCH[NDRUM] = {0, 1, 2, 2, 3, 1, 4, 4, 5, 6};   // open hat chokes the closed hat (same channel), rim cuts the snare
@@ -9356,6 +9420,7 @@ static void drumHit(int d, float vel) {   // from the audio thread (voice lock h
 	CSND_SetChnRegs(flags, osConvertVirtToPhys(gDrumSmp[d]), osConvertVirtToPhys(gDrumSmp[d]), gDrumLen[d] * 2, gThruOn ? 0 : csMono(vol), csSend(l / 32768.0f, r / 32768.0f));
 }
 static void rowHit(int r, float vel) {   // a pattern hit on row r (kick / snare / hat): MUTE and CHANCE first
+	if (gDrMuteNow) return;
 	if (gDrumMute & (1 << r)) return;
 	if (gDrumChance[r] < 0.999f && rand() % 1000 >= (int)(gDrumChance[r] * 1000)) return;
 	drumHit(r, vel);
@@ -9386,7 +9451,7 @@ static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the
 		frac = gDrumPh / len; if (frac > 0.999f) frac = 0.999f;
 	}
 	if (clk < 0) return;
-	gDrClk = clk;
+	gDrClk = clk; gDrMuteNow = gPartMute[3];   // the DRUMS part muted: the clock runs, the hits stay quiet
 	int any = 0;
 	if (step >= 0) {
 		gDrumStep = step;
@@ -9415,6 +9480,7 @@ static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the
 		int nr = gDrRat[r][i] + 1;
 		if (nr > 1) { ratLeft[r] = nr - 1; ratStep[r] = 1.0 / nr; ratNext[r] = (double)n + ratStep[r]; ratVel[r] = vel * 0.8f; }
 	}
+	gDrMuteNow = 0;
 	if (any) csndExecCmds(false);
 }
 static int midiDrumPad(int a, int on, int vel, int inTick) {   // channel 10 (General MIDI drums, the phone's DRUM PADS): 1 = it was a drum
@@ -9582,7 +9648,7 @@ static void drumRecChanged(void) {
 // Every edit is one SELECT+L undo.
 #define DG_Y (TAB_H + 2 + gDgShift)   // gDgShift: 16 when the grid sits in the SEQ page, under its buttons
 #define DG_LX 54
-#define DG_RH (gDgShift ? 16 : 18)
+#define DG_RH (gDgShift ? 16 : 17)   // (17: room for the PARTS strip under the DRUMS page's grid)
 #define DG_PGY (DG_TOP + DG_ROWS * DG_RH + 1)   // the PAGE strip under the rows
 #define DG_TOP (DG_Y + 18)
 #define DG_ROWS 10
@@ -10129,6 +10195,276 @@ static void gestureDemo(int X, int Y, int roll) {
 }
 // the SEQ page's left panel: ROLL CHORD, the chord a tap on the piano roll writes (D-pad on ROLL CHORD, or tap here on the web)
 #define RC_Y 98
+// ---- PARTS: SYNTH / CHORD / BASS / DRUMS, one at a time, on the one transport. The strip at the bottom of the SEQ and
+// DRUMS pages picks one (tap) or mutes it (hold). The roll shows the part you're in; the others stay as ghosts.
+static const u8 PART_COL[4][3] = {{85, 255, 255}, {255, 85, 255}, {255, 255, 85}, {85, 255, 85}};
+static const char* PART_NAMES[4] = {"SYNTH", "CHORD", "BASS", "DRUMS"};
+static int gPtK = -1, gPtMuted = 0; static u64 gPtT0 = 0;
+static Param P_PCHORD[] = {
+	PE("PROGRESSION", &gProg, NPROG, PROG_NAMES, 0), PE("PLAY ON BARS", &gProgAuto, 2, ONOFF, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0),
+	PE("STRUM VOICES", &gStrumVox, 4, STRUMVOX_NAMES, 0), PE("STRUM NOTES", &gStrumScale, 2, STRN_NAMES, 0),
+	PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE), PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
+	PEND};
+static Param P_PBASS[] = {
+	PE("BASS LINE", &gPadBass, NBASS, BASS_NAMES, 0), PE("PAD BASS SOUND", &gPadBassSub, 4, BASSSND_NAMES, 0), PE("PROGRESSION", &gProg, NPROG, PROG_NAMES, 0), PE("PLAY ON BARS", &gProgAuto, 2, ONOFF, 0),
+	PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE), PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
+	PEND};
+static void partListSync(void) { PAGES[7] = gSeqPart == 1 ? P_PCHORD : gSeqPart == 2 ? P_PBASS : P_PLAY; }
+static int partDegAt(int st) {   // the chord (scale degree) under step st of the 4 bars, -1 none
+	if (gProg == PROG_CUSTOM) return ctAt(st & (CT_N - 1), NULL);
+	return gProg ? PROGS[gProg][(st / 16) & 3] : gPadSel;
+}
+static int partQAt(int st) { int a; if (gProg == PROG_CUSTOM && ctAt(st & (CT_N - 1), &a) >= 0) return gCtQ[a]; return 0; }
+static int partHasChords(void) { if (gProg == PROG_CUSTOM) { for (int i = 0; i < CT_N; i++) if (gCtDeg[i] >= 0) return 1; return 0; } return gProg || gPadSel >= 0; }
+static int partBassNote(int deg, char c) {   // a line's letter -> a note for that chord (as bassNoteOf, for any bar)
+	int b = gPadBase, r = padDeg(b, deg) - 12;
+	switch (c) { case '3': return padDeg(b, deg + 2) - 12; case '5': return padDeg(b, deg + 4) - 12; case '7': return padDeg(b, deg + 6) - 12; case 'O': return r + 12; default: return r; }
+}
+static const char* partLine(void) { return gPadBass >= 2 ? BASS_PAT[gPadBass] : gPadBass == 1 ? "R_______________" : ""; }
+static void ctName(int d, int q, char* nm, int len, char** roman) {   // "Am7" (and the roman numeral, when asked)
+	char t[24]; padName(gPadBase, d, t, sizeof(t)); char* bar = strchr(t, '|'); if (bar) *bar++ = 0;
+	if (roman) { static char r[12]; snprintf(r, sizeof(r), "%s", t); *roman = r; }
+	snprintf(nm, len, "%s%s", bar ? bar : t, CTQ_SUF[q % NCTQ]);
+}
+static void ctEnsure(void) {   // writing in the CHORD part: the progression becomes the part's own track (a preset: one chord a bar)
+	if (gProg == PROG_CUSTOM) return;
+	int pr = gProg; memset(gCtDeg, -1, sizeof(gCtDeg)); memset(gCtQ, 0, sizeof(gCtQ));
+	if (pr) for (int b = 0; b < 4; b++) ctSet(b * 16, PROGS[pr][b], 16, 0);
+	gProg = PROG_CUSTOM;
+}
+static int stickQ(void) {   // HICHORD: the circle pad colours the chord - up 7TH, right 9TH, down SUS4, left INVERSION
+	circlePosition cp; hidCircleRead(&cp); int ax = abs(cp.dx), ay = abs(cp.dy);
+	if (ax < 60 && ay < 60) return 0;
+	if (ay >= ax) return cp.dy > 0 ? 1 : 3;
+	return cp.dx > 0 ? 2 : 4;
+}
+static void partSelect(int k, int curPage) {
+	if (k == gSeqPart && !(k == 3 && curPage != 11) && !(k < 3 && curPage == 11)) return;
+	if (gSeqPart < 3) gPartLow[gSeqPart] = gRollLow;
+	gSeqPart = k; gStepEd = -1; gDgEd = 0; gPatView = 0;
+	if (k == 3) gPageWant = 11;
+	else {
+		if (curPage != 7) gPageWant = 7;
+		if (gPartLow[k] >= 0) gRollLow = gPartLow[k];
+		else if (k == 2) gRollLow = padDeg(gPadBase, 0) - 13;
+		if (k && gRollPg > 3) gRollPg = 0;
+	}
+	partListSync();
+	say(k == 0 ? "SYNTH: THE PIANO ROLL (CHORD TONES LIT)" : k == 1 ? "CHORD: HOLD A CHORD ON THE LEFT, TAP / DRAG THE GRID" : k == 2 ? "BASS: TAP CHORD TONES (R 3 5 7 OCTAVE)" : "DRUMS: THE DRUM GRID");
+}
+static void partMuteToggle(int k) {
+	gPartMute[k] = !gPartMute[k];
+	if (k == 1 && gPartMute[1] && gProgAuto) playSet(NULL, 0, 0.8f);
+	if (k == 2 && gPartMute[2]) bassStop();
+	char m[32]; snprintf(m, sizeof(m), "%s %s", PART_NAMES[k], gPartMute[k] ? "MUTED" : "ON"); say(m); gSeqSaveDue = 1;
+}
+static int partStripShown(void) { return (gGridOn && gPatView == 0 && gStepEd < 0) || (gDrumOnB && !gDgEd); }
+static void drawPartStrip(void) {
+	rect(0, PART_Y - 1, 320, 240 - PART_Y + 1, RGB3(TH->bg));
+	for (int k = 0; k < 4; k++) {
+		int x = k * 80, on = k == gSeqPart; const u8* c = PART_COL[k];
+		if (on) rect(x + 1, PART_Y, 78, 12, c[0], c[1], c[2]); else outline(x + 1, PART_Y, 78, 12, c[0] / 2, c[1] / 2, c[2] / 2);
+		char t[12]; snprintf(t, sizeof(t), "%d %s", k + 1, PART_NAMES[k]);
+		if (on) text(x + 5, PART_Y + 2, t, 1, RGB3(TH->bg)); else if (gPartMute[k]) text(x + 5, PART_Y + 2, t, 1, c[0] / 4, c[1] / 4, c[2] / 4); else text(x + 5, PART_Y + 2, t, 1, c[0] * 3 / 4, c[1] * 3 / 4, c[2] * 3 / 4);
+		if (gPartMute[k]) text(x + 69, PART_Y + 2, "M", 1, 255, 80, 80);
+	}
+}
+static int partTouch(int x, int y, int press, int release, int curPage) {   // 1 = redraw. tap: the part, hold: mute it
+	(void)y;
+	if (press) { gPtHold = 1; gPtK = x / 80; if (gPtK > 3) gPtK = 3; gPtT0 = osGetTime(); gPtMuted = 0; return 0; }
+	if (!gPtHold) return 0;
+	if (!gPtMuted && osGetTime() - gPtT0 >= 450) { gPtMuted = 1; partMuteToggle(gPtK); return 1; }
+	if (release) { gPtHold = 0; if (!gPtMuted) { partSelect(gPtK, curPage); return 1; } }
+	return 0;
+}
+// CHORD TONES LIT: in the SYNTH and BASS rolls, the cells of the chord playing at each step are tinted - write inside them
+static void drawChordLane(void) {
+	if (!partHasChords()) return;
+	const u8* c = PART_COL[1];
+	for (int st = RP0; st < RP0 + ROLL_VIEW && st < NSTEP; st++) {
+		int d = partDegAt(st); if (d < 0) continue;
+		int nt[5], n = ctNotes(d, partQAt(st), nt), x = rollX(st) + 1, w = (int)ROLL_CW - 1;
+		for (int r = 0; r < ROLL_ROWS; r++) {
+			int rn = rollNote(r); if (rn < 0) continue;
+			for (int i = 0; i < n; i++) if (((rn - nt[i]) % 12 + 12) % 12 == 0) { int y = ROLL_TOP + (ROLL_ROWS - 1 - r) * ROLL_RH; rect(x, y, w, ROLL_RH - 1, c[0] / (i ? 6 : 4), c[1] / 8, c[2] / (i ? 6 : 4)); break; }
+		}
+		int a; if (gProg == PROG_CUSTOM ? (ctAt(st, &a) >= 0 && a == st) : (st % 16 == 0)) {   // the chord's name where it starts
+			char nm[12]; ctName(d, partQAt(st), nm, sizeof(nm), NULL); text(x + 1, ROLL_TOP + 1, nm, 1, c[0], c[1], c[2]);
+		}
+	}
+}
+static void partGhostRect(int x, int y, int w, int k, int full) {
+	const u8* c = PART_COL[k];
+	if (full) { rect(x, y, w, ROLL_RH - 3, c[0], c[1], c[2]); rect(x, y, 2, ROLL_RH - 3, 255, 255, 255); }
+	else rect(x, y + 3, w, ROLL_RH - 9 > 2 ? ROLL_RH - 9 : 2, c[0] * 2 / 5, c[1] * 2 / 5, c[2] * 2 / 5);
+}
+static void drawPartNotes(int k, int full) {   // k = 2 BASS over this page (k = 1: the chords are the lit lane now)
+	if (k != 2) return;
+	const char* L = partLine(); if (!*L) return;
+	for (int s = 0; s < 16; s++) {
+		char c = L[s]; if (c == '-' || c == '_') continue;
+		int deg = partDegAt(RP0 + s); if (deg < 0) continue;
+		int e = s + 1; while (e < 16 && L[e] == '_') e++;
+		int nt = partBassNote(deg, c); if (rollRow(nt) < 0) continue;
+		int x = rollX(RP0 + s) + 1, w = rollX(RP0 + e - 1) + (int)ROLL_CW - x - 1;
+		partGhostRect(x, rollY(nt) + 1, w, 2, full);
+	}
+}
+// CHORD part, HICHORD style: the 7 chords of the key down the left are buttons (hold one: it plays; the circle pad colours
+// it; with REC and PLAY it's written as long as you hold it). The grid: a page = a bar of 16 steps, chords any length -
+// tap / drag along a row to write one, tap a chord to take it out.
+#define CG_KW 44
+#define CG_RH 20
+#define CG_Y (ROLL_TOP + 3)
+#define CG_CW ((320 - CG_KW) / 16.0f)
+static int gCgBtn = -1, gCgQ = 0, gCgRecSt = -1, gCgSt = -1, gCgNew = 0, gCgDrag = 0, gCgA = -1;
+static void drawChordGrid(void) {
+	const u8* c = PART_COL[1]; int now = gSeqPlaying ? ((int)floorf(transportPos16())) % CT_N : -1;
+	rectP(0, ROLL_TOP, 320, VEL_Y - 2 - ROLL_TOP, TH->bg);
+	for (int d = 0; d < 7; d++) {
+		int y = CG_Y + (6 - d) * CG_RH, held = d == gCgBtn; char nm[12], *ro; ctName(d, held ? gCgQ : 0, nm, sizeof(nm), &ro);
+		if (held) rect(0, y, CG_KW - 2, CG_RH - 2, c[0], c[1], c[2]); else rect(0, y, CG_KW - 2, CG_RH - 2, c[0] / 4, c[1] / 4, c[2] / 4);
+		text(3, y + 2, ro, 1, held ? 0 : c[0], held ? 0 : c[1], held ? 0 : c[2]); text(3, y + 11, nm, 1, held ? 0 : 200, held ? 0 : 200, held ? 0 : 200);
+		for (int i = 0; i < 16; i++) { int x = CG_KW + (int)(i * CG_CW); rectP(x + 1, y, (int)CG_CW - 1, CG_RH - 2, (d & 1) ? TH->bg : TH->pad); if (!(i & 3)) rectP(x, y, 1, CG_RH - 2, TH->line); }
+	}
+	for (int st = RP0; st < RP0 + 16; st++) {   // the chords on this page
+		int a, d = partDegAt(st); if (d < 0) continue;
+		int start = gProg == PROG_CUSTOM ? (ctAt(st, &a), a) : st - st % 16;
+		if (st != RP0 && st != start) continue;
+		int L = gProg == PROG_CUSTOM ? gCtLen[start] : 16, e = start + L; if (e > RP0 + 16) e = RP0 + 16;
+		int x = CG_KW + (int)((st - RP0) * CG_CW) + 1, w = CG_KW + (int)((e - RP0) * CG_CW) - x - 1, y = CG_Y + (6 - d) * CG_RH, play = now >= start && now < start + L;
+		rect(x, y, w, CG_RH - 2, play ? 255 : c[0], play ? 200 : c[1], play ? 255 : c[2]); if (st == start) rect(x, y, 2, CG_RH - 2, 255, 255, 255);
+		char nm[12]; ctName(d, partQAt(st), nm, sizeof(nm), NULL); int fit = (w - 4) / 8; if (fit > 0) { nm[fit < 11 ? fit : 11] = 0; text(x + 4, y + 6, nm, 1, RGB3(TH->bg)); }
+	}
+	if (now >= RP0 && now < RP0 + 16) { int x = CG_KW + (int)((now - RP0) * CG_CW); rect(x, CG_Y - 1, 1, 7 * CG_RH, 255, 255, 255); }
+	if (gCgRecSt >= 0) text(CG_KW + 4, CG_Y + 7 * CG_RH - 9, "REC", 1, 255, 80, 80);
+}
+static void cgPlay(int d, int q) { int ch[5], n = ctNotes(d, q, ch); gAuditionT = 0; playSet(ch, n, 0.85f); }
+static int chordGridTouch(int x, int y, int press, int release) {   // 1 = redraw
+	if (gCgBtn >= 0 || (press && x < CG_KW && y >= CG_Y && y < CG_Y + 7 * CG_RH)) {   // the CHORD BUTTONS
+		if (press) {
+			gCgBtn = 6 - (y - CG_Y) / CG_RH; gCgQ = stickQ(); cgPlay(gCgBtn, gCgQ);
+			if (gLiveRec && gSeqPlaying) { undoMark(); ctEnsure(); gProgAuto = 1; gCgRecSt = ((int)(transportPos16() + 0.5f)) % CT_N; ctSet(gCgRecSt, gCgBtn, 1, gCgQ); gRollPg = gCgRecSt / 16; gSeqSaveDue = 1; }
+			char nm[12]; ctName(gCgBtn, gCgQ, nm, sizeof(nm), NULL); say(nm); return 1;
+		}
+		if (release) { gCgBtn = -1; gCgRecSt = -1; playSet(NULL, 0, 0.8f); return 1; }
+		int q = stickQ(), r = 0;
+		if (q != gCgQ) { gCgQ = q; cgPlay(gCgBtn, q); if (gCgRecSt >= 0) gCtQ[gCgRecSt] = (u8)q; char nm[12]; ctName(gCgBtn, q, nm, sizeof(nm), NULL); say(nm); r = 1; }
+		if (gCgRecSt >= 0 && gSeqPlaying) {   // REC: the chord lasts as long as it's held
+			int now = ((int)floorf(transportPos16())) % CT_N, L = now - gCgRecSt + 1; if (L < 1) L = CT_N - gCgRecSt;
+			if (L != gCtLen[gCgRecSt]) { ctSet(gCgRecSt, gCgBtn, L, gCgQ); r = 1; }
+		}
+		return r;
+	}
+	if (x < CG_KW && !gCgDrag) return 0;
+	int i = (int)((x - CG_KW) / CG_CW); if (i < 0) i = 0; if (i > 15) i = 15;
+	int st = RP0 + i, d = 6 - (y - CG_Y) / CG_RH;
+	if (press) {
+		if (y < CG_Y || y >= CG_Y + 7 * CG_RH || d < 0 || d > 6) return 0;
+		undoMark(); ctEnsure(); gProgAuto = 1; gSeqSaveDue = 1; gCgDrag = 1;
+		int a, cd = ctAt(st, &a);
+		if (cd == d) { gCgNew = 0; gCgA = a; gCgSt = st; return 0; }   // on a chord: a tap takes it out, a drag sets its length
+		int q = stickQ(); ctSet(st, d, 4, q); gCgNew = 1; gCgA = st; gCgSt = st; cgPlay(d, q); if (!gSeqPlaying) gAuditionT = 0.35f;
+		char nm[12]; ctName(d, q, nm, sizeof(nm), NULL); char m[32]; snprintf(m, sizeof(m), "BAR %d: %s", st / 16 + 1, nm); say(m); return 1;
+	}
+	if (!gCgDrag) return 0;
+	if (release) {
+		gCgDrag = 0;
+		if (!gCgNew && st == gCgSt && gCgA >= 0) { gCtDeg[gCgA] = -1; say("CHORD OUT"); gCgA = -1; return 1; }
+		gCgA = -1; return 1;
+	}
+	if (gCgA >= 0 && st != gCgSt) { gCgSt = -2; int L = st - gCgA + 1; if (L < 1) L = 1; if (L != gCtLen[gCgA]) { ctSet(gCgA, gCtDeg[gCgA], L, gCtQ[gCgA]); gCgNew = 1; char m[24]; snprintf(m, sizeof(m), "LENGTH %d STEPS", L); say(m); return 1; } }
+	return 0;
+}
+static void drawPartLane(void) {   // CHORD / BASS: under the roll, the four bars at a glance
+	rectP(0, VEL_Y - 2, 320, VEL_H + 2, TH->bg);
+	const u8* c = PART_COL[gSeqPart]; int w = (320 - ROLL_KW) / 4;
+	rect(0, VEL_Y, ROLL_KW - 1, VEL_H, c[0] / 3, c[1] / 3, c[2] / 3); text(2, VEL_Y + VEL_H / 2 - 4, "BAR", 1, c[0], c[1], c[2]);
+	for (int b = 0; b < 4; b++) {
+		int x = ROLL_KW + b * w, on = b == (gRollPg & 3), at = gSeqPlaying && ((int)(transportPos16() / 16) & 3) == b;
+		if (on) rect(x + 1, VEL_Y, w - 2, VEL_H, c[0] / 3, c[1] / 3, c[2] / 3); outline(x + 1, VEL_Y, w - 2, VEL_H, at ? 255 : c[0] / 2, at ? 255 : c[1] / 2, at ? 255 : c[2] / 2);
+		char top[8]; snprintf(top, sizeof(top), "%d", b + 1); text(x + 5, VEL_Y + 4, top, 1, c[0], c[1], c[2]);
+		char ln[24] = ""; int o = 0, last = -2;   // the chords that start in the bar
+		for (int st = b * 16; st < b * 16 + 16; st++) { int a, d = partDegAt(st); int start = gProg == PROG_CUSTOM ? (d >= 0 ? (ctAt(st, &a), a) : -1) : b * 16; if (d < 0 || start == last || (start < b * 16 && st != b * 16)) continue; last = start;
+			char nm[12]; ctName(d, partQAt(st), nm, sizeof(nm), NULL); o += snprintf(ln + o, sizeof(ln) - o, "%s%s", o ? " " : "", nm); if (o >= 9) break; }
+		ln[9] = 0; text(x + 5, VEL_Y + 16, *ln ? ln : "-", 1, RGB3(TH->txt));
+	}
+}
+static int partRollTouch(int x, int y, int press) {   // BASS part: a tap in the roll writes a chord tone
+	if (!press || gSeqPart != 2) return 0;
+	int st = RP0 + (int)((x - ROLL_KW) / ROLL_CW), row = ROLL_ROWS - 1 - (y - ROLL_TOP) / ROLL_RH, nt = rollNote(row);
+	if (x < ROLL_KW || y < ROLL_TOP || row < 0 || row >= ROLL_ROWS || nt < 0 || st < RP0 || st >= RP0 + ROLL_VIEW) return 0;
+	int deg = partDegAt(st); if (deg < 0) { say("NO CHORD HERE: WRITE ONE IN THE CHORD PART"); return 0; }
+	int s16 = st - RP0; char want = 0; static const char LET[5] = {'R', '3', '5', '7', 'O'};
+	for (int i = 0; i < 5; i++) if (partBassNote(deg, LET[i]) == nt) { want = LET[i]; break; }
+	if (!want) for (int i = 0; i < 4; i++) if (((partBassNote(deg, LET[i]) - nt) % 12 + 12) % 12 == 0) { want = LET[i]; break; }
+	if (!want) { say("CHORD TONES ONLY: R 3 5 7 OR THE OCTAVE"); return 0; }
+	undoMark();
+	if (gPadBass != BASS_USER) { const char* L = partLine(); for (int i = 0; i < 16; i++) gBassUser[i] = *L ? L[i] : '-'; gBassUser[16] = 0; gPadBass = BASS_USER; }
+	int hit = -1; for (int i = s16; i >= 0; i--) { if (gBassUser[i] != '_') { if (gBassUser[i] != '-' && gBassUser[i] == want) hit = i; break; } }
+	if (hit >= 0) { gBassUser[hit] = '-'; for (int i = hit + 1; i < 16 && gBassUser[i] == '_'; i++) gBassUser[i] = '-'; }
+	else { gBassUser[s16] = want; int pn = partBassNote(deg, want); if (!gSeqPlaying) { playSet(&pn, 1, 0.8f); gAuditionT = 0.2f; } }
+	gSeqSaveDue = 1; return 1;
+}
+// the top screen: the parts' lanes over four bars, the one you're in lit
+static void drawPartsHead(int x0, int y0, int w) {
+	const u8* c = PART_COL[gSeqPart]; char s[40];
+	snprintf(s, sizeof(s), "PART %d %s", gSeqPart + 1, PART_NAMES[gSeqPart]); text(x0, y0, s, 1, c[0], c[1], c[2]);
+	snprintf(s, sizeof(s), "%d BPM", gBPM); text(x0 + w - (int)strlen(s) * 8, y0, s, 1, RGB3(TH->dim));
+	int lx = x0 + 44, lw = w - 44;
+	for (int k = 0; k < 4; k++) {
+		int y = y0 + 12 + k * 8, on = k == gSeqPart; const u8* pc = PART_COL[k]; int dv = gPartMute[k] ? 5 : on ? 1 : 2;
+		text(x0, y, PART_NAMES[k], 1, pc[0] / dv, pc[1] / dv, pc[2] / dv);
+		rect(lx, y, lw, 7, 0, on ? 30 : 16, on ? 30 : 16);
+		u8 r = pc[0] / dv, g = pc[1] / dv, bb = pc[2] / dv;
+		if (k == 0) for (int st = 0; st < 64 && st < gSeqLen; st++) { const Step* sp = &gSeq[st]; if (!sp->n) continue; int L = noteLen(sp, 0); int x = lx + st * lw / 64, ww = L * lw / 64; rect(x, y + 2, ww > 1 ? ww - 1 : 1, 3, r, g, bb); }
+		if (k == 1) { int prev = -9; for (int st = 0; st < 64; st++) { int d = partDegAt(st); if (d < 0) { prev = -9; continue; } int a = st; if (gProg == PROG_CUSTOM) ctAt(st, &a); else a = st - st % 16; int x = lx + st * lw / 64, x2 = lx + (st + 1) * lw / 64; rect(x, y + 1, x2 - x, 6, r, g, bb); if (a == st && prev != -9) rect(x, y + 1, 1, 6, 0, 0, 0); prev = d; } }
+		if (k == 2) { const char* L = partLine(); if (*L) for (int b = 0; b < 4; b++) for (int st = 0; st < 16; st++) if (L[st] != '-' && L[st] != '_' && partDegAt(b * 16 + st) >= 0) rect(lx + (b * 16 + st) * lw / 64, y + (L[st] == 'R' ? 4 : L[st] == 'O' ? 0 : 2), 2, 2, r, g, bb); }
+		if (k == 3) for (int rr = 0; rr < 10; rr++) { int L = gDrLen[rr] < 1 ? 16 : gDrLen[rr]; for (int st = 0; st < 64; st++) { int i = st % L; int v = rr < 3 ? gMyDrum[rr][i] : gDrumX[rr - 3][i]; if (v) rect(lx + st * lw / 64, y + (rr < 3 ? rr * 2 + 1 : 6), 1, 1, r, g, bb); } }
+		for (int b = 1; b < 4; b++) rect(lx + b * lw / 4, y, 1, 7, 0, 70, 70);
+	}
+	if (gSeqPlaying) { float p = fmodf(transportPos16(), 64.0f); int x = lx + (int)(p * lw / 64); rect(x, y0 + 12, 1, 31, 255, 255, 255); }
+}
+static void drawPartTopInfo(void) {   // the left panel's lower half on the SEQ page: CHORD = how to play it, BASS = the lines
+	const u8* c = PART_COL[gSeqPart];
+	if (gSeqPart == 1) {
+		text(10, RC_Y - 2, "HICHORD: HOLD A CHORD", 1, RGB3(TH->dim));
+		int cx = 100, cy = RC_Y + 40;   // the circle pad and what each way does
+		outline(cx - 14, cy - 10, 28, 20, c[0] / 2, c[1] / 2, c[2] / 2); rect(cx - 3, cy - 3, 6, 6, c[0], c[1], c[2]);
+		static const char* QN[5] = {"TRIAD", "7TH", "9TH", "SUS4", "INV"};
+		int q = gCgBtn >= 0 ? gCgQ : -1;
+		const u8* on = c; const u8* off = TH->txt;
+		text(cx - 12, cy - 26, QN[1], 1, RGB3(q == 1 ? on : off)); text(cx + 20, cy - 4, QN[2], 1, RGB3(q == 2 ? on : off));
+		text(cx - 16, cy + 16, QN[3], 1, RGB3(q == 3 ? on : off)); text(cx - 54, cy - 4, QN[4], 1, RGB3(q == 4 ? on : off));
+		char s[40]; if (gCgBtn >= 0) { char nm[12]; ctName(gCgBtn, gCgQ, nm, sizeof(nm), NULL); snprintf(s, sizeof(s), "PLAYING %s", nm); } else snprintf(s, sizeof(s), "%s", PROG_NAMES[gProg]);
+		text(10, RC_Y + 68, s, 1, RGB3(TH->val));
+		text(10, RC_Y + 82, "REC + PLAY: HOLD = WRITE", 1, RGB3(TH->dim));
+		text(10, RC_Y + 94, "GRID: TAP / DRAG LENGTH", 1, RGB3(TH->dim));
+		return;
+	}
+	text(10, RC_Y - 2, "BASS LINES: A TAP PICKS", 1, RGB3(TH->dim));
+	for (int i = 1; i < NBASS; i++) {
+		int x = 8 + ((i - 1) % 4) * 47, y = RC_Y + 10 + ((i - 1) / 4) * 18, on = i == gPadBass;
+		if (on) rect(x, y, 45, 15, c[0], c[1], c[2]); else outline(x, y, 45, 15, RGB3(TH->line));
+		const u8* tc = on ? TH->bg : TH->txt; text(x + 23 - (int)strlen(BASS_NAMES[i]) * 4, y + 4, BASS_NAMES[i], 1, tc[0], tc[1], tc[2]);
+	}
+	text(10, RC_Y + 10 + 3 * 18 + 6, gProg ? "FOLLOWS THE CHORD PART" : "PLAYS UNDER THE PADS' CHORD", 1, RGB3(TH->val));
+}
+static int partTopTouch(int x, int y) {   // web: the BASS lines on the top screen take taps
+	if (gSeqPart != 2 || y < RC_Y + 10 || y >= RC_Y + 10 + 3 * 18 || x < 8 || x >= 8 + 4 * 47) return 0;
+	int i = ((y - RC_Y - 10) / 18) * 4 + (x - 8) / 47 + 1; if (i < 1 || i >= NBASS) return 0;
+	gPadBass = i; bassStop(); say(BASS_LONG[i]); return 1;
+}
+static void partSnapGet(PartSnap* q) {
+	memset(q, 0, sizeof(*q)); q->m = PART_MAGIC; q->prog = gProg; q->autoOn = gProgAuto; q->bass = gPadBass;
+	memcpy(q->ct, gCtDeg, CT_N); memcpy(q->cl, gCtLen, CT_N); memcpy(q->cq, gCtQ, CT_N); memcpy(q->line, gBassUser, 17); memcpy(q->mute, gPartMute, 4);
+}
+static void partSnapSet(const PartSnap* q) {
+	gProg = q->prog >= 0 && q->prog < NPROG ? q->prog : 0; gProgAuto = q->autoOn ? 1 : 0; gPadBass = q->bass >= 0 && q->bass < NBASS ? q->bass : 0;
+	for (int i = 0; i < CT_N; i++) { gCtDeg[i] = q->ct[i] >= 0 && q->ct[i] < 7 ? q->ct[i] : -1; gCtLen[i] = q->cl[i] ? q->cl[i] : 1; gCtQ[i] = q->cq[i] < NCTQ ? q->cq[i] : 0; }
+	for (int i = 0; i < 16; i++) { char c = q->line[i]; gBassUser[i] = strchr("R357O-_", c) && c ? c : '-'; } gBassUser[16] = 0;
+	for (int i = 0; i < 4; i++) gPartMute[i] = q->mute[i] ? 1 : 0;
+}
 static void drawRollChords(void) {
 	text(10, RC_Y - 2, "ROLL CHORD: A TAP WRITES", 1, RGB3(TH->dim));
 	for (int i = 0; i < NCHORD; i++) {
@@ -10162,9 +10498,7 @@ static int beatListTouch(int x, int y) {
 }
 static void drawDrumsPanel(void) {   // the top screen: what's playing and how to drive the grid (the sequencer itself is below)
 	frame(4, 30, 196, 194);
-	char s[40]; snprintf(s, sizeof(s), "%s KIT  %d BPM  %s", KIT_NAMES[gKit], gBPM, gDrums ? "ON" : "OFF"); text(10, 36, s, 1, gDrums ? TH->val[0] : TH->dim[0], gDrums ? TH->val[1] : TH->dim[1], gDrums ? TH->val[2] : TH->dim[2]);
-	int r = gDgSel; snprintf(s, sizeof(s), "%s: %s, %d STEPS", kitPadName(DG_DRUM[r]), DRATE_NAMES[gDrRate[r]], gDrLen[r]); text(10, 52, s, 1, TXT);
-	if (gSwing > 0.01f) { snprintf(s, sizeof(s), "SWING %d%%", (int)(gSwing * 100 + 0.5f)); text(10, 64, s, 1, DIM); }
+	drawPartsHead(10, 32, 186);   // PARTS: the four lanes (the kit, the BPM and the rest are in the list on the right)
 	drawBeatList();
 }
 
@@ -10973,7 +11307,7 @@ static void sessionClear(void) {   // voice lock held: a clean start
 	myDrumLoad(); memset(gMyDrum, 0, sizeof(gMyDrum)); memset(gDrumX, 0, sizeof(gDrumX)); memset(gDrRat, 0, sizeof(gDrRat)); memset(gDrCond, 0, sizeof(gDrCond)); memset(gDrAcc, 0, sizeof(gDrAcc));
 	for (int r = 0; r < 3; r++) { *DPAT[r] = MINE_IDX[r]; gDrumSel[r] = MINE_IDX[r]; } gDrums = 0; drumsChanged(); gBeatFromPatch = 0;
 	for (int t = 0; t < NTRK; t++) if (gTpHave[t]) tapeErase(t);
-	gPads = 0; gProg = 0; gProgAuto = 0; gPadBass = 0;
+	gPads = 0; gProg = 0; gProgAuto = 0; gPadBass = 0; memset(gPartMute, 0, sizeof(gPartMute)); memset(gCtDeg, -1, sizeof(gCtDeg)); memcpy(gBassUser, "R---------------", 17);
 	SPatch ip; patchInit(&ip); initWire(&ip); patchApply(&ip); gEdited = 0; gGuard = 0;
 	gSeqSaveDue = 1; gDrumSaveDue = 1; gSessAt = -1;
 	say("NEW SESSION: INIT PATCH, EMPTY PATTERNS");
@@ -11435,7 +11769,7 @@ int main(void) {
 					for (int q = 0; q < NPAGES; q++) { int p = NAV[q]; if (PAGE_SECT[p] != sect) continue; int w = strlen(SUB_NAMES[p]) * 8;
 						if (TTX >= sx - 4 && TTX < sx + w + 6) { gPageWant = p; break; } sx += w + 16; } }
 			}
-			if (TTOUCH && !was && TTX < 200 && ((page == 7 && rollChordTouch(TTX, TTY)) || (page == 11 && beatListTouch(TTX, TTY)))) { topDirty = botDirty = 1; }
+			if (TTOUCH && !was && TTX < 200 && ((page == 7 && ((gSeqPart == 1 || gSeqPart == 2) ? partTopTouch(TTX, TTY) : rollChordTouch(TTX, TTY))) || (page == 11 && beatListTouch(TTX, TTY)))) { topDirty = botDirty = 1; }
 			if (TTOUCH && page != 0 && TTX >= 204 && TTY >= 30 && TTY < 214) {
 				int np = pageLen(page), first = sel[page] - 14; if (first < 0) first = 0;
 				int r = first + (TTY - 31) / 12;
@@ -11624,7 +11958,8 @@ int main(void) {
 			} else if (page == 0 && !gPads && t.py < WORK_B) {   // PATCH page: the browser
 				if (!prevTouch) { if (browserTouch(t.px, t.py)) { curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
 			} else if (gDrumOnB && !gPads) {   // DRUMS page: the drum sequencer has the whole screen
-				if (drumGridTouch(t.px, t.py, !prevTouch)) topDirty = botDirty = 1;
+				if (partStripShown() && ((!prevTouch && t.py >= PART_Y) || gPtHold)) { if (partTouch(t.px, t.py, !prevTouch, 0, page)) topDirty = botDirty = 1; }
+				else if (drumGridTouch(t.px, t.py, !prevTouch)) topDirty = botDirty = 1;
 			} else if (t.py >= WORK_B && t.py < KB_Y && !gModOn && !gGridOn && !(gPads && !gGridOn)) {
 				if (!prevTouch) {
 					int b = t.px * NPERF / 320;
@@ -11694,7 +12029,8 @@ int main(void) {
 		{ static int dT = 0; if ((page == 7 || page == 11) && !gStartMenu && ++dT % 4 == 0) topDirty = 1; }   // the gesture demo moves
 		{ static int gT = 0; if (xyShown() && ++gT % 3 == 0 && xyModulated()) botDirty = 1; }   // the ghost follows the modulation
 		if (prevTouch && !touching && grainEdTouch(0, 0, 0, 1)) botDirty = 1;
-		if (gDrumOnB && prevTouch && !touching && drumGridRelease()) botDirty = 1;   // let go of the grain editor: SCAN carries on from there
+		if (gDrumOnB && prevTouch && !touching && gPtHold) { if (partTouch(gLastTX, gLastTY, 0, 1, page)) topDirty = botDirty = 1; }
+		else if (gDrumOnB && prevTouch && !touching && drumGridRelease()) botDirty = 1;   // let go of the grain editor: SCAN carries on from there
 		if (gPads && prevTouch && !touching) { if (latch || gLiveRec || gSeqMode == 2) padsSettle(1); else gPadPend = 0; gStrumZone = -1; if (gLiveRec) liveUp(); if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
 		padsTick(dt); if (!gAudioClock) { progTick(); bassTick(dt); } if (gProgDirty) { gProgDirty = 0; if (gPads) botDirty = 1; }
 		int freshPress = touching && !prevTouch;   // a new tap restrikes the key even if it's the one still held (LATCH, drum pads)
@@ -11714,6 +12050,9 @@ int main(void) {
 		{ static float st = 0; if (gDrumBuilt == 5 && waveSig() != gWaveSig) { st += 1.0f / 60; if (st > 0.25f) { gDrumWant = 105; gWaveSig = waveSig(); st = 0; } } else st = 0; }   // WAVE kit: the drums follow OSC A's table and WT POS (rebuilt once it settles)
 		if (gPageWant >= 0) { page = gPageWant; gPageWant = -1; topDirty = botDirty = 1; }
 		if (page != gCurPage) { gCurPage = page; botDirty = 1; }
+		if (page == 11 && gSeqPart != 3) { if (gSeqPart < 3) gPartLow[gSeqPart] = gRollLow; gSeqPart = 3; partListSync(); }   // PARTS follow the page
+		if (page == 7 && gSeqPart == 3) { gSeqPart = 0; partListSync(); }
+		if (sel[page] >= pageLen(page)) sel[page] = 0;
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; if (!g) { gStepEd = -1; gSeqSaveDue = 1; } } }
 		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }
 		{ int m = page == 4; if (m != gShapeOn) { gShapeOn = m; gShDrag = -1; botDirty = 1; } }
