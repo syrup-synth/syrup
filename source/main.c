@@ -741,6 +741,9 @@ typedef struct {
 	int subOnly;  // PADS BASS: the bass note on one part of the patch only: 1 = the SUB osc, 2 = OSC A, 3 = OSC B
 } SVoice;
 static int gStrumVox = 2; static const char* STRUMVOX_NAMES[4] = {"2", "3", "4", "6"}; static const int STRUMVOX_N[4] = {2, 3, 4, 6};
+// TRACKER LIVE: notes played live from the pads (the chord's root in SYN 1, the bass in SYN 2) are written onto the
+// tracker's rows as they play, so the TRACKER view shows them too, not only the sequence
+static s16 gTrkLive[64][2]; static u8 gTrkLiveV[64][2]; static u32 gTrkLiveClk[64][2]; static float gTrkLivePh = 0; static u32 gTrkLiveN = 1000; static int gTrkLiveOn = 0;
 static int gSubBassNote = -1, gPadBassSub = 1; static const char* BASSSND_NAMES[4] = {"PATCH", "SUB OSC", "OSC A", "OSC B"};   // PAD BASS SOUND   // the pads' bass note right now: voiceOn makes it a SUB-only voice
 static SVoice gV[NVS];
 static float gPressAll = 0, gSlideAll = 0;   // the latest channel pressure / CC 74 (for notes not on their own channel)
@@ -5261,7 +5264,7 @@ static void outline(int x, int y, int w, int h, u8 r, u8 g, u8 b) { rect(x, y, w
 // the key; where you touch a pad picks the chord: low = triad, middle = 7th, high = 9th; left edge = inversion,
 // right edge = sus4. Slide across the STRUM strip to strum the last chord like an autoharp.
 static int gPads = 0, gPadSel = -1, gPadN = 0, gPadNotes[4], gStrumZone = -1;
-static struct { int note; float t; } gStrumOff[24]; static int gStrumOffN = 0;
+static struct { int note; float t; } gStrumOff[24]; static int gStrumOffN = 0, gStrumLastS = -1;
 #define STRUM_MAX 6
 // STRUM VOICES: how many strummed strings ring at once. Never more than the free DSP channels allow after the chord
 // that's held (a fat patch, 3+3 unison, would steal the chord's own voices otherwise)
@@ -5347,6 +5350,11 @@ static void chordMorph(const int* notes, int n, float vel) {
 	gHeldN = 0; for (int i = 0; i < nw; i++) gHeld[gHeldN++] = nn[i]; gHeldVel = vel;
 }
 // a pad chord sounds (and, while recording, goes into the sequencer: live REC onto the grid, step REC one step each)
+static int trkLiveRow(void);
+static void trkLiveNote(int c, int note, float vel) {
+	int r = trkLiveRow(); if (r < 0 || r >= 64) return;
+	gTrkLive[r][c] = (s16)note; gTrkLiveV[r][c] = (u8)(vel * 255); gTrkLiveClk[r][c] = gTrkLiveN; gTrkLiveOn = 1;
+}
 static void padPlay(int base, const int* notes, int n, float vel, int sound) {
 	int all[6], k = 0;
 	if (gPadBass == 1 && gPadSel >= 0) { all[k++] = padDeg(base, gPadSel) - 12; gSubBassNote = all[0]; }
@@ -5354,6 +5362,8 @@ static void padPlay(int base, const int* notes, int n, float vel, int sound) {
 	int morph = sound == 2 && !gArp && gHeldN > 0;   // gliding from the held chord: the step before slides into this one
 	if (gLiveRec) { int prev = gLvN ? gLvStep : -1; liveDown(all, k, vel); if (morph && prev >= 0 && gSeqPlaying && prev != gLvStep) gSeq[prev].fl |= 2; }
 	else if (gSeqMode == 2) { int prev = gRecPos > 0 ? gRecPos - 1 : -1; if (morph && prev >= 0 && gSeq[prev].n) gSeq[prev].fl |= 2; seqRecord(all, k, vel); }
+	if (sound && n > 0) trkLiveNote(0, notes[0], vel);
+	if (sound && gPadBass == 1 && gPadSel >= 0) trkLiveNote(1, padDeg(base, gPadSel) - 12, vel);
 	if (sound == 1) {   // a new chord over the last one: if both together won't fit the DSP channels, the last one lets go fast
 		// (its long release would have its voices stolen - cut dead - by the new chord: the hiccup on each AUTO bar)
 		int per = 0; for (int o = 0; o < 2; o++) if (gOsc[o].on) per += gOsc[o].uni; if (per < 1) per = 1;
@@ -5461,7 +5471,12 @@ static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 
 	int from = gStrumZone < 0 ? z : gStrumZone + (z > gStrumZone ? 1 : -1), d = z >= from ? 1 : -1;
 	float v = 0.4f + 0.6f * (y - STRUM_Y) / (float)(240 - STRUM_Y);
 	for (int q = from; ; q += d) {
-		int nt = gStrumScale ? strumScaleNote(base, q) : gPadNotes[q % gPadN] + 12 * (q / gPadN) - 12;   // walk up the chord tones (or the SCALE from the chord's root), octave by octave
+		// the strip spans one octave less than it used to (the top one was thin and shrill): its 24 zones share the strings
+		int S = gStrumScale ? 17 : ((24 + gPadN - 1) / gPadN - 1) * gPadN; if (S < gPadN || S > 24) S = 24;
+		int qq = q * S / 24;
+		if (qq == gStrumLastS && gStrumZone >= 0) { if (q == z) break; continue; }   // two zones on one string: struck once
+		gStrumLastS = qq;
+		int nt = gStrumScale ? strumScaleNote(base, qq) : gPadNotes[qq % gPadN] + 12 * (qq / gPadN) - 12;   // walk up the chord tones (or the SCALE from the chord's root), octave by octave
 		int k = 0; for (; k < gStrumOffN; k++) if (gStrumOff[k].note == nt) break;
 		if (k < gStrumOffN) { voiceFade(nt, 0.02f); for (int j = k; j < gStrumOffN - 1; j++) gStrumOff[j] = gStrumOff[j + 1]; gStrumOffN--; }   // struck again: the old one fades in 20 ms
 		while (gStrumOffN >= strumCap()) { voiceFade(gStrumOff[0].note, 0.03f); for (int j = 0; j < gStrumOffN - 1; j++) gStrumOff[j] = gStrumOff[j + 1]; gStrumOffN--; }   // only so many strings ring: the oldest fades (stolen voices were cut dead: the clicks)
@@ -5489,9 +5504,12 @@ static void bassTick(float dt) {   // BASS LINES: while a pad chord sounds, the 
 	if (c == '_') return;   // held
 	if (gBassNote >= 0) { voiceFade(gBassNote, 0.03f); gBassNote = -1; }
 	if (c == '-') return;
-	gBassNote = bassNoteOf(c); gSubBassNote = gBassNote; voiceOn(gBassNote, st % 4 == 0 ? 0.9f : 0.75f);
+	gBassNote = bassNoteOf(c); gSubBassNote = gBassNote; trkLiveNote(1, gBassNote, 0.8f); voiceOn(gBassNote, st % 4 == 0 ? 0.9f : 0.75f);
 }
 static void padsTick(float dt) {   // strummed notes ring for a moment, then let go
+	{ static int lastRow = -1; if (!gSeqPlaying) gTrkLivePh += dt * gBPM / 60.0f * 4.0f; if (gTrkLivePh >= 16) gTrkLivePh -= 16;   // TRACKER LIVE: its rows' clock
+	  int r = trkLiveRow(); if (r != lastRow) { lastRow = r; gTrkLiveN++; }
+	  static float idle = 0; if (gHeldN || gBassNote >= 0) idle = 0; else if (gTrkLiveOn && (idle += dt) > 4) { gTrkLiveOn = 0; idle = 0; } }
 	if (padsSettle(0)) gProgDirty = 1;   // a slide that came to rest (the remote's slides have no touch frames after them)
 	if (gProg && gProgAuto) {   // AUTO: the next chord on every bar (on the sequencer's bar line when it plays)
 		static int lastPos = -1; int next = 0;
@@ -10058,7 +10076,8 @@ static void partDraw(float dt) {
 static float gTrkVu[TRK_CH];
 static const char* TRK_CHN[TRK_CH] = {"SYN 1", "SYN 2", "KICK", "SNARE", "HAT", "CLAP"};
 static int trkRows(int big) { return big ? 8 : 16; }
-static int trkNow(void) { return gSeqPlaying && gSeqPos >= 0 ? gSeqPos % NSTEP : (gDrums && gDrumStep >= 0 ? gDrumStep % 16 : -1); }
+static int trkLiveRow(void) { return gSeqPlaying && gSeqPos >= 0 ? gSeqPos % NSTEP : (int)gTrkLivePh % 16; }
+static int trkNow(void) { return gSeqPlaying && gSeqPos >= 0 ? gSeqPos % NSTEP : (gDrums && gDrumStep >= 0 ? gDrumStep % 16 : gTrkLiveOn ? trkLiveRow() : -1); }
 static void trkMeters(void) {   // the meters: hits push them up, they fall back
 	static int lastHit[4] = {-1, -1, -1, -1}; static int lastPos = -2; const int D[4] = {0, 1, 2, 4};   // kick, snare, hat, clap
 	for (int c = 0; c < TRK_CH; c++) gTrkVu[c] *= 0.88f;
@@ -10108,8 +10127,11 @@ static void trackerText(int big) {   // CPU, straight onto the top screen after 
 		const Step* st = &gSeq[row]; int live = row < gSeqLen;
 		for (int c = 0; c < 2; c++) {
 			char nt[4]; int on = live && st->n > c; if (on) trkNote(nt, st->note[c] + gSeqTr); else strcpy(nt, "...");
-			snprintf(s, sizeof(s), "%s %02X", nt, on ? st->vel >> 2 : 0); if (!on) { s[4] = s[5] = '.'; }
-			text(26 + c * 58, y, s, 1, on ? (hl ? 255 : 230) : 70, on ? (hl ? 255 : 230) : 70, on ? (hl ? 255 : 120) : 110);
+			int lv = !on && row < 64 && gTrkLive[row][c] >= 0 && gTrkLiveN - gTrkLiveClk[row][c] < (u32)(gSeqPlaying && gSeqLen > 0 ? gSeqLen : 16);   // played live (pads, bass) on this row, this time round
+			if (lv) trkNote(nt, gTrkLive[row][c]);
+			snprintf(s, sizeof(s), "%s %02X", nt, on ? st->vel >> 2 : lv ? gTrkLiveV[row][c] >> 2 : 0); if (!on && !lv) { s[4] = s[5] = '.'; }
+			if (lv) text(26 + c * 58, y, s, 1, hl ? 200 : 120, 255, 255);
+			else text(26 + c * 58, y, s, 1, on ? (hl ? 255 : 230) : 70, on ? (hl ? 255 : 230) : 70, on ? (hl ? 255 : 120) : 110);
 		}
 		const u8 dv[4] = {gMyDrum[0][row], gMyDrum[1][row], gMyDrum[2][row], gDrumX[1][row]};
 		for (int c = 0; c < 4; c++) {
