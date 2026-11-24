@@ -23,6 +23,13 @@ static void SCRIPT(int fr) {
 	}
 	if (fr >= 140 && fr < 190) { TOUCH = 1; TX = RX(2); TY = RY(48); }
 	if (fr == 180) HD = KEY_B;
-	if (fr == 194) { if (gSeq[2].lk[0] || gSeq[2].lk[1] || gSeq[2].lk[2]) fail("PLOCK: hold + B should clear the step's locks"); done = 1; }
+	if (fr == 194) { if (gSeq[2].lk[0] || gSeq[2].lk[1] || gSeq[2].lk[2]) fail("PLOCK: hold + B should clear the step's locks"); }
+	// MOTION SEQUENCE: REC on, the sequence playing, sweep the cutoff over a bar: each step keeps the value it went by at
+	if (fr == 200) { memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 8; for (int k = 0; k < 8; k++) stepSetNote(k, 48, 1); gCutoff = 0.2f; gLiveRec = 1; transportToggle(); }
+	if (fr > 202 && fr < 254) gCutoff = 0.2f + (fr - 202) * 0.012f;   // a slow sweep up, one bar (8 steps x 7.5 frames)
+	if (fr == 263) { gLiveRec = 0; int n = 0, up = 1, last = -1; for (int k = 1; k < 8; k++) { int j = plkFind(&gSeq[k], 0); if (j >= 0) { n++; if (gSeq[k].lv[j] < last) up = 0; last = gSeq[k].lv[j]; } }
+		if (n < 6) fail("MOTION: the sweep should be on most of the bar's steps (%d)", n); if (!up) fail("MOTION: the recorded values should rise with the sweep"); gCutoff = 0.2f; }
+	if (fr > 270 && fr < 330) { if (gSeqPos == 6) after = gCutoff; }
+	if (fr == 332) { if (after < 0.5f) fail("MOTION: played back, step 7 should have the swept-up cutoff (%.2f)", after); transportToggle(); done = 1; }
 }
-int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 196; app_main(); if (!done) fail("didn't run"); printf("plock: hold a note, lock CUTOFF, played and put back\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 336; app_main(); if (!done) fail("didn't run"); printf("plock: hold a note, lock CUTOFF, played and put back\n"); return gFails ? 1 : 0; }

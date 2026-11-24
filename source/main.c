@@ -2401,6 +2401,7 @@ static void csRampTick(void) {   // audio tick, voice lock held: SUB layers on t
 	}
 	if (any) csndExecCmds(false);
 }
+static volatile u32 gClkMiss = 0, gClkWait = 0;   // audio ticks that found the main loop holding the voices: skipped / waited for
 static void progTick(void); static void bassTick(float dt);
 static void audioTick(void* data) {
 	(void)data;
@@ -2422,7 +2423,13 @@ static void audioTick(void* data) {
 #else
 	#define CLK_MISS (void)0
 #endif
-	if (LightLock_TryLock(&gVoiceLock)) { CLK_MISS; return; }   // main loop busy: the frames are counted next time
+	if (LightLock_TryLock(&gVoiceLock)) {   // main loop busy: wait for it a little (it's on this core, below us: sleeping lets it
+		// finish) - a miss used to cost the sequencer a whole 5 ms frame. From zp12: the playing should never wait a frame
+		int got = 0;
+		for (int w = 0; w < 20 && !got; w++) { svcSleepThread(100000); if (!LightLock_TryLock(&gVoiceLock)) got = 1; }   // up to 2 ms
+		if (!got) { CLK_MISS; gClkMiss++; return; }   // still busy after 2 ms: the frames are counted next time
+		gClkWait++;
+	}
 	int mipsOk = !LightLock_TryLock(&gMipsLock);   // a wavetable rebuild (XY, circle pad, motion moving WT POS) used to hold the clock here:
 	gTickNoMips = !mipsOk;                          // now the clock runs anyway and notes it starts just skip building tables
 #ifndef SYRUP_HOST
@@ -3959,9 +3966,10 @@ static const Param* plkParam(int k) {
 	return gPlkP[k];
 }
 static struct { int on; float base, set; } gPlkLive[NPLK];   // locks the sequencer has put on: the value under them, and what it set
+static volatile u8 gMotHot[NPLK];   // MOTION REC: a setting being moved right now (the locks leave it alone)
 static void plockApply(const Step* s) {   // audio tick (or STOP): the last step's locks off, this one's on
 	int want[NPLK] = {0}; float val[NPLK];
-	if (s) for (int j = 0; j < NLOCK; j++) if (s->lk[j] && s->lk[j] <= NPLK) { want[s->lk[j] - 1] = 1; val[s->lk[j] - 1] = s->lv[j] / 255.0f; }
+	if (s) for (int j = 0; j < NLOCK; j++) if (s->lk[j] && s->lk[j] <= NPLK && !gMotHot[s->lk[j] - 1]) { want[s->lk[j] - 1] = 1; val[s->lk[j] - 1] = s->lv[j] / 255.0f; }
 	for (int k = 0; k < NPLK; k++) {
 		const Param* p = plkParam(k); if (!p) continue;
 		if (gPlkLive[k].on && !want[k]) { if (fabsf(paramNorm(p) - gPlkLive[k].set) < 0.002f) paramSetNorm(p, gPlkLive[k].base); gPlkLive[k].on = 0; }   // (moved by hand meanwhile: it stays where you put it)
@@ -3986,6 +3994,26 @@ static void plkNudge(int dir, int fast) {   // left / right in the LOCK list
 	int v = s->lv[j] + dir * (fast ? 6 : 2); if (v < 0) v = 0; if (v > 255) v = 255; s->lv[j] = (u8)v;
 	paramSetNorm(p, v / 255.0f);   // hear it
 	char m[48]; snprintf(m, sizeof(m), "STEP %d LOCK: %s %d%%", gPlkStep + 1, PLK_NAMES[k], v * 100 / 255); say(m); gSeqSaveDue = 1;
+}
+// MOTION SEQUENCE (DS-10 / zp12): with REC on and the sequence playing, moving a lockable setting (the pad, a knob on the
+// phone, MIDI, the XY pad...) writes it into each step that goes by while it moves: the sweep stays in the pattern
+static void motionRecTick(void) {   // main loop, voice lock held
+	static float last[NPLK]; static u64 tMove[NPLK]; static int lastStep[NPLK], init = 0; u64 now = osGetTime();
+	if (!init) { init = 1; for (int k = 0; k < NPLK; k++) { const Param* p = plkParam(k); last[k] = p ? paramNorm(p) : 0; lastStep[k] = -1; } }
+	for (int k = 0; k < NPLK; k++) {
+		const Param* p = plkParam(k); if (!p) continue; float v = paramNorm(p);
+		int byLock = gPlkLive[k].on && fabsf(v - gPlkLive[k].set) < 0.002f, moved = fabsf(v - last[k]) > 0.002f && !byLock && gPlkStep < 0;
+		if (moved) tMove[k] = now;
+		last[k] = v;
+		int hot = gLiveRec && gSeqPlaying && now - tMove[k] < 200; gMotHot[k] = (u8)hot;
+		if (!hot || gSeqPos < 0) { if (!hot) lastStep[k] = -1; continue; }
+		if (gSeqPos == lastStep[k]) continue;
+		lastStep[k] = gSeqPos; Step* st = &gSeq[gSeqPos]; int j = plkFind(st, k);
+		if (j < 0) for (int i = 0; i < NLOCK; i++) if (!st->lk[i]) { j = i; break; }
+		if (j < 0) continue;   // three locks on this step already
+		st->lk[j] = (u8)(k + 1); st->lv[j] = (u8)(v * 255); gSeqSaveDue = 1;
+		if (gPlkLive[k].on) gPlkLive[k].set = v;   // (what's playing is now the knob's)
+	}
 }
 static void plkClear(void) {
 	if (gPlkStep < 0) return; Step* s = &gSeq[gPlkStep]; undoMark();
@@ -11225,6 +11253,7 @@ int main(void) {
 #endif
 		if (startAct == 3) { helpOn = 1; gHelpSlide = 0; topDirty = botDirty = 1; }
 		if (startAct == 5) { learnArm(page, sel[page]); topDirty = 1; }
+		motionRecTick();
 		{   // PARAMETER LOCKS: a note held in the piano roll (its step editor open, the finger still down) takes the pad
 			int hold = page == 7 && gGridOn && (kHeld & KEY_TOUCH) && gGtLong && gStepEd >= 0 && gPatView == 0;
 			if (hold && gPlkStep != gStepEd) { plkEnd(); plkBegin(gStepEd); topDirty = 1; }
