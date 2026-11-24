@@ -97,7 +97,7 @@ static float csNext(CsCh* h){
   if(h->pos>=h->n){ if(!h->rep){h->on=0;} else h->pos-=h->n*floor(h->pos/h->n);} return x; }
 static Result csndInit(void){return 0;} static void csndExit(void){} static Result csndExecCmds(bool w){(void)w;return 0;}
 static void CSND_SetChnRegs(u32 flags,u32 pa0,u32 pa1,u32 size,u32 vol,u32 cap){(void)pa1; int c=flags&0x1F; CsCh* h=&CS[c]; int ap=h->a0p, ai=h->a0i; h->fmt=(flags>>12)&3; h->rep=((flags>>10)&3)==1; h->d=PHYS[pa0]; h->ad=PHYS[pa0];
- h->n=h->fmt==2?size*2:size/2; h->pos=0; h->timer=flags>>16; h->l=(vol&0xffff)/32768.0f; h->r=(vol>>16)/32768.0f; h->cl=(cap&0xffff)/32768.0f; h->cr=(cap>>16)/32768.0f; h->on=1; h->ap=-1; h->last=ap; h->ai=ai; }
+ h->n=h->fmt==2?size*2:size/2; h->pos=0; h->timer=flags>>16; h->l=(vol&0xffff)/32768.0f; h->r=(vol>>16)/32768.0f; h->cl=(cap&0xffff)/32768.0f; h->cr=(cap>>16)/32768.0f; h->on=(flags & SOUND_ENABLE)!=0; h->ap=-1; h->last=ap; h->ai=ai; }
 static void CSND_SetChnRegsPSG(u32 flags,u32 vol,u32 cap,CSND_DutyCycle d){ int c=flags&0x1F; CsCh* h=&CS[c]; h->fmt=3; h->duty=d; h->d=NULL; h->pos=0; h->timer=flags>>16; h->l=(vol&0xffff)/32768.0f; h->r=(vol>>16)/32768.0f; h->cl=(cap&0xffff)/32768.0f; h->cr=(cap>>16)/32768.0f; h->on=1; }
 static void CSND_SetChnRegsNoise(u32 flags,u32 vol,u32 cap){ CSND_SetChnRegsPSG(flags,vol,cap,99); CS[flags&0x1F].lfsr=0x7FFF; }
 static void CSND_SetAdpcmState(u32 c,int blk,int smp,int idx){ if(!blk){CS[c].a0p=smp;CS[c].a0i=idx;} }

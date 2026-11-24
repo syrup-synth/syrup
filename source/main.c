@@ -667,11 +667,11 @@ static float gTmpCyc[CYC];
 
 static void buildSub(void) {
 	for (int n = 0; n < CYC; n++) {
-		float p = n / (float)CYC, s = 0;
+		float p = n / (float)CYC, s = 0;   // (each shape starts at a zero crossing, rising: a note can start at full level without a click)
 		switch (gSubShape) {
 		case 0: s = sinf(TWO_PI * p); break;
-		case 1: s = 4.0f * fabsf(p - 0.5f) - 1.0f; break;
-		case 2: s = 2 * p - 1; break;
+		case 1: { float q = p + 0.75f; q -= floorf(q); s = 4.0f * fabsf(q - 0.5f) - 1.0f; } break;
+		case 2: { float q = p + 0.5f; q -= floorf(q); s = 2 * q - 1; } break;
 		case 3: s = p < 0.5f ? 1 : -1; break;
 		case 4: s = p < 0.25f ? 1 : -1; s += 0.5f; break;
 		case 5: s = sinf(TWO_PI * p) + 0.35f * sinf(2 * TWO_PI * p) + 0.12f * sinf(3 * TWO_PI * p); s *= 0.8f; break;   // a fuller, organ-ish sine
@@ -988,9 +988,10 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 		u32 timer = CSND_TIMER(f * N);
 		if (timer < 0x42) timer = 0x42;
 		if (timer > 0xFFFF) timer = 0xFFFF;
-		u32 flags = SOUND_FORMAT_16BIT | SOUND_REPEAT | (gQGrit == 2 ? 0 : SOUND_LINEAR_INTERP) | SOUND_ENABLE | SOUND_CHANNEL(ch) | (timer << 16);
+		int held = role == R_SUB && gAudioClock;   // SUB: set up stopped; the audio tick starts it at its level, from the zero crossing the table begins on
+		u32 flags = SOUND_FORMAT_16BIT | SOUND_REPEAT | (gQGrit == 2 ? 0 : SOUND_LINEAR_INTERP) | (held ? 0 : SOUND_ENABLE) | SOUND_CHANNEL(ch) | (timer << 16);
 		CSND_SetChnRegs(flags, pa, pa, N * 2, 0, 0);
-		gCsRamp[ch] = role == R_SUB; gCsCur[ch][0] = gCsCur[ch][1] = gCsTgt[ch][0] = gCsTgt[ch][1] = 0;   // SUB RAMP: from silence
+		gCsRamp[ch] = held ? 2 : 0; gCsCur[ch][0] = gCsCur[ch][1] = gCsTgt[ch][0] = gCsTgt[ch][1] = 0;   // SUB RAMP: from silence
 	}
 }
 
@@ -2187,7 +2188,14 @@ static void csRampTick(void) {   // audio tick, voice lock held: SUB layers on t
 	if (!gCsndOK) return; int any = 0;
 	for (int c = 0; c < NCS; c++) if (gCsRamp[c]) {
 		int moved = 0;
-		for (int k = 0; k < 2; k++) { float d = gCsTgt[c][k] - gCsCur[c][k]; if (d > 1e-4f || d < -1e-4f) { gCsCur[c][k] += fabsf(d) < 0.003f ? d : d * 0.45f; moved = 1; } }
+		if (gCsRamp[c] == 2) {   // not started yet: start it at its level now (the wave begins at 0)
+			if (gCsOwner[c] == -3) { gCsOwner[c] = -1; gCsRamp[c] = 0; continue; }
+			if (gCsTgt[c][0] + gCsTgt[c][1] < 1e-4f) continue;
+			gCsCur[c][0] = gCsTgt[c][0]; gCsCur[c][1] = gCsTgt[c][1]; gCsRamp[c] = 1;
+			{ float l = gCsCur[c][0], r = gCsCur[c][1]; u32 vol = (u32)(l * 0x8000) | ((u32)(r * 0x8000) << 16); CSND_SetVol(c, gThruOn ? 0 : csMono(vol), csSend(l, r)); }
+			CSND_SetPlayState(c, 1); any = 1; continue;
+		}
+		for (int k = 0; k < 2; k++) { float d = gCsTgt[c][k] - gCsCur[c][k]; if (d > 1e-4f || d < -1e-4f) { float dn = gCsOwner[c] == -3 ? 0.015f : 0.05f; gCsCur[c][k] += d > 0.015f ? 0.015f : d < -dn ? -dn : d; moved = 1;   /* a straight line, at most 1.5% a tick: a chip volume step is instant, so a big one is a click */ } }
 		if (gCsOwner[c] == -3 && gCsCur[c][0] < 0.004f && gCsCur[c][1] < 0.004f) { CSND_SetPlayState(c, 0); gCsOwner[c] = -1; gCsRamp[c] = 0; any = 1; continue; }   // faded: now it stops
 		if (moved) { float l = gCsCur[c][0], r = gCsCur[c][1]; u32 vol = (u32)(l * 0x8000) | ((u32)(r * 0x8000) << 16); CSND_SetVol(c, gThruOn ? 0 : csMono(vol), csSend(l, r)); any = 1; }
 	}
