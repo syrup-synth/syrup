@@ -740,6 +740,7 @@ typedef struct {
 	float mbend, press, mslide;   // per note: MPE bend (semitones), pressure (aftertouch), slide (CC 74), 0..1
 	int subOnly;  // PADS BASS: the bass note on one part of the patch only: 1 = the SUB osc, 2 = OSC A, 3 = OSC B
 } SVoice;
+static int gStrumVox = 2; static const char* STRUMVOX_NAMES[4] = {"2", "3", "4", "6"}; static const int STRUMVOX_N[4] = {2, 3, 4, 6};
 static int gSubBassNote = -1, gPadBassSub = 1; static const char* BASSSND_NAMES[4] = {"PATCH", "SUB OSC", "OSC A", "OSC B"};   // PAD BASS SOUND   // the pads' bass note right now: voiceOn makes it a SUB-only voice
 static SVoice gV[NVS];
 static float gPressAll = 0, gSlideAll = 0;   // the latest channel pressure / CC 74 (for notes not on their own channel)
@@ -3670,7 +3671,7 @@ static Param P_PRESET[] = {
 static Param P_PLAY[] = {
 	// most-reached first: tempo and the transport, then the arp, the key, then the details
 	PE("ROLL CHORD", &gRollChord, NCHORD, CHORD_NAMES, 0), PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
-	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("SEQ KEYS", &gSeqKeys, 2, SEQKEYS_NAMES, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0), PE("PAD BASS SOUND", &gPadBassSub, 4, BASSSND_NAMES, 0), PE("ROLL SCALE", &gRollScale, 3, RSC_NAMES, 0), PE("STRUM NOTES", &gStrumScale, 2, STRN_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
+	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("SEQ KEYS", &gSeqKeys, 2, SEQKEYS_NAMES, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0), PE("PAD BASS SOUND", &gPadBassSub, 4, BASSSND_NAMES, 0), PE("ROLL SCALE", &gRollScale, 3, RSC_NAMES, 0), PE("STRUM NOTES", &gStrumScale, 2, STRN_NAMES, 0), PE("STRUM VOICES", &gStrumVox, 4, STRUMVOX_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
 	PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0), PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0),
 	PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PE("REC QUANT", &gRecQ, 4, RQ_NAMES, 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("CLICK", &gClick, 4, CLICK_NAMES, 0), PF("CLICK LEVEL", &gClickLevel, 0, 1, 0.05f, "%", 0), PI_("TAPE ALIGN", &gTapeAlign, -50, 50, 0), PE("TAPE DRUMS", &gTapeDrums, 2, ONOFF, 0),
 	PE("SHAKE QUANT", &gShakeQ, 3, SHQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
@@ -4255,7 +4256,7 @@ static const char* paramHelp(const char* n) {
 		{"REV DAMP", "DARKER REVERB TAIL"}, {"FX MIX", "HOW MUCH EFFECT"}, {"DRIVE", "DISTORTION TYPE"}, {"DRIVE AMT", "HOW MUCH DISTORTION"},
 		{"MASTER", "OUTPUT VOLUME"}, {"ROOT", "KEY OF THE SCALE"}, {"SCALE", "LOCK THE KEYS TO A SCALE"}, {"ARP", "ARPEGGIATOR PATTERN"},
 		{"ARP RATE", "ARPEGGIATOR SPEED"}, {"ARP OCTAVES", "OCTAVES THE ARP CLIMBS"}, {"ARP GATE", "ARP NOTE LENGTH"}, {"ARP STRUM", "CHORD ARP: TIME BETWEEN STRINGS"}, {"STRUM DIR", "DOWN, UP, OR BOTH LIKE A GUITAR"}, {"BPM", "TEMPO"},
-		{"SEQ GATE", "STEP NOTE LENGTH"}, {"SEQ KEYS", "KEYS PLAY ALONG OR TRANSPOSE"}, {"PAD MORPH", "PADS: SLIDE GLIDES TO THE NEXT CHORD (0 = RETRIGGER)"}, {"PAD BASS SOUND", "PADS BASS: WHOLE PATCH, SUB OSC, OSC A OR OSC B ALONE"}, {"ROLL SCALE", "PIANO ROLL: SHOW THE SCALE, OR ONLY ITS NOTES"}, {"STRUM NOTES", "PADS STRUM STRIP: CHORD TONES OR THE SCALE"},
+		{"SEQ GATE", "STEP NOTE LENGTH"}, {"SEQ KEYS", "KEYS PLAY ALONG OR TRANSPOSE"}, {"PAD MORPH", "PADS: SLIDE GLIDES TO THE NEXT CHORD (0 = RETRIGGER)"}, {"PAD BASS SOUND", "PADS BASS: WHOLE PATCH, SUB OSC, OSC A OR OSC B ALONE"}, {"ROLL SCALE", "PIANO ROLL: SHOW THE SCALE, OR ONLY ITS NOTES"}, {"STRUM NOTES", "PADS STRUM STRIP: CHORD TONES OR THE SCALE"}, {"STRUM VOICES", "STRINGS RINGING AT ONCE (NEVER STEALS THE CHORD)"},
 		{"SWING", "SHUFFLE FEEL"},
 		{"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},
 		{"THEME", "COLOUR SCHEME"},
@@ -4656,7 +4657,7 @@ static int gridNote(int row) {   // row 0 = bottom; follows the scale (major ste
 }
 static void rectP(int x, int y, int w, int h, const u8* c) { rect(x, y, w, h, c[0], c[1], c[2]); }
 #define GRID_BTNS 8
-static int gPatView = 0, gStepEd = -1, gStepEdRow = 0;
+static int gPatView = 0, gStepEd = -1, gStepEdRow = 0, gPageWant = -1;   // gPageWant: a touch asks the main loop for another page
 static int gUndoOk = 0, gUndoIdx = 0;   // the UNDO button on PAT: the newest history step is a pattern edit
 // HISTORY: SELECT+L undo, SELECT+R redo. Pattern edits (notes, RIFF, CLEAR, the tools) and patch edits
 // (a run of turns on one control is one step) go on one list, newest last.
@@ -4689,7 +4690,7 @@ static int histStep(int undo) {   // 0 nothing to do, 1 pattern, 2 patch, 3 drum
 }
 static int gLvN = 0, gLvNote[4], gLvStep = 0; static float gLvT0 = 0;   // the notes being held while recording live
 static void liveRecToggle(void); static void liveRecStop(void); static void liveDown(const int* notes, int n, float vel); static void liveUp(void); static void liveAdd(const int* notes, int n, float vel);
-static int gDgEd = 0, gDgShift = 0; static void drawDgEd(void); static void drawDrumGrid(void); static int drumGridTouch(int x, int y, int press); static int drumGridRelease(void);
+static void drumRecHit(int r, float vel); static int gDgEd = 0, gDgShift = 0; static void drawDgEd(void); static void drawDrumGrid(void); static int drumGridTouch(int x, int y, int press); static int drumGridRelease(void);
 static void drawPatView(void); static void drawTapeView(void); static int tapeTouch(int x, int y, int press, int release); static void tapeSeqStarted(void);
 static void drawStepEd(void);
 // PIANO ROLL (SEQ page, the whole bottom screen): pitch up the side with a keyboard, the 16 steps across.
@@ -5114,7 +5115,7 @@ static void gridButtons(int x) {
 	if (b == 1) { gPatView = gPatView == 1 ? 0 : 1; gStepEd = -1; gDgEd = 0; }
 	if (b == 2 && gSeqLen > 1) gSeqLen--;
 	if (b == 3 && gSeqLen < NSTEP) gSeqLen++;
-	if (b == 4) { gPatView = gPatView == 3 ? 0 : 3; gStepEd = -1; gDgEd = 0; }   // DRUMS <-> NOTES
+	if (b == 4) { gPatView = 0; gStepEd = -1; gDgEd = 0; gPageWant = 11; }   // DRUM: the DRUMS page (its settings on top, the same drum sequencer below)
 	if (b == 5) { gPatView = gPatView == 2 ? 0 : 2; gStepEd = -1; gDgEd = 0; }   // TAPE
 	if (b == 6) { undoMark(); int base = riffBase(); acidGen(); gPatView = 0; gStepEd = -1; gRollLow = base; say("RIFF: IN THE ROLL'S OCTAVE - TAP AGAIN FOR A NEW ONE"); }
 }
@@ -5134,7 +5135,7 @@ static void audition(int nt) { if (!gSeqPlaying) { playSet(&nt, 1, 0.8f); gAudit
 static int gGtSt = -1, gGtNote = 0, gGtHit = -1, gGtDrag = 0, gGtLong = 0, gGtKeys = 0, gGtY0 = 0, gGtLow0 = 0; static u64 gGtT0;
 static int gGtX0 = 0, gGtVel = 0, gGtV0 = 0;   // drag up / down on a note: its VELOCITY
 static int gGtMove = 0, gMvSt = -1, gMvNt = 0, gMvLen = 1, gMvSt0 = 0, gMvNt0 = 0;   // dragging a note to a new step / pitch
-static int gGtErase = 0;
+static int gGtErase = 0, gRollKeyOn = 0;   // gRollKeyOn: a key of the roll is held (its chord sounding)
 static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (gStepEd >= 0 && gPatView != 3 && !(press && y < XY_Y + 15)) return stepEdTouch(x, y, press, release);
 	if (press && y < XY_Y + 15) { gridButtons(x); return 1; }
@@ -5170,12 +5171,20 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	}
 	if (press) {
 		gGtKeys = x < ROLL_KW && y >= ROLL_TOP; gGtY0 = y; gGtX0 = x; gGtVel = 0; gGtLow0 = gRollLow; gGtDrag = 0; gGtLong = 0; gGtT0 = svcGetSystemTick();
-		if (gGtKeys) { if (row >= 0 && row < ROLL_ROWS && nt >= 0) audition(nt); gGtSt = -1; return 0; }
+		if (gGtKeys) {   // the KEYS: held down they play (the ROLL CHORD on that root) until you let go, like a keyboard
+			if (row >= 0 && row < ROLL_ROWS && nt >= 0) {
+				int ch[4], k = 0;
+				if (gRollChord > 0 && gRollChord < NCHORD && gVoiceMode < 3) { for (int i = 0; i < 4; i++) { int iv = CHORDS[gRollChord][i]; if (iv >= 0 && nt + iv <= 127) ch[k++] = nt + iv; } }
+				else ch[k++] = nt;
+				gAuditionT = 0; playSet(ch, k, 0.8f); gRollKeyOn = 1;
+			}
+			gGtSt = -1; return 1;
+		}
 		gGtSt = ok ? st : -1; gGtNote = nt; gGtHit = ok ? noteCover(st, nt, NULL) : -1; gGtMove = 0; gGtErase = 0;
 		return 0;
 	}
 	if (gGtKeys) {   // drag the keyboard: scroll
-		if (release) { gGtKeys = 0; return 0; }
+		if (release) { gGtKeys = 0; if (gRollKeyOn) { gRollKeyOn = 0; playSet(NULL, 0, 0.8f); return 1; } return 0; }
 		if (gVoiceMode >= 3) return 0;   // a kit's rows are fixed
 		int nl = gGtLow0 + (y - gGtY0) / ROLL_RH; nl = nl < 12 ? 12 : nl > 108 ? 108 : nl;
 		if (nl != gRollLow) { gRollLow = nl; return 1; }
@@ -5215,17 +5224,27 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	}
 	if (!gGtLong && ok && gGtHit >= 0 && gGtMove) {
 		// a drag that starts on a note's head, or moves off its pitch: MOVE it (its tail still sets the length)
-		if (!gGtDrag) { int k0 = 0; noteCover(gGtSt, gGtNote, &k0); gGtDrag = 1; undoMark(); gMvSt0 = gMvSt = gGtHit; gMvNt0 = gMvNt = gGtNote; gMvLen = noteLen(&gSeq[gGtHit], k0); }
+		static Step snap[NSTEP];   // the pattern without the moving note: notes it passes over come back once it's gone by
+		if (!gGtDrag) { int k0 = 0; noteCover(gGtSt, gGtNote, &k0); gGtDrag = 1; undoMark(); gMvSt0 = gMvSt = gGtHit; gMvNt0 = gMvNt = gGtNote; gMvLen = noteLen(&gSeq[gGtHit], k0);
+			Step keep = gSeq[gMvSt]; stepSetNote(gMvSt, gMvNt, 0); memcpy(snap, gSeq, sizeof(snap)); gSeq[gMvSt] = keep; }
 		int ds = gMvSt0 + (st - gGtSt), dn = gVoiceMode >= 3 ? rollNote(rollRow(gMvNt0) + row - rollRow(gGtNote)) : gMvNt0 + (nt - gGtNote); if (gVoiceMode >= 3 && dn < 0) return 0; if (ds < 0) ds = 0; if (ds > NSTEP - 1) ds = NSTEP - 1; if (dn < 0) dn = 0; if (dn > 127) dn = 127;
 		if (ds != gMvSt || dn != gMvNt) {
-			if (gSeq[ds].n >= 4 && !(ds == gMvSt)) return 0;   // that step is full
-			stepSetNote(gMvSt, gMvNt, 0); stepSetNote(ds, dn, 1); stepSetLen(ds, dn, gMvLen); gMvSt = ds; gMvNt = dn; if (dn != gMvNt0 || ds != gMvSt0) audition(dn);
+			if (snap[ds].n >= 4) return 0;   // that step is full
+			memcpy(gSeq, snap, sizeof(snap));   // the others as they were, then the note in its new place
+			stepSetNote(ds, dn, 1); stepSetLen(ds, dn, gMvLen);
+			gMvSt = ds; gMvNt = dn; if (dn != gMvNt0 || ds != gMvSt0) audition(dn);
 			return 1;
 		}
 		return 0;
 	}
 	if (!gGtLong && ok && st != gGtSt) {   // a drag along the row: length
-		if (!gGtDrag) { gGtDrag = 1; gGtMove = 0; undoMark(); if (gGtHit < 0) { if (gSeq[gGtSt].n >= 4 || rowOfNote(gGtNote) >= 0) { gGtSt = -1; return 0; } stepSetNote(gGtSt, gGtNote, 1); gGtHit = gGtSt; } }
+		static int chN = 0, ch[4];   // ROLL CHORD: a drag from an empty cell writes the whole chord, all of it as long as the drag
+		if (!gGtDrag) { gGtDrag = 1; gGtMove = 0; undoMark(); chN = 0;
+			if (gGtHit < 0) { if (gSeq[gGtSt].n >= 4 || rowOfNote(gGtNote) >= 0) { gGtSt = -1; return 0; }
+				if (gRollChord > 0 && gRollChord < NCHORD) { for (int i = 0; i < 4; i++) { int iv = CHORDS[gRollChord][i]; if (iv < 0 || gSeq[gGtSt].n >= 4) continue; int n2 = gGtNote + iv; if (n2 > 127) continue; stepSetNote(gGtSt, n2, 1); ch[chN++] = n2; } }
+				else stepSetNote(gGtSt, gGtNote, 1);
+				gGtHit = gGtSt; } }
+		if (chN) { for (int i = 0; i < chN; i++) stepSetLen(gGtHit, ch[i], st - gGtHit + 1); return 1; }
 		stepSetLen(gGtHit, gGtNote, st - gGtHit + 1); return 1;
 	}
 	if (!gGtDrag && !gGtLong && svcGetSystemTick() - gGtT0 > SYSCLOCK_ARM11 * 2 / 5) {
@@ -5244,6 +5263,15 @@ static void outline(int x, int y, int w, int h, u8 r, u8 g, u8 b) { rect(x, y, w
 static int gPads = 0, gPadSel = -1, gPadN = 0, gPadNotes[4], gStrumZone = -1;
 static struct { int note; float t; } gStrumOff[24]; static int gStrumOffN = 0;
 #define STRUM_MAX 6
+// STRUM VOICES: how many strummed strings ring at once. Never more than the free DSP channels allow after the chord
+// that's held (a fat patch, 3+3 unison, would steal the chord's own voices otherwise)
+static int dspUsable(int c);
+static int strumCap(void) {
+	int per = 0; for (int o = 0; o < 2; o++) if (gOsc[o].on) per += gOsc[o].uni; if (gSubLevel > 0.01f && !gCsndOK) per++; if (per < 1) per = 1;
+	int tot = 0; for (int c = 0; c < NCH; c++) if (dspUsable(c)) tot++;
+	int chord = gHeldN > 0 ? gHeldN : 0, free = tot - chord * per, cap = free / per, want = STRUMVOX_N[gStrumVox & 3];
+	if (cap > want) cap = want; if (cap < 1) cap = 1; return cap;
+}
 static void voiceFade(int note, float sec) {   // let a note go fast but not dead: a short release, no click
 	mirNote('F', note, sec);
 	for (int i = 0; i < NVS; i++) { SVoice* v = &gV[i]; if (v->active && !v->isEcho && v->note == note && v->stage != 4) { v->stage = v->stage2 = 4; v->relMul = sec / (gEnv1.r + 0.0005f); } }
@@ -5326,6 +5354,14 @@ static void padPlay(int base, const int* notes, int n, float vel, int sound) {
 	int morph = sound == 2 && !gArp && gHeldN > 0;   // gliding from the held chord: the step before slides into this one
 	if (gLiveRec) { int prev = gLvN ? gLvStep : -1; liveDown(all, k, vel); if (morph && prev >= 0 && gSeqPlaying && prev != gLvStep) gSeq[prev].fl |= 2; }
 	else if (gSeqMode == 2) { int prev = gRecPos > 0 ? gRecPos - 1 : -1; if (morph && prev >= 0 && gSeq[prev].n) gSeq[prev].fl |= 2; seqRecord(all, k, vel); }
+	if (sound == 1) {   // a new chord over the last one: if both together won't fit the DSP channels, the last one lets go fast
+		// (its long release would have its voices stolen - cut dead - by the new chord: the hiccup on each AUTO bar)
+		int per = 0; for (int o = 0; o < 2; o++) if (gOsc[o].on) per += gOsc[o].uni; if (per < 1) per = 1;
+		int tot = 0; for (int c = 0; c < NCH; c++) if (dspUsable(c)) tot++;
+		int ringing = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho) ringing++;
+		if ((ringing + k) * per > tot)
+			for (int i = 0; i < gHeldN; i++) { int keep = 0; for (int j = 0; j < k; j++) if (all[j] == gHeld[i]) keep = 1; if (!keep) voiceFade(gHeld[i], 0.06f); }
+	}
 	if (sound == 2) chordMorph(all, k, vel); else if (sound) playSet(all, k, vel);
 }
 static void drawPads(int base) {
@@ -5428,7 +5464,7 @@ static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 
 		int nt = gStrumScale ? strumScaleNote(base, q) : gPadNotes[q % gPadN] + 12 * (q / gPadN) - 12;   // walk up the chord tones (or the SCALE from the chord's root), octave by octave
 		int k = 0; for (; k < gStrumOffN; k++) if (gStrumOff[k].note == nt) break;
 		if (k < gStrumOffN) { voiceFade(nt, 0.02f); for (int j = k; j < gStrumOffN - 1; j++) gStrumOff[j] = gStrumOff[j + 1]; gStrumOffN--; }   // struck again: the old one fades in 20 ms
-		while (gStrumOffN >= STRUM_MAX) { voiceFade(gStrumOff[0].note, 0.03f); for (int j = 0; j < gStrumOffN - 1; j++) gStrumOff[j] = gStrumOff[j + 1]; gStrumOffN--; }   // only so many strings ring: the oldest fades (stolen voices were cut dead: the clicks)
+		while (gStrumOffN >= strumCap()) { voiceFade(gStrumOff[0].note, 0.03f); for (int j = 0; j < gStrumOffN - 1; j++) gStrumOff[j] = gStrumOff[j + 1]; gStrumOffN--; }   // only so many strings ring: the oldest fades (stolen voices were cut dead: the clicks)
 		gStrumOff[gStrumOffN].note = nt; gStrumOff[gStrumOffN].t = 0.35f; gStrumOffN++;
 		voiceOn(nt, v);
 		if (q == z) break;
@@ -9616,6 +9652,8 @@ static int drumGridTouch(int x, int y, int press) {   // 1 = redraw
 		gHoldR = r; gHoldI = -2; gHoldT = osGetTime();
 		if (clrArmed()) { gDrumClrArm = 0; drumGridMark(); drumRowClear(r); char m[48]; snprintf(m, sizeof(m), "%s CLEARED (SELECT+L UNDOES)", kitPadName(DG_DRUM[r])); say(m); return 1; }
 		gDgSel = r; if (gTapRow >= 0) gTapRow = r;   /* a tap plays the drum and picks the row (no double-tap clear: people tap to hear it) */
+		if (gSeqPlaying && (gLiveRec || gTapRow >= 0) && gDrumBuilt == gKit) {   // RECORDING (REC or MIC TAP on): the names are pads, a tap records that drum
+			if (!gDrums) { gDrums = 1; drumsChanged(); } drumRecHit(r, 0.85f); gVisBeat = 0.85f; return 1; }
 		if (gCsndOK && gDrumBuilt == gKit) { if (gDrumCh[0] < 0) drumPickChannels(); drumHit(DG_DRUM[r], 0.85f); csndExecCmds(false); } else if (gCsndOK) gDrumWant = gKit; return 1;
 	}
 	int i = (int)((x - DG_LX) / ((320 - DG_LX - 2) / 16.0f)); if (i < 0 || i > 15) return 0; i += DP0;
@@ -9643,6 +9681,14 @@ static int drumGridRelease(void) {   // the stylus came up
 	gHoldR = -1; gHoldOff = 0; gHoldVel = 0;
 	return d;
 }
+static void drumRecHit(int r, float vel) {   // a hit played live onto row r, at the step it's nearest (MIC TAP, or a drum's name tapped while recording)
+	int st = gDrIdx[r] >= 0 ? gDrIdx[r] : (gDrumStep < 0 ? 0 : gDrumStep);   // the row's own step (its RATE / LENGTH)
+	int L = gDrLen[r] < 1 ? 16 : gDrLen[r];
+	if (gSeqPlaying && gDrRate[r] == 0) { float l = stepLen(gSeqPos < 0 ? 0 : gSeqPos); if (gSeqPh > l * 0.5f) st = (st + 1) % L; }   // nearest 16th: a hit just before the step lands on it
+	else if (!gSeqPlaying && gDrRate[r] == 0) { float len = (gDrumStep & 1) ? 1.0f - gSwing : 1.0f + gSwing; if (gDrumPh > len * 0.5f) st = (st + 1) % L; }
+	drumRowToMine(r); if (r >= 3) gDrumX[r - 3][st] = (u8)(vel * 255); else gMyDrum[r][st] = (u8)(vel * 255); gDrumSaveDue = 1;
+	if (gCsndOK) { if (gDrumCh[0] < 0) drumPickChannels(); drumHit(DG_DRUM[r], vel); csndExecCmds(false); }
+}
 static void drumTapTick(float dt) {   // main thread (inside the voice lock), 60 times a second
 	if (gDvPlay && gDrumWant < 0 && gCsndOK && gDrumBuilt == gKit) { if (gDrumCh[0] < 0) drumPickChannels(); drumHit(gDvPlay - 1, 0.85f); csndExecCmds(false); gDvPlay = 0; }   // hear the SOUND edit
 	if (gTapRow < 0 && gDrumRec) gTapRow = gDrumRec - 1;   // MIC TAP from the menu / a patch: same thing
@@ -9652,11 +9698,7 @@ static void drumTapTick(float dt) {   // main thread (inside the voice lock), 60
 	if (gTapHold > 0) { gTapHold -= dt; gTapLevel += (pk - gTapLevel) * 0.2f; return; }
 	if (pk > 0.2f && pk > gTapLevel * 2.5f + 0.05f) {
 		float vel = (pk - 0.2f) / 0.6f; if (vel > 1) vel = 1; vel = 0.3f + 0.7f * vel;
-		int r = gTapRow;
-		int st = gDrIdx[r] >= 0 ? gDrIdx[r] : (gDrumStep < 0 ? 0 : gDrumStep);   // the row's own step (its RATE / LENGTH)
-		if (!gSeqPlaying && gDrRate[r] == 0) { float len = (gDrumStep & 1) ? 1.0f - gSwing : 1.0f + gSwing; if (gDrumPh > len * 0.5f) st = (st + 1) % (gDrLen[r] < 1 ? 16 : gDrLen[r]); }   // nearest 16th
-		drumRowToMine(r); if (r >= 3) gDrumX[r - 3][st] = (u8)(vel * 255); else gMyDrum[r][st] = (u8)(vel * 255); gDrumSaveDue = 1;
-		if (gCsndOK) { drumHit(DG_DRUM[r], vel); csndExecCmds(false); }
+		drumRecHit(gTapRow, vel);
 		gTapHold = 0.09f; gVisBeat = vel;
 	}
 	gTapLevel += (pk - gTapLevel) * 0.2f;
@@ -11227,6 +11269,7 @@ int main(void) {
 		}
 		if (gVoiceMode >= 3 && (gDrumBuilt != gVoiceMode - 3 || gDrumCh[3] < 0)) { kitEnsure(); botDirty = 1; }
 		{ static float st = 0; if (gDrumBuilt == 5 && waveSig() != gWaveSig) { st += 1.0f / 60; if (st > 0.25f) { gDrumWant = 105; gWaveSig = waveSig(); st = 0; } } else st = 0; }   // WAVE kit: the drums follow OSC A's table and WT POS (rebuilt once it settles)
+		if (gPageWant >= 0) { page = gPageWant; gPageWant = -1; gPads = 0; topDirty = botDirty = 1; }
 		if (page != gCurPage) { gCurPage = page; botDirty = 1; }
 		{ int g = page == 7; if (g != gGridOn) { gGridOn = g; botDirty = 1; if (!g) { gStepEd = -1; gSeqSaveDue = 1; } } }
 		{ int m = page == 5; if (m != gModOn) { gModOn = m; botDirty = 1; } if (gModOn && !gPads) botDirty = 1; }
