@@ -5333,15 +5333,21 @@ static void drawPads(int base) {
 // SLIDE waits for the finger to settle: pads crossed on the way (under PAD_SETTLE ms) don't play, the chord it stops on
 // does (and letting go on one plays it, for LATCH / REC). gPadPend: a chord the finger is on but hasn't settled on yet.
 #define PAD_SETTLE 90
+static int gPpProg = -1;   // a pending PROGRESSION chord (slid onto, not settled yet)
 static int gPadPend = 0, gPpI, gPpB, gPpS, gPdI = -1, gPdB = -1, gPdS = -1; static float gPpLy; static u64 gPpT;   // gPd: the zone the playing chord came from
 static void padsGo(int base, int i, int band, int side, float ly, int slide, float* velOut) {
-	gPadPend = 0; gPdI = i; gPdB = band; gPdS = side; gPadSel = i; gPadN = padChord(base, i, band, side, gPadNotes);
+	gPadPend = 0; gPpProg = -1; gPdI = i; gPdB = band; gPdS = side; gPadSel = i; gPadN = padChord(base, i, band, side, gPadNotes);
 	*velOut = 0.55f + 0.45f * (1 - ly / (float)PAD_H) * 0.5f + 0.2f;
 	padPlay(base, gPadNotes, gPadN, *velOut, slide && gPadMorph > 0.001f ? 2 : 1);   // sliding: the chord MORPHS (each voice glides to its new note)
 }
+static void progGo(int base, int k, int slide) {   // a PROGRESSION chord: tapped, or slid onto (it MORPHS from the one before)
+	gPadPend = 0; gPpProg = -1; gProgAt = k; gPadSel = PROGS[gProg][k]; gPdI = gPadSel; gPdB = 0; gPdS = 1;
+	gPadN = padChord(base, gPadSel, 0, 1, gPadNotes); padPlay(base, gPadNotes, gPadN, 0.8f, slide && gPadMorph > 0.001f ? 2 : 1);
+}
 static int padsSettle(int now) {   // 1 = the pending chord played (now: don't wait out PAD_SETTLE, e.g. on letting go)
-	if (!gPadPend || gPadSel < 0) { gPadPend = 0; return 0; }
+	if (!gPadPend || gPadSel < 0) { gPadPend = 0; gPpProg = -1; return 0; }
 	if (!now && osGetTime() - gPpT < PAD_SETTLE) return 0;
+	if (gPpProg >= 0) { progGo(gPadBase, gPpProg, 1); return 1; }
 	float v; padsGo(gPadBase, gPpI, gPpB, gPpS, gPpLy, 1, &v); return 1;
 }
 static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 = screen changed
@@ -5353,20 +5359,27 @@ static int padsTouch(int base, int x, int y, int press, float* velOut) {   // 1 
 			if (gPadSel < 0) return 0;
 			if (i == lastI && band == lastB && side == lastS) { gPadPend = 0; return 0; }   // back on the chord that's playing
 			if (i == lastI && (abs(lx - (side == 0 ? 5 : side == 2 ? 38 : 21)) > 6)) return 0;   // (an edge only counts once the finger is well into it)
-			if (!gPadPend || i != gPpI || band != gPpB || side != gPpS) { gPadPend = 1; gPpI = i; gPpB = band; gPpS = side; gPpLy = ly; gPpT = osGetTime(); return 0; }
+			if (!gPadPend || gPpProg >= 0 || i != gPpI || band != gPpB || side != gPpS) { gPadPend = 1; gPpProg = -1; gPpI = i; gPpB = band; gPpS = side; gPpLy = ly; gPpT = osGetTime(); return 0; }
 			if (osGetTime() - gPpT < PAD_SETTLE) return 0;   // still passing over it
 		}
 		padsGo(base, i, band, side, ly, !press, velOut);
 		return 1;
 	}
 	if (y < STRUM_Y - 1) {   // the PROGRESSION row
-		if (!press) return 0;
+		if (!press) {   // SLIDE along the progression's chords: like the pads, the chord the finger settles on glides in
+			if (!gProg || gPadSel < 0 || x < 128 || x >= 280) return 0;
+			int k = (x - 128) / 38; if (k > 3) return 0;
+			if (k == gProgAt && gPadSel == PROGS[gProg][k]) { gPadPend = 0; gPpProg = -1; return 0; }
+			if (!gPadPend || gPpProg != k) { gPadPend = 1; gPpProg = k; gPpT = osGetTime(); return 0; }
+			if (osGetTime() - gPpT < PAD_SETTLE) return 0;
+			progGo(base, k, 1); *velOut = 0.8f; return 1;
+		}
 		if (x >= 94 && x < 128) { gPadBass = (gPadBass + 1) % NBASS; bassStop(); say(BASS_LONG[gPadBass]); return 1; }
 		if (x < 94) { gProg = (gProg + 1) % NPROG; gProgAt = -1; if (!gProg && gProgAuto) { gProgAuto = 0; playSet(NULL, 0, 0.8f); } return 1; }
 		if (!gProg) return 0;
 		if (x >= 280) { gProgAuto = !gProgAuto; gProgAt = -1; gProgBar = 1; if (!gProgAuto) playSet(NULL, 0, 0.8f); return 1; }
 		int k = (x - 128) / 38; if (x < 128 || k > 3) return 0;
-		gProgAt = k; gPadSel = PROGS[gProg][k]; gPadN = padChord(base, gPadSel, 0, 1, gPadNotes); padPlay(base, gPadNotes, gPadN, 0.8f, 1); *velOut = 0.8f;
+		progGo(base, k, 0); *velOut = 0.8f;
 		return 1;
 	}
 	if (gPadSel < 0) { gPadSel = 0; gPadN = padChord(base, 0, 0, 1, gPadNotes); }
