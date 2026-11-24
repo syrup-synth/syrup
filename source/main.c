@@ -738,9 +738,9 @@ typedef struct {
 	float rnd;    // RANDOM mod source, set per note
 	int mch;      // the MIDI channel the note came in on (-1: not MIDI) - MPE sends each note on its own
 	float mbend, press, mslide;   // per note: MPE bend (semitones), pressure (aftertouch), slide (CC 74), 0..1
-	int subOnly;  // PADS BASS: the bass note plays on the SUB oscillator alone (its shape), not the whole patch
+	int subOnly;  // PADS BASS: the bass note on one part of the patch only: 1 = the SUB osc, 2 = OSC A, 3 = OSC B
 } SVoice;
-static int gSubBassNote = -1, gPadBassSub = 1; static const char* BASSSND_NAMES[2] = {"PATCH", "SUB OSC"};   // the pads' bass note right now: voiceOn makes it a SUB-only voice
+static int gSubBassNote = -1, gPadBassSub = 1; static const char* BASSSND_NAMES[4] = {"PATCH", "SUB OSC", "OSC A", "OSC B"};   // PAD BASS SOUND   // the pads' bass note right now: voiceOn makes it a SUB-only voice
 static SVoice gV[NVS];
 static float gPressAll = 0, gSlideAll = 0;   // the latest channel pressure / CC 74 (for notes not on their own channel)
 static int gMidiChNow = -1, gMpe = 0;   // the channel of the MIDI note being started; MPE mode (VOICE+FX)
@@ -994,7 +994,9 @@ static void startVoice(int vi) {
 	int roles[R_COUNT], bks[R_COUNT], nr = 0, nd = 0, nc = 0;
 	if (v->isEcho) { if (!gOsc[0].on && !gOsc[1].on) { v->active = 0; return; } roles[nr] = R_TAP; bks[nr++] = gCsndOK ? BK_CSND : BK_DSP; }
 	else {
-		if (v->subOnly) { roles[nr] = R_SUB; bks[nr++] = gCsndOK ? BK_CSND : BK_DSP; }   // PADS BASS: the sub alone
+		int bo = v->subOnly == 2 ? 0 : v->subOnly == 3 ? 1 : -1;   // PADS BASS on OSC A / OSC B: that oscillator's layers alone
+		if (bo >= 0 && gOsc[bo].on) for (int u = 0; u < gOsc[bo].uni; u++) { roles[nr] = (bo ? R_B0 : R_A0) + u; bks[nr++] = BK_DSP; }
+		else if (v->subOnly) { roles[nr] = R_SUB; bks[nr++] = gCsndOK ? BK_CSND : BK_DSP; }   // PADS BASS: the sub alone (or the osc picked is off)
 		else {
 		for (int o = 0; o < 2; o++) if (gOsc[o].on) for (int u = 0; u < gOsc[o].uni; u++) { roles[nr] = (o ? R_B0 : R_A0) + u; bks[nr++] = BK_DSP; }
 		if (gSubLevel > 0.01f) { roles[nr] = R_SUB; bks[nr++] = gCsndOK ? BK_CSND : BK_DSP; }
@@ -1103,7 +1105,7 @@ static void voiceOn(int note, float vel) {
 	}
 	SVoice* v = newVoice(); initVoice(v);
 	v->note = note; v->freq = mtof((float)note); v->cur = v->freq; v->vel = vel; v->rnd = (rand() % 2001) / 1000.0f - 1; v->mch = gMidiChNow;
-	v->subOnly = gPadBassSub && note == gSubBassNote;
+	v->subOnly = note == gSubBassNote ? gPadBassSub : 0;
 	lfoTrig();
 	startVoice(v - gV);
 	if (v->active && !v->subOnly) addTaps(v);
@@ -3643,7 +3645,7 @@ static Param P_PRESET[] = {
 static Param P_PLAY[] = {
 	// most-reached first: tempo and the transport, then the arp, the key, then the details
 	PE("ROLL CHORD", &gRollChord, NCHORD, CHORD_NAMES, 0), PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
-	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("SEQ KEYS", &gSeqKeys, 2, SEQKEYS_NAMES, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0), PE("PAD BASS SOUND", &gPadBassSub, 2, BASSSND_NAMES, 0), PE("ROLL SCALE", &gRollScale, 3, RSC_NAMES, 0), PE("STRUM NOTES", &gStrumScale, 2, STRN_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
+	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("SEQ KEYS", &gSeqKeys, 2, SEQKEYS_NAMES, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0), PE("PAD BASS SOUND", &gPadBassSub, 4, BASSSND_NAMES, 0), PE("ROLL SCALE", &gRollScale, 3, RSC_NAMES, 0), PE("STRUM NOTES", &gStrumScale, 2, STRN_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
 	PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0), PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0),
 	PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PE("REC QUANT", &gRecQ, 4, RQ_NAMES, 0), PE("PREROLL", &gPreroll, 3, PRE_NAMES, 0), PE("CLICK", &gClick, 4, CLICK_NAMES, 0), PF("CLICK LEVEL", &gClickLevel, 0, 1, 0.05f, "%", 0), PI_("TAPE ALIGN", &gTapeAlign, -50, 50, 0), PE("TAPE DRUMS", &gTapeDrums, 2, ONOFF, 0),
 	PE("SHAKE QUANT", &gShakeQ, 3, SHQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
@@ -4228,7 +4230,7 @@ static const char* paramHelp(const char* n) {
 		{"REV DAMP", "DARKER REVERB TAIL"}, {"FX MIX", "HOW MUCH EFFECT"}, {"DRIVE", "DISTORTION TYPE"}, {"DRIVE AMT", "HOW MUCH DISTORTION"},
 		{"MASTER", "OUTPUT VOLUME"}, {"ROOT", "KEY OF THE SCALE"}, {"SCALE", "LOCK THE KEYS TO A SCALE"}, {"ARP", "ARPEGGIATOR PATTERN"},
 		{"ARP RATE", "ARPEGGIATOR SPEED"}, {"ARP OCTAVES", "OCTAVES THE ARP CLIMBS"}, {"ARP GATE", "ARP NOTE LENGTH"}, {"ARP STRUM", "CHORD ARP: TIME BETWEEN STRINGS"}, {"STRUM DIR", "DOWN, UP, OR BOTH LIKE A GUITAR"}, {"BPM", "TEMPO"},
-		{"SEQ GATE", "STEP NOTE LENGTH"}, {"SEQ KEYS", "KEYS PLAY ALONG OR TRANSPOSE"}, {"PAD MORPH", "PADS: SLIDE GLIDES TO THE NEXT CHORD (0 = RETRIGGER)"}, {"PAD BASS SOUND", "PADS BASS: ON THE SUB OSC ALONE, OR THE WHOLE PATCH"}, {"ROLL SCALE", "PIANO ROLL: SHOW THE SCALE, OR ONLY ITS NOTES"}, {"STRUM NOTES", "PADS STRUM STRIP: CHORD TONES OR THE SCALE"},
+		{"SEQ GATE", "STEP NOTE LENGTH"}, {"SEQ KEYS", "KEYS PLAY ALONG OR TRANSPOSE"}, {"PAD MORPH", "PADS: SLIDE GLIDES TO THE NEXT CHORD (0 = RETRIGGER)"}, {"PAD BASS SOUND", "PADS BASS: WHOLE PATCH, SUB OSC, OSC A OR OSC B ALONE"}, {"ROLL SCALE", "PIANO ROLL: SHOW THE SCALE, OR ONLY ITS NOTES"}, {"STRUM NOTES", "PADS STRUM STRIP: CHORD TONES OR THE SCALE"},
 		{"SWING", "SHUFFLE FEEL"},
 		{"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},
 		{"THEME", "COLOUR SCHEME"},
@@ -6487,7 +6489,7 @@ static void audioToFrames(const float* in, int n, int rate, float* fr) {
 	wtFinish(fr, WT_FR);
 }
 // save, rescan, and load the new table into OSC A
-static void wtInstall(const char* base, float* fr) {
+static void wtInstallNow(const char* base, float* fr) {
 	char path[96], nm[24];
 	for (int k = 1; k < 100; k++) {
 		snprintf(nm, sizeof(nm), "%s %d.wav", base, k); snprintf(path, sizeof(path), "sdmc:/3ds/syrup/%s", nm);
@@ -6495,16 +6497,53 @@ static void wtInstall(const char* base, float* fr) {
 	}
 	mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777);
 	wtWriteWav(path, fr, WT_FR);
+	// the SD work first, with no lock held (the main loop takes gMipsLock when a note starts): read the new file
+	// back, then only memory copies under the lock
+	Table tmp = {0}; tmp.frames = (float*)malloc(sizeof(float) * CYC * 64); int ok = tmp.frames && loadWav(&tmp, path);
+	scanTables();   // (the directory read stays outside the lock too)
 	LightLock_Lock(&gMipsLock);
-	scanTables(); gTableCount = T_BUILTIN + gNFiles;
+	gTableCount = T_BUILTIN + gNFiles;
 	for (int i = 0; i < WCACHE; i++) { gWCache[i].idx = -1; }
 	int idx = -1; for (int i = 0; i < gNFiles; i++) if (!strcmp(gFiles[i], nm)) idx = T_BUILTIN + i;
+	if (idx >= 0 && ok) {   // into the cache, so tableSelect is a copy
+		int slot = 0; for (int i = 1; i < WCACHE; i++) if (gWCache[i].used < gWCache[slot].used) slot = i;
+		free(gWCache[slot].frames); gWCache[slot].frames = tmp.frames; tmp.frames = NULL;
+		gWCache[slot].idx = idx; gWCache[slot].nFrames = tmp.nFrames; gWCache[slot].used = ++gWClock;
+		char cn[64]; snprintf(cn, sizeof(cn), "%s", nm); cn[strlen(cn) - 4] = 0; for (char* c = cn; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
+		snprintf(gWCache[slot].name, sizeof(gWCache[slot].name), "%.22s", cn);
+	}
 	if (idx >= 0) { gOsc[0].table = idx; tableSelect(&gOsc[0].tb, idx); }
 	LightLock_Unlock(&gMipsLock);
+	free(tmp.frames);
 	gForceBuild |= 1;
 	char m[48]; snprintf(m, sizeof(m), "SAVED %.20s -> OSC A", nm); say(m);
 }
 
+// CAPTURES (MIC / TAPE / CAM / KIT / NET / RULE / ADD > TABLE) finish on the SAVER thread: turning audio into frames,
+// finding a free name, writing the .wav, rescanning the card and loading it take long enough to stop the sound when
+// done on the main loop (with the voice lock held). One job at a time; a new capture while one is going waits its turn.
+static void saverWant(int w);
+#define SV_WT 32
+static volatile int gWtJob = 0; static float* gWtIn = NULL; static int gWtN = 0, gWtRate = 0; static float* gWtFr = NULL; static char gWtBase[24];
+static int wtJobTake(const char* base) {   // 0 = busy (say so)
+	if (gWtJob) { say("STILL SAVING THE LAST TABLE..."); return 0; }
+	snprintf(gWtBase, sizeof(gWtBase), "%s", base); return 1;
+}
+static void wtInstall(const char* base, float* fr) {   // frames ready: copied, saved + loaded off the main loop
+	if (!wtJobTake(base)) return;
+	gWtFr = (float*)malloc(sizeof(float) * CYC * WT_FR); if (!gWtFr) { wtInstallNow(base, fr); return; }
+	memcpy(gWtFr, fr, sizeof(float) * CYC * WT_FR); gWtIn = NULL; gWtJob = 1; say("MAKING THE TABLE..."); saverWant(SV_WT);
+}
+static void wtFromAudio(const char* base, float* in, int n, int rate) {   // audio -> table, all off the main loop (takes in)
+	if (!wtJobTake(base)) { free(in); return; }
+	gWtIn = in; gWtN = n; gWtRate = rate; gWtFr = NULL; gWtJob = 1; say("MAKING THE TABLE..."); saverWant(SV_WT);
+}
+static void wtJobRun(void) {   // the SAVER thread
+	if (!gWtJob) return;
+	if (gWtIn) { float* fr = (float*)malloc(sizeof(float) * CYC * WT_FR); if (fr) audioToFrames(gWtIn, gWtN, gWtRate, fr); free(gWtIn); gWtIn = NULL; gWtFr = fr; }
+	if (gWtFr) wtInstallNow(gWtBase, gWtFr); else say("NOT ENOUGH MEMORY");
+	free(gWtFr); gWtFr = NULL; gWtJob = 0;
+}
 // mic: record 1 s, then turn it into a table
 static float gMicRecT = 0;
 static void micRecStart(void) { if (!gMicOK) { say("MIC NOT AVAILABLE"); return; } gMicRecT = 1.1f; }
@@ -6565,13 +6604,12 @@ static void micRecTick(float dt) {
 	char m[32]; snprintf(m, sizeof(m), "SING / PLAY INTO THE MIC... %.1f", gMicRecT > 0 ? gMicRecT : 0); say(m);
 	if (gMicRecT > 0) return;
 	u32 N = gMicSize / 2, end = micGetLastSampleOffset() / 2;
-	float* in = (float*)malloc(sizeof(float) * N); float* fr = (float*)malloc(sizeof(float) * CYC * WT_FR);
-	if (in && fr) {
+	float* in = (float*)malloc(sizeof(float) * N);
+	if (in) {
 		const s16* m2 = (const s16*)gMicBuf;
 		for (u32 i = 0; i < N; i++) in[i] = m2[(end + i) % N] / 32768.0f;   // oldest to newest
-		audioToFrames(in, N, 16364, fr); wtInstall("MIC", fr);
+		wtFromAudio("MIC", in, (int)N, 16364);
 	}
-	free(in); free(fr);
 }
 
 // ================================================================ more chip-level sound (no CPU in the audio path)
@@ -7171,9 +7209,9 @@ static void loopToTable(void) {   // TAPE > TABLE: the last track you recorded b
 	int n = gTapeLen > 32728 * 12 ? 32728 * 12 : gTapeLen;
 	s16* raw = n > 0 ? (s16*)malloc(sizeof(s16) * n) : NULL; n = raw ? tapeMono(raw, n) : 0;
 	if (!n) { free(raw); say("RECORD A TAPE TRACK FIRST"); return; }
-	float* in = (float*)malloc(sizeof(float) * n); float* fr = (float*)malloc(sizeof(float) * CYC * WT_FR);
-	if (in && fr) { for (int i = 0; i < n; i++) in[i] = raw[i] / 32768.0f; audioToFrames(in, n, 32728, fr); wtInstall("TAPE", fr); }
-	free(in); free(fr); free(raw);
+	float* in = (float*)malloc(sizeof(float) * n);
+	if (in) { for (int i = 0; i < n; i++) in[i] = raw[i] / 32768.0f; wtFromAudio("TAPE", in, n, 32728); }
+	free(raw);
 }
 
 // ---- grain engine: the DSP plays short windowed slices from a source, two channels offset by half a grain;
@@ -10467,6 +10505,41 @@ static int dspAsk(void) {   // the first start without the firmware: say what Sy
 	return 0;
 #endif
 }
+// SAVER: SD writes off the main loop (a write can take 100+ ms on the 3DS SD card, and the loop runs the voices).
+// The main loop asks (saverWant); this thread, lower priority than it, writes. Without a thread (web): written there and then.
+enum { SV_PAGE = 1, SV_DRUM = 2, SV_LEARN = 4, SV_LAST = 8, SV_SEQ = 16 };   // (SV_WT = 32: a table capture)
+static volatile int gSaveWant = 0, gSaveBusy = 0, gSavePage = 0, gSaverQuit = 0; static volatile char gSaveMark[32];
+static LightEvent gSaveEv; static Thread gSaver = NULL;
+static void saverRun(int w) {
+	if (w & SV_PAGE) { settingsSave(gSavePage); if (gSaveMark[0]) crashMark((const char*)gSaveMark); }
+	if (w & SV_DRUM) myDrumSave();
+	if (w & SV_LEARN) learnSave();
+	if (w & SV_LAST) lastWrite();
+	if (w & SV_SEQ) seqWriteSnap();
+	if (w & SV_WT) wtJobRun();
+}
+static void saverMain(void* a) {
+	(void)a;
+	for (;;) {
+		LightEvent_Wait(&gSaveEv);
+		int w = __atomic_exchange_n(&gSaveWant, 0, __ATOMIC_SEQ_CST);
+		if (w) { __atomic_or_fetch(&gSaveBusy, w, __ATOMIC_SEQ_CST); saverRun(w); __atomic_and_fetch(&gSaveBusy, ~w, __ATOMIC_SEQ_CST); }
+		if (gSaverQuit) break;
+	}
+}
+static void saverWant(int w) {
+	if (!gSaver) { saverRun(w); return; }
+	__atomic_or_fetch(&gSaveWant, w, __ATOMIC_SEQ_CST); LightEvent_Signal(&gSaveEv);
+}
+static void saverStart(void) {
+	LightEvent_Init(&gSaveEv, RESET_ONESHOT);
+	s32 pr = 0x30; svcGetThreadPriority(&pr, CUR_THREAD_HANDLE);
+	gSaver = threadCreate(saverMain, NULL, 0x8000, pr < 0x3F ? pr + 1 : pr, 0, false);
+}
+static void saverStop(void) {   // at exit: whatever's asked for is written before anything closes
+	if (gSaver) { gSaverQuit = 1; LightEvent_Signal(&gSaveEv); threadJoin(gSaver, U64_MAX); threadFree(gSaver); gSaver = NULL; }
+	int w = gSaveWant; gSaveWant = 0; if (w) saverRun(w);
+}
 #ifndef SYRUP_HOST
 static void hangWatch(void* a) {   // HANG REPORT (see gWhere)
 	(void)a; u32 last = gBeat; u64 t0 = osGetTime();
@@ -10571,6 +10644,7 @@ int main(void) {
 	gSplash = 0;   // tests start straight on the instrument (the web build keeps the logo and a tip)
 #endif
 	if (gSplash) for (int k = 0; k < 2; k++) { splashBottomReady(); gfxFlushBuffers(); gfxSwapBuffers(); gspWaitForVBlank(); }
+	saverStart();
 #ifndef SYRUP_HOST
 	{ s32 pr = 0x30; svcGetThreadPriority(&pr, CUR_THREAD_HANDLE); threadCreate(hangWatch, NULL, 0x2000, pr > 0x19 ? pr - 1 : pr, 0, true); }
 #endif
@@ -11203,7 +11277,11 @@ int main(void) {
 		}
 		LightLock_Unlock(&gVoiceLock); WHERE("SAVES / NET");
 		// SD writes wait until here, so a page press never holds the lock the audio tick needs
-		if (gPageMarkDue) { gPageMarkDue = 0; settingsSave(page); char m[32]; snprintf(m, sizeof(m), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); crashMark(m); }
+		{   // a page change: the settings + crash mark go to the SD once the page has stayed put a second (not on every flick
+			// through the menus), and on the SAVER thread: an SD write takes long enough on the 3DS to stall the main loop
+			static u64 pageT = 0; if (gPageMarkDue) { gPageMarkDue = 0; pageT = osGetTime() + 1000; }
+			if (pageT && osGetTime() >= pageT) { pageT = 0; gSavePage = page; snprintf((char*)gSaveMark, sizeof(gSaveMark), "PAGE %s%s", PAGE_NAMES[page], visActive(page) ? " (GPU)" : ""); saverWant(SV_PAGE); }
+		}
 		if (gTblDue) { int t = gTblDue; gTblDue = 0; LightLock_Lock(&gMipsLock); if (t & 1) tableSelect(&A->tb, A->table); if (t & 2) tableSelect(&B->tb, B->table); LightLock_Unlock(&gMipsLock); gForceBuild |= t; topDirty = 1; }
 		if (gMainJobDue) { gMainJobDue = 0; LightLock_Lock(&gMipsLock); doRebuild(&gMainJob); LightLock_Unlock(&gMipsLock); ASET(gJobDone, 1); }
 #ifndef SYRUP_NO_NET
@@ -11216,11 +11294,11 @@ int main(void) {
 #endif
 		kitSync();
 		drumService();
-		if (gDrumSaveDue) { gDrumSaveDue = 0; myDrumSave(); }
-		if (gLearnSaveDue) { gLearnSaveDue = 0; learnSave(); }
-		{ static u64 at = 0; u64 tn = osGetTime(); if (tn - at > 5000) { at = tn; if (lastSnap()) lastWrite(); gSeqSaveDue = 1; } }   // AUTOSAVE: the sound and the sequences every 5 s
-		if (gBrightSaveDue) { gBrightSaveDue = 0; settingsSave(page); }
-		if (gSeqSaveDue) { gSeqSaveDue = 0; LightLock_Lock(&gVoiceLock); seqSnap(); LightLock_Unlock(&gVoiceLock); seqWriteSnap(); }
+		if (gDrumSaveDue) { gDrumSaveDue = 0; saverWant(SV_DRUM); }
+		if (gLearnSaveDue) { gLearnSaveDue = 0; saverWant(SV_LEARN); }
+		{ static u64 at = 0; u64 tn = osGetTime(); if (tn - at > 5000) { at = tn; if (!(gSaveBusy & SV_LAST) && lastSnap()) saverWant(SV_LAST); gSeqSaveDue = 1; } }   // AUTOSAVE: the sound and the sequences every 5 s
+		if (gBrightSaveDue) { gBrightSaveDue = 0; gSavePage = page; gSaveMark[0] = 0; saverWant(SV_PAGE); }
+		if (gSeqSaveDue && !(gSaveBusy & SV_SEQ)) { gSeqSaveDue = 0; LightLock_Lock(&gVoiceLock); seqSnap(); LightLock_Unlock(&gVoiceLock); saverWant(SV_SEQ); }
 		{ static int sk = 0; int now = skipRecent(); if (now != sk) { sk = now; topDirty = 1; } }
 
 		memset(on, 0, sizeof(on));
@@ -11309,6 +11387,7 @@ int main(void) {
 	}
 
 	gHung = 1; WHERE("LOOP");   // quitting: no hang report
+	saverStop();
 	aptUnhook(&gSleepCookie);
 	// background threads first (network MIDI, IR, downloads, camera) so nothing is mid-call while services close
 	if (!gSafeMode) {

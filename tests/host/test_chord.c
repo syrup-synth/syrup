@@ -73,7 +73,7 @@ static void SCRIPT(int fr) {
 	if (fr == 369) {   // DRUM HITS table and KIT > TABLE
 		float* f = builtinFrames(T_DRUMS); if (!f) fail("DRUM HITS: no table");
 		else { float a0 = 0, a7 = 0; for (int k = 0; k < CYC; k++) { a0 += fabsf(f[k]); a7 += fabsf(f[7 * CYC + k]); } if (a0 < 100 || a7 < 100) fail("DRUM HITS: kick frames should have sound (%.0f %.0f)", a0, a7); }
-		int n0 = gNFiles; kitToTable(); if (gNFiles != n0 + 1 || gOsc[0].table < T_BUILTIN) fail("KIT > TABLE: a new table on OSC A (files %d -> %d)", n0, gNFiles);
+		int n0 = gNFiles; kitToTable(); for (int t = 0; t < 400 && gWtJob; t++) usleep(10000);   /* (the table is made on the SAVER thread) */ if (gNFiles != n0 + 1 || gOsc[0].table < T_BUILTIN) fail("KIT > TABLE: a new table on OSC A (files %d -> %d)", n0, gNFiles);
 	}
 	if (fr == 370) {   // piano roll ERASER: from an empty cell, up first, then across the notes
 		memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 16; gPatView = 0; gStepEd = -1; gRollLow = 60;

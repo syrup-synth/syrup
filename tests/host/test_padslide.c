@@ -31,7 +31,10 @@ static void SCRIPT(int fr) {
 			if (v->note == bn) ok = v->subOnly && v->nch == 1 && v->role[0] == R_SUB; else if (!v->subOnly && v->nch >= 1) chordFull = 1; }
 		if (!ok) fail("PAD BASS SOUND SUB: the bass note should play on the SUB osc alone");
 		if (!chordFull) fail("PAD BASS SOUND SUB: the chord should still be the whole patch");
-		playSet(NULL, 0, 0.8f); gPadBass = 0; done = 1;
+		playSet(NULL, 0, 0.8f); gPadBassSub = 2; gOsc[0].on = 1; padPlay(48, gPadNotes, gPadN, 0.8f, 1);
+		int okA = 0; for (int k = 0; k < NVS; k++) { SVoice* v = &gV[k]; if (v->active && !v->isEcho && v->stage != 4 && v->note == bn) { okA = v->nch >= 1; for (int j = 0; j < v->nch; j++) if (v->role[j] > R_A2) okA = 0; } }
+		if (!okA) fail("PAD BASS SOUND OSC A: the bass note should be OSC A's layers alone");
+		playSet(NULL, 0, 0.8f); gPadBass = 0; gPadBassSub = 1; done = 1;
 	}
 }
 int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 145; app_main(); if (!done) fail("PAD SLIDE: didn't run"); printf("padslide: chords crossed on a slide don't play\n"); return gFails ? 1 : 0; }
