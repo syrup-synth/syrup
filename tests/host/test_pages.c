@@ -46,8 +46,11 @@ static void SCRIPT(int fr) {
 		gDrums = 0; drumsChanged();
 		myDrumSave(); memset(gMyDrum, 0, sizeof gMyDrum); gMyDrumLoaded = 0; myDrumLoad();
 		{ memset(gSeq, 0, sizeof gSeq); stepSetNote(3, 60, 1); stepSetNote(40, 62, 1); gSeqLen = 48; int cx = ROLL_KW + 4 * PG_W + 60;
-		  pageStripTouch(cx); if (!gSeq[3].n) fail("CLR: one tap only arms it");
-		  pageStripTouch(cx); if (gSeq[3].n || gSeq[40].n || gSeqLen != 16) fail("CLR twice should clear the pattern (len %d)", gSeqLen); }
+		  pageStripTouch(cx); if (!gLs || gLsN != NSTEP / ROLL_VIEW + 2) fail("BARS: a tap opens its list (%d %d)", gLs, gLsN);
+		  lsPick(NSTEP / ROLL_VIEW); if (gLs || gSeqLen != 48) fail("BARS: CUT EMPTY keeps bars 1-3 (len %d)", gSeqLen);
+		  stepSetNote(40, 62, 0); gGtHit = -1; seqTrimTail(); if (gSeqLen != 16) fail("an erased last note should cut the empty bars (len %d)", gSeqLen);
+		  stepSetNote(40, 62, 1); gSeqLen = 48; lsPick(0); if (gSeqLen != 16 || !gSeq[40].n) fail("BARS: 1 BAR plays one bar, the notes past it stay (len %d)", gSeqLen);
+		  pageStripTouch(cx); lsPick(NSTEP / ROLL_VIEW + 1); if (gSeq[3].n || gSeq[40].n || gSeqLen != 16) fail("BARS: CLEAR ALL should clear the pattern (len %d)", gSeqLen); }
 		if (!gMyDrum[1][20] || gDrLen[0] != 32) fail("drums save + load at 32 steps (%d, len %d)", gMyDrum[1][20], gDrLen[0]);
 		{   // SAMPLE kit: WAVs in a folder, named by drum; missing ones stay 808
 			static const char* NM[][2] = {{"Kick 01.wav", "0"}, {"808 Open Hat.wav", "3"}, {"hh.WAV", "2"}, {"Lo Tom.wav", "6"}, {"tom2.wav", "7"}, {"Cowbell.wav", "8"}, {"7.wav", "6"}, {"readme.txt", "-1"}};

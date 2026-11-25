@@ -104,11 +104,11 @@ static void SCRIPT(int fr) {
 		gStyle = 14; gPreset = 0; presetLoad(14, 0); gEdited = 0; gGuard = 0;
 		if (gVoiceMode < 3) fail("browser: a DRUMS kit should play the kit");
 		gStyle = 15; presetLoad(15, 0); if (!gDrums || !gBeatFromPatch) fail("browser: a GROOVE patch should bring its beat (%d)", gDrums);
-		browseStep(1, 0, 1); if (gStyle != NSTYLES - 1) fail("browser: DRUMS / GROOVE are out of the list: > goes to USER (%d)", gStyle);
-		if (gDrums) fail("browser: moving GROOVE -> USER should stop the patch's beat");
+		browseStep(1, 0, 1); if (gStyle != NSTYLES - 2) fail("browser: DRUMS / GROOVE are out of the list: > goes to IDM (%d)", gStyle);
+		if (gDrums) fail("browser: moving GROOVE -> IDM should stop the patch's beat");
 		gStyle = 14; gPreset = 0; presetLoad(14, 0); gEdited = 0; gGuard = 0;
 		gStyle = NSTYLES - 1; gPreset = 0; for (int i = 0; i < NUSER; i++) gUser[i].magic = 0;
-		gStyle = 15; presetLoad(15, 0); gEdited = 0; gGuard = 0; browseStep(1, 0, 1); if (gVoiceMode >= 3 || gDrums) fail("browser: into USER the kit and beat should go (vm %d, drums %d)", gVoiceMode, gDrums);
+		presetLoad(15, 0); gStyle = NSTYLES - 2; gEdited = 0; gGuard = 0; browseStep(1, 0, 1); if (gVoiceMode >= 3 || gDrums) fail("browser: into USER the kit and beat should go (vm %d, drums %d)", gVoiceMode, gDrums);
 		if (strcmp(gPatchName, "BOOM BAP BASS")) fail("browser: an empty USER slot keeps the sound (%s)", gPatchName);
 		gGuard = 0; gEdited = 0; gStyle = NSTYLES - 1; gPreset = 1; presetLoad(15, 0); gStyle = NSTYLES - 1; gPreset = 1;
 		browseStep(0, -1, 1); if (gDrums) fail("browser: an empty USER slot should stop a patch's beat");

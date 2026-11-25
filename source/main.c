@@ -2575,8 +2575,9 @@ static int patUsed(int i) { const SeqPat* p = i == gPatCur ? NULL : &gPat[i]; fo
 static const char* SEQ_PATH = "sdmc:/3ds/syrup/seq.bin";
 #define SEQ_MAGIC 0x53455131   // "SEQ1"
 static SeqPat gSnapPat[NPAT]; static u8 gSnapSong[NSONG]; static int gSnapHdr[4];
-typedef struct { u32 m; int prog, autoOn, bass; s8 ct[64]; u8 cl[64], cq[64]; char line[17]; u8 mute[4]; float lvl[3], send[3]; } PartSnap;   // after the song: the CHORD / BASS parts
-#define PART_MAGIC 0x33545250   // "PRT3"
+typedef struct { u32 m; int prog, autoOn, bass; s8 ct[64]; u8 cl[64], cq[64]; char line[17]; u8 mute[4]; float lvl[3], send[3]; u8 arp[4]; } PartSnap;   // after the song: the CHORD / BASS parts
+#define PART_MAGIC 0x34545250   // "PRT4" (+ CHORD ARP)
+#define PART_MAGIC3 0x33545250   // "PRT3"
 static PartSnap gSnapPart; static void partSnapGet(PartSnap* q); static void partSnapSet(const PartSnap* q);
 static void seqSnap(void) {   // copy what gets saved (hold the voice lock: the audio tick can switch patterns)
 	patStore(); memcpy(gSnapPat, gPat, sizeof(gPat)); memcpy(gSnapSong, gSong, sizeof(gSong));
@@ -2626,7 +2627,8 @@ static void seqLoad(void) {
 			ok = 1;
 		}
 		memset(song, 0, sizeof(song)); ok = ok && fread(song, 1, sizeof(song), f) >= 32;   // files from before the song grew to 64 hold 32
-		PartSnap ps; if (ok && fread(&ps, sizeof(ps), 1, f) == 1 && ps.m == PART_MAGIC) partSnapSet(&ps);   // (older files: no parts saved)
+		PartSnap ps; memset(&ps, 0, sizeof(ps)); size_t got = ok ? fread(&ps, 1, sizeof(ps), f) : 0;   // (older files: no parts saved; PRT3: no arp)
+		if (got >= offsetof(PartSnap, arp) && (ps.m == PART_MAGIC || ps.m == PART_MAGIC3)) { if (ps.m == PART_MAGIC3) memset(ps.arp, 0, sizeof(ps.arp)); partSnapSet(&ps); }
 	}
 	if (ok) {
 		memcpy(gPat, tmp, sizeof(gPat)); memcpy(gSong, song, sizeof(gSong));
@@ -3386,13 +3388,13 @@ static void q_vowelpad(SPatch* p) {   // no quirks: slow vowel morph, breath ben
 
 typedef struct { const char* name; void (*fn)(SPatch*); } PresetDef;
 #define MAXPRE 20
-#define NSTYLES 17   // last style = USER
+#define NSTYLES 18   // last style = USER
 // the browser lists these (DRUMS and GROOVE stay in the code, for old saves, but are out of the menus: the drum grid does that now)
-#define NVSTY 15
-static const int VSTY[NVSTY] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16};
-static int stySlot(int st) { for (int i = 0; i < NVSTY; i++) if (VSTY[i] == st) return i; return st == 16 ? NVSTY - 1 : NVSTY - 2; }   /* DRUMS / GROOVE (hidden): as if on RAVE, so > is USER */
+#define NVSTY 16
+static const int VSTY[NVSTY] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17};
+static int stySlot(int st) { for (int i = 0; i < NVSTY; i++) if (VSTY[i] == st) return i; return st == NSTYLES - 1 ? NVSTY - 1 : NVSTY - 3; }   /* DRUMS / GROOVE (hidden): as if on RAVE, so > is USER */
 static int styHidden(int st) { return st == 14 || st == 15; }
-static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "CHIPSET", "MOTION", "QUIRKS", "RAVE", "DRUMS", "GROOVE", "USER"};
+static const char* STYLE_NAMES[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQUENCE", "TEXTURE", "CHIP", "SPACE", "CHIPSET", "MOTION", "QUIRKS", "RAVE", "DRUMS", "GROOVE", "IDM", "USER"};
 #define STYLE_SPACE 9
 // ---- RAVE (euro house and rave: pads, stabs, piano, organ bass, hoover)
 static void r_ravestrings(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 4; OA.detune = 20; OA.width = 1; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = 1; OB.uni = 2; OB.detune = 12; OB.level = 0.3f;
@@ -3547,6 +3549,34 @@ static void u_ksbass(SPatch* p) { p->master = 0.8f; OA.table = T_PLUCK; OA.pos =
 	ENV1(0.001f, 0, 1.4f, 0.0f, 0.15f); p->subLevel = 0.3f; p->voiceMode = 1; NOSTICK; p->xyMode = 7; }
 static void u_ksharp(SPatch* p) { p->master = 0.7f; OA.table = T_PLUCK; OA.pos = 1.0f; OA.oct = 1; ENV2(0.0f, 0, 1.6f, 0.0f, 0.8f); MOD(2, SRC_ENV2, DST_APOS, -1.0f); MOD(3, SRC_VEL, DST_APOS, -0.3f);
 	ENV1(0.001f, 0, 3.5f, 0.0f, 1.2f); REVB(0.35f, RV_HALL); DLYS(0.15f, S8D, DL_PING); NOSTICK; p->xyMode = 7; }
+// ---- IDM: Warp-records-era electronics - music-box bells that drift out of tune, cold detuned pads, a darker acid,
+// a sub you feel, prepared-piano plucks, a squelchy mono lead, tape-warped strings and a broken-toy chip voice.
+static void i_bells(SPatch* p) { p->master = 0.6f; OA.table = T_DIGITAL; OA.pos = 0.62f; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 2; OB.level = 0.25f;
+	ENV1(0.001f, 0, 1.6f, 0.0f, 1.4f); LFO(0, LS_SINE, 0, 0.23f); MOD(2, SRC_LFO1, DST_PITCH, 0.004f); MOD(3, SRC_RAND, DST_PITCH, 0.003f);   // a music box that's been in the sun
+	REVB(0.4f, RV_HALL); DLYS(0.28f, S8D, DL_PING); p->eqHigh = 1; NOSTICK; }
+static void i_saw85(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 5; OA.detune = 22; OA.width = 1; OB.on = 1; OB.table = T_PWM; OB.pos = 0.4f; OB.oct = 1; OB.level = 0.22f;
+	ENV1(0.6f, 0, 1.0f, 0.95f, 2.2f); LFO(0, LS_SINE, 0, 0.09f); LFO(1, LS_TRI, 0, 0.31f); MOD(2, SRC_LFO1, DST_PITCH, 0.006f); MOD(3, SRC_LFO2, DST_OFCUT, 0.08f);   // the wow of an old cassette
+	OUTF(OF_L12, 0.62f, 0.12f, 0, 0); MFX(FX_CHORUS, 0.35f, 0.7f, 0.5f); REVB(0.45f, RV_HALL); DLYS(0.2f, S4, DL_TAPE); p->dlyWow = 0.6f; p->eqLow = -3; }
+static void i_analord(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SQR; OA.oct = -1; OA.level = 0.8f; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = -1; OB.detune = 9; OB.level = 0.5f;
+	ENV1(0.002f, 0, 0.25f, 0.4f, 0.12f); ENV2(0.0f, 0, 0.22f, 0.0f, 0.1f); MOD(0, SRC_ENV2, DST_OFCUT, 0.5f); MOD(2, SRC_VEL, DST_OFCUT, 0.2f);
+	OUTF(OF_ACID, 0.3f, 0.7f, 0.35f, 0.35f); p->voiceMode = 1; p->glide = 0.07f; DLYS(0.18f, S8D, DL_DUB); REVB(0.12f, RV_SPRING); NOSTICK; lane(p, 0, 4, 4, 0.2f, 0.8f, 1); p->xyMode = 3; }
+static void i_sub(SPatch* p) { p->master = 0.8f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -1; OB.on = 1; OB.table = T_BASIC; OB.pos = TRI; OB.level = 0.18f;
+	ENV1(0.004f, 0, 0.6f, 0.75f, 0.18f); DRV(1, 0.18f); OUTF(OF_LP, 0.35f, 0.05f, 0, 0); p->voiceMode = 1; p->glide = 0.05f; NOSTICK; }
+static void i_prepared(SPatch* p) { p->master = 0.7f; OA.table = T_PLUCK; OA.pos = 1.0f; OB.on = 1; OB.table = T_DIGITAL; OB.pos = 0.8f; OB.oct = 1; OB.detune = 14; OB.level = 0.22f;   // a bolt on the strings
+	ENV2(0.0f, 0, 0.35f, 0.0f, 0.2f); MOD(2, SRC_ENV2, DST_APOS, -1.0f); MOD(3, SRC_VEL, DST_APOS, -0.3f); ENV1(0.001f, 0, 0.9f, 0.0f, 0.4f);
+	OUTF(OF_LP, 0.7f, 0.15f, 0, 0); REVB(0.3f, RV_ROOM); DLYS(0.16f, S16, DL_LOFI); NOSTICK; }
+static void i_squelch(SPatch* p) { p->master = 0.55f; OA.table = T_PWM; OA.pos = 0.75f; OA.uni = 2; OA.detune = 11; OB.on = 1; OB.table = T_SYNC; OB.pos = 0.3f; OB.level = 0.4f;
+	ENV1(0.003f, 0, 0.3f, 0.6f, 0.2f); ENV2(0.0f, 0, 0.18f, 0.0f, 0.1f); MOD(0, SRC_ENV2, DST_OFCUT, 0.45f); LFO(0, LS_SH, 0, 7.0f); MOD(2, SRC_LFO1, DST_BPOS, 0.35f);   // stepped sync: the chatter
+	OUTF(OF_DIRTY, 0.45f, 0.55f, 0.4f, 0.3f); p->voiceMode = 1; p->glide = 0.04f; DLYS(0.25f, S16, DL_PING); REVB(0.2f, RV_PLATE); NOSTICK; }
+static void i_warpstr(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 4; OA.detune = 16; OA.width = 1; OB.on = 1; OB.table = T_HARMONIX; OB.pos = 0.3f; OB.oct = 1; OB.level = 0.2f;
+	ENV1(0.25f, 0, 1.0f, 0.9f, 1.4f); LFO(0, LS_SINE, 0, 5.2f); MOD(2, SRC_LFO1, DST_PITCH, 0.0025f); LFO(1, LS_SINE, 0, 0.13f); MOD(3, SRC_LFO2, DST_PITCH, 0.007f);   // vibrato on a stretched tape
+	OUTF(OF_L12, 0.55f, 0.1f, 0, 0); MFX(FX_CHORUS, 0.5f, 0.8f, 0.5f); REVB(0.45f, RV_HALL); p->eqHigh = -1; }
+static void i_toybox(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = SQR; OA.oct = 1; ENV1(0.001f, 0, 0.22f, 0.0f, 0.15f); LFO(0, LS_SQR, 0, 12.0f); MOD(2, SRC_LFO1, DST_PITCH, 0.083f);   // a fast octave trill, like a broken handheld
+	OUTF(OF_LP, 0.55f, 0.1f, 0, 0); p->lofiBits = 6; p->lofiRate = 0.2f; REVB(0.3f, RV_PLATE); DLYS(0.25f, S16, DL_PING); NOSTICK; }
+static void i_allinone(SPatch* p) { p->master = 0.72f;   // bass + chord + lead in one: headroom first, registers kept apart (A the warm body, B an octave up for presence)
+	OA.table = T_BASIC; OA.pos = 0.25f; OA.uni = 2; OA.detune = 8; OA.level = 0.52f; OB.on = 1; OB.table = T_HARMONIX; OB.pos = 0.4f; OB.oct = 1; OB.level = 0.36f;
+	ENV1(0.004f, 0, 0.28f, 0.65f, 0.22f); OUTF(OF_LP, 0.58f, 0.22f, 0, 0); LFO(0, LS_SINE, 0, 0.15f); MOD(2, SRC_LFO1, DST_APOS, 0.14f);
+	REVB(0.18f, RV_HALL); DLYS(0.12f, S8D, DL_PING); NOSTICK; }
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
 	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}, {"DARK 808", b_dark808}, {"303 SCREAM", b_303scream}},
@@ -3589,6 +3619,8 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"VOWEL KIT", d_wvowel}, {"FM KIT", d_wgrowl}, {"PLUCK KIT", d_wpluck}, {"SYNC KIT", d_wsync}, {"PULSE KIT", d_wpwm}, {"SOFT KIT", d_wharm}},
 	{{"BOOM BAP BASS", g_boombap}, {"TRAP SP-12", g_trap}, {"EUCLID CHIP", g_euclid}, {"BEATBOX TAP", g_beatbox}, {"LOOP PARTNER", g_loopcomp},
 	 {"TAPE LOOP", g_tapeloop}, {"VARIECHO", g_variecho}, {"SLOWDOWN", g_slowdown}},
+	{{"MUSIC BOX", i_bells}, {"SAW 85", i_saw85}, {"ANALORD", i_analord}, {"DEEP SUB", i_sub}, {"PREPARED", i_prepared},
+	 {"SQUELCH", i_squelch}, {"WARP STRINGS", i_warpstr}, {"TOY BOX", i_toybox}, {"ALL-IN-ONE", i_allinone}},
 };
 #define NUSER 8
 static SPatch gUser[NUSER];
@@ -3748,6 +3780,7 @@ static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every fa
 	{1.39f, 2.04f, 1.36f, 1.81f, 1.69f, 1.50f, 1.17f, 1.24f, 2.90f, 3.10f, 2.20f, 1.65f, 1.26f, 1.52f, 1.00f},   // RAVE
 	{1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.60f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // DRUMS
 	{0.94f, 0.36f, 1.00f, 0.60f, 2.50f, 0.54f, 1.80f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f},   // GROOVE
+	{0.80f, 2.00f, 0.85f, 1.00f, 1.20f, 1.10f, 1.90f, 3.50f, 1.25f},   // IDM
 };
 static int presetCount(int style) {
 	if (style == NSTYLES - 1) return NUSER;
@@ -3775,7 +3808,8 @@ static void presetLoad(int style, int idx) {
 // AUTOSAVE: the sound you were playing (edits included) comes back next time, even after a power-off.
 // last.bin = magic, style, preset, edited, the patch. Written every few seconds when it changed, and on exit.
 static const char* LAST_PATH = "sdmc:/3ds/syrup/last.bin";
-#define LAST_MAGIC 0x53594C31   // "SYL1"
+#define LAST_MAGIC 0x53594C32   // "SYL2" (SYL1: before IDM, when USER was style 16)
+#define LAST_MAGIC1 0x53594C31
 static SPatch gLastPatch; static int gLastHdr[4];
 static int lastSnap(void) {   // 1 = something changed since the last write
 	static SPatch p; patchCapture(&p);
@@ -3790,9 +3824,10 @@ static void lastWrite(void) {
 static int lastLoad(void) {
 	FILE* f = safeRead(LAST_PATH); if (!f) return 0;
 	int h[4] = {0}; static SPatch p; patchInit(&p); SPatch d = p;
-	int ok = fread(h, sizeof(h), 1, f) == 1 && h[0] == LAST_MAGIC && fread(&p, 1, sizeof(p), f) >= PATCH_V15_SIZE && (p.magic == PATCH_MAGIC || p.magic == PATCH_MAGIC15);
+	int ok = fread(h, sizeof(h), 1, f) == 1 && (h[0] == LAST_MAGIC || h[0] == LAST_MAGIC1) && fread(&p, 1, sizeof(p), f) >= PATCH_V15_SIZE && (p.magic == PATCH_MAGIC || p.magic == PATCH_MAGIC15);
 	if (ok && p.magic == PATCH_MAGIC15) { memcpy((char*)&p + PATCH_V15_SIZE, (char*)&d + PATCH_V15_SIZE, sizeof(SPatch) - PATCH_V15_SIZE); p.magic = PATCH_MAGIC; }   // v15: ENV 3 / 4 get defaults
 	fclose(f); if (!ok) return 0;
+	if (ok && h[0] == LAST_MAGIC1 && h[1] == 16) h[1] = NSTYLES - 1;   // the USER bank moved up one
 	if (h[1] >= 0 && h[1] < NSTYLES) { gStyle = gStyleCur = h[1]; gPreset = gPresetCur = h[2] >= 0 ? h[2] : 0; }
 	patchApply(&p); gEdited = h[3] ? 1 : 0; gGuard = 0;
 	gLastPatch = p; memcpy(gLastHdr, h, sizeof(h));
@@ -5142,16 +5177,23 @@ static void drawPageStrip(void) {
 		if (i == pp) rectP(x + 3, PG_Y + 4, 3, 3, cur ? TH->ink : TH->keyOn);   // the playhead is on this page
 	}
 	int cx = ROLL_KW + 4 * PG_W; rectP(cx + 1, PG_Y, 50, 11, gRollPg < NSTEP / ROLL_VIEW - 1 ? TH->tab : TH->bg); text(cx + 6, PG_Y + 2, "COPY>", 1, RGB3(TH->tabTxt));
-	{ int a = rollClrArmed(), x = cx + 53; rectP(x, PG_Y, 320 - x - 1, 11, a ? TH->warn : TH->tab); text(x + (320 - x) / 2 - 12, PG_Y + 2, a ? "ALL" : "CLR", 1, RGB3(a ? TH->ink : TH->tabTxt)); }
+	{ int x = cx + 53; rectP(x, PG_Y, 320 - x - 1, 11, TH->tab); text(x + (320 - x) / 2 - 16, PG_Y + 2, "BARS", 1, RGB3(TH->tabTxt)); }
 }
 static void undoMark(void);
+static void lsOpenBars(void);
+static int seqUsedBars(void) {   // bars up to the last one with a note in it (or a note held into it); at least 1
+	int end = 0; for (int st = 0; st < NSTEP; st++) for (int k = 0; k < gSeq[st].n; k++) { int e = st + (gSeq[st].len[k] ? gSeq[st].len[k] : 1); if (e > end) end = e; }
+	int b = (end + ROLL_VIEW - 1) / ROLL_VIEW; return b < 1 ? 1 : b;
+}
+static void seqTrimTail(void) {   // erasing left empty bars at the end: the pattern stops before them
+	int b = seqUsedBars(); if (gSeqLen <= b * ROLL_VIEW) return;
+	gSeqLen = b * ROLL_VIEW; if (gRollPg >= b) gRollPg = b - 1;
+	char m[40]; snprintf(m, sizeof(m), "EMPTY BARS CUT: %d BAR%s", b, b > 1 ? "S" : ""); say(m);
+}
 static int pageStripTouch(int x) {   // press on the strip
 	if (x < ROLL_KW) { gRollFollow = !gRollFollow; say(gRollFollow ? "FOLLOW: THE PAGE TURNS WITH THE PLAYHEAD" : "FOLLOW OFF"); return 1; }
 	int i = (x - ROLL_KW) / PG_W;
-	if (x >= ROLL_KW + 4 * PG_W + 52) {   // CLR: a double tap clears the pattern
-		if (!rollClrArmed()) { gRollClrT = osGetTime(); say("CLR: DOUBLE-TAP TO CLEAR THE PATTERN"); return 1; }
-		undoMark(); memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 16; gRollPg = 0; gRollClrT = 0; say("PATTERN CLEARED (SELECT+L UNDOES)"); return 1;
-	}
+	if (x >= ROLL_KW + 4 * PG_W + 52) { lsOpenBars(); return 1; }   // BARS: how many bars play, trim the empty ones, clear
 	if (i >= 4) {   // COPY>
 		if (gRollPg >= NSTEP / ROLL_VIEW - 1) { say("THE LAST PAGE"); return 0; }
 		undoMark(); int a = RP0, b = a + ROLL_VIEW; memcpy(&gSeq[b], &gSeq[a], sizeof(Step) * ROLL_VIEW);
@@ -5587,7 +5629,7 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (gSelHeld && x >= ROLL_KW) {   // SELECT held: the stylus is an eraser (every note it touches goes)
 		static int erased = 0; if (press) { erased = 0; gGtSt = -1; }
 		if (release) return 0;
-		if (ok) { int h = noteCover(st, nt, NULL); if (h >= 0) { if (!erased) undoMark(); erased = 1; stepSetNote(h, nt, 0); return 1; } }
+		if (ok) { int h = noteCover(st, nt, NULL); if (h >= 0) { if (!erased) undoMark(); erased = 1; stepSetNote(h, nt, 0); seqTrimTail(); return 1; } }
 		return 0;
 	}
 	if (press) {
@@ -5616,7 +5658,7 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 		int s0 = gGtSt; gGtSt = -1;
 		if (gGtDrag || gGtLong) return gGtDrag;
 		if (rowOfNote(gGtNote) >= 0) { say("RHYTHM ROW: HOLD A STEP TO CHANGE IT (ROW LEN / EUCL)"); return 0; }
-		if (gGtHit >= 0) { undoMark(); stepSetNote(gGtHit, gGtNote, 0); return 1; }   // tap a note: gone
+		if (gGtHit >= 0) { undoMark(); stepSetNote(gGtHit, gGtNote, 0); seqTrimTail(); return 1; }   // tap a note: gone
 		if (gSeq[s0].n >= 4) { say("4 NOTES PER STEP"); return 0; }
 		undoMark();
 		if (gRollChord > 0 && gRollChord < NCHORD) {   // ROLL CHORD: the whole chord on this step, the tapped note its root
@@ -5628,7 +5670,7 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	{   // ERASER: from an empty cell go up or down first, then scribble: every note you cross goes (sideways first = a long note)
 		int er = gGtErase;
 		if (!er && gGtHit < 0 && !gGtLong && !gGtDrag && abs(y - gGtY0) > 8 && abs(y - gGtY0) > abs(x - gGtX0) * 2) { er = gGtErase = 1; gGtDrag = 1; undoMark(); say("ERASER: SCRIBBLE OVER NOTES"); }
-		if (er) { int h = ok ? noteCover(st, nt, NULL) : -1; if (h >= 0) { stepSetNote(h, nt, 0); return 1; } return 0; }
+		if (er) { int h = ok ? noteCover(st, nt, NULL) : -1; if (h >= 0) { stepSetNote(h, nt, 0); seqTrimTail(); return 1; } return 0; }
 	}
 	if (!gGtLong && gGtHit >= 0 && !gGtDrag) {   // first move on a note straight up or down: its VELOCITY (down = softer)
 		int dx = x - gGtX0, dy = y - gGtY0;
@@ -5745,7 +5787,27 @@ static s8 gCtDeg[CT_N] = {[0 ... CT_N - 1] = -1}; static u8 gCtLen[CT_N], gCtQ[C
 static const char* CTQ_SUF[NCTQ] = {"", "7", "9", "SUS", "/I"};
 static void trkLiveNote(int c, int note, float vel);
 static int gCtHeld[6], gCtHeldN = 0;   // the CHORD part's notes sounding (its own voices, not the keys')
+// CHORD ARP: the CHORD part plays its chord one note at a time (UP / DOWN / UP+DN / RANDOM), at a RATE, over 1-3 octaves
+#define NCARP 5
+#define NCARPR 6
+static int gCtArp = 0, gCtArpRate = 2, gCtArpOct = 0;
+static const char* CARP_NAMES[NCARP] = {"OFF", "UP", "DOWN", "UP+DN", "RANDOM"};
+static const char* CARPR_NAMES[NCARPR] = {"1/4", "1/8", "1/16", "1/32", "1/8T", "1/16T"};
+static const char* CARPO_NAMES[3] = {"1 OCT", "2 OCT", "3 OCT"};
+static const float CARPR_MUL[NCARPR] = {0.25f, 0.5f, 1, 2, 0.75f, 1.5f};   // notes per 16th
+static int gCtArpNt[18], gCtArpN = 0, gCtArpCur = -1; static long gCtArpLast = -1; static float gCtArpPh = 0; static unsigned gCtArpRs = 1;
 static void partChordPlay(const int* notes, int n, float vel) {   // the CHORD part: let the last chord go, start this one
+	if (gCtArp) {   // ARP: only remember the chord; the arp tick plays it
+		gVoicePart = 1; for (int i = 0; i < gCtHeldN; i++) voiceFade(gCtHeld[i], 0.08f); gVoicePart = 0; gCtHeldN = 0;
+		int m = n > 6 ? 6 : n, s[6]; for (int i = 0; i < m; i++) s[i] = notes[i];
+		for (int i = 1; i < m; i++) for (int j = i; j > 0 && s[j] < s[j - 1]; j--) { int t = s[j]; s[j] = s[j - 1]; s[j - 1] = t; }   // low to high
+		int on = gCtArpOct < 0 ? 0 : gCtArpOct > 2 ? 2 : gCtArpOct; gCtArpN = 0;
+		for (int o = 0; o <= on; o++) for (int i = 0; i < m; i++) gCtArpNt[gCtArpN++] = s[i] + 12 * o;
+		if (!m && gCtArpCur >= 0) { gVoicePart = 1; voiceFade(gCtArpCur, 0.08f); gVoicePart = 0; gCtArpCur = -1; }
+		if (m && gCtArpCur < 0) gCtArpLast = -1;   // a new chord after a gap: start on the next arp step
+		return;
+	}
+	if (gCtArpCur >= 0) { gVoicePart = 1; voiceFade(gCtArpCur, 0.08f); gVoicePart = 0; gCtArpCur = -1; gCtArpN = 0; }
 	gVoicePart = 1; for (int i = 0; i < gCtHeldN; i++) { int keep = 0; for (int j = 0; j < n; j++) if (notes[j] == gCtHeld[i]) keep = 1; if (!keep) voiceFade(gCtHeld[i], 0.08f); }
 	for (int j = 0; j < n && j < 6; j++) { int had = 0; for (int i = 0; i < gCtHeldN; i++) if (gCtHeld[i] == notes[j]) had = 1; if (!had) voiceOn(notes[j], vel); }
 	gVoicePart = 0; gCtHeldN = 0; for (int j = 0; j < n && j < 6; j++) gCtHeld[gCtHeldN++] = notes[j];
@@ -5962,7 +6024,22 @@ static void progTick(void) {   // audio tick: AUTO plays the progression's next 
 	if (bar == lastBar) return;
 	lastBar = bar; gProgAt = (int)(bar % 4); gPadSel = PROGS[gProg][gProgAt]; gPadN = padChord(gPadBase, gPadSel, 0, 1, gPadNotes); if (!gPartMute[1]) partChordPlay(gPadNotes, gPadN, 0.8f); gProgDirty = 1;
 }
+static void chordArpTick(float dt) {   // audio tick: the CHORD part's arp, on the transport (or its own clock when stopped)
+	if (!gCtArp || !gCtArpN || gPartMute[1]) { if (gCtArpCur >= 0) { gVoicePart = 1; voiceFade(gCtArpCur, 0.06f); gVoicePart = 0; gCtArpCur = -1; } if (!gCtArp) gCtArpN = 0; return; }
+	float mul = CARPR_MUL[gCtArpRate < 0 || gCtArpRate >= NCARPR ? 2 : gCtArpRate];
+	double pos; if (gSeqPlaying) pos = transportPos16(); else { gCtArpPh += dt * gBPM / 60.0f * 4.0f; pos = gCtArpPh; }
+	long k = (long)floor(pos * mul + 1e-6); if (k == gCtArpLast) return; gCtArpLast = k;
+	int n = gCtArpN, i;
+	if (gCtArp == 1) i = (int)(k % n);
+	else if (gCtArp == 2) i = n - 1 - (int)(k % n);
+	else if (gCtArp == 3) { int per = n > 1 ? 2 * n - 2 : 1; int q = (int)(k % per); i = q < n ? q : per - q; }
+	else { gCtArpRs = gCtArpRs * 1103515245u + 12345u; i = (int)((gCtArpRs >> 16) % (unsigned)n); }
+	int nt = gCtArpNt[i < 0 ? 0 : i >= n ? n - 1 : i];
+	gVoicePart = 1; if (gCtArpCur >= 0) voiceFade(gCtArpCur, 0.05f); voiceOn(nt, (k % 4) == 0 ? 0.85f : 0.68f); gVoicePart = 0; gCtArpCur = nt;
+	trkLiveNote(0, nt, 0.75f);
+}
 static void padsTick(float dt) {   // strummed notes ring for a moment, then let go
+	chordArpTick(dt);
 	{ static int lastRow = -1; if (!gSeqPlaying) gTrkLivePh += dt * gBPM / 60.0f * 4.0f; if (gTrkLivePh >= 16) gTrkLivePh -= 16;   // TRACKER LIVE: its rows' clock
 	  int r = trkLiveRow(); if (r != lastRow) { lastRow = r; gTrkLiveN++; }
 	  static float idle = 0; if (gHeldN || gBassNote >= 0) idle = 0; else if (gTrkLiveOn && (idle += dt) > 4) { gTrkLiveOn = 0; idle = 0; } }
@@ -6604,7 +6681,7 @@ static int gSlDrag = -1;
 #define BR_COLS 3
 #define BR_ROWS 6
 static int gBrStyle = -1;   // the style shown (-1 = the one playing)
-static const char* STYLE_SHORT[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQ", "TEXTUR", "CHIP", "SPACE", "CHPSET", "MOTION", "QUIRKS", "RAVE", "DRUMS", "GROOVE", "USER"};
+static const char* STYLE_SHORT[NSTYLES] = {"BASS", "LEAD", "PAD", "KEYS", "PLUCK", "CHORD", "SEQ", "TEXTUR", "CHIP", "SPACE", "CHPSET", "MOTION", "QUIRKS", "RAVE", "DRUMS", "GROOVE", "IDM", "USER"};
 static int brStyle(void) { return gBrStyle >= 0 ? gBrStyle : gStyle; }
 static int brCount(int st) { return presetCount(st) + (st == NSTYLES - 1); }   // USER: the slots, then INIT PATCH
 static int brFirst(void) { int f = stySlot(brStyle()) - 2; if (f < 0) f = 0; if (f > NVSTY - 5) f = NVSTY - 5; return f; }   // a position in VSTY
@@ -6834,9 +6911,9 @@ static const char* pnlShort(const char* n) {   // a slider's name in 4 letters
 }
 // LIST: a choice opens every option at once; tap one (or D-pad + A, B closes)
 #define LS_MAX 64
-enum { LS_PARAM, LS_COND, LS_RATE, LS_LEN, LS_EUCL };
+enum { LS_PARAM, LS_COND, LS_RATE, LS_LEN, LS_EUCL, LS_BARS };
 static int gLs = 0, gLsN, gLsCur, gLsTop, gLsKind; static Param* gLsP; static char gLsTitle[24]; static char gLsNm[LS_MAX][14];
-static void lsOpenParam(Param* p);
+static void lsOpenParam(Param* p); static void lsOpenBars(void);
 static void drawLs(void); static int lsTouch(int x, int y); static void lsPick(int i); static int lsCols(void);
 static void downTri(int x, int y, const u8* c) { rectP(x, y, 7, 1, c); rectP(x + 1, y + 1, 5, 1, c); rectP(x + 2, y + 2, 3, 1, c); rectP(x + 3, y + 3, 1, 1, c); }
 #define PNL_SUB_Y 24
@@ -10255,6 +10332,11 @@ static void lsOpenParam(Param* p) {
 	for (int i = 0; i < n; i++) { tmp = (int)p->mn + i; paramFmt(&q, gLsNm[i], sizeof(gLsNm[i])); }
 	gLsP = p; lsOpen(p->name, n, *(int*)p->p - (int)p->mn, LS_PARAM);
 }
+static void lsOpenBars(void) {
+	int nb = NSTEP / ROLL_VIEW; for (int i = 0; i < nb; i++) snprintf(gLsNm[i], 14, "%d BAR%s", i + 1, i ? "S" : "");
+	snprintf(gLsNm[nb], 14, "CUT EMPTY"); snprintf(gLsNm[nb + 1], 14, "CLEAR ALL");
+	lsOpen("PATTERN BARS", nb + 2, (gSeqLen + ROLL_VIEW - 1) / ROLL_VIEW - 1, LS_BARS);
+}
 static void lsOpenDrum(int kind) {
 	int r = gDgEdR, L = gDrLen[r] < 1 ? 16 : gDrLen[r];
 	if (kind == LS_COND) { for (int i = 0; i < NCOND; i++) snprintf(gLsNm[i], 14, "%s", COND_NAMES[i]); lsOpen("PLAY IF", NCOND, gDrCond[r][gDgEdI], kind); }
@@ -10302,6 +10384,11 @@ static void lsPick(int i) {
 	case LS_COND: drumGridMark(); gDrCond[r][gDgEdI] = (u8)i; gDrumSaveDue = 1; break;
 	case LS_RATE: gDrRate[r] = (u8)i; gDrumSaveDue = 1; break;
 	case LS_LEN: gDrLen[r] = (u8)(i + 1); gDrumSaveDue = 1; break;
+	case LS_BARS: { int nb = NSTEP / ROLL_VIEW; undoMark();
+		if (i < nb) { gSeqLen = (i + 1) * ROLL_VIEW; if (gRollPg > i) gRollPg = i; snprintf(m, sizeof(m), "PATTERN: %d BAR%s (NOTES PAST IT STAY, UNPLAYED)", i + 1, i ? "S" : ""); }
+		else if (i == nb) { int b = seqUsedBars(); gSeqLen = b * ROLL_VIEW; if (gRollPg >= b) gRollPg = b - 1; snprintf(m, sizeof(m), "EMPTY BARS CUT: %d BAR%s", b, b > 1 ? "S" : ""); }
+		else { memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 16; gRollPg = 0; snprintf(m, sizeof(m), "PATTERN CLEARED (SELECT+L UNDOES)"); }
+		say(m); return; }
 	default: { int L = gDrLen[r] < 1 ? 16 : gDrLen[r], n = 0; for (int k = 0; k < L; k++) if (drumCellOn(r, k)) n++; if (i != n) drumEuclid(r, i - n); }
 	}
 	snprintf(m, sizeof(m), "%s: %s", gLsTitle, gLsNm[i]); say(m);
@@ -10672,6 +10759,7 @@ static const char* PART_NAMES[4] = {"SYNTH", "CHORD", "BASS", "DRUMS"};
 static int gPtK = -1, gPtMuted = 0; static u64 gPtT0 = 0;
 static Param P_PCHORD[] = {
 	PE("PROGRESSION", &gProg, NPROG, PROG_NAMES, 0), PE("PLAY ON BARS", &gProgAuto, 2, ONOFF, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0),
+	PE("CHORD ARP", &gCtArp, NCARP, CARP_NAMES, 0), PE("ARP RATE", &gCtArpRate, NCARPR, CARPR_NAMES, 0), PE("ARP OCTAVES", &gCtArpOct, 3, CARPO_NAMES, 0),
 	PE("STRUM VOICES", &gStrumVox, 4, STRUMVOX_NAMES, 0), PE("STRUM NOTES", &gStrumScale, 2, STRN_NAMES, 0),
 	PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE), PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0),
 	PEND};
@@ -10932,6 +11020,7 @@ static void partSnapGet(PartSnap* q) {
 	memset(q, 0, sizeof(*q)); q->m = PART_MAGIC; q->prog = gProg; q->autoOn = gProgAuto; q->bass = gPadBass;
 	memcpy(q->ct, gCtDeg, CT_N); memcpy(q->cl, gCtLen, CT_N); memcpy(q->cq, gCtQ, CT_N); memcpy(q->line, gBassUser, 17); memcpy(q->mute, gPartMute, 4);
 	for (int i = 0; i < 3; i++) { q->lvl[i] = gPartLvl[i]; q->send[i] = gPartSend[i]; }
+	q->arp[0] = (u8)gCtArp; q->arp[1] = (u8)gCtArpRate; q->arp[2] = (u8)gCtArpOct;
 }
 static int nudgeArmed(void) {
 	if (gSeqPart == 1) return gProg == PROG_CUSTOM && gCgSel >= 0 && gCgSel < CT_N && gCtDeg[gCgSel] >= 0;
@@ -10963,6 +11052,7 @@ static void partSnapSet(const PartSnap* q) {
 	for (int i = 0; i < 16; i++) { char c = q->line[i]; gBassUser[i] = strchr("R357O-_", c) && c ? c : '-'; } gBassUser[16] = 0;
 	for (int i = 0; i < 4; i++) gPartMute[i] = q->mute[i] ? 1 : 0;
 	for (int i = 0; i < 3; i++) { gPartLvl[i] = q->lvl[i] >= 0 && q->lvl[i] <= 1.5f ? q->lvl[i] : 1; gPartSend[i] = q->send[i] >= 0 && q->send[i] <= 1 ? q->send[i] : 1; }
+	gCtArp = q->arp[0] < NCARP ? q->arp[0] : 0; gCtArpRate = q->arp[1] < NCARPR ? q->arp[1] : 2; gCtArpOct = q->arp[2] < 3 ? q->arp[2] : 0;
 }
 static void drawRollChords(void) {
 	text(10, RC_Y - 2, "ROLL CHORD: A TAP WRITES", 1, RGB3(TH->dim));
@@ -12020,7 +12110,9 @@ int main(void) {
 		}
 		if (startAct == START_QUIT) break;   // QUIT
 		WHERE("WAKE"); wakeTick();
-		if (gSongEndReq) { gSongEndReq = 0; if (gSeqMode == 1) transportToggle(); gSongPos = 0; say("SONG END (SONG LOOP: OFF)"); }   // the song ran out: stop and rewind
+		if (gSongEndReq) { gSongEndReq = 0;
+			if (gTapeRec >= 0 && gTapeState >= 3) { if (!gTapeLen) gTapeRecLen = gTapePos - gTapePos % 2; tapeRecStop(1); }   // a take the length of the song: the song ending is the take ending (keep it)
+			else if (gSeqMode == 1) transportToggle(); gSongPos = 0; say("SONG END (SONG LOOP: OFF)"); }   // the song ran out: stop and rewind
 		{ static int lb = -1; int b = recAny() ? (int)((osGetTime() / 250) & 1) : -1; if (b != lb) { topDirty = botDirty = 1; lb = b; } }   // REC / MIC blink
 		WHERE("VOICE LOCK"); LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		WHERE("MOTION / CAMERA"); BREATHE();
