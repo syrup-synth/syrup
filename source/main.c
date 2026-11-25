@@ -598,6 +598,10 @@ static float gCutoff = 0.75f, gRes = 0.1f, gKeytrack = 0.3f;
 static AHDSR gEnv1 = {0.005f, 0.0f, 0.6f, 0.7f, 0.35f}, gEnv2 = {0.002f, 0.0f, 0.45f, 0.2f, 0.4f};
 static AHDSR gEnv3 = {0.0f, 0.0f, 0.3f, 0.0f, 0.2f}, gEnv4 = {0.5f, 0.0f, 1.0f, 0.5f, 0.8f};   // ENV 3 / 4: mod-only envelopes (a pluck and a swell to start with)
 static LFO gLfo[2] = {{0, 0, 0.6f, 0, 0, 0}, {1, 1, 4.0f, 0, 0, 0}};
+static int gClkOut = 0;   // MIDI CLOCK OUT: 24 pulses a beat + START / STOP to the Network MIDI session, from the audio clock
+#define MCOQ 128
+static u8 gMcoSt[MCOQ]; static u64 gMcoT[MCOQ]; static volatile u32 gMcoW = 0, gMcoR = 0; static volatile u32 gMcoPulses = 0; static double gClkOutPh = 0;
+static void mcoPush(u8 st) { u32 w = gMcoW, n = (w + 1) % MCOQ; if (n == gMcoR) return; gMcoSt[w] = st; gMcoT[w] = osGetTime() * 10; __sync_synchronize(); gMcoW = n; if (st == 0xF8) gMcoPulses++; }
 static int gLfoCC[2] = {0, 0};   // LFO1/2 CC OUT: send the LFO as this CC (0 = off) to the Network MIDI session, channel 1
 static ModSlot gMod[8] = {{SRC_ENV2, DST_CUTOFF, 0.35f}, {SRC_STICK, DST_APOS, 0.5f}, {SRC_LFO1, DST_BPOS, 0.0f}, {SRC_OFF, DST_PITCH, 0.0f}};
 static int gVoiceMode = 0, gChord = 0, gFx = 0, gEchoT = 1, gDrive = 0, gBendRange = 2;
@@ -2507,6 +2511,14 @@ static void audioTick(void* data) {
 		clickTick();
 		shakeQTick();
 		gateTick(d, seqStepNow());
+		if (gClkOut) {   // MIDI CLOCK OUT: straight time (swing is ours), START on PLAY with the first pulse, STOP with STOP
+			static int was = 0;
+			if (gSeqPlaying && !was) { mcoPush(0xFA); mcoPush(0xF8); gClkOutPh = 0; }
+			else if (!gSeqPlaying && was) mcoPush(0xFC);
+			was = gSeqPlaying;
+			gClkOutPh += d * gBPM / 60.0 * 24.0;
+			while (gClkOutPh >= 1.0) { gClkOutPh -= 1.0; if (!gClkSilent) mcoPush(0xF8); }
+		}
 	}
 	gClkSilent = 0;
 	mixRampTick(); csRampTick();
@@ -3981,7 +3993,7 @@ static Param P_MOD[] = {
 	PF("MACRO 1", &gMacro[0], 0, 1, 0.02f, "%", 0), PF("MACRO 2", &gMacro[1], 0, 1, 0.02f, "%", 0), PF("MACRO 3", &gMacro[2], 0, 1, 0.02f, "%", 0), PF("MACRO 4", &gMacro[3], 0, 1, 0.02f, "%", 0),
 	PE("XY PAD", &gXyMode, NXY, XY_NAMES, D_THEME), PF("CHAOS RATE", &gChaosRate, 0, 1, 0.02f, "%", 0),
 	PF("LFO3 RATE", &gDlRate[0], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO3 SYNC", &gDlSync[0], NSYNC, SYNC_NAMES, 0), PE("LFO3 TRIG", &gDlTrig[0], 3, DLTRIG_NAMES, 0), PF("LFO4 RATE", &gDlRate[1], 0.05f, 20, 0.05f, "HZ", 0), PE("LFO4 SYNC", &gDlSync[1], NSYNC, SYNC_NAMES, 0), PE("LFO4 TRIG", &gDlTrig[1], 3, DLTRIG_NAMES, 0),
-	PI_("LFO1 CC OUT", &gLfoCC[0], 0, 127, 0), PI_("LFO2 CC OUT", &gLfoCC[1], 0, 127, 0),
+	PE("MIDI CLOCK OUT", &gClkOut, 2, ONOFF, 0), PI_("LFO1 CC OUT", &gLfoCC[0], 0, 127, 0), PI_("LFO2 CC OUT", &gLfoCC[1], 0, 127, 0),
 	PE("LFO1 SHAPE", &gLfo[0].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO1 RATE", &gLfo[0].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO1 SYNC", &gLfo[0].sync, NSYNC, SYNC_NAMES, 0),
 	PE("LFO1 MODE", &gLfo[0].mode, 2, LFO_MODES, 0), PE("LFO1 TABLE", &gLfo[0].table, T_BUILTIN, BUILTIN_NAMES, 0), PF("LFO1 WT POS", &gLfo[0].pos, 0, 1, 0.02f, "%", 0),
 	PE("LFO2 SHAPE", &gLfo[1].shape, NLFOSH, LFO_SHAPES, 0), PF("LFO2 RATE", &gLfo[1].rate, 0.05f, 20, 0.05f, "HZ", 0), PE("LFO2 SYNC", &gLfo[1].sync, NSYNC, SYNC_NAMES, 0),
@@ -8829,11 +8841,14 @@ static u32 gSsrc = 0x53595255;
 static u64 netNow(void) { return osGetTime() * 10; }   // 100 us units
 static int gUdData = -1; static volatile int gPeerOk = 0; static struct sockaddr_in gPeerData;   // the session's data socket + who invited us
 // MIDI OUT over the same session: an RTP-MIDI packet with one message (no journal)
-static void rtpSend(u8 st, u8 a, u8 b) {
+static void rtpSendTs(u8 st, u8 a, u8 b, u64 when);
+static void rtpSend(u8 st, u8 a, u8 b) { rtpSendTs(st, a, b, netNow()); }
+static void rtpSendTs(u8 st, u8 a, u8 b, u64 when) {
 	if (!gPeerOk || gUdData < 0) return;
-	static u16 seq = 0; u32 ts = (u32)netNow();
-	u8 r[16] = {0x80, 0x61, (u8)(seq >> 8), (u8)seq, (u8)(ts >> 24), (u8)(ts >> 16), (u8)(ts >> 8), (u8)ts, (u8)(gSsrc >> 24), (u8)(gSsrc >> 16), (u8)(gSsrc >> 8), (u8)gSsrc, 3, st, a, b};
-	seq++; sendto(gUdData, r, 16, 0, (struct sockaddr*)&gPeerData, sizeof(gPeerData));
+	static u16 seq = 0; u32 ts = (u32)when;
+	int L = st >= 0xF8 ? 1 : (st & 0xE0) == 0xC0 ? 2 : 3;   // real-time (CLOCK / START / STOP): one byte
+	u8 r[16] = {0x80, 0x61, (u8)(seq >> 8), (u8)seq, (u8)(ts >> 24), (u8)(ts >> 16), (u8)(ts >> 8), (u8)ts, (u8)(gSsrc >> 24), (u8)(gSsrc >> 16), (u8)(gSsrc >> 8), (u8)gSsrc, (u8)L, st, a, b};
+	seq++; sendto(gUdData, r, 13 + L, 0, (struct sockaddr*)&gPeerData, sizeof(gPeerData));
 }
 static void amReply(int s, struct sockaddr_in* a, const u8* pk, int n) {
 	if (n < 4) return;
@@ -8921,6 +8936,7 @@ static void netMain(void* arg) {
 			if (c->ws) cliWs(c);
 			else { c->buf[c->n] = 0; if (strstr(c->buf, "\r\n\r\n")) cliHttp(c); else if (c->n >= (int)sizeof(c->buf) - 1) cliClose(c); }
 		}
+		while (gMcoR != gMcoW) { u32 r = gMcoR; if (gMcoSt[r] == 0xF8 || gMcoSt[r] == 0xFA || gMcoSt[r] == 0xFC) rtpSendTs(gMcoSt[r], 0, 0, gMcoT[r]); gMcoR = (r + 1) % MCOQ; idle = 0; }   // MIDI CLOCK OUT, stamped with when it was due
 		if (gMirClients > 0 && gMirR != gMirW) {   // MIRROR: whole events out, one WebSocket frame to every mirror
 			static u8 fr[4 + 16384]; u32 r = gMirR, n = (gMirW - r) & (MIRQ - 1), take = 0; if (n > 16384) n = 16384;
 			while (take + 3 <= n) { u32 L = gMirQ[(r + take + 1) & (MIRQ - 1)] | (u32)gMirQ[(r + take + 2) & (MIRQ - 1)] << 8; if (take + 3 + L > n) break; take += 3 + L; }

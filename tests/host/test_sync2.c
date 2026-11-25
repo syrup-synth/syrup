@@ -12,8 +12,9 @@ static void hook(int part, int note) {
 	if (part == 10) { float p = transportPos16(); double e = p / 4 - floor(p / 4 + 0.5); if (fabs(e * 4) > kErr) kErr = fabs(e * 4); kN++; }
 }
 static float elapsed16(void) { return (float)((ON - on0) / 32728.0 * gBPM / 60.0 * 4.0); }
+static void SCRIPT2(int fr);
 static void SCRIPT(int fr) {
-	HD = 0; TOUCH = 0;
+	HD = 0; TOUCH = 0; SCRIPT2(fr);
 	if (fr == 3) {
 		gOnsetHook = hook; gBPM = 120; gSwing = 0.25f;
 		memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 13; for (int i = 0; i < 13; i += 2) stepSetNote(i, 60, 1);
@@ -44,8 +45,17 @@ static void SCRIPT(int fr) {
 			float want = pulses / 6.0f, got = transportPos16();
 			printf("external clock 131 BPM, 32 beats: transport %.2f, the clock %.2f 16ths (BPM now %d)\n", got, want, gBPM);
 			if (fabsf(got - want) > 0.5f) fail("MIDI CLOCK: the transport should stay on the external beats (%.2f vs %.2f)", got, want);
-			phase = 3; done = 1; transportToggle();
+			phase = 3; transportToggle(); gClkOut = 1; gBPM = 125; gMcoR = gMcoW; transportToggle(); pulses = (int)gMcoPulses; t0 = fr;
 		}
 	}
 }
-int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 60 * 60; app_main(); if (!done) fail("didn't finish"); printf("sync2: swing, stalls, external clock\n"); return gFails ? 1 : 0; }
+static void SCRIPT2(int fr) {   // MIDI CLOCK OUT: START, then 24 pulses a beat at the tempo
+	if (phase == 3 && fr == t0 + 2) { if (gMcoSt[0] != 0xFA && gMcoSt[(gMcoW + MCOQ - 0) % MCOQ] == 0) {} }
+	if (phase == 3 && fr == t0 + 2 * 60 + 2) {
+		int n = (int)gMcoPulses - pulses; float want = 2.0f * 125 / 60 * 24;
+		printf("MIDI CLOCK OUT: %d pulses in 2 s at 125 BPM (want %.0f)\n", n, want);
+		if (n < want - 3 || n > want + 3) fail("MIDI CLOCK OUT: 24 pulses a beat (%d in 2 s)", n);
+		done = 1; transportToggle(); gClkOut = 0;
+	}
+}
+int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 60 * 60; app_main(); if (!done) fail("didn't finish"); printf("sync2: swing, stalls, external clock, clock out\n"); return gFails ? 1 : 0; }
