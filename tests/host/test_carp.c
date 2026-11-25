@@ -22,6 +22,8 @@ static void SCRIPT(int fr) {
 	}
 	if (fr == 130) { int on = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].stage != 4 && gV[i].part == 1) on++; if (on < 3) fail("ARP OFF: the chord holds again (%d)", on); }
 	if (fr == 132) { transportToggle(); gCtArp = 3; gCtArpRate = 4; gCtArpOct = 2; gSeqSaveDue = 0; seqSave(); gCtArp = 0; gCtArpRate = 0; gCtArpOct = 0; seqLoad();
-		if (gCtArp != 3 || gCtArpRate != 4 || gCtArpOct != 2) fail("SAVE: seq.bin should keep the CHORD ARP (%d %d %d)", gCtArp, gCtArpRate, gCtArpOct); gCtArp = 0; done = 1; }
+		if (gCtArp != 3 || gCtArpRate != 4 || gCtArpOct != 2) fail("SAVE: seq.bin should keep the CHORD ARP (%d %d %d)", gCtArp, gCtArpRate, gCtArpOct); gCtArp = 1; gCtArpRate = 2; gProgAuto = 1; transportToggle(); }
+	if (fr == 150) panicAll();
+	if (fr == 165) { int on = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].stage != 4 && gV[i].part == 1) on++; if (on || gCtArpN) fail("PANIC: the chord arp should stop (%d voices, %d notes)", on, gCtArpN); transportToggle(); gCtArp = 0; done = 1; }
 }
-int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 140; app_main(); if (!done) fail("didn't run"); printf("carp: CHORD ARP up, octaves, off, saved\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 170; app_main(); if (!done) fail("didn't run"); printf("carp: CHORD ARP up, octaves, off, saved, panic\n"); return gFails ? 1 : 0; }

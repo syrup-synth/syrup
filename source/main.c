@@ -137,6 +137,10 @@ static int gVisTrails = 0, gVisParts = 1, gVisBurst = 0;
 #define TH_SYRUP 20   // the new look: dark slate, a colour per section (OSC blue, FILTER orange, FX purple)
 static const char* THEME_NAMES[NTHEMES] = {"ORIGINAL", "PIP GREEN", "DOS BLUE", "AMBER EGA", "MAGENTA", "STICKER", "IMPULSE",
 	"CYBER", "SOLARIZED", "GB POCKET", "VAPORWAVE", "CGA", "SINCLAIR", "X11", "NORD", "ACID", "BBS", "HERCULES", "HERC AMBER", "HERC GREEN", "SYRUP", "SYRUP LIGHT"};
+static const int VTH[] = {20, 21, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17};   // the themes offered (HERC AMBER / HERC GREEN wait for the monochrome set after the beta)
+#define NVTH ((int)(sizeof(VTH) / sizeof(VTH[0])))
+static int thSlot(int t) { for (int i = 0; i < NVTH; i++) if (VTH[i] == t) return i; return 0; }
+static int thStep(int t, int d) { return VTH[(thSlot(t) + NVTH + d) % NVTH]; }
 static int gTheme = TH_SYRUP,   /* SYRUP: the default look */ gScan = 0, gBright = 0;   // gBright: screen brightness 1..5, 0 = leave the system setting
 static const char* BRIGHT_NAMES[6] = {"SYSTEM", "1 DIM", "2", "3", "4", "5 BRIGHT"};
    // graphics-chip visuals (see visFrame); off by default while being tested on hardware
@@ -4724,7 +4728,7 @@ static int settingsLoad(void) {   // returns the page you were on last time
 		gStickMode = d[0] == 0x53455432 && d[2] >= 0 && d[2] < 4 ? d[2] : SM_DATA;   // older settings: the new default, DATA
 		int b = 0; if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 6) gBright = b;   // older settings: no brightness, SYSTEM
 		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 3) gSeqRate = b;
-		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < NTHEMES) gTheme = b == 16 ? TH_SYRUP : b;   // the theme you picked stays picked (the old default, BBS: the new look)
+		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < NTHEMES) gTheme = b == 16 || b == 18 || b == 19 ? TH_SYRUP : b;   // the theme you picked stays picked (the old default, BBS: the new look)
 		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 4) gXyGlide = b;
 		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 2) gN3 = b;
 	}
@@ -4766,6 +4770,7 @@ static void drawHeader(int page) {
 	const u8* acc = ps >= 0 ? pnlAcc(ps) : TH->keyOn;   // the section's colour (OSC blue, FILTER orange, FX purple), else the theme's
 	rect(0, 0, 400, 14, RGB3(TH->tab));
 	if (recAny()) { int b = (osGetTime() / 300) & 1; rect(1, 1, 46, 12, b ? 220 : 120, b ? 40 : 20, b ? 40 : 20); rect(6, 5, 4, 4, 255, 255, 255); text(14, 3, "REC", 1, 255, 255, 255); }   // RECORDING: always shown
+	else if (gSeqPlaying) { rect(1, 1, 50, 12, 40, 170, 90); for (int k = 0; k < 4; k++) rect(6 + k, 4 + k, 1, 7 - 2 * k, 255, 255, 255); text(14, 3, "PLAY", 1, 255, 255, 255); }   // PLAYING: where REC shows
 	else text(4, 3, "SYRUP", 1, acc[0], acc[1], acc[2]);
 	int x = 58;
 	for (int i = 0; i < 7; i++) {
@@ -5240,7 +5245,7 @@ static void drawGrid(void) {
 	if (gStepEd >= 0) { drawStepEd(); return; }
 	if (gPatView == 2) { drawTapeView(); return; }
 	if (gPatView) { drawPatView(); return; }
-	if (gSeqPart == 1) { drawChordGrid(); drawPartLane(); drawPageStrip(); drawPartStrip(); return; }   // CHORD: chords of any length, the pages are the bars
+	if (gSeqPart == 1) { drawChordGrid(); drawPartLane(); drawPartStrip(); return; }   // CHORD: chords of any length; the BAR lane is the pages (no second strip)
 	int below = 0, above = 0;
 	for (int r = 0; r < ROLL_ROWS; r++) {   // lanes and the keyboard down the side
 		int nt = rollNote(r), y = ROLL_TOP + (ROLL_ROWS - 1 - r) * ROLL_RH, kit = gVoiceMode >= 3;
@@ -5318,7 +5323,7 @@ static void drawGrid(void) {
 			}
 		}
 	}
-	drawPageStrip();
+	if (!PRB) drawPageStrip();   // CHORD / BASS: the BAR lane picks the bar
 	if (partStripShown()) drawPartStrip();
 }
 // pattern + song view (PAT button): 16 patterns, COPY / CLEAR, and a song chain of up to 32 patterns
@@ -5601,7 +5606,9 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (gPatView == 3) { gDgShift = 16; int r = release ? drumGridRelease() : drumGridTouch(x, y, press); gDgShift = 0; return r; }
 	if (gPatView == 2) return tapeTouch(x, y, press, release);
 	if (gPatView) { if (press) patViewTouch(x, y); return press; }
-	if (PRB && y >= PG_Y) { if (!press) return 0; int i = (x - ROLL_KW) / PG_W; if (x >= ROLL_KW && i >= 0 && i < 4) { gRollPg = i; gRollFollow = 0; return 1; } return 0; }   // CHORD / BASS: pages = bars
+	if (PRB && y >= VEL_Y - 2) { if (!press) return 0; int i = (x - ROLL_KW) / ((320 - ROLL_KW) / 4);   // CHORD / BASS: the BAR lane is the page strip
+		if (x < ROLL_KW) { gRollFollow = !gRollFollow; say(gRollFollow ? "FOLLOW: THE BAR TURNS WITH THE PLAYHEAD" : "FOLLOW OFF"); return 1; }
+		if (i >= 0 && i < 4) { gRollPg = i; gRollFollow = 0; return 1; } return 0; }
 	if (y >= PG_Y) return press ? pageStripTouch(x) : 0;   // the PAGE strip
 	if (PRB && y >= VEL_Y - 2) return 0;
 	if (gSeqPart == 1) return chordGridTouch(x, y, press, release);
@@ -6012,7 +6019,7 @@ static void bassTick(float dt) {   // BASS LINES: while a pad chord sounds, the 
 }
 static void progTick(void) {   // audio tick: AUTO plays the progression's next chord on each bar of the transport - only while it plays
 	static long lastBar = -1; static int lastSt = -1, ctOn = 0;
-	if (!gProg || !gProgAuto || !gSeqPlaying) { lastBar = -1; lastSt = -1; ctOn = 0; gCtGap = 0; if (gCtHeldN) partChordPlay(NULL, 0, 0.8f); return; }
+	if (!gProg || !gProgAuto || !gSeqPlaying) { lastBar = -1; lastSt = -1; ctOn = 0; gCtGap = 0; if (gCtHeldN || gCtArpN) partChordPlay(NULL, 0, 0.8f); return; }
 	if (gProg == PROG_CUSTOM) {   // the CHORD part's track: each chord on its own step, for its own length
 		int s16 = ((int)floorf(transportPos16())) % CT_N; if (s16 == lastSt) return; lastSt = s16;
 		int a, d = ctAt(s16, &a);
@@ -7034,9 +7041,15 @@ static int pnlTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (press) { if (y < PNL_FD_Y || y >= PNL_KR_Y || x < x0 || x >= x0 + fw * nf) return 0; gPnlDrag = (x - x0) / fw; }
 	if (gPnlDrag < 0 || gPnlDrag >= nf) return 0;
 	Param* p = pnlFind(S->fd[gPnlDrag], S->page); if (!p) return 0;
-	float t = (PNL_TB - y) / (float)(PNL_TB - PNL_TT); t = t < 0 ? 0 : t > 1 ? 1 : t;
-	if (p->type == PT_I || p->type == PT_E) { int n = (int)(p->mx - p->mn); if (n > 0) t = roundf(t * n) / n; }
 	gPnlHotP = p; gSelReq = p->name;
+	if (p->type == PT_I || p->type == PT_E) {   // OCTAVE, SEMI, UNISON...: steps from where you touched (a tap never jumps an octave), 14 px a step
+		static int y0, v0; if (press) { y0 = y; v0 = *(int*)p->p; return 1; }
+		int mx = (int)p->mx; if (p->names == TABLE_NAME_DUMMY) mx = gTableCount - 1;
+		int v = v0 + (y0 - y) / 14; v = v < (int)p->mn ? (int)p->mn : v > mx ? mx : v;
+		if (v == *(int*)p->p) return 0;
+		gPnlReq = p; gPnlReqDir = 0; gPnlReqV = v; return 1;
+	}
+	float t = (PNL_TB - y) / (float)(PNL_TB - PNL_TT); t = t < 0 ? 0 : t > 1 ? 1 : t;
 	if (fabsf(t - paramNorm(p)) < 0.002f) return press;
 	gPnlReq = p; gPnlReqT = t; gPnlReqDir = 0; return 1;
 }
@@ -7187,14 +7200,15 @@ static u32 stickDpad(void) {
 }
 static int gThemePick = 0, gBrightSaveDue = 0;
 #define TP_COLS 3
-#define TP_CH 30
+#define TP_CH 27
 static void drawThemePick(void) {
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	rectP(0, 0, 320, 240, TH->bg);
 	text(6, 6, "PICK A THEME", 1, RGB3(TH->val));
 	rectP(262, 2, 54, 16, TH->keyOn); text(267, 6, "CLOSE", 1, RGB3(TH->ink));
-	for (int i = 0; i < NTHEMES; i++) {
-		if (!gThBuilt) themeBuild(); const Theme* t = &gThFix[i]; int x = 4 + (i % TP_COLS) * 105, y = 22 + (i / TP_COLS) * (TP_CH + 4), w = 101;
+	for (int k = 0; k < NVTH; k++) {
+		int i = VTH[k];
+		if (!gThBuilt) themeBuild(); const Theme* t = &gThFix[i]; int x = 4 + (k % TP_COLS) * 105, y = 22 + (k / TP_COLS) * (TP_CH + 4), w = 101;
 		rectP(x, y, w, TP_CH, t->bg); outlineP(x, y, w, TP_CH, t->line);
 		if (i == gTheme) { outlineP(x - 1, y - 1, w + 2, TP_CH + 2, t->val); outlineP(x + 1, y + 1, w - 2, TP_CH - 2, t->val); }
 		text(x + 5, y + 5, t->name, 1, RGB3(t->txt));
@@ -7204,7 +7218,7 @@ static void drawThemePick(void) {
 static int themePickTouch(int x, int y) {   // 1 = picked or closed
 	if (y < 20) { if (x >= 262) { gThemePick = 0; return 1; } return 0; }
 	int c = (x - 4) / 105, r = (y - 22) / (TP_CH + 4); if (c < 0 || c >= TP_COLS || r < 0) return 0;
-	int i = r * TP_COLS + c; if (i >= NTHEMES) return 0;
+	int k = r * TP_COLS + c; if (k >= NVTH) return 0; int i = VTH[k];
 	gTheme = i; gThemePick = 0; gBrightSaveDue = 1; char m[32]; snprintf(m, sizeof(m), "THEME: %s", THEME_NAMES[i]); say(m); return 1;
 }
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
@@ -9979,7 +9993,7 @@ static void fxTailsClear(void) {
 static void panicRest(void);
 static int gPanicClr = 0;   // frames left to keep emptying the FX: audio already on its way in refills them
 static void panicAll(void) {
-	gCtHeldN = 0;   // (the CHORD part's notes go with everything else)
+	gCtHeldN = 0; gCtArpN = 0; gCtArpCur = -1; gCtArpLast = -1;   // (the CHORD part's notes and its ARP go with everything else)
 	for (int i = 0; i < NVS; i++) if (gV[i].active) freeVoice(&gV[i]);
 	softCutAll();   // PANIC: no fade-outs either
 	gHeldN = 0; gArpN = 0; gArpOnN = 0; gStrN = 0; gMidiHeldN = 0; gSqNn = 0; gStrumOffN = 0; gSlideOn = 0; gBassNote = -1; gBassStep = -1;
@@ -10573,7 +10587,7 @@ static void mirFeed(const u8* p, int n) {   // the mirror: a batch of events fro
 }
 static void mirUiApply(void) {   // the mirror's main loop: the 3DS's drums, tempo and the rest of the state ('U')
 	const MirUI* u = &gMirUI;
-	if (u->theme >= 0 && u->theme < NTHEMES) gTheme = u->theme;
+	if (u->theme >= 0 && u->theme < NTHEMES && u->theme != 18 && u->theme != 19) gTheme = u->theme;
 	gStyle = u->style; gPreset = u->preset; gBrFocus = u->brFocus; gVisMode = u->visMode; gVisOverlay = u->visOverlay; gPatView = u->patView; gStartMenu = u->startMenu; gStartSel = u->startSel;
 	gQuickBar = u->quickBar; gQuickIdx = u->quickIdx; gSeqMode = u->seqMode; gSeqPos = u->seqPos; gSeqPlaying = u->seqMode == 1 && u->seqPos >= 0; gBPM = u->bpm; gPads = u->pads; gGridOn = u->gridOn;
 	gPatCur = u->patCur; gLiveRec = u->liveRec; gPadSel = u->padSel; gProg = u->prog; gVoiceMode = u->voiceMode; gDrumStep = u->drumStep; gArp = u->arp; gVisT = u->visT; gSwing = u->swing;
@@ -10938,17 +10952,17 @@ static int chordGridTouch(int x, int y, int press, int release) {   // 1 = redra
 	return 0;
 }
 static void drawPartLane(void) {   // CHORD / BASS: under the roll, the four bars at a glance
-	rectP(0, VEL_Y - 2, 320, VEL_H + 2, TH->bg);
+	int LH = PG_Y + 11 - VEL_Y; rectP(0, VEL_Y - 2, 320, LH + 2, TH->bg);
 	const u8* c = PART_COL[gSeqPart]; int w = (320 - ROLL_KW) / 4;
-	rect(0, VEL_Y, ROLL_KW - 1, VEL_H, c[0] / 3, c[1] / 3, c[2] / 3); text(2, VEL_Y + VEL_H / 2 - 4, "BAR", 1, c[0], c[1], c[2]);
+	rect(0, VEL_Y, ROLL_KW - 1, LH, c[0] / 3, c[1] / 3, c[2] / 3); text(2, VEL_Y + LH / 2 - 4, "BAR", 1, c[0], c[1], c[2]);
 	for (int b = 0; b < 4; b++) {
 		int x = ROLL_KW + b * w, on = b == (gRollPg & 3), at = gSeqPlaying && ((int)(transportPos16() / 16) & 3) == b;
-		if (on) rect(x + 1, VEL_Y, w - 2, VEL_H, c[0] / 3, c[1] / 3, c[2] / 3); outline(x + 1, VEL_Y, w - 2, VEL_H, at ? 255 : c[0] / 2, at ? 255 : c[1] / 2, at ? 255 : c[2] / 2);
+		if (on) rect(x + 1, VEL_Y, w - 2, LH, c[0] / 3, c[1] / 3, c[2] / 3); outline(x + 1, VEL_Y, w - 2, LH, at ? 255 : c[0] / 2, at ? 255 : c[1] / 2, at ? 255 : c[2] / 2);
 		char top[8]; snprintf(top, sizeof(top), "%d", b + 1); text(x + 5, VEL_Y + 4, top, 1, c[0], c[1], c[2]);
 		char ln[24] = ""; int o = 0, last = -2;   // the chords that start in the bar
 		for (int st = b * 16; st < b * 16 + 16; st++) { int a, d = partDegAt(st); int start = gProg == PROG_CUSTOM ? (d >= 0 ? (ctAt(st, &a), a) : -1) : b * 16; if (d < 0 || start == last || (start < b * 16 && st != b * 16)) continue; last = start;
 			char nm[12]; ctName(d, partQAt(st), nm, sizeof(nm), NULL); o += snprintf(ln + o, sizeof(ln) - o, "%s%s", o ? " " : "", nm); if (o >= 9) break; }
-		ln[9] = 0; text(x + 5, VEL_Y + 16, *ln ? ln : "-", 1, RGB3(TH->txt));
+		ln[9] = 0; text(x + 5, VEL_Y + 18, *ln ? ln : "-", 1, RGB3(TH->txt));
 	}
 }
 static int partRollTouch(int x, int y, int press) {   // BASS part: a tap in the roll writes a chord tone
@@ -12085,7 +12099,7 @@ int main(void) {
 		if (gStickMenu) kDown |= stickDpad(); else stickDpad();
 		if (gThemePick && !gStartMenu && (kDown & (KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT | KEY_A))) {   // the picker by buttons / circle pad: try them live, A keeps it
 			int d = (kDown & KEY_DRIGHT) ? 1 : (kDown & KEY_DLEFT) ? -1 : (kDown & KEY_DDOWN) ? TP_COLS : (kDown & KEY_DUP) ? -TP_COLS : 0;
-			if (d) { gTheme = (gTheme + NTHEMES + d) % NTHEMES; gBrightSaveDue = 1; }
+			if (d) { gTheme = thStep(gTheme, d); gBrightSaveDue = 1; }
 			if (kDown & KEY_A) { gThemePick = 0; char m[32]; snprintf(m, sizeof(m), "THEME: %s", THEME_NAMES[gTheme]); say(m); }
 			kDown &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT | KEY_A); topDirty = topAgain = botDirty = botAgain = 1;
 		}
@@ -12101,7 +12115,7 @@ int main(void) {
 			if (kDown & KEY_DUP) { gStartSel = (gStartSel + NSTART - 1) % NSTART; topDirty = 1; }
 			if (kDown & KEY_DDOWN) { gStartSel = (gStartSel + 1) % NSTART; topDirty = 1; }
 			if (gStartSel == 4 && (kDown & (KEY_DLEFT | KEY_DRIGHT | KEY_L | KEY_R))) {   // THEME: < > or L / R try the themes right here, live
-				int d = (kDown & (KEY_DRIGHT | KEY_R)) ? 1 : -1; gTheme = (gTheme + NTHEMES + d) % NTHEMES; gBrightSaveDue = 1; topDirty = topAgain = botDirty = botAgain = 1;
+				int d = (kDown & (KEY_DRIGHT | KEY_R)) ? 1 : -1; gTheme = thStep(gTheme, d); gBrightSaveDue = 1; topDirty = topAgain = botDirty = botAgain = 1;
 			}
 			if (kDown & KEY_A) { startAct = gStartSel; gStartMenu = 0; }
 			if (kDown & KEY_B) gStartMenu = 0;
@@ -12113,7 +12127,7 @@ int main(void) {
 		if (gSongEndReq) { gSongEndReq = 0;
 			if (gTapeRec >= 0 && gTapeState >= 3) { if (!gTapeLen) gTapeRecLen = gTapePos - gTapePos % 2; tapeRecStop(1); }   // a take the length of the song: the song ending is the take ending (keep it)
 			else if (gSeqMode == 1) transportToggle(); gSongPos = 0; say("SONG END (SONG LOOP: OFF)"); }   // the song ran out: stop and rewind
-		{ static int lb = -1; int b = recAny() ? (int)((osGetTime() / 250) & 1) : -1; if (b != lb) { topDirty = botDirty = 1; lb = b; } }   // REC / MIC blink
+		{ static int lb = -1; int b = recAny() ? (int)((osGetTime() / 250) & 1) : gSeqPlaying ? -2 : -1; if (b != lb) { topDirty = botDirty = 1; lb = b; } }   // REC / MIC blink
 		WHERE("VOICE LOCK"); LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		WHERE("MOTION / CAMERA"); BREATHE();
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
@@ -12177,6 +12191,7 @@ int main(void) {
 				if (kDown & KEY_L) { selCombo = 1; int r = histStep(1); say(r == 1 ? "UNDO: PATTERN" : r == 2 ? "UNDO: PATCH EDIT" : r == 3 ? "UNDO: DRUMS" : "NOTHING TO UNDO"); topDirty = botDirty = 1; }
 				if (kDown & KEY_R) { selCombo = 1; int r = histStep(0); say(r == 1 ? "REDO: PATTERN" : r == 2 ? "REDO: PATCH EDIT" : r == 3 ? "REDO: DRUMS" : "NOTHING TO REDO"); topDirty = botDirty = 1; }
 				if (kDown & KEY_DDOWN) { selCombo = 1; startAct = 2; }   // PANIC, below
+				if ((kDown & KEY_B) && gQuickBar < 0) { selCombo = 1; liveRecToggle(); kDown &= ~KEY_B; topDirty = botDirty = 1; }   // SELECT + B: RECORD
 				if ((kDown & (KEY_DLEFT | KEY_DRIGHT)) && page == 7 && gQuickBar < 0 && nudgeArmed()) { nudgeDo(kDown & KEY_DLEFT ? -1 : 1); topDirty = botDirty = 1; }   // SELECT + < >: NUDGE
 				if (kDown & (KEY_DUP | KEY_DLEFT | KEY_DRIGHT)) selCombo = 1;
 				kDown &= ~(KEY_L | KEY_R | KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT); kHeld &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT);
@@ -12333,9 +12348,7 @@ int main(void) {
 		if (startAct == 4) { gThemePick = 1; botDirty = 1; }   // THEME: the picker, every theme at once
 		if (startAct == 6) { gSessDue = 1; say("SAVING THE SESSION..."); }
 		if (startAct == 7) { gSessDue = 3; }
-		if (startAct == 8) { static u64 armT = 0; u64 tn = osGetTime();
-			if (!armT || tn - armT > 4000) { armT = tn; say("NEW SESSION: CHOOSE IT AGAIN (THIS ONE IS SAVED FIRST)"); }
-			else { armT = 0; gSessDue = 2; say("SAVING, THEN A NEW SESSION..."); } }
+		if (startAct == 8) { gSessDue = 2; say("SAVING, THEN A NEW SESSION..."); }   // one press: choosing it in the START menu is deliberate (and this one is saved first)
 		if (gSessClear) { gSessClear = 0; sessionClear(); latch = 0; curKey = -1; topDirty = botDirty = 1; }
 		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
 

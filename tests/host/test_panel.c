@@ -43,6 +43,11 @@ static void SCRIPT(int fr) {
 	if (fr == 99) { TOUCH = 1; TX = 2 * (320 / 9) + 26; TY = MXV_BY + 6; }   // BASS: S
 	if (fr == 102) { if (gPartLvl[1] > 0.3f) fail("MIX: CHORD's level should be low (%.2f)", gPartLvl[1]); if (gPartSend[1] > 0.1f) fail("MIX: CHORD's FX send ~0 (%.2f)", gPartSend[1]); if (!gPartSolo[2]) fail("MIX: BASS solo");
 		if (partGain(1) != 0 || partGain(2) <= 0) fail("MIX: with BASS soloed, CHORD is silent"); shotBot("shots/mix.ppm"); }
-	if (fr == 104) { gPartSolo[2] = 0; gPartLvl[1] = 1; gPartSend[1] = 1; done = 1; }
+	if (fr == 104) { gPartSolo[2] = 0; gPartLvl[1] = 1; gPartSend[1] = 1; gMixOn = 0; gPageWant = 1; gPnl = 1; gOsc[0].oct = 0; }
+	// OCTAVE: a tap at the bottom of its bar doesn't drop it; dragging up 30 px is +2
+	if (fr == 108) { TOUCH = 1; TX = fx(4, 8); TY = PNL_TB - 2; }
+	if (fr == 111) { if (gOsc[0].oct != 0) fail("OCTAVE: a tap should not jump it (%d)", gOsc[0].oct); }
+	if (fr >= 112 && fr < 120) { TOUCH = 1; TX = fx(4, 8); TY = PNL_TB - 10 - (fr - 112) * 5; }   // from y0 = PNL_TB - 10 up 35 px
+	if (fr == 123) { if (gOsc[0].oct != 2) fail("OCTAVE: a drag up should step it by 14 px (%d)", gOsc[0].oct); gOsc[0].oct = 0; done = 1; }
 }
-int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 106; app_main(); if (!done) fail("didn't run"); printf("panel: sliders, choices, sub-pages, small keys\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 126; app_main(); if (!done) fail("didn't run"); printf("panel: sliders, choices, sub-pages, small keys\n"); return gFails ? 1 : 0; }
