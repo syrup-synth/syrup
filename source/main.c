@@ -561,7 +561,7 @@ static float gDl[2][64]; static float gDlRate[2] = {1.0f, 0.5f}, gDlPh[2], gDlVa
 // the last point - a drawn envelope
 static int gDlTrig[2] = {0, 0}; static const char* DLTRIG_NAMES[3] = {"FREE", "NOTE", "ONCE"};
 static float dlAt(int k, float ph) { if (ph >= 1) return gDl[k][63]; float x = ph * 64; int i = (int)x; float u = x - i; return gDl[k][i & 63] * (1 - u) + gDl[k][i < 63 ? i + 1 : (gDlTrig[k] == 2 ? 63 : 0)] * u; }
-static float dlHz(int k);
+static float dlHz(int k); static int gSeqPlaying; static float transportPos16(void);   // ONE TRANSPORT: the LFOs and the gate read it
 static float gChaosX = 0, gChaosY = 0, gChaosRate = 0.3f;   // a Lorenz attractor, slowly wandering, never repeating
 static float gMacro[4] = {0, 0, 0, 0};
 #define NMOD 8
@@ -935,8 +935,9 @@ static void gateTick(float dt, int seqStep) {   // audio tick, every 5 ms piece
 	static int lastSeq = -1;
 	if (!gGatePat) { gGateG = 1; return; }
 	float r = gGateRate == 1 ? 0.5f : gGateRate == 2 ? 2.0f : 1.0f;
-	gGatePh += dt * gBPM / 60.0f * 4.0f * r;
-	if (seqStep >= 0 && seqStep != lastSeq && gGateRate == 0 && gSeqRate == 0) gGatePh = (float)seqStep;   // lock to the sequencer's steps
+	if (gSeqPlaying) gGatePh = transportPos16() * r;   // ONE TRANSPORT: the gate's steps are the transport's
+	else gGatePh += dt * gBPM / 60.0f * 4.0f * r;
+	(void)seqStep;
 	lastSeq = seqStep;
 	if (gGatePh >= 16) gGatePh -= 16 * floorf(gGatePh / 16);
 	int st = (int)gGatePh; float fr = gGatePh - st;
@@ -1293,7 +1294,9 @@ static void mirRetune(int from, int to, int kind) { if (!gMirOn) return; u8 b[3]
 static void kitNoteOn(int note, float vel); static void kitHitSound(int d, float vel);
 static float gNoteVel[128], gKeyFade[128];   // keyboard feedback: how hard each held note was hit; the glow a released key leaves
 static int gChordKey = -1;
+static void (*gOnsetHook)(int part, int note) = 0;   // tests: who started a note, and when
 static void voiceOn(int note, float vel) {
+	if (gOnsetHook) gOnsetHook(gVoicePart, note);
 	mirNote('N', note, vel);
 	if (note >= 0 && note < 128) gNoteVel[note] = vel;
 	if (!gAudioOK) return;
@@ -1449,13 +1452,16 @@ static void voicesUpdate(float dt, float bend) {
 			int fi = (int)(l->pos * 63 + 0.5f), key = l->table * 100 + fi;
 			if (key != l->tabKey) { float* fr = builtinFrames(l->table); if (fr) { lfoFill(l, fr + fi * CYC, 1); l->tabKey = key; } }
 		}
-		float prev = l->ph; l->ph += dt * lfoRateHz(l, gBPM); if (l->ph >= 1) l->ph -= floorf(l->ph);
+		float prev = l->ph;
+		if (l->sync > 0 && l->mode == 0 && gSeqPlaying) { float p = transportPos16() / 4.0f / SYNC_BEATS[l->sync]; l->ph = p - floorf(p); }   // ONE TRANSPORT: a synced LFO's cycle sits on the beat
+		else { l->ph += dt * lfoRateHz(l, gBPM); if (l->ph >= 1) l->ph -= floorf(l->ph); }
 		if (l->ph < prev) l->sh = hash01((int)(gAge + i * 77), (int)(l->rate * 100 + gIdc)) * 2 - 1;
 		l->val = lfoValue(l);
 	}
 	for (int k = 0; k < 2; k++) {   // drawn LFOs: read the painted shape, smoothly
 		float hz = dlHz(k);
-		gDlPh[k] += dt * hz; if (gDlPh[k] >= 1) gDlPh[k] -= floorf(gDlPh[k]);
+		if (gDlSync[k] > 0 && gSeqPlaying) { float p = transportPos16() / 4.0f / SYNC_BEATS[gDlSync[k]]; gDlPh[k] = p - floorf(p); }   // synced: on the beat
+		else { gDlPh[k] += dt * hz; if (gDlPh[k] >= 1) gDlPh[k] -= floorf(gDlPh[k]); }
 		float x = gDlPh[k] * 64; int i = (int)x; float u = x - i;
 		gDlVal[k] = gDl[k][i & 63] * (1 - u) + gDl[k][(i + 1) & 63] * u;
 	}
@@ -2443,7 +2449,7 @@ static void csRampTick(void) {   // audio tick, voice lock held: SUB layers on t
 static volatile u32 gClkMiss = 0, gClkWait = 0;
 static volatile int gAudioWants = 0;
 #define BREATHE() do { if (gAudioWants) { LightLock_Unlock(&gVoiceLock); for (int _b = 0; _b < 40 && gAudioWants; _b++) svcSleepThread(50000); LightLock_Lock(&gVoiceLock); } } while (0)   // audio tick is waiting for gVoiceLock: the main loop lets go at its next BREATHE()   // audio ticks that found the main loop holding the voices: skipped / waited for
-static void progTick(void); static void bassTick(float dt);
+static void progTick(void); static void bassTick(float dt); static void chordArpTick(float dt);
 // PARTS (SEQ): one part at a time on the one transport - 0 SYNTH (the roll), 1 CHORD (the progression), 2 BASS (the line),
 // 3 DRUMS (the drum grid). gPartMute: a held part button mutes it
 static int gPnl = 0;   // the PANEL is up (OSC / FILT / FX: sliders + a small keyboard)
@@ -2494,7 +2500,7 @@ static void audioTick(void* data) {
 	gTickMidi = 1; if (mqDrain(1)) gTqUi = 1;   // network, IR and remote MIDI: as soon as it arrives, not at the next screen frame
 	while (dt > 1e-6f) {   // missed frames: catch up in frame-sized pieces so every step still fires, in order
 		float d = dt > 160.0f / DSPRATE ? 160.0f / DSPRATE : dt; dt -= d;
-		if (!gMirror) { seqTick(d); arpTick(d); progTick(); bassTick(d); }   // a mirror plays only what the 3DS sends; ONE TRANSPORT: the arp, the pads' AUTO progression and bass lines all count its 16ths
+		if (!gMirror) { seqTick(d); arpTick(d); progTick(); chordArpTick(d); bassTick(d); }   // a mirror plays only what the 3DS sends; ONE TRANSPORT: the arp, the pads' AUTO progression and bass lines all count its 16ths
 		drumTick(d);
 		clickTick();
 		shakeQTick();
@@ -6007,7 +6013,7 @@ static int bassNoteOf(char c) {   // a line's letter -> a note, from the pad tha
 	switch (c) { case '3': return padDeg(b, p + 2) - 12; case '5': return padDeg(b, p + 4) - 12; case '7': return padDeg(b, p + 6) - 12; case 'O': return r + 12; default: return r; }
 }
 static void bassTick(float dt) {   // BASS LINES: while a pad chord sounds, the line plays on the 16ths (the sequencer's, or its own at BPM)
-	int on = gPadBass >= 2 && gPadSel >= 0 && (gHeldN > 0 || gCtHeldN > 0 || (gPartMute[1] && gProg && gProgAuto && gSeqPlaying && !gCtGap)) && !gPartMute[2];   // (a muted CHORD part still leads the bass)   // (not only with the pads up: a latched chord keeps its line on the DRUMS page too)
+	int on = gPadBass >= 2 && gPadSel >= 0 && (gHeldN > 0 || gCtHeldN > 0 || gCtArpN > 0 || (gPartMute[1] && gProg && gProgAuto && gSeqPlaying && !gCtGap)) && !gPartMute[2];   // (a muted CHORD part still leads the bass)   // (not only with the pads up: a latched chord keeps its line on the DRUMS page too)
 	if (!on) { if (gBassNote >= 0 || gBassStep >= 0) bassStop(); return; }
 	(void)dt; if (!gSeqPlaying) { if (gBassNote >= 0 || gBassStep >= 0) bassStop(); return; }   // ONE TRANSPORT: bass lines play with PLAY, on its 16ths
 	int st = ((int)floorf(transportPos16())) & 15;
@@ -6048,7 +6054,6 @@ static void chordArpTick(float dt) {   // audio tick: the CHORD part's arp, on t
 	trkLiveNote(0, nt, 0.75f);
 }
 static void padsTick(float dt) {   // strummed notes ring for a moment, then let go
-	chordArpTick(dt);
 	{ static int lastRow = -1; if (!gSeqPlaying) gTrkLivePh += dt * gBPM / 60.0f * 4.0f; if (gTrkLivePh >= 16) gTrkLivePh -= 16;   // TRACKER LIVE: its rows' clock
 	  int r = trkLiveRow(); if (r != lastRow) { lastRow = r; gTrkLiveN++; }
 	  static float idle = 0; if (gHeldN || gBassNote >= 0) idle = 0; else if (gTrkLiveOn && (idle += dt) > 4) { gTrkLiveOn = 0; idle = 0; } }
@@ -9845,6 +9850,7 @@ static int drumFadeTick(void) {   // audio thread, each 5 ms frame: fading chann
 	return any;
 }
 static void drumHit(int d, float vel) {   // from the audio thread (voice lock held)
+	if (gOnsetHook) gOnsetHook(10 + d, 0);
 	if (gDrMuteNow) return;
 	mirNote('D', d, vel);
 	if (d >= 0 && d < NDRUM && vel > 0.05f) { gPadFlash[d] = 1; gDrumHitN[d]++; }
@@ -12692,7 +12698,7 @@ int main(void) {
 		if (gDrumOnB && prevTouch && !touching && gPtHold) { if (partTouch(gLastTX, gLastTY, 0, 1, page)) topDirty = botDirty = 1; }
 		else if (gDrumOnB && prevTouch && !touching && drumGridRelease()) botDirty = 1;   // let go of the grain editor: SCAN carries on from there
 		if (gPads && prevTouch && !touching) { if (latch || gLiveRec || gSeqMode == 2) padsSettle(1); else gPadPend = 0; gStrumZone = -1; if (gLiveRec) liveUp(); if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
-		padsTick(dt); if (!gAudioClock) { progTick(); bassTick(dt); } if (gProgDirty) { gProgDirty = 0; if (gPads) botDirty = 1; }
+		padsTick(dt); if (!gAudioClock) { progTick(); chordArpTick(dt); bassTick(dt); } if (gProgDirty) { gProgDirty = 0; if (gPads) botDirty = 1; }
 		int freshPress = touching && !prevTouch;   // a new tap restrikes the key even if it's the one still held (LATCH, drum pads)
 		prevTouch = touching;
 		{ static int f = 0; if (gAddDirty && (++f % 6 == 0 || !touching)) { gAddDirty = 0; addApply(); topDirty = 1; } }   // additive editor: rebuild a few times a second while drawing
