@@ -43,7 +43,7 @@ button.on{background:#f0a040;color:#1a1410;border-color:#f0a040}
 </style></head><body><div id="app">
 <div class="bar"><div class="st" id="st">SYRUP REMOTE <b>connecting…</b></div>
 <button id="pp">&lt; PATCH</button><button id="pn">PATCH &gt;</button><button id="seq">PLAY</button></div>
-<div id="tabs"><button data-p="keys" class="on">KEYS</button><button data-p="chords">CHORDS</button><button data-p="drums">DRUMS</button><button data-p="xy">XY</button><button data-p="knobs">KNOBS</button><button id="along" title="Load Syrup on this phone and play along with the 2DS (sound here too)">SOUND HERE</button></div>
+<div id="tabs"><button data-p="keys" class="on">KEYS</button><button data-p="chords">CHORDS</button><button data-p="drums">DRUMS</button><button data-p="xy">XY</button><button data-p="knobs">KNOBS</button><button id="along" title="Load Syrup on this phone and play along with the 2DS (sound here too)">SOUND HERE</button><button id="unit" title="A whole second Syrup on this phone: its own sounds and patterns, on the 3DS's tempo and PLAY / STOP">2ND UNIT</button></div>
 <div class="pg on" id="p-keys">
  <div class="bar"><button id="od">OCT-</button><button id="ou">OCT+</button><span class="st" id="oct">C3</span><button id="acid">RIFF</button>
  <button id="hold">HOLD</button><button id="panic">ALL OFF</button></div>
@@ -148,5 +148,6 @@ const mi=$('midi');
 if(navigator.requestMIDIAccess){navigator.requestMIDIAccess().then(a=>{const hook=()=>{const names=[];a.inputs.forEach(i=>{names.push(i.name);i.onmidimessage=m=>{const d=m.data;if(d[0]!=0xFE)send(Array.from(d))}});mi.textContent=names.length?'MIDI IN: '+names.join(', '):'WEB MIDI ON: plug in a MIDI keyboard'};hook();a.onstatechange=hook},()=>{mi.textContent='WEB MIDI blocked by the browser'})}
 else mi.textContent='';
 
+;(function(){var u=document.getElementById('unit');if(u){if(typeof BR!=='undefined'&&BR)u.style.display='none';else u.onclick=function(e){e.stopPropagation();location.href='/unit'}}})();
 ;(function(){var b=document.getElementById('along');if(!b)return;if(typeof BR!=='undefined'&&BR){b.style.display='none';return}b.onclick=function(e){e.stopPropagation();location.href='/mirror'}})();
 </script></body></html>

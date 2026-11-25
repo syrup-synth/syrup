@@ -561,7 +561,7 @@ static float gDl[2][64]; static float gDlRate[2] = {1.0f, 0.5f}, gDlPh[2], gDlVa
 // the last point - a drawn envelope
 static int gDlTrig[2] = {0, 0}; static const char* DLTRIG_NAMES[3] = {"FREE", "NOTE", "ONCE"};
 static float dlAt(int k, float ph) { if (ph >= 1) return gDl[k][63]; float x = ph * 64; int i = (int)x; float u = x - i; return gDl[k][i & 63] * (1 - u) + gDl[k][i < 63 ? i + 1 : (gDlTrig[k] == 2 ? 63 : 0)] * u; }
-static float dlHz(int k); static int gSeqPlaying; static float transportPos16(void);   // ONE TRANSPORT: the LFOs and the gate read it
+static float dlHz(int k); static int gSeqPlaying; static float transportPos16(void); static float stepLenClk(unsigned c); static void unitPublish(void);   // ONE TRANSPORT: the LFOs and the gate read it
 static float gChaosX = 0, gChaosY = 0, gChaosRate = 0.3f;   // a Lorenz attractor, slowly wandering, never repeating
 static float gMacro[4] = {0, 0, 0, 0};
 #define NMOD 8
@@ -1281,6 +1281,10 @@ static void addTaps(SVoice* v) {   // (each tap keeps the note's part: MIX level
 // draws the top screen (and can sound) in step: notes, drum hits, the live mod values, the page you're on, the patch
 // when it changes. gMirOn: a mirror is listening (3DS); gMirror: this is the mirror (web). Events: type, u16 length, data.
 static volatile int gMirOn = 0, gMirNew = 0, gMirClients = 0; static int gMirror = 0;
+// SECOND UNIT: a whole Syrup in a browser (http://<the 3DS>:8080/unit) plays its own sounds, patterns and drums on
+// this one's tempo and transport. The audio tick publishes where the transport is; Wi-Fi sends it 8 times a second
+// (the web LINK's clk), and PLAY / STOP / BPM go both ways. gUnitStIn: a PLAY / STOP / BPM from the browser, for the main loop.
+static volatile int gUnitClients = 0, gUnitStIn = -1, gUnitLast = -1, gUnitPlay = 0; static volatile u32 gUnitPub = 0, gUnitClkI = 0; static volatile float gUnitClkF = 0;
 #define MIRQ 65536
 static u8 gMirQ[MIRQ]; static volatile u32 gMirW = 0, gMirR = 0; static volatile int gMirSpin = 0;
 static void mirEmit(u8 t, const void* p, int n) {   // any thread; never waits long (a full ring drops: the next snapshot repairs)
@@ -2521,6 +2525,7 @@ static void audioTick(void* data) {
 		}
 	}
 	gClkSilent = 0;
+	if (gUnitClients) unitPublish();
 	mixRampTick(); csRampTick();
 	gInAudioTick = 0; gTickNoMips = 0;
 	if (mipsOk) LightLock_Unlock(&gMipsLock);
@@ -2727,6 +2732,11 @@ static float stepLen(int i) { return ((i & 1) ? 1.0f - gSwing : 1.0f + gSwing) *
 // ONE TRANSPORT: SWING follows the transport's own step count, not the pattern's - a pattern of an odd length (or a
 // song's patterns of different lengths) used to flip the long / short steps and pull the drums, bass and arps apart
 static float stepLenClk(unsigned c) { return stepLen((int)(c & 1)); }
+static void unitPublish(void) {   // SECOND UNIT: where the transport is, in steps (read by the Wi-Fi thread: a sequence count around it)
+	gUnitPub++; __sync_synchronize();
+	float l = stepLenClk(gSeqClock); gUnitPlay = gSeqPlaying; gUnitClkI = gSeqClock; gUnitClkF = l > 0 ? gSeqPh / l : 0;
+	__sync_synchronize(); gUnitPub++;
+}
 // trig conditions, shared by the sequencer and the drums: 0 ALWAYS, 1-5 chance, 6-14 A:B (loop A of every B), FILL,
 // !FILL, PRE / !PRE (the last condition here), NEI / !NEI (the neighbour's), 1ST / !1ST (the first loop after start)
 #define NCOND 23
@@ -3908,7 +3918,7 @@ static int gStartMenu = 0, gStartSel = 0;
 static const char* START_NAMES[NSTART] = {"SAVE PATCH", "BROWSER", "PANIC", "HELP", "THEME", "MIDI LEARN", "SAVE SESSION", "LOAD SESSION", "NEW SESSION", "LINK PHONE", "QUIT"};
 #define START_LINK 9
 #define START_QUIT 10
-static int gPhoneLink = 0;   // LINK PHONE: a QR code on the bottom screen - the phone's camera opens Syrup's phone pages
+static int gPhoneLink = 0;   // LINK PHONE: a QR code on the bottom screen - the phone's camera opens Syrup's phone pages (1 REMOTE: the controller pages; 2 2ND UNIT: a whole Syrup on the 3DS's clock)
 static void browseSave(void) {
 	int slot = (gStyle == NSTYLES - 1 && gPreset < NUSER) ? gPreset : -1;
 	if (slot < 0) { for (int i = 0; i < NUSER; i++) if (gUser[i].magic != PATCH_MAGIC) { slot = i; break; } if (slot < 0) slot = gSaveSlot; }
@@ -7453,11 +7463,12 @@ static void drawPhoneLink(void) {   // the bottom screen: a QR code the phone's 
 	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
 	rectP(0, 0, 320, 240, TH->bg);
 	text(6, 6, "LINK PHONE", 1, RGB3(TH->val));
+	for (int k = 0; k < 2; k++) { int on = gPhoneLink == k + 1, x = 96 + k * 82; rectP(x, 2, 78, 16, on ? TH->val : TH->keyOn); text(x + 39 - (k ? 8 : 6) * 4, 6, k ? "2ND UNIT" : "REMOTE", 1, RGB3(on ? TH->bg : TH->ink)); }
 	rectP(262, 2, 54, 16, TH->keyOn); text(267, 6, "CLOSE", 1, RGB3(TH->ink));
 	if (!gNetAddr[0]) { text(160 - 15 * 4, 110, "STARTING WI-FI...", 1, RGB3(TH->txt)); return; }
 	if (!strchr(gNetAddr, ':')) { text(160 - (int)strlen(gNetAddr) * 4, 100, gNetAddr, 1, RGB3(TH->warn)); text(160 - 27 * 4, 120, "TURN WI-FI ON (THE SWITCH),", 1, RGB3(TH->txt)); text(160 - 21 * 4, 132, "THEN LINK PHONE AGAIN", 1, RGB3(TH->txt)); return; }
 	static char url[48]; static uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(4)], tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(4)]; static char made[48] = ""; static int ok = 0;
-	snprintf(url, sizeof url, "http://%s/", gNetAddr);
+	snprintf(url, sizeof url, "http://%s/%s", gNetAddr, gPhoneLink == 2 ? "unit" : "");
 	if (strcmp(url, made)) { snprintf(made, sizeof made, "%s", url); ok = qrcodegen_encodeText(url, tmp, qr, qrcodegen_Ecc_MEDIUM, 1, 4, qrcodegen_Mask_AUTO, true); }
 	if (ok) {
 		int n = qrcodegen_getSize(qr), sc = 170 / (n + 8), w = (n + 8) * sc, x0 = 160 - w / 2, y0 = 24;   // a quiet zone of 4 all round
@@ -7465,7 +7476,7 @@ static void drawPhoneLink(void) {   // the bottom screen: a QR code the phone's 
 		for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) if (qrcodegen_getModule(qr, x, y)) rect(x0 + (x + 4) * sc, y0 + (y + 4) * sc, sc, sc, 0, 0, 0);
 		text(160 - (int)strlen(url) * 4, y0 + w + 6, url, 1, RGB3(TH->val));
 	}
-	text(160 - 30 * 4, 222, "POINT THE PHONE'S CAMERA HERE", 1, RGB3(TH->dim));
+	text(160 - 30 * 4, 222, gPhoneLink == 2 ? "A WHOLE SYRUP, ON THIS CLOCK" : "POINT THE PHONE'S CAMERA HERE", 1, RGB3(TH->dim));
 }
 static int gWebUpSay = 0;
 static void webUpStart(void) {
@@ -8725,8 +8736,8 @@ static void b64(const u8* in, int n, char* out) {
 #include "remote_html.h"
 static int sendAll(int s, const void* d, int n) { const char* p = (const char*)d; while (n > 0) { int k = send(s, p, n, 0); if (k <= 0) { if (k < 0 && errno == EAGAIN) { svcSleepThread(1000000); continue; } return 0; } p += k; n -= k; } return 1; }
 #define NCLI 8
-typedef struct { int s, ws; char buf[2048]; int n; MidiIn run; u8 closing, mir; u64 t; FILE* up; int left; } Cli;   // mir: a MIRROR page listening   // t: last activity (ms); up / left: a file being uploaded
-static void cliClose(Cli* c) { if (c->mir) { c->mir = 0; if (--gMirClients <= 0) { gMirClients = 0; gMirOn = 0; } } if (c->up) { fclose(c->up); c->up = NULL; } if (c->s >= 0) close(c->s); c->s = -1; c->ws = 0; c->n = 0; c->closing = 0; }
+typedef struct { int s, ws; char buf[2048]; int n; MidiIn run; u8 closing, mir, unit; u64 t; FILE* up; int left; } Cli;   // mir: a MIRROR page listening   // t: last activity (ms); up / left: a file being uploaded
+static void cliClose(Cli* c) { if (c->unit) { c->unit = 0; if (--gUnitClients <= 0) gUnitClients = 0; } if (c->mir) { c->mir = 0; if (--gMirClients <= 0) { gMirClients = 0; gMirOn = 0; } } if (c->up) { fclose(c->up); c->up = NULL; } if (c->s >= 0) close(c->s); c->s = -1; c->ws = 0; c->n = 0; c->closing = 0; }
 // WEB UPLOAD (WI-FI MIDI on, then http://<the 3DS>:8080/files): the page turns any audio the browser can read into
 // 32728 Hz mono WAVs and POSTs them one by one, raw, to /up?d=<folder>&n=<name>; then /done and Syrup rescans.
 // d = kits/<NAME> (a SAMPLE kit) or tables (a wavetable WAV for OSC A / B). Names are cleaned; nothing leaves /3ds/syrup.
@@ -8803,6 +8814,7 @@ static void cliHttp(Cli* c) {   // request complete in c->buf
 		char r[256]; int n = snprintf(r, sizeof(r), "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", acc);
 		if (!sendAll(c->s, r, n)) { cliClose(c); return; }
 		c->ws = 1; c->n = 0; gNetClients++;
+		if (!strncmp(c->buf, "GET /unit", 9)) { c->unit = 2; gUnitClients++; return; }   // a SECOND UNIT: hello + the transport next time round
 		if (!strncmp(c->buf, "GET /mirror", 11)) { c->mir = 1; gMirR = gMirW; gMirClients++; gMirOn = 1; gMirNew = 1; }   // a MIRROR: everything from a full snapshot on
 		return;
 	}
@@ -8813,7 +8825,7 @@ static void cliHttp(Cli* c) {   // request complete in c->buf
 		int n = snprintf(hdr, sizeof(hdr), "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", len);
 		if (sendAll(c->s, hdr, n)) sendAll(c->s, FILES_HTML, len);
 	}
-	else if (!strncmp(c->buf, "GET /mirror", 11) || !strncmp(c->buf, "GET /stream", 11)) {   // MIRROR / STREAM: a loader that brings in Syrup for the web
+	else if (!strncmp(c->buf, "GET /mirror", 11) || !strncmp(c->buf, "GET /stream", 11) || !strncmp(c->buf, "GET /unit", 9)) {   // (+ SECOND UNIT: the same loader)   // MIRROR / STREAM: a loader that brings in Syrup for the web
 		char hdr[160]; int len = (int)strlen(MIRROR_HTML);
 		int n = snprintf(hdr, sizeof(hdr), "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", len);
 		if (sendAll(c->s, hdr, n)) sendAll(c->s, MIRROR_HTML, len);
@@ -8842,6 +8854,28 @@ static void cliHttp(Cli* c) {   // request complete in c->buf
 	// "page failed to load". Half-close, then wait for the browser to hang up (or 3 s).
 	shutdown(c->s, SHUT_WR); c->closing = 1; c->n = 0; c->t = osGetTime();
 }
+// SECOND UNIT: the web LINK's messages as WebSocket text: {"id":..,"n":..,"st"|"clk"|"m"|"hi"|"ping"|"pong":..}
+static int wsText(Cli* c, const char* m, int L) {
+	u8 f[300]; int h = 2; if (L > 280) return 1;
+	f[0] = 0x81; if (L < 126) f[1] = (u8)L; else { f[1] = 126; f[2] = 0; f[3] = (u8)L; h = 4; }
+	memcpy(f + h, m, L); return sendAll(c->s, f, h + L);
+}
+static u32 gUnitN = 0;
+static int unitSay(Cli* c, const char* body) { char m[260]; int L = snprintf(m, sizeof(m), "{\"id\":\"3ds\",\"n\":\"3ds%lu\",%s}", (unsigned long)++gUnitN, body); return wsText(c, m, L); }
+static int unitStNow(void) { return (gSeqMode == 1 ? 1 : 0) | (gBPM << 4); }
+static void unitHello(Cli* c) { char b[40]; unitSay(c, "\"m\":\"3ds\""); snprintf(b, sizeof(b), "\"st\":%d", unitStNow()); unitSay(c, b); }
+static const char* jsonKey(const char* j, const char* k) { const char* p = strstr(j, k); return p ? p + strlen(k) : NULL; }
+static void unitIn(Cli* c, const char* d, int len) {
+	char j[256]; if (len > 255) return; memcpy(j, d, len); j[len] = 0;
+	const char* p;
+	if ((p = jsonKey(j, "\"st\":"))) { int st = atoi(p) & ~2; gUnitLast = st; __sync_synchronize(); gUnitStIn = st; }   // (the drums' on / off stays each unit's own)
+	if ((p = jsonKey(j, "\"ping\":"))) {   // the browser times the trip here: answer at once
+		char k[40], id[40] = ""; int i = 0; while (p[i] && p[i] != ',' && p[i] != '}' && i < 39) { k[i] = p[i]; i++; } k[i] = 0;
+		const char* q = jsonKey(j, "\"id\":\""); if (q) { i = 0; while (q[i] && q[i] != '"' && i < 39) { id[i] = q[i]; i++; } id[i] = 0; }
+		char b[120]; snprintf(b, sizeof(b), "\"pong\":%s,\"to\":\"%s\"", k, id); unitSay(c, b);
+	}
+	if (strstr(j, "\"hi\":1")) unitSay(c, "\"m\":\"3ds\"");
+}
 static void cliWs(Cli* c) {   // parse as many frames as are complete
 	for (;;) {
 		u8* p = (u8*)c->buf; if (c->n < 2) return;
@@ -8855,7 +8889,8 @@ static void cliWs(Cli* c) {   // parse as many frames as are complete
 		if (masked) for (u32 i = 0; i < len; i++) d[i] ^= p[hl - 4 + (i & 3)];
 		if (op == 8) { u8 cl[2] = {0x88, 0}; sendAll(c->s, cl, 2); cliClose(c); gNetClients--; return; }
 		if (op == 9 && len < 126) { u8 pg[2 + 125]; pg[0] = 0x8A; pg[1] = (u8)len; memcpy(pg + 2, d, len); sendAll(c->s, pg, 2 + len); }   // pong, in one write
-		if (op == 1 || op == 2) midiParse(d, len, &c->run);
+		if (c->unit && op == 1) unitIn(c, (const char*)d, (int)len);
+		else if (op == 1 || op == 2) midiParse(d, len, &c->run);
 		int used = hl + len; memmove(c->buf, c->buf + used, c->n - used); c->n -= used;
 	}
 }
@@ -8927,7 +8962,7 @@ static void netMain(void* arg) {
 	int uc = udpOpen(5004), ud = udpOpen(5005), ur = udpOpen(5008); gUdData = ud;   // 5008: plain MIDI bytes (FM-1 LINK and friends)
 	int ub = socket(AF_INET, SOCK_DGRAM, 0); u64 beaconT = 0; MidiIn rawRun = {0};
 	if (ub >= 0) { int on = 1; setsockopt(ub, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)); }
-	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].up = NULL; cl[i].left = 0; cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; memset(&cl[i].run, 0, sizeof(MidiIn)); cl[i].closing = 0; cl[i].mir = 0; cl[i].t = 0; }
+	static Cli cl[NCLI]; for (int i = 0; i < NCLI; i++) { cl[i].up = NULL; cl[i].left = 0; cl[i].s = -1; cl[i].ws = 0; cl[i].n = 0; memset(&cl[i].run, 0, sizeof(MidiIn)); cl[i].closing = 0; cl[i].mir = 0; cl[i].unit = 0; cl[i].t = 0; }
 	gNetClients = 0;
 	while (gNetRun) {
 		int idle = 1;
@@ -8939,7 +8974,7 @@ static void netMain(void* arg) {
 				for (int i = 0; i < NCLI; i++) if (!cl[i].ws && (slot < 0 || cl[i].t < cl[slot].t)) slot = i;
 				if (slot >= 0) cliClose(&cl[slot]);
 			}
-			if (slot < 0) close(s); else { cl[slot].s = s; cl[slot].ws = 0; cl[slot].mir = 0; cl[slot].n = 0; memset(&cl[slot].run, 0, sizeof(MidiIn)); cl[slot].closing = 0; cl[slot].t = osGetTime(); }
+			if (slot < 0) close(s); else { cl[slot].s = s; cl[slot].ws = 0; cl[slot].mir = 0; cl[slot].unit = 0; cl[slot].n = 0; memset(&cl[slot].run, 0, sizeof(MidiIn)); cl[slot].closing = 0; cl[slot].t = osGetTime(); }
 			idle = 0;
 		}
 		for (int i = 0; i < NCLI; i++) {
@@ -8958,6 +8993,17 @@ static void netMain(void* arg) {
 			c->n += k; idle = 0; c->t = osGetTime();
 			if (c->ws) cliWs(c);
 			else { c->buf[c->n] = 0; if (strstr(c->buf, "\r\n\r\n")) cliHttp(c); else if (c->n >= (int)sizeof(c->buf) - 1) cliClose(c); }
+		}
+		if (gUnitClients > 0) {   // SECOND UNIT: hello to new ones, PLAY / STOP / BPM when they change, the clock 8 times a second
+			static u64 uT = 0; char b[80];
+			for (int i = 0; i < NCLI; i++) if (cl[i].s >= 0 && cl[i].ws && cl[i].unit == 2) { cl[i].unit = 1; unitHello(&cl[i]); }
+			int st = unitStNow();
+			if (gUnitStIn < 0 && st != gUnitLast) { gUnitLast = st; snprintf(b, sizeof(b), "\"st\":%d", st); for (int i = 0; i < NCLI; i++) if (cl[i].s >= 0 && cl[i].unit) unitSay(&cl[i], b); idle = 0; }
+			if (osGetTime() - uT >= 125) {
+				uT = osGetTime(); u32 a, ci; float cf; int pl, tries = 0;
+				do { a = gUnitPub; __sync_synchronize(); ci = gUnitClkI; cf = gUnitClkF; pl = gUnitPlay; __sync_synchronize(); } while ((a & 1 || a != gUnitPub) && ++tries < 50);
+				if (pl) { snprintf(b, sizeof(b), "\"clk\":%.4f", (double)ci + cf); for (int i = 0; i < NCLI; i++) if (cl[i].s >= 0 && cl[i].unit) unitSay(&cl[i], b); }
+			}
 		}
 		while (gMcoR != gMcoW) { u32 r = gMcoR; if (gMcoSt[r] == 0xF8 || gMcoSt[r] == 0xFA || gMcoSt[r] == 0xFC) rtpSendTs(gMcoSt[r], 0, 0, gMcoT[r]); gMcoR = (r + 1) % MCOQ; idle = 0; }   // MIDI CLOCK OUT, stamped with when it was due
 		if (gMirClients > 0 && gMirR != gMirW) {   // MIRROR: whole events out, one WebSocket frame to every mirror
@@ -9199,8 +9245,14 @@ static int mqDrain(int inTick) {
 	}
 	return ch;
 }
+static void unitSet(int st) {   // SECOND UNIT: PLAY / STOP and the BPM from the browser (the web LINK's st)
+	int play = st & 1, bpm = st >> 4;
+	if (bpm >= 40 && bpm <= 240) gBPM = bpm;
+	if (play != (gSeqMode == 1)) { if (play) { seqStop(); gSongPos = 0; } transportToggle(); }
+}
 static int midiTick(void) {   // returns 1 when something on screen changed
 	int ch = tqDrain(0) | gTqUi; gTqUi = 0;
+	if (gUnitStIn >= 0) { unitSet(gUnitStIn); __sync_synchronize(); gUnitStIn = -1; ch = 1; }
 	if (!gTickMidi) ch |= mqDrain(0);   // no audio tick running (audio off): the main loop takes it
 	while (gMainQR != gMainQW) {
 		u8 st = gMainQ[gMainQR][0], a = gMainQ[gMainQR][1], b = gMainQ[gMainQR][2]; gMainQR = (gMainQR + 1) % MQ;
@@ -12401,7 +12453,8 @@ int main(void) {
 		if (kDown & KEY_Y) { page = navStep(page, -1); topDirty = 1; }
 		if (kDown & KEY_A) { if (page != 0) gChord = (gChord + 1) % NCHORD; topDirty = 1; }   // (the browser saves with its SAVE button or START > SAVE PATCH, not A)
 		if (gThemePick && (kDown & KEY_B)) { gThemePick = 0; kDown &= ~KEY_B; botDirty = 1; }
-		if (gPhoneLink && (kDown & (KEY_B | KEY_A))) { gPhoneLink = 0; kDown &= ~(KEY_B | KEY_A); botDirty = botAgain = 1; }   // A / B close the QR
+		if (gPhoneLink && (kDown & (KEY_B | KEY_A))) { gPhoneLink = 0; kDown &= ~(KEY_B | KEY_A); botDirty = botAgain = 1; }
+		if (gPhoneLink && (kDown & (KEY_DLEFT | KEY_DRIGHT | KEY_L | KEY_R))) { gPhoneLink = 3 - gPhoneLink; kDown &= ~(KEY_DLEFT | KEY_DRIGHT | KEY_L | KEY_R); botDirty = botAgain = 1; }   // REMOTE / 2ND UNIT   // A / B close the QR
 		{ static char la[32] = ""; if (gPhoneLink && strcmp(la, gNetAddr)) { snprintf(la, sizeof la, "%s", gNetAddr); botDirty = botAgain = 1; } }   // the address arrives: draw the QR   // B closes the theme picker
 		if (kDown & KEY_B) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
 		if (gN3 > 0 && (kDown & KEY_ZR)) {   // ZR: the sequence plays / stops
@@ -12645,7 +12698,8 @@ int main(void) {
 			touchPosition t; hidTouchRead(&t);
 			if (gThemePick) { if (!prevTouch && themePickTouch(t.px, t.py)) topDirty = botDirty = topAgain = botAgain = 1; }
 			else if (gLs) { if (!prevTouch && lsTouch(t.px, t.py)) topDirty = botDirty = topAgain = botAgain = 1; }
-			else if (gPhoneLink) { if (!prevTouch && t.py < 20 && t.px >= 262) { gPhoneLink = 0; botDirty = botAgain = 1; } }
+			else if (gPhoneLink) { if (!prevTouch && t.py < 20 && t.px >= 262) { gPhoneLink = 0; botDirty = botAgain = 1; }
+				else if (!prevTouch && t.py < 20 && t.px >= 96 && t.px < 260) { gPhoneLink = t.px < 176 ? 1 : 2; botDirty = botAgain = 1; } }
 			else if (t.py < TAB_H) {
 				if (!prevTouch) {
 					int b = t.px * NCHIP / 320, again = !gPads && chipOfPage(page) == b;

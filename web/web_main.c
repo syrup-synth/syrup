@@ -30,17 +30,18 @@ EMSCRIPTEN_KEEPALIVE void web_link_set(int st) {   // PLAY / STOP (the one trans
 // a little each time (no audible jump), or jumps there if it's more than a step and a half out (joined late)
 EMSCRIPTEN_KEEPALIVE double web_link_clock(void) {
 	if (!gSeqPlaying) return -1;
-	float l = stepLen(gSeqPos < 0 ? 0 : gSeqPos); return (double)gSeqClock + (l > 0 ? gSeqPh / l : 0);
+	float l = stepLenClk(gSeqClock); return (double)gSeqClock + (l > 0 ? gSeqPh / l : 0);
 }
 EMSCRIPTEN_KEEPALIVE double web_link_follow(double target) {   // returns how far out it was, in steps
 	if (!gSeqPlaying || target < 0) return 0;
-	float l = stepLen(gSeqPos < 0 ? 0 : gSeqPos); double mine = (double)gSeqClock + (l > 0 ? gSeqPh / l : 0), d = target - mine;
+	float l = stepLenClk(gSeqClock); double mine = (double)gSeqClock + (l > 0 ? gSeqPh / l : 0), d = target - mine;
 	if (fabs(d) > 1.5) {
 		long n = (long)floor(target); int L = gSeqLen < 1 ? 1 : gSeqLen;
-		gSeqClock = (unsigned)n; gSeqPos = (int)(n % L); gSeqPh = (float)(target - n) * stepLen(gSeqPos); gPendFire = -1; gEarlyDone = 0; gFireOff = 0;
+		gSeqClock = (unsigned)n; gSeqPos = (int)(n % L); gSeqPh = (float)(target - n) * stepLenClk((unsigned)n); gPendFire = -1; gEarlyDone = 0; gFireOff = 0;
 		return d;
 	}
-	float c = (float)d * 0.3f; if (c > 0.06f) c = 0.06f; if (c < -0.06f) c = -0.06f;
+	float lim = gSeqClock < 16 ? 0.25f : 0.06f;   // just started (PLAY from the other unit got here a trip later): pull in quickly
+	float c = (float)d * (gSeqClock < 16 ? 0.6f : 0.3f); if (c > lim) c = lim; if (c < -lim) c = -lim;
 	gSeqPh += c * l; if (gSeqPh < 0) gSeqPh = 0;
 	return d;
 }

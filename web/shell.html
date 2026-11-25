@@ -147,11 +147,11 @@
   </div>
 </div>
 <button class="b" id="tapsnd">TAP FOR SOUND</button>
-<div id="lkpanel" class="phpanel"><div>LINK DEVICES: open Syrup on the other device, tap LINK there, and type this code (or type its code here)</div><div class="code" id="lkcode">......</div><div><input id="lkin" inputmode="numeric" maxlength="6" placeholder="code" style="font:inherit;font-size:20px;width:8em;text-align:center;background:#000;color:var(--hot);border:1px solid var(--line);border-radius:6px;padding:6px"> <button class="b" id="lkgo">JOIN</button></div><div id="lkst" class="u"></div><div><button class="b" id="lkmaster">MAKE THIS THE MASTER</button> <button class="b" id="lkoff">UNLINK</button> <button class="b" id="lkclose">CLOSE</button></div></div>
+<div id="lkpanel" class="phpanel"><div>LINK DEVICES: open Syrup on the other device, tap LINK there, and type this code (or type its code here)</div><div class="code" id="lkcode">......</div><div><input id="lkin" inputmode="numeric" maxlength="6" placeholder="code" style="font:inherit;font-size:20px;width:8em;text-align:center;background:#000;color:var(--hot);border:1px solid var(--line);border-radius:6px;padding:6px"> <button class="b" id="lkgo">JOIN</button></div><div id="lkst" class="u"></div><div id="unrow" style="display:none">IN TIME BY EAR: <button class="b" id="unm">-</button> <span id="unv">0 ms</span> <button class="b" id="unp">+</button></div><div><button class="b" id="lkmaster">MAKE THIS THE MASTER</button> <button class="b" id="lkoff">UNLINK</button> <button class="b" id="lkclose">CLOSE</button></div></div>
 <div id="phpanel"><div>PHONE LINK: on the phone, scan this (or open the address)</div><div id="phqr"></div><div class="code" id="phcode"></div><div class="u" id="phurl"></div><div id="phst" class="u"></div><button class="b" id="phclose">CLOSE</button></div>
 <!--REMOTE_HTML-->
 <script>
-var MIRP = location.pathname.replace(/\/+$/, ''), MIR = MIRP === '/mirror' || MIRP === '/stream', STREAM = MIRP === '/stream', QS = new URLSearchParams(location.search);
+var MIRP = location.pathname.replace(/\/+$/, ''), MIR = MIRP === '/mirror' || MIRP === '/stream', UNIT = MIRP === '/unit', STREAM = MIRP === '/stream', QS = new URLSearchParams(location.search);
 var PHONE = /^#phone=\d+/.test(location.hash) ? location.hash.slice(7) : '';
 var KEYS = 0, TOUCH = 0, TX = 0, TY = 0, CX = 0, CY = 0, ready = false, GK = 0, GX = 0, GY = 0;
 function send() { if (ready && !MIR) Module._web_input((KEYS | GK) >>> 0, TOUCH, TX, TY, GX || GY ? GX : CX, GX || GY ? GY : CY); }
@@ -178,6 +178,7 @@ var Module = {
     };
     send();
     if (MIR) mirStart();
+    if (UNIT) unitStart();
   },
   print: function (t) { console.log(t); }, printErr: function (t) { console.warn(t); }
 };
@@ -390,7 +391,7 @@ function lkGot(d, from) {   // from: 'bc' or the connection it came on
   if (d.ping && lkMaster === myId) lkSend({ pong: d.ping, to: d.id });
   if (d.pong && lkPingT[d.pong]) { var r = performance.now() - lkPingT[d.pong]; delete lkPingT[d.pong]; lkRtt = lkRtt ? lkRtt * 0.7 + r * 0.3 : r; }
   if (d.clk !== undefined && d.id === lkMaster && lkMaster !== myId && ready) {   // the master's clock: steps since PLAY, + the trip here
-    var bpm = Module._web_link_get() >> 4, ahead = (lkRtt / 2) / 1000 * bpm / 60 * 4;
+    var bpm = Module._web_link_get() >> 4, ahead = (lkRtt / 2 + (from && from.unit ? unitLat() : 0)) / 1000 * bpm / 60 * 4;
     lkOut = Module._web_link_follow(d.clk + ahead);
   }
   lkSt();
@@ -443,6 +444,28 @@ setInterval(function () {   // the master's clock, 8 times a second; followers t
   if (lkMaster === myId) { var c = Module._web_link_clock(); if (c >= 0) lkSend({ clk: c }); }
   else if (lkMaster && lkConns.length) { var k = Math.random(); lkPingT[k] = performance.now(); lkSend({ ping: k }); }
 }, 125);
+// ---- SECOND UNIT: this page was opened from a 3DS at http://<the 3DS>:8080/unit. It's a whole Syrup (its own patch,
+// patterns and drums) linked to the 3DS like another LINK device: the 3DS is the master clock, PLAY / STOP / BPM go
+// both ways. Its sound comes out later than the 3DS's (the browser's queue + the output), so it runs that much ahead.
+var unNudge = 0; try { unNudge = +localStorage.getItem('syrupUnitNudge') || 0; } catch (e) {}
+function unitLat() {
+  var q = ready ? Module._web_audio_avail() / 32728 : 0, o = actx ? (actx.baseLatency || 0) + (actx.outputLatency || 0) + 1024 / actx.sampleRate : 0;
+  return (actx && actx.state === 'running' ? (q + o) * 1000 : 0) + unNudge;
+}
+function unitShow() { document.getElementById('unv').textContent = (unNudge > 0 ? '+' : '') + unNudge + ' ms'; }
+function unitNudge(d) { unNudge = Math.max(-200, Math.min(200, unNudge + d)); try { localStorage.setItem('syrupUnitNudge', unNudge); } catch (e) {} unitShow(); }
+function unitStart() {
+  document.title = 'Syrup: second unit'; document.getElementById('unrow').style.display = 'block'; unitShow();
+  document.getElementById('unm').onclick = function () { unitNudge(-5); }; document.getElementById('unp').onclick = function () { unitNudge(5); };
+  lkMaster = null;
+  (function conn() {
+    var ws = new WebSocket('ws://' + location.host + '/unit'), c = { unit: 1, open: false, send: function (d) { if (ws.readyState === 1) ws.send(JSON.stringify(d)); }, close: function () { ws.close(); } };
+    ws.onopen = function () { c.open = true; lkConns.push(c); linkBtn.classList.add('on'); c.send({ id: myId, n: Math.random(), hi: 1 }); msg.textContent = 'SECOND UNIT: on the 3DS\'s clock (LINK for the timing)'; lkSt(); };
+    ws.onmessage = function (ev) { try { lkGot(JSON.parse(ev.data), c); } catch (e) {} };
+    ws.onclose = function () { var was = c.open; c.open = false; lkConns = lkConns.filter(function (x) { return x !== c; }); if (lkMaster === '3ds') lkMaster = null; lkSt();
+      msg.textContent = 'SECOND UNIT: looking for the 3DS...'; setTimeout(conn, was ? 500 : 1500); };
+  })();
+}
 // ---- MIRROR / STREAM: this page was opened from a 3DS (WI-FI MIDI on, http://<the 3DS>:8080/mirror or /stream).
 // It runs Syrup muted and plays / draws exactly what the 3DS sends; STREAM is the clean view for OBS (browser source).
 // /stream?ov=pckb (overlays: Patch, Chord, Keys, Bpm; ov= for none) &bg=clear (see-through background) &sound=1
