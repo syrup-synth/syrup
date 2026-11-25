@@ -6775,7 +6775,7 @@ static const PnlSub PNL_FX[5] = {
 	{"SPACE", 10, {"REVERB TYPE", "DELAY TYPE", "DELAY SYNC"}, {"REVERB MIX", "REV SIZE", "REV DAMP", "DELAY MIX", "TAPE WOW", "TAPE SAT", "FX MIX"}},
 	{"OTT", 10, {"PUMP RATE", "SHIMMER", "FREEZE"}, {"OTT", "PUMP", "MASTER"}}};
 static int gPnlSub[3] = {0, 0, 3};   // FILT / FX: the sub-page (OSC's is its page)
-static Param* gPnlReq = NULL; static float gPnlReqT = 0; static int gPnlReqDir = 0;   // a slider / choice asks the main loop
+static Param* gPnlReq = NULL; static float gPnlReqT = 0; static int gPnlReqDir = 0, gPnlReqV = -1;   // ReqV: an exact value (a list pick)   // a slider / choice asks the main loop
 static int gPnlSubDrag = -1, gPnlSubTo = -1, gPnlSubX0 = 0;   // FX: a block of the chain being dragged
 static int gPnlDrag = -1, gPnlHot = -1; static const Param* gPnlHotP = NULL;
 static const u8 PNL_ACC[3][3] = {{92, 200, 255}, {255, 170, 70}, {180, 120, 255}};
@@ -6832,6 +6832,13 @@ static const char* pnlShort(const char* n) {   // a slider's name in 4 letters
 	if (!strncmp(n, "ENV", 3) && strlen(n) > 5) return n + 5;   // ENV1 ATK -> ATK
 	return n;
 }
+// LIST: a choice opens every option at once; tap one (or D-pad + A, B closes)
+#define LS_MAX 64
+enum { LS_PARAM, LS_COND, LS_RATE, LS_LEN, LS_EUCL };
+static int gLs = 0, gLsN, gLsCur, gLsTop, gLsKind; static Param* gLsP; static char gLsTitle[24]; static char gLsNm[LS_MAX][14];
+static void lsOpenParam(Param* p);
+static void drawLs(void); static int lsTouch(int x, int y); static void lsPick(int i); static int lsCols(void);
+static void downTri(int x, int y, const u8* c) { rectP(x, y, 7, 1, c); rectP(x + 1, y + 1, 5, 1, c); rectP(x + 2, y + 2, 3, 1, c); rectP(x + 3, y + 3, 1, 1, c); }
 #define PNL_SUB_Y 24
 #define PNL_CH_Y 44
 #define PNL_FD_Y 66
@@ -6895,6 +6902,7 @@ static void drawPanel(void) {
 		char sh[8]; snprintf(sh, sizeof(sh), "%.5s", pnlChName(p->name));
 		int room = (w - 8) / 8 - (int)strlen(sh) - 1; if (room < 3) room = 3; if ((int)strlen(v) > room) v[room] = 0;
 		text(x, PNL_CH_Y + 5, sh, 1, PC_DIM); text(x + ((int)strlen(sh) + 1) * 8, PNL_CH_Y + 5, v, 1, A[0], A[1], A[2]);
+		if (p->type != PT_F) downTri(x + w - 14, PNL_CH_Y + 7, TH->dim);
 	}
 	int nf = pnlFaders(S), fw = nf ? 312 / nf : 312; if (fw > 52) fw = 52; int x0 = 160 - fw * nf / 2;
 	for (int i = 0; i < nf; i++) {
@@ -6941,7 +6949,9 @@ static int pnlTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (press && y >= PNL_CH_Y && y < PNL_CH_Y + 18) {
 		int nc = pnlChoices(S); if (!nc) return 0; int i = (x - 8) * nc / 308; if (i < 0) i = 0; if (i >= nc) i = nc - 1;
 		Param* p = pnlFind(S->ch[i], S->page); if (!p) return 0;
-		int w = 308 / nc, rx = x - 8 - i * w; gPnlReq = p; gPnlReqDir = rx < w * 2 / 5 ? -1 : 1; gPnlHotP = p; gSelReq = p->name; return 1;
+		gPnlHotP = p; gSelReq = p->name;
+		if (p->type != PT_F && p->names != PRESS_RIGHT && (p->mx - p->mn < LS_MAX || p->names == TABLE_NAME_DUMMY)) { lsOpenParam(p); return 1; }
+		int w = 308 / nc, rx = x - 8 - i * w; gPnlReq = p; gPnlReqDir = rx < w * 2 / 5 ? -1 : 1; return 1;
 	}
 	int nf = pnlFaders(S), fw = nf ? 312 / nf : 312; if (fw > 52) fw = 52; int x0 = 160 - fw * nf / 2;
 	if (press) { if (y < PNL_FD_Y || y >= PNL_KR_Y || x < x0 || x >= x0 + fw * nf) return 0; gPnlDrag = (x - x0) / fw; }
@@ -6955,6 +6965,7 @@ static int pnlTouch(int x, int y, int press, int release) {   // 1 = redraw
 }
 static int pnlApply(Param* p) {   // the main loop: what a slider / choice asked for
 	if (gPnlReqDir) { int d = gPnlReqDir; gPnlReqDir = 0; return paramChange(p, d, 0); }
+	if (gPnlReqV >= 0) { int v = gPnlReqV; gPnlReqV = -1; if (*(int*)p->p == v) return 0; *(int*)p->p = v; return 1; }
 	float was = paramNorm(p); paramSetNorm(p, gPnlReqT); return fabsf(paramNorm(p) - was) > 0.0001f || p->type == PT_F;
 }
 static void drawMiniKeys(int base, const u8* on) {   // 3 octaves under the sliders
@@ -7121,6 +7132,7 @@ static int themePickTouch(int x, int y) {   // 1 = picked or closed
 }
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	if (gThemePick) { drawThemePick(); return; }
+	if (gLs) { drawLs(); return; }
 	drawBottomMain(base, on, helpOn, latch);
 	if ((gPads && !gGridOn) || gModOn || gGridOn || gDrumOnB || gPnl || gMixOn) return;
 	if (gShapeOn && !gGridOn && !gAddEdit) drawShapeEditor();
@@ -10158,8 +10170,8 @@ static void drawDgEd(void) {
 		text(X, DE_Y + 24, "RATCHET", 1, RGB3(curShown() && gDgSelF % 5 == 2 ? TH->keyOn : TH->txt));
 		for (int q = 0; q < 4; q++) { int on = gDrRat[r][i] == q; rectP(X + q * 46, DE_Y + 36, 44, 20, on ? TH->keyOn : TH->tab); snprintf(b, sizeof(b), "%d", q + 1); text(X + q * 46 + 18, DE_Y + 42, b, 1, RGB3(on ? TH->ink : TH->tabTxt)); }
 		text(X, DE_Y + 64, "IF", 1, RGB3(curShown() && gDgSelF % 5 == 3 ? TH->keyOn : TH->txt));
-		rectP(X, DE_Y + 76, 36, 20, TH->tab); text(X + 14, DE_Y + 82, "<", 1, RGB3(TH->tabTxt)); rectP(X + 148, DE_Y + 76, 36, 20, TH->tab); text(X + 162, DE_Y + 82, ">", 1, RGB3(TH->tabTxt));
-		{ const char* cn = COND_NAMES[gDrCond[r][i]]; text(X + 92 - (int)strlen(cn) * 4, DE_Y + 82, cn, 1, RGB3(gDrCond[r][i] ? TH->warn : TH->val)); }
+		rectP(X, DE_Y + 76, 184, 20, TH->tab); downTri(X + 170, DE_Y + 84, TH->tabTxt);
+		{ const char* cn = COND_NAMES[gDrCond[r][i]]; text(X + 88 - (int)strlen(cn) * 4, DE_Y + 82, cn, 1, RGB3(gDrCond[r][i] ? TH->warn : TH->val)); }
 		text(X, DE_Y + 104, "NUDGE", 1, RGB3(curShown() && gDgSelF % 5 == 4 ? TH->keyOn : TH->txt));
 		rectP(X, DE_Y + 116, 90, 20, TH->tab); text(X + 8, DE_Y + 122, "< EARLIER", 1, RGB3(TH->tabTxt)); rectP(X + 94, DE_Y + 116, 90, 20, TH->tab); text(X + 106, DE_Y + 122, "LATER >", 1, RGB3(TH->tabTxt));
 		rectP(X, DE_Y + 146, 96, 20, TH->warn); text(X + 12, DE_Y + 152, "TAKE OUT", 1, RGB3(TH->ink));
@@ -10178,14 +10190,14 @@ static void drawDgEd(void) {
 		}
 		int y = DE_Y + 22 + 8 * DV_RH + 2;
 		{ int L = gDrLen[r] < 1 ? 16 : gDrLen[r], n = 0; for (int i = 0; i < L; i++) if (drumCellOn(r, i)) n++; char e[8]; snprintf(e, sizeof(e), "%d", n);   // EUCLID: that many hits, spread evenly
-		  int y2 = y + 20; text(6, y2 + 4, "EUCL", 1, RGB3(TH->txt)); rectP(50, y2, 24, 16, TH->tab); text(58, y2 + 4, "<", 1, RGB3(TH->tabTxt)); text(98 - (int)strlen(e) * 4, y2 + 4, e, 1, RGB3(TH->val)); rectP(124, y2, 24, 16, TH->tab); text(132, y2 + 4, ">", 1, RGB3(TH->tabTxt));
+		  int y2 = y + 20; text(6, y2 + 4, "EUCL", 1, RGB3(TH->txt)); rectP(50, y2, 98, 16, TH->tab); text(92 - (int)strlen(e) * 4, y2 + 4, e, 1, RGB3(TH->val)); downTri(136, y2 + 6, TH->tabTxt);
 		  text(166, y2 + 4, "ROT", 1, RGB3(TH->txt)); rectP(198, y2, 24, 16, TH->tab); text(206, y2 + 4, "<", 1, RGB3(TH->tabTxt)); rectP(264, y2, 24, 16, TH->tab); text(272, y2 + 4, ">", 1, RGB3(TH->tabTxt)); }
-		text(6, y + 4, "RATE", 1, RGB3(TH->txt)); rectP(50, y, 24, 16, TH->tab); text(58, y + 4, "<", 1, RGB3(TH->tabTxt)); text(98 - (int)strlen(DRATE_NAMES[gDrRate[r]]) * 4, y + 4, DRATE_NAMES[gDrRate[r]], 1, RGB3(TH->val)); rectP(124, y, 24, 16, TH->tab); text(132, y + 4, ">", 1, RGB3(TH->tabTxt));
+		text(6, y + 4, "RATE", 1, RGB3(TH->txt)); rectP(50, y, 98, 16, TH->tab); text(92 - (int)strlen(DRATE_NAMES[gDrRate[r]]) * 4, y + 4, DRATE_NAMES[gDrRate[r]], 1, RGB3(TH->val)); downTri(136, y + 6, TH->tabTxt);
 		snprintf(t, sizeof(t), "%d", gDrLen[r]);
-		text(166, y + 4, "LEN", 1, RGB3(TH->txt)); rectP(198, y, 24, 16, TH->tab); text(206, y + 4, "<", 1, RGB3(TH->tabTxt)); text(242 - (int)strlen(t) * 4, y + 4, t, 1, RGB3(TH->val)); rectP(264, y, 24, 16, TH->tab); text(272, y + 4, ">", 1, RGB3(TH->tabTxt));
+		text(166, y + 4, "LEN", 1, RGB3(TH->txt)); rectP(198, y, 90, 16, TH->tab); text(236 - (int)strlen(t) * 4, y + 4, t, 1, RGB3(TH->val)); downTri(276, y + 6, TH->tabTxt);
 	}
 }
-static void drumRowToMine(int r); static void drumNudge(int r, int d);
+static void drumRowToMine(int r); static void drumNudge(int r, int d); static void lsOpenDrum(int kind);
 static void drumNudge(int r, int d) {   // NUDGE: the step being edited one step earlier / later (swaps with what's there)
 	int i = gDgEdI, L = gDrLen[r] < 1 ? 16 : gDrLen[r], j = ((i + d) % L + L) % L; if (j == i) return;
 	drumGridMark(); myDrumLoad(); drumRowToMine(r);
@@ -10208,7 +10220,7 @@ static int dgEdTouch(int x, int y, int press) {   // 1 = redraw
 		if (!press) return 0;
 		if (x < X - 4) return 0;
 		if (y >= DE_Y + 34 && y < DE_Y + 58) { int k = (x - X) / 46; if (k > 3) k = 3; drumGridMark(); gDrRat[r][i] = (u8)k; gDrumSaveDue = 1; return 1; }
-		if (y >= DE_Y + 74 && y < DE_Y + 98) { int d = x < X + 44 ? -1 : x >= X + 140 ? 1 : 0; if (!d) return 0; drumGridMark(); gDrCond[r][i] = (u8)((gDrCond[r][i] + NCOND + d) % NCOND); gDrumSaveDue = 1; return 1; }
+		if (y >= DE_Y + 74 && y < DE_Y + 98) { lsOpenDrum(LS_COND); return 1; }
 		if (y >= DE_Y + 114 && y < DE_Y + 138) { drumNudge(r, x < X + 92 ? -1 : 1); return 1; }
 		if (y >= DE_Y + 144 && y < DE_Y + 168 && x < X + 100) { drumGridMark(); drumCellSet(r, i, 0); gDgEd = 0; return 1; }
 		return 0;
@@ -10220,19 +10232,79 @@ static int dgEdTouch(int x, int y, int press) {   // 1 = redraw
 	if (gDgDrag >= 0 && gDgDrag < 8) { int v = DV_MIN[gDgDrag] + (int)lroundf(vfaderT(y, DSV_T, DSV_B) * (DV_MAX[gDgDrag] - DV_MIN[gDgDrag])); dvSet(&gDV[r], gDgDrag, v); gDrumSaveDue = 1; return 1; }
 	int y2 = DE_Y + 22 + 8 * DV_RH + 2;
 	if (press && y >= y2 + 20 && y < y2 + 36) {   // EUCLID < > / ROTATE < >
-		if (x >= 50 && x < 74) drumEuclid(r, -1); else if (x >= 124 && x < 148) drumEuclid(r, 1);
+		if (x >= 50 && x < 148) lsOpenDrum(LS_EUCL);
 		else if (x >= 198 && x < 222) drumRotate(r, -1); else if (x >= 264 && x < 288) drumRotate(r, 1); else return 0;
 		return 1;
 	}
 	if (press && y >= y2 && y < y2 + 16) {
-		if (x >= 50 && x < 74) gDrRate[r] = (u8)((gDrRate[r] + NDRATE - 1) % NDRATE);
-		else if (x >= 124 && x < 148) gDrRate[r] = (u8)((gDrRate[r] + 1) % NDRATE);
-		else if (x >= 198 && x < 222) { if (gDrLen[r] > 1) gDrLen[r]--; }
-		else if (x >= 264 && x < 288) { if (gDrLen[r] < DSTEP) gDrLen[r]++; }
+		if (x >= 50 && x < 148) lsOpenDrum(LS_RATE);
+		else if (x >= 198 && x < 288) lsOpenDrum(LS_LEN);
 		else return 0;
-		gDrumSaveDue = 1; return 1;
+		return 1;
 	}
 	return 0;
+}
+static void lsOpen(const char* title, int n, int cur, int kind) {
+	gLs = 1; gLsN = n < 1 ? 1 : n > LS_MAX ? LS_MAX : n; gLsCur = cur < 0 ? 0 : cur >= gLsN ? gLsN - 1 : cur; gLsKind = kind; snprintf(gLsTitle, sizeof(gLsTitle), "%s", title);
+	int c = lsCols(), cap = c * 8; gLsTop = 0; if (gLsCur >= cap) gLsTop = (gLsCur / c - 3) * c; if (gLsTop < 0) gLsTop = 0;
+}
+static void lsOpenParam(Param* p) {
+	int mx = (int)p->mx; if (p->names == TABLE_NAME_DUMMY) mx = gTableCount - 1; else if (p->names == PRESET_DUMMY) mx = presetCount(gStyle) - 1;
+	int n = mx - (int)p->mn + 1; if (n > LS_MAX) n = LS_MAX;
+	Param q = *p; int tmp; q.p = &tmp; q.mx = (float)mx;
+	for (int i = 0; i < n; i++) { tmp = (int)p->mn + i; paramFmt(&q, gLsNm[i], sizeof(gLsNm[i])); }
+	gLsP = p; lsOpen(p->name, n, *(int*)p->p - (int)p->mn, LS_PARAM);
+}
+static void lsOpenDrum(int kind) {
+	int r = gDgEdR, L = gDrLen[r] < 1 ? 16 : gDrLen[r];
+	if (kind == LS_COND) { for (int i = 0; i < NCOND; i++) snprintf(gLsNm[i], 14, "%s", COND_NAMES[i]); lsOpen("PLAY IF", NCOND, gDrCond[r][gDgEdI], kind); }
+	else if (kind == LS_RATE) { for (int i = 0; i < NDRATE; i++) snprintf(gLsNm[i], 14, "%s", DRATE_NAMES[i]); lsOpen("RATE", NDRATE, gDrRate[r], kind); }
+	else if (kind == LS_LEN) { for (int i = 0; i < DSTEP; i++) snprintf(gLsNm[i], 14, "%d", i + 1); lsOpen("LENGTH (STEPS)", DSTEP, L - 1, kind); }
+	else { int n = 0; for (int i = 0; i < L; i++) if (drumCellOn(r, i)) n++; for (int i = 0; i <= L; i++) snprintf(gLsNm[i], 14, "%d", i); lsOpen("EUCLID HITS", L + 1, n, kind); }
+}
+static int lsCols(void) {
+	int ml = 1; for (int i = 0; i < gLsN; i++) { int l = (int)strlen(gLsNm[i]); if (l > ml) ml = l; }
+	int c = 312 / ((ml + 2) * 8); return c < 1 ? 1 : c > 8 ? 8 : c;
+}
+#define LS_Y 24
+#define LS_RH 26
+static void drawLs(void) {
+	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
+	rectP(0, 0, 320, 240, TH->bg);
+	text(6, 6, gLsTitle, 1, RGB3(TH->val));
+	rectP(262, 2, 54, 16, TH->keyOn); text(267, 6, "CLOSE", 1, RGB3(TH->ink));
+	int c = lsCols(), w = 312 / c, cap = c * 8;
+	if (gLsN > cap) { rectP(190, 2, 30, 16, TH->tab); text(201, 6, "^", 1, RGB3(TH->tabTxt)); rectP(224, 2, 30, 16, TH->tab); text(235, 6, "v", 1, RGB3(TH->tabTxt)); }
+	for (int k = 0; k < cap && gLsTop + k < gLsN; k++) {
+		int i = gLsTop + k, x = 4 + (k % c) * w, y = LS_Y + (k / c) * LS_RH, on = i == gLsCur;
+		rectP(x + 1, y, w - 2, LS_RH - 4, on ? TH->keyOn : TH->tab);
+		const char* t = gLsNm[i]; int ln = (int)strlen(t), mx = (w - 6) / 8; if (ln > mx) ln = mx;
+		char b[16]; snprintf(b, sizeof(b), "%.*s", ln, t); text(x + w / 2 - ln * 4, y + 7, b, 1, RGB3(on ? TH->ink : TH->tabTxt));
+	}
+}
+static int lsTouch(int x, int y) {
+	int c = lsCols(), w = 312 / c, cap = c * 8;
+	if (y < 20) {
+		if (x >= 262) { gLs = 0; return 1; }
+		if (gLsN > cap && x >= 190 && x < 220) { gLsTop -= cap; if (gLsTop < 0) gLsTop = 0; return 1; }
+		if (gLsN > cap && x >= 224 && x < 254) { if (gLsTop + cap < gLsN) gLsTop += cap; return 1; }
+		return 0;
+	}
+	int col = (x - 4) / w, row = (y - LS_Y) / LS_RH; if (col < 0 || col >= c || row < 0 || row >= 8 || y < LS_Y) return 0;
+	int i = gLsTop + row * c + col; if (i >= gLsN) return 0;
+	lsPick(i); return 1;
+}
+static void lsPick(int i) {
+	int r = gDgEdR; char m[40]; gLs = 0; gLsCur = i;
+	switch (gLsKind) {
+	case LS_PARAM: { Param* p = gLsP; int n = (int)(p->mx - p->mn);
+		(void)n; gPnlReq = p; gPnlReqDir = 0; gPnlReqV = (int)p->mn + i; gPnlHotP = p; gSelReq = p->name; break; }
+	case LS_COND: drumGridMark(); gDrCond[r][gDgEdI] = (u8)i; gDrumSaveDue = 1; break;
+	case LS_RATE: gDrRate[r] = (u8)i; gDrumSaveDue = 1; break;
+	case LS_LEN: gDrLen[r] = (u8)(i + 1); gDrumSaveDue = 1; break;
+	default: { int L = gDrLen[r] < 1 ? 16 : gDrLen[r], n = 0; for (int k = 0; k < L; k++) if (drumCellOn(r, k)) n++; if (i != n) drumEuclid(r, i - n); }
+	}
+	snprintf(m, sizeof(m), "%s: %s", gLsTitle, gLsNm[i]); say(m);
 }
 // CIRCLE PAD in the editors: a cursor on the piano roll and the drum grid (A puts / takes a note or hit, hold A opens
 // its step editor, B on the drum grid opens the row's SOUND), and in the step editors up / down picks a setting and
@@ -11919,13 +11991,19 @@ int main(void) {
 			else { gspWaitForVBlank(); continue; }
 		}
 		if (kDown & KEY_START) { gStartMenu = !gStartMenu; gStartSel = 0; topDirty = topAgain = 1; kDown &= ~KEY_START; }
-		gStickMenu = (gStartMenu || gThemePick || (page == 0 && gStickMode == SM_PAGE)) && !(kHeld & KEY_SELECT);
+		gStickMenu = (gStartMenu || gThemePick || gLs || (page == 0 && gStickMode == SM_PAGE)) && !(kHeld & KEY_SELECT);
 		if (gStickMenu) kDown |= stickDpad(); else stickDpad();
 		if (gThemePick && !gStartMenu && (kDown & (KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT | KEY_A))) {   // the picker by buttons / circle pad: try them live, A keeps it
 			int d = (kDown & KEY_DRIGHT) ? 1 : (kDown & KEY_DLEFT) ? -1 : (kDown & KEY_DDOWN) ? TP_COLS : (kDown & KEY_DUP) ? -TP_COLS : 0;
 			if (d) { gTheme = (gTheme + NTHEMES + d) % NTHEMES; gBrightSaveDue = 1; }
 			if (kDown & KEY_A) { gThemePick = 0; char m[32]; snprintf(m, sizeof(m), "THEME: %s", THEME_NAMES[gTheme]); say(m); }
 			kDown &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT | KEY_A); topDirty = topAgain = botDirty = botAgain = 1;
+		}
+		if (gLs && !gStartMenu && (kDown & (KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT | KEY_A | KEY_B))) {   // the list by buttons
+			int c = lsCols(), d = (kDown & KEY_DRIGHT) ? 1 : (kDown & KEY_DLEFT) ? -1 : (kDown & KEY_DDOWN) ? c : (kDown & KEY_DUP) ? -c : 0;
+			if (d) { gLsCur = (gLsCur + gLsN * 4 + d) % gLsN; int cap = c * 8; if (gLsCur < gLsTop) gLsTop = gLsCur / c * c; if (gLsCur >= gLsTop + cap) gLsTop = (gLsCur / c - 7) * c; }
+			if (kDown & KEY_A) lsPick(gLsCur); else if (kDown & KEY_B) gLs = 0;
+			kDown &= ~(KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT | KEY_A | KEY_B); topDirty = topAgain = botDirty = botAgain = 1;
 		}
 		int startAct = -1;
 		if (gStartMenu) {   // the menu has the buttons; the touch screen keeps playing
@@ -12375,6 +12453,7 @@ int main(void) {
 		if (touching) {
 			touchPosition t; hidTouchRead(&t);
 			if (gThemePick) { if (!prevTouch && themePickTouch(t.px, t.py)) topDirty = botDirty = topAgain = botAgain = 1; }
+			else if (gLs) { if (!prevTouch && lsTouch(t.px, t.py)) topDirty = botDirty = topAgain = botAgain = 1; }
 			else if (t.py < TAB_H) {
 				if (!prevTouch) {
 					int b = t.px * NCHIP / 320, again = !gPads && chipOfPage(page) == b;

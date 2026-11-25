@@ -90,7 +90,8 @@ static void SCRIPT(int fr) {
 	{ static int at, rv; if (fr == 260) { for (int i = 0; i < NFXB; i++) if (gFxOrder[i] == 3) at = i; }
 	  if (fr == 262) { TOUCH = 1; TX = 4 + at * 312 / 5 + 30; TY = PNL_SUB_Y + 6; }   // the SPACE block (a tap: its sliders)
 	  if (fr == 266) rv = gRevType;
-	  if (fr == 267) { TOUCH = 1; TX = 8 + 308 / 3 - 12; TY = PNL_CH_Y + 6; }   // REVERB type: the right of it = next
+	  if (fr == 267) { TOUCH = 1; TX = 8 + 308 / 3 - 12; TY = PNL_CH_Y + 6; }   // REVERB type: its list
+	  if (fr == 269 && gLs) { int c = lsCols(), w = 312 / c, k = (gLsCur + 1) % gLsN - gLsTop; TOUCH = 1; TX = 4 + (k % c) * w + w / 2; TY = LS_Y + (k / c) * LS_RH + 8; }   // the next one
 	  if (fr == 272) { shotBot("shots/fx_chain_sel.ppm"); shotTop("shots/fx_chain_top.ppm"); if (gPnlSub[2] != 3 || gRevType != (rv + 1) % NREVT) fail("FX: SPACE's sliders, the reverb type stepped (sub %d, rev %d -> %d)", gPnlSub[2], rv, gRevType); } }
 	// chips: OSC, OSC again = OSC B, again = SUB+NOISE; R from there goes on to FILT+ENV (L / R skip the side pages)
 	{ static int pg[3]; int xo = 0 * 320 / 8 + 20;

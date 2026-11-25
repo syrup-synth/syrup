@@ -21,6 +21,10 @@ static void SCRIPT(int fr) {
 	if (fr == 48) { if (gDgEd != 2 || gDgEdR != 2) fail("EDIT: a name should open its SOUND (%d %d)", gDgEd, gDgEdR); }
 	if (fr == 50 || fr == 51) { TOUCH = 1; TX = 160; TY = DE_Y + 6; }   // SOLO
 	if (fr == 54) { if (gDrSolo != 2) fail("SOLO: the HAT row (%d)", gDrSolo); shotBot("shots/drum_sound.ppm"); for (int d = 0; d < 10; d++) h0[d] = gDrumHitN[d]; transportToggle(); }
+	if (fr == 56) { TOUCH = 1; TX = 90; TY = DE_Y + 22 + 8 * DV_RH + 8; }   // RATE: a list
+	if (fr == 58) { if (!gLs || gLsN != NDRATE) fail("RATE: a tap should open its list (%d %d)", gLs, gLsN); shotBot("shots/list_rate.ppm");
+		int c = lsCols(), w = 312 / c; TOUCH = 1; TX = 4 + 2 * w + w / 2; TY = LS_Y + 8; }   // X2
+	if (fr == 60) { if (gLs || gDrRate[2] != 2) fail("RATE: picking X2 should set it (%d %d)", gLs, gDrRate[2]); }
 	if (fr == 174) { int k = gDrumHitN[0] - h0[0], h = gDrumHitN[2] - h0[2]; if (k || h < 3) fail("SOLO: only the hats should play (kicks %d, hats %d)", k, h); gDrSolo = -1; transportToggle(); done = 1; }
 }
-int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 178; app_main(); if (!done) fail("didn't run"); printf("drumedit: EDIT, TUNE, NUDGE, SOLO\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 178; app_main(); if (!done) fail("didn't run"); printf("drumedit: EDIT, TUNE, NUDGE, SOLO, LIST\n"); return gFails ? 1 : 0; }

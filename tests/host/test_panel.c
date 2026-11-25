@@ -1,5 +1,5 @@
 // PANEL: OSC / FILT / FX show their settings as sliders over a small keyboard. A drag sets a slider (through the same path
-// as the D-pad), a choice steps with a tap, the sub-pages switch, the small keys play
+// as the D-pad), a choice opens a list, the sub-pages switch, the small keys play
 #include "syrup_host.c"
 #include "harness.h"
 static int done = 0; static float lv0;
@@ -11,9 +11,11 @@ static void SCRIPT(int fr) {
 	if (fr == 9) { if (!gPnl || gCurPage != 1) fail("PANEL: OSC should show the sliders (%d %d)", gPnl, gCurPage); shotBot("shots/pnl_osc.ppm"); shotTop("shots/pnl_osc_top.ppm"); lv0 = gOsc[0].level; }
 	if (fr >= 10 && fr < 16) { TOUCH = 1; TX = fx(2, 8); TY = PNL_TB - (fr - 10) * 4; }   // LEVEL: drag from the bottom up a bit
 	if (fr == 18) { if (gOsc[0].level > 0.4f || gOsc[0].level == lv0) fail("PANEL: dragging LEVEL low should set it (%.2f)", gOsc[0].level); }
-	if (fr == 20) { TOUCH = 1; TX = 8 + 308 / 3 + 308 / 3 - 10; TY = PNL_CH_Y + 6; }   // TABLE: the right of it = next
+	if (fr == 20) { TOUCH = 1; TX = 8 + 308 / 3 + 40; TY = PNL_CH_Y + 6; }   // TABLE: a tap opens the list
+	if (fr == 22) { if (!gLs || gLsN < 2) fail("PANEL: a tap on TABLE should open its list (%d %d)", gLs, gLsN); shotBot("shots/list_table.ppm");
+		int c = lsCols(), w = 312 / c, k = (gLsCur + 1) % gLsN - gLsTop; TOUCH = 1; TX = 4 + (k % c) * w + w / 2; TY = LS_Y + (k / c) * LS_RH + 8; }
 	if (fr == 19) lv0 = gOsc[0].table;
-	if (fr == 24) { if (gOsc[0].table == (int)lv0) fail("PANEL: a tap on TABLE's right should step it (%d)", gOsc[0].table); }
+	if (fr == 24) { if (gLs || gOsc[0].table == (int)lv0) fail("PANEL: picking from the list should set TABLE (%d %d)", gLs, gOsc[0].table); }
 	if (fr == 26) { TOUCH = 1; TX = 4 + 312 * 2 / 3 + 30; TY = PNL_SUB_Y + 6; }   // SUB+NOISE
 	if (fr == 30) { if (gCurPage != 3) fail("PANEL: SUB+NOISE should be page 3 (%d)", gCurPage); shotBot("shots/pnl_sub.ppm"); }
 	if (fr >= 32 && fr <= 35) { TOUCH = 1; TX = 100; TY = 236; }   // a small key, held
