@@ -6904,7 +6904,7 @@ static void vfader(int cx, int top, int bot, int w, float t, float zero, const u
 	if (b - a < 2) { a = yv - 1; b = yv + 1; }
 	rect(cx - w / 2, a, w, b - a, r, g, bl);
 	rect(cx - w / 2 - 2, bot, w + 4, 1, RGB3(TH->line));   // the baseline
-	if (val) { int ty = yv - 11; if (ty < top - 10) ty = top - 10; if (ty > bot - 10) ty = bot - 10; text(cx - (int)strlen(val) * 4, ty, val, 1, r, g, bl); }   // the value, on the bar
+	if (val) { int ty = (t < zero - 0.001f ? yz : yv) - 11; if (ty < top - 10) ty = top - 10; if (ty > bot - 10) ty = bot - 10; text(cx - (int)strlen(val) * 4, ty, val, 1, r, g, bl); }   // the value, on the bar
 }
 static float vfaderT(int y, int top, int bot) { float t = (bot - y) / (float)(bot - top); return t < 0 ? 0 : t > 1 ? 1 : t; }
 static const char* pnlShort(const char* n) {   // a slider's name in 4 letters
