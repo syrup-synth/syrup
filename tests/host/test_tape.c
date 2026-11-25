@@ -12,7 +12,7 @@ static int playOk = 0;
 static void SCRIPT(int fr) {
 	HD = 0; TOUCH = 0; gFxCore2 = 0;
 	if (fr == 2) { int st, ix; if (findPreset("SOFT PLUCK", &st, &ix)) presetLoad(st, ix); else fail("tape: no SOFT PLUCK");
-		gBPM = 240; gTapeLenSel = 0; gDrums = 0; gPreroll = 0; seqClear(); gSeqLen = 16; for (int k = 0; k < 16; k += 4) stepSetNote(k, 60, 1); }
+		gBPM = 240; gTapeLenSel = 5; gDrums = 0; gPreroll = 0; seqClear(); gSeqLen = 16; for (int k = 0; k < 16; k += 4) stepSetNote(k, 60, 1); }
 	tap(fr, 3, 5 * 320 / 8 + 20, 8);                       // SEQ chip
 	tap(fr, 6, 1 * 320 / 7 + 20, XY_Y + 5);                // PAT
 	tap(fr, 9, 160, PV_TAPE_Y + 8);                           // TAPE >>>

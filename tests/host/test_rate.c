@@ -15,8 +15,8 @@ static void SCRIPT(int fr) {
 		int k = gDrumHitN[0] - k0; if (k < 2 || k > 3) fail("SEQ RATE 1/32: the drums stay in 16ths, about 2 kicks in 2 bars (%d)", k);
 		int c = gClickN - c0; if (c < 7 || c > 9) fail("CLICK ALWAYS: a click a beat, about 8 in 2 bars (%d)", c);
 		if (gClickCh >= 0 && (CS[gClickCh].cl != 0 || CS[gClickCh].cr != 0)) fail("CLICK: it must not feed the capture (it would land on tape)");
-		gTapeLenSel = 0; int want = 4 * 4 * 32728 / 2; if (abs(tapeSamples() - want) > 400) fail("TAPE 4 BARS at SEQ RATE 1/32 is still 4 bars (%d, want %d)", tapeSamples(), want);
-		gTapeLenSel = 5; gSongOn = 0; want = 16 * 32728 / 8 / 2; if (abs(tapeSamples() - want) > 400) fail("TAPE PATTERN at 1/32: 16 steps = half a bar (%d, want %d)", tapeSamples(), want);
+		gTapeLenSel = 5; int want = 4 * 4 * 32728 / 2; if (abs(tapeSamples() - want) > 400) fail("TAPE 4 BARS at SEQ RATE 1/32 is still 4 bars (%d, want %d)", tapeSamples(), want);
+		gTapeLenSel = TL_SONG; gSongOn = 0; want = 16 * 32728 / 8 / 2; if (abs(tapeSamples() - want) > 400) fail("TAPE PATTERN at 1/32: 16 steps = half a bar (%d, want %d)", tapeSamples(), want);
 		gClick = 2; c0 = gClickN; }
 	if (fr == 370 && gClickN != c0) fail("CLICK RECORDING: no clicks when nothing records (%d)", gClickN - c0);
 	if (fr == 372) {   // REC QUANT 32ND: a note a quarter step in stays; half way = +50 nudge; three quarters = the next step

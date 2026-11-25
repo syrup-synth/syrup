@@ -66,7 +66,7 @@ static void SCRIPT(int fr) {
 	if (fr == 2013) { if (gDgEd != 1 || gDgEdI != 1) fail("PAD: holding A should open the step's editor (%d)", gDgEd); if (!gMyDrum[0][1]) fail("PAD: holding A shouldn't take the hit away"); }
 	if (fr >= 2014 && fr < 2016) CY = -150;
 	if (fr >= 2020 && fr < 2022) CX = 150;
-	if (fr == 2025) { if (gDgSelF != 1) fail("PAD: down should pick RATCHET (%d)", gDgSelF); if (gDrRat[0][1] != 1) fail("PAD: right should add a ratchet (%d)", gDrRat[0][1]); }
+	if (fr == 2025) { if (gDgSelF != 1) fail("PAD: down should pick TUNE (%d)", gDgSelF); if (gDrTn[0][1] != 1) fail("PAD: right should tune the step up (%d)", gDrTn[0][1]); }
 	if (fr == 2026 || fr == 2027) HD |= KEY_B;
 	if (fr == 2029 && gDgEd) fail("PAD: B should close the editor");
 	// and on the piano roll
