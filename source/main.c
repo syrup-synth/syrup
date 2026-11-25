@@ -5761,8 +5761,10 @@ static int strumScaleNote(int base, int q) {   // STRUM NOTES SCALE: string q = 
 	int r = padDeg(base, gPadSel), k = -40; while (scaleNote(base + gRoot, k) < r) k++;
 	return scaleNote(base + gRoot, k + q) - 12;
 }
+static int gPadFlip = 0;   // HICHORD: the stick pulled down = the chord's other colour (major <-> minor)
 static int padChord(int base, int pad, int band, int side, int* out) {
 	int r = padDeg(base, pad), t3 = padDeg(base, pad + 2), t5 = padDeg(base, pad + 4), t7 = padDeg(base, pad + 6), t9 = padDeg(base, pad + 8);
+	if (gPadFlip && t5 - r == 7) t3 = r + (t3 - r == 4 ? 3 : 4);
 	if (side == 2) t3 = padDeg(base, pad + 3);   // sus4
 	int n = 0;
 	if (band == 2) { out[n++] = r; out[n++] = t3; out[n++] = t7; out[n++] = t9; }   // 9th: drop the 5th, keep four notes
@@ -12254,7 +12256,28 @@ int main(void) {
 			else if (page == 7 && gGridOn && !gPatView && !gPads) mode = gStepEd >= 0 ? 1 : 4;
 			if (kHeld & KEY_SELECT) mode = 0;   // SELECT held: the pad is the QUICK ring
 			if (mode == 1 && (kHeld & KEY_TOUCH) && gGtLong) mode = 0;   // the note still held: its PARAMETER LOCKS have the pad and B
-			gEdStick = mode != 0;
+			// HICHORD: a pad held, the circle pad reshapes its chord as you play - up 7TH, up-right 9TH, right SUS4, left INVERSION,
+			// down MAJOR <-> MINOR (down-left: that + 7TH), back to the middle: the chord you touched
+			gEdStick = 0;
+			{ static int hcDir = -1, hcI = -1, hcB = 0, hcS = 1; int held = 0;
+			  if (gPads && !gGridOn && (kHeld & KEY_TOUCH) && gPadSel >= 0 && !(kHeld & KEY_SELECT)) { touchPosition tp; hidTouchRead(&tp); held = tp.py >= PAD_Y && tp.py < PROG_Y - 2; }
+			  if (held) {
+				circlePosition cp; hidCircleRead(&cp); float jx = cp.dx / 150.0f, jy = cp.dy / 150.0f; int dir = -1;
+				if (jx * jx + jy * jy > 0.3f) { float a = atan2f(jy, jx); dir = ((int)lroundf(a / 0.785398f) + 8) % 8; }   // 0 right, 2 up, 4 left, 6 down
+				if (gPdI != hcI) { hcI = gPdI; hcB = gPdB; hcS = gPdS; if (dir >= 0) hcDir = -2; }   // a new pad under the finger: the push applies to it too
+				if (dir != hcDir) {
+					int band = hcB, side = hcS, flip = 0; const char* nm = "";
+					switch (dir) { case 2: band = 1; nm = "7TH"; break; case 1: band = 2; nm = "9TH"; break; case 0: side = 2; nm = "SUS4"; break; case 4: side = 0; nm = "INVERSION"; break;
+						case 6: flip = 1; nm = "MAJOR <> MINOR"; break; case 5: flip = 1; band = 1; nm = "OTHER COLOUR + 7TH"; break; case 3: band = 1; side = 0; nm = "7TH, INVERTED"; break; case 7: side = 2; band = 1; nm = "7SUS4"; break; }
+					hcDir = dir; gPadFlip = flip; float v;
+					padsGo(gPadBase, hcI, band, side, PAD_H / 2, 1, &v); gPdB = hcB; gPdS = hcS;
+					if (dir >= 0) { char m[32]; snprintf(m, sizeof m, "HICHORD: %s", nm); say(m); }
+					topDirty = botDirty = 1;
+				}
+				mode = 0; gEdStick = 1;
+			  } else { gPadFlip = 0; hcDir = -1; hcI = -1; }
+			}
+			gEdStick = gEdStick || mode != 0;
 			static float ax = 0, ay = 0; static int hx = 0, hy = 0; static u64 aT = 0; static int aHeld = 0, aDone = 0;
 			if (mode) {
 				circlePosition cp; hidCircleRead(&cp); float jx = cp.dx / 150.0f, jy = cp.dy / 150.0f;
@@ -12563,7 +12586,7 @@ int main(void) {
 				if (!prevTouch) {
 					int b = t.px * NCHIP / 320, again = !gPads && chipOfPage(page) == b;
 					if (b == 7) { gMixOn = !gMixOn; if (gMixOn) gPads = 0; }
-					else if (b == 6) { gMixOn = 0; gPads = !gPads; gPadSel = -1; if (gPads && page == 7) page = 1; /* the piano roll owns the whole screen: leave it for the pads */ if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: LOW = TRIAD, MID = 7TH, TOP = 9TH; EDGES = INVERSION / SUS4"); }
+					else if (b == 6) { gMixOn = 0; gPads = !gPads; gPadSel = -1; if (gPads && page == 7) page = 1; /* the piano roll owns the whole screen: leave it for the pads */ if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: HOLD ONE + CIRCLE PAD = HICHORD (UP 7TH, RIGHT SUS4, DOWN MINOR)"); }
 					else {
 						gPads = 0; gMixOn = 0;
 						if (b == 0) page = again ? (page % 3) + 1 : 1;   // OSC A -> OSC B -> SUB+NOISE (the sub-tabs say which)
