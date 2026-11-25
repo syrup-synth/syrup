@@ -3904,9 +3904,11 @@ static int browseStep(int ds, int dp, int fresh) {   // returns 1 when the sound
 }
 // START: a quick menu over the top screen (no more quitting by accident)
 static int gStartMenu = 0, gStartSel = 0;
-#define NSTART 10
-static const char* START_NAMES[NSTART] = {"SAVE PATCH", "BROWSER", "PANIC", "HELP", "THEME", "MIDI LEARN", "SAVE SESSION", "LOAD SESSION", "NEW SESSION", "QUIT"};
-#define START_QUIT 9
+#define NSTART 11
+static const char* START_NAMES[NSTART] = {"SAVE PATCH", "BROWSER", "PANIC", "HELP", "THEME", "MIDI LEARN", "SAVE SESSION", "LOAD SESSION", "NEW SESSION", "LINK PHONE", "QUIT"};
+#define START_LINK 9
+#define START_QUIT 10
+static int gPhoneLink = 0;   // LINK PHONE: a QR code on the bottom screen - the phone's camera opens Syrup's phone pages
 static void browseSave(void) {
 	int slot = (gStyle == NSTYLES - 1 && gPreset < NUSER) ? gPreset : -1;
 	if (slot < 0) { for (int i = 0; i < NUSER; i++) if (gUser[i].magic != PATCH_MAGIC) { slot = i; break; } if (slot < 0) slot = gSaveSlot; }
@@ -6334,11 +6336,11 @@ static const float ENV_SEGW[5] = {64, 34, 64, 34, 80};   // A, H, D, sustain hol
 static const float ENV_MAXT[5] = {4, 2, 4, 0, 5};
 static void drawStartMenu(void) {
 	fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400;
-	int mw = 200, mh = NSTART * 18 + 44, mx = 200 - mw / 2, my = 120 - mh / 2;
+	int mw = 200, mh = NSTART * 17 + 44, mx = 200 - mw / 2, my = 120 - mh / 2;
 	rect(mx, my, mw, mh, RGB3(TH->bg)); outline(mx, my, mw, mh, RGB3(TH->line)); outline(mx + 2, my + 2, mw - 4, mh - 4, RGB3(TH->grid));
 	text(200 - 5 * 8, my + 8, "MENU", 2, RGB3(TH->val));
 	for (int i = 0; i < NSTART; i++) {
-		int y = my + 30 + i * 18, on = i == gStartSel;
+		int y = my + 30 + i * 17, on = i == gStartSel;
 		if (on) rect(mx + 10, y - 3, mw - 20, 16, RGB3(TH->keyOn));
 		const u8* c = on ? TH->ink : TH->txt;
 		char nm[32]; if (i == 4) snprintf(nm, sizeof(nm), "< THEME: %s >", THEME_NAMES[gTheme]); else snprintf(nm, sizeof(nm), "%s", START_NAMES[i]);   // THEME shows which, < > / L R change it
@@ -6946,6 +6948,7 @@ static const char* pnlShort(const char* n) {   // a slider's name in 4 letters
 enum { LS_PARAM, LS_COND, LS_RATE, LS_LEN, LS_EUCL, LS_BARS };
 static int gLs = 0, gLsN, gLsCur, gLsTop, gLsKind; static Param* gLsP; static char gLsTitle[24]; static char gLsNm[LS_MAX][14];
 static void lsOpenParam(Param* p); static void lsOpenBars(void);
+static void drawPhoneLink(void);
 static void drawLs(void); static int lsTouch(int x, int y); static void lsPick(int i); static int lsCols(void);
 static void downTri(int x, int y, const u8* c) { rectP(x, y, 7, 1, c); rectP(x + 1, y + 1, 5, 1, c); rectP(x + 2, y + 2, 3, 1, c); rectP(x + 3, y + 3, 1, 1, c); }
 #define PNL_SUB_Y 24
@@ -7249,6 +7252,7 @@ static int themePickTouch(int x, int y) {   // 1 = picked or closed
 static void drawBottom(int base, const u8* on, int helpOn, int latch) {
 	if (gThemePick) { drawThemePick(); return; }
 	if (gLs) { drawLs(); return; }
+	if (gPhoneLink) { drawPhoneLink(); return; }
 	drawBottomMain(base, on, helpOn, latch);
 	if ((gPads && !gGridOn) || gModOn || gGridOn || gDrumOnB || gPnl || gMixOn) return;
 	if (gShapeOn && !gGridOn && !gAddEdit) drawShapeEditor();
@@ -7444,6 +7448,25 @@ static float gMicRecT = 0;
 static void micRecStart(void) { if (!gMicOK) { say("MIC NOT AVAILABLE"); return; } gMicRecT = 1.1f; }
 // WEB UPLOAD: the Wi-Fi server (the one WI-FI MIDI runs) also takes files at /files
 static void kitScanDirs(void); static void netMidiChanged(void); static int gMidiNet; static char gNetAddr[32]; static volatile int gWebUpDone, gWebUpN; static char gWebUpKit[40];
+#include "lib/qrcodegen.inc"   // Project Nayuki's QR Code generator (MIT): the LINK PHONE screen
+static void drawPhoneLink(void) {   // the bottom screen: a QR code the phone's camera opens, the address under it
+	fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL); fbW = 320;
+	rectP(0, 0, 320, 240, TH->bg);
+	text(6, 6, "LINK PHONE", 1, RGB3(TH->val));
+	rectP(262, 2, 54, 16, TH->keyOn); text(267, 6, "CLOSE", 1, RGB3(TH->ink));
+	if (!gNetAddr[0]) { text(160 - 15 * 4, 110, "STARTING WI-FI...", 1, RGB3(TH->txt)); return; }
+	if (!strchr(gNetAddr, ':')) { text(160 - (int)strlen(gNetAddr) * 4, 100, gNetAddr, 1, RGB3(TH->warn)); text(160 - 27 * 4, 120, "TURN WI-FI ON (THE SWITCH),", 1, RGB3(TH->txt)); text(160 - 21 * 4, 132, "THEN LINK PHONE AGAIN", 1, RGB3(TH->txt)); return; }
+	static char url[48]; static uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(4)], tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(4)]; static char made[48] = ""; static int ok = 0;
+	snprintf(url, sizeof url, "http://%s/", gNetAddr);
+	if (strcmp(url, made)) { snprintf(made, sizeof made, "%s", url); ok = qrcodegen_encodeText(url, tmp, qr, qrcodegen_Ecc_MEDIUM, 1, 4, qrcodegen_Mask_AUTO, true); }
+	if (ok) {
+		int n = qrcodegen_getSize(qr), sc = 170 / (n + 8), w = (n + 8) * sc, x0 = 160 - w / 2, y0 = 24;   // a quiet zone of 4 all round
+		rect(x0, y0, w, w, 255, 255, 255);
+		for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) if (qrcodegen_getModule(qr, x, y)) rect(x0 + (x + 4) * sc, y0 + (y + 4) * sc, sc, sc, 0, 0, 0);
+		text(160 - (int)strlen(url) * 4, y0 + w + 6, url, 1, RGB3(TH->val));
+	}
+	text(160 - 30 * 4, 222, "POINT THE PHONE'S CAMERA HERE", 1, RGB3(TH->dim));
+}
 static int gWebUpSay = 0;
 static void webUpStart(void) {
 #ifdef SYRUP_NO_NET
@@ -12377,7 +12400,9 @@ int main(void) {
 		if (kDown & KEY_X) { page = navStep(page, 1); topDirty = 1; }
 		if (kDown & KEY_Y) { page = navStep(page, -1); topDirty = 1; }
 		if (kDown & KEY_A) { if (page != 0) gChord = (gChord + 1) % NCHORD; topDirty = 1; }   // (the browser saves with its SAVE button or START > SAVE PATCH, not A)
-		if (gThemePick && (kDown & KEY_B)) { gThemePick = 0; kDown &= ~KEY_B; botDirty = 1; }   // B closes the theme picker
+		if (gThemePick && (kDown & KEY_B)) { gThemePick = 0; kDown &= ~KEY_B; botDirty = 1; }
+		if (gPhoneLink && (kDown & (KEY_B | KEY_A))) { gPhoneLink = 0; kDown &= ~(KEY_B | KEY_A); botDirty = botAgain = 1; }   // A / B close the QR
+		{ static char la[32] = ""; if (gPhoneLink && strcmp(la, gNetAddr)) { snprintf(la, sizeof la, "%s", gNetAddr); botDirty = botAgain = 1; } }   // the address arrives: draw the QR   // B closes the theme picker
 		if (kDown & KEY_B) { latch = !latch; if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
 		if (gN3 > 0 && (kDown & KEY_ZR)) {   // ZR: the sequence plays / stops
 			transportToggle(); topDirty = botDirty = 1;
@@ -12404,7 +12429,12 @@ int main(void) {
 		if (startAct == 4) { gThemePick = 1; botDirty = 1; }   // THEME: the picker, every theme at once
 		if (startAct == 6) { gSessDue = 1; say("SAVING THE SESSION..."); }
 		if (startAct == 7) { gSessDue = 3; }
-		if (startAct == 8) { gSessDue = 2; say("SAVING, THEN A NEW SESSION..."); }   // one press: choosing it in the START menu is deliberate (and this one is saved first)
+		if (startAct == 8) { gSessDue = 2; say("SAVING, THEN A NEW SESSION..."); }
+#ifdef SYRUP_NO_NET
+		if (startAct == START_LINK) say("WEB: USE THE PHONE BUTTON ABOVE");
+#else
+		if (startAct == START_LINK) { gPhoneLink = 1; if (!gMidiNet) { gMidiNet = 1; netMidiChanged(); } botDirty = botAgain = 1; }   // LINK PHONE: Wi-Fi on, the QR up
+#endif   // one press: choosing it in the START menu is deliberate (and this one is saved first)
 		if (gSessClear) { gSessClear = 0; sessionClear(); latch = 0; curKey = -1; topDirty = botDirty = 1; }
 		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
 
@@ -12615,6 +12645,7 @@ int main(void) {
 			touchPosition t; hidTouchRead(&t);
 			if (gThemePick) { if (!prevTouch && themePickTouch(t.px, t.py)) topDirty = botDirty = topAgain = botAgain = 1; }
 			else if (gLs) { if (!prevTouch && lsTouch(t.px, t.py)) topDirty = botDirty = topAgain = botAgain = 1; }
+			else if (gPhoneLink) { if (!prevTouch && t.py < 20 && t.px >= 262) { gPhoneLink = 0; botDirty = botAgain = 1; } }
 			else if (t.py < TAB_H) {
 				if (!prevTouch) {
 					int b = t.px * NCHIP / 320, again = !gPads && chipOfPage(page) == b;

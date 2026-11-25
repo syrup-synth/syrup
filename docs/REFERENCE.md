@@ -408,6 +408,7 @@ It can't check what only the hardware does: real chip quirks, CPU load on a 2DS,
 ## Mirror, Stream and the phone pages
 - **MIRROR**: turn WI-FI MIDI on, then open `http://<the 3DS>:8080/mirror` on a computer. The page loads Syrup for the web (from `3ds/syrup/web/index.html` on the SD card, or GitHub Pages) and follows the 3DS: notes, drum hits, glides, the live mod values, the page, the patch, the pattern and the drum grid. Its sound is off until you press SOUND ON.
 - **STREAM**: `http://<the 3DS>:8080/stream` is the clean view for OBS (a Browser source, 1920x1080, "Control audio via OBS"): the VISUALIZER full window. Options: `ov=pckb` overlays (Patch, Chord name, Keys, Bpm), `bg=clear` makes the background see-through, `sound=1`, `view=follow` shows the 3DS's own pages instead.
+- **LINK PHONE** (START menu): turns WI-FI MIDI on and puts a QR code on the bottom screen; point the phone's camera at it and the phone pages open. On the phone, **SOUND HERE** loads Syrup on the phone and plays along with the 3DS (the mirror). A or B closes the QR.
 - **Phone pages** (`http://<the 3DS>:8080/`): KEYS, CHORDS (the pads: top 9th, middle 7th, bottom triad; slide = MORPH; the progression row; a strum strip), DRUMS (General MIDI notes on channel 10 play the drum machine), XY, KNOBS (the first 8 settings of the page on the 3DS, CC 20-27).
 - **PHONE** (web version): the computer shows a 6-digit code and a QR; the phone opens it and gets the same pages, linked peer to peer.
 - **QUICK** (web version): the quick-select ring, by tap.

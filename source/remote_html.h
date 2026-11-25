@@ -45,7 +45,7 @@ static const char REMOTE_HTML[] =
 	"</style></head><body><div id=\"app\">\n"
 	"<div class=\"bar\"><div class=\"st\" id=\"st\">SYRUP REMOTE <b>connecting…</b></div>\n"
 	"<button id=\"pp\">&lt; PATCH</button><button id=\"pn\">PATCH &gt;</button><button id=\"seq\">PLAY</button></div>\n"
-	"<div id=\"tabs\"><button data-p=\"keys\" class=\"on\">KEYS</button><button data-p=\"chords\">CHORDS</button><button data-p=\"drums\">DRUMS</button><button data-p=\"xy\">XY</button><button data-p=\"knobs\">KNOBS</button></div>\n"
+	"<div id=\"tabs\"><button data-p=\"keys\" class=\"on\">KEYS</button><button data-p=\"chords\">CHORDS</button><button data-p=\"drums\">DRUMS</button><button data-p=\"xy\">XY</button><button data-p=\"knobs\">KNOBS</button><button id=\"along\" title=\"Load Syrup on this phone and play along with the 2DS (sound here too)\">SOUND HERE</button></div>\n"
 	"<div class=\"pg on\" id=\"p-keys\">\n"
 	" <div class=\"bar\"><button id=\"od\">OCT-</button><button id=\"ou\">OCT+</button><span class=\"st\" id=\"oct\">C3</span><button id=\"acid\">RIFF</button>\n"
 	" <button id=\"hold\">HOLD</button><button id=\"panic\">ALL OFF</button></div>\n"
@@ -149,4 +149,6 @@ static const char REMOTE_HTML[] =
 	"const mi=$('midi');\n"
 	"if(navigator.requestMIDIAccess){navigator.requestMIDIAccess().then(a=>{const hook=()=>{const names=[];a.inputs.forEach(i=>{names.push(i.name);i.onmidimessage=m=>{const d=m.data;if(d[0]!=0xFE)send(Array.from(d))}});mi.textContent=names.length?'MIDI IN: '+names.join(', '):'WEB MIDI ON: plug in a MIDI keyboard'};hook();a.onstatechange=hook},()=>{mi.textContent='WEB MIDI blocked by the browser'})}\n"
 	"else mi.textContent='';\n"
+	"\n"
+	";(function(){var b=document.getElementById('along');if(!b)return;if(typeof BR!=='undefined'&&BR){b.style.display='none';return}b.onclick=function(e){e.stopPropagation();location.href='/mirror'}})();\n"
 	"</script></body></html>\n";
