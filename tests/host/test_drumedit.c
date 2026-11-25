@@ -12,9 +12,9 @@ static void SCRIPT(int fr) {
 	if (fr == 18) { if (!gDgEditMode) fail("EDIT should turn on"); }
 	if (fr == 20 || fr == 21) { float cw = (320 - DG_LX - 2) / 16.0f; TOUCH = 1; TX = DG_LX + (int)(4 * cw) + 3; TY = DG_TOP + 0 * DG_RH + 4; }   // KICK step 5
 	if (fr == 24) { if (gDgEd != 1 || gDgEdI != 4) fail("EDIT: a tap on a step should open its editor (%d %d)", gDgEd, gDgEdI); shotBot("shots/drum_step.ppm"); }
-	if (fr >= 26 && fr < 30) { TOUCH = 1; TX = 74 + 4; TY = DE_Y + 22 + 1 * 22 + 6; }   // TUNE: all the way down
+	if (fr >= 26 && fr < 30) { TOUCH = 1; TX = 94; TY = DSE_B + 2; }   // TUNE: all the way down
 	if (fr == 32) { if (gDrTn[0][4] > -20) fail("TUNE: the step should go down (%d)", gDrTn[0][4]); }
-	if (fr == 34 || fr == 35) { TOUCH = 1; TX = 200; TY = DE_Y + 22 + 4 * 22 + 6; }   // NUDGE: later
+	if (fr == 34 || fr == 35) { TOUCH = 1; TX = 132 + 120; TY = DE_Y + 124; }   // NUDGE: later
 	if (fr == 38) { if (!gMyDrum[0][5] || gMyDrum[0][4] || gDrTn[0][5] > -20 || gDgEdI != 5) fail("NUDGE: the hit (and its TUNE) should move to step 6 (%d %d %d)", gMyDrum[0][5], gMyDrum[0][4], gDrTn[0][5]); shotBot("shots/drum_step2.ppm"); }
 	if (fr == 40 || fr == 41) { TOUCH = 1; TX = 280; TY = DE_Y + 6; }   // DONE
 	if (fr == 44 || fr == 45) { TOUCH = 1; TX = 10; TY = DG_TOP + 2 * DG_RH + 4; }   // HAT's name: its SOUND

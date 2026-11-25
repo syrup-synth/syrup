@@ -34,11 +34,11 @@ static void SCRIPT(int fr) {
 	// MIX: the strips; drag CHORD's level down, its FX send to 0, solo BASS
 	if (fr == 80) CHIP(7);
 	if (fr == 84) { if (!gMixOn) fail("MIX: the chip should open the mixer"); }
-	if (fr >= 86 && fr < 90) { TOUCH = 1; TX = MXR_X0 + 20; TY = MXR_Y + 1 * MXR_H + 8; }   // CHORD's level: low
+	if (fr >= 86 && fr < 90) { TOUCH = 1; TX = 320 / 9 + 17; TY = MXV_B - 10; }   // CHORD's level: low
 	if (fr == 91) { TOUCH = 1; TX = 150; TY = 30; }   // FX SEND
-	if (fr >= 93 && fr < 96) { TOUCH = 1; TX = MXR_X0 - 4; TY = MXR_Y + 1 * MXR_H + 8; }   // CHORD's send: 0
+	if (fr >= 93 && fr < 96) { TOUCH = 1; TX = 106 + 50; TY = MXV_B + 4; }   // CHORD's send: 0
 	if (fr == 97) { TOUCH = 1; TX = 40; TY = 30; }   // LEVELS
-	if (fr == 99) { TOUCH = 1; TX = 302; TY = MXR_Y + 2 * MXR_H + 8; }   // BASS: S
+	if (fr == 99) { TOUCH = 1; TX = 2 * (320 / 9) + 26; TY = MXV_BY + 6; }   // BASS: S
 	if (fr == 102) { if (gPartLvl[1] > 0.3f) fail("MIX: CHORD's level should be low (%.2f)", gPartLvl[1]); if (gPartSend[1] > 0.1f) fail("MIX: CHORD's FX send ~0 (%.2f)", gPartSend[1]); if (!gPartSolo[2]) fail("MIX: BASS solo");
 		if (partGain(1) != 0 || partGain(2) <= 0) fail("MIX: with BASS soloed, CHORD is silent"); shotBot("shots/mix.ppm"); }
 	if (fr == 104) { gPartSolo[2] = 0; gPartLvl[1] = 1; gPartSend[1] = 1; done = 1; }

@@ -6809,6 +6809,18 @@ static void rrect(int x, int y, int w, int h, int rad, u8 r, u8 g, u8 b) {   // 
 	for (int i = 0; i < rad; i++) { int d = rad - i, k = rad - (int)sqrtf((float)(rad * rad - d * d)); rect(x + k, y + i, rad - k, 1, r, g, b); rect(x + k, y + h - 1 - i, rad - k, 1, r, g, b); rect(x + w - rad, y + i, rad - k, 1, r, g, b); rect(x + w - rad, y + h - 1 - i, rad - k, 1, r, g, b); }
 	rect(x, y + rad, rad, h - 2 * rad, r, g, b); rect(x + w - rad, y + rad, rad, h - 2 * rad, r, g, b);
 }
+static void vfader(int cx, int top, int bot, int w, float t, float zero, const u8* col, int dim, const char* val) {
+	// a slider drawn as a bar chart's bar: wide and solid, its value riding on top of it, a faint column behind for the range
+	t = t < 0 ? 0 : t > 1 ? 1 : t; zero = zero < 0 ? 0 : zero > 1 ? 1 : zero;
+	rect(cx - w / 2, top, w, bot - top, RGB3(TH->pad));
+	int yv = bot - (int)((bot - top) * t), yz = bot - (int)((bot - top) * zero), a = yv < yz ? yv : yz, b = yv < yz ? yz : yv;
+	u8 r = dim ? col[0] / 3 : col[0], g = dim ? col[1] / 3 : col[1], bl = dim ? col[2] / 3 : col[2];
+	if (b - a < 2) { a = yv - 1; b = yv + 1; }
+	rect(cx - w / 2, a, w, b - a, r, g, bl);
+	rect(cx - w / 2 - 2, bot, w + 4, 1, RGB3(TH->line));   // the baseline
+	if (val) { int ty = yv - 11; if (ty < top - 10) ty = top - 10; if (ty > bot - 10) ty = bot - 10; text(cx - (int)strlen(val) * 4, ty, val, 1, r, g, bl); }   // the value, on the bar
+}
+static float vfaderT(int y, int top, int bot) { float t = (bot - y) / (float)(bot - top); return t < 0 ? 0 : t > 1 ? 1 : t; }
 static const char* pnlShort(const char* n) {   // a slider's name in 4 letters
 	static const char* L[][2] = {{"WT POS", "POS"}, {"WARP AMT", "WARP"}, {"LEVEL", "LVL"}, {"DETUNE", "DTUN"}, {"OCTAVE", "OCT"}, {"UNISON", "UNI"}, {"BLEND", "BLND"},
 		{"SUB LEVEL", "SUB"}, {"SUB OCTAVE", "SOCT"}, {"NOISE LEVEL", "NOIS"}, {"CHIP SQUARE", "CHIP"}, {"CHIP OCTAVE", "COCT"}, {"CUTOFF", "CUT"}, {"KEYTRACK", "KEY"},
@@ -6888,12 +6900,9 @@ static void drawPanel(void) {
 	for (int i = 0; i < nf; i++) {
 		Param* p = pnlFind(S->fd[i], S->page); if (!p) continue;
 		int cx = x0 + i * fw + fw / 2, hot = p == gPnlHotP; float t = paramNorm(p); char v[16]; pnlFmt(p, v, sizeof(v));
-		text(cx - (int)strlen(v) * 4, PNL_FD_Y, v, 1, (hot ? A : TH->txt)[0], (hot ? A : TH->txt)[1], (hot ? A : TH->txt)[2]);
-		rrect(cx - 3, PNL_TT, 6, PNL_TB - PNL_TT, 3, PC_LINE);
-		int yv = PNL_TB - (int)((PNL_TB - PNL_TT) * t), bip = p->mn < 0;
-		if (bip) { int mid = (PNL_TT + PNL_TB) / 2, a = yv < mid ? yv : mid, b = yv < mid ? mid : yv; rrect(cx - 3, a, 6, b - a + 1, 3, A[0], A[1], A[2]); }
-		else rrect(cx - 3, yv, 6, PNL_TB - yv, 3, A[0], A[1], A[2]);
-		rrect(cx - 12, yv - 4, 24, 9, 3, RGB3(TH->keyW)); rect(cx - 8, yv - 1, 16, 2, A[0], A[1], A[2]);
+
+		int fwid = fw - 6 > 46 ? 46 : fw - 6;   // wide bars: a thumb's width
+		vfader(cx, PNL_TT, PNL_TB, fwid, t, p->mn < 0 ? (0 - p->mn) / (p->mx - p->mn) : 0, A, 0, v);
 		const char* sh = pnlShort(p->name); text(cx - (int)strlen(sh) * 4, PNL_TB + 7, sh, 1, (hot ? A : TH->dim)[0], (hot ? A : TH->dim)[1], (hot ? A : TH->dim)[2]);
 	}
 }
@@ -7914,51 +7923,49 @@ static const u8 MIX_COL[NMIXS][3] = {{85, 255, 255}, {255, 85, 255}, {255, 255, 
 static float* mixLvl(int k) { return k < 3 ? &gPartLvl[k] : k == 3 ? &gDrumLevel : k < 8 ? &gTpLevel[k - 4] : &gMaster; }
 static float mixMax(int k) { return k == 8 ? 1.5f : k == 3 ? 1.0f : k < 3 ? 1.5f : 1.0f; }
 static int mixMuted(int k) { return k < 4 ? gPartMute[k] : k < 8 ? gTpMute[k - 4] : 0; }
-// rows, as the spec asks: name | bar (74..222) | value | M S - 20 px apart; LEVELS / FX SEND / TAPE on the sub-tabs
-#define MXR_Y 44
-#define MXR_H 20
-#define MXR_X0 74
-#define MXR_X1 222
+// vertical: a wide bar per part (a bar chart you drag), the value on the bar, M S under it; LEVELS / FX SEND / TAPE tabs
+#define MXV_T 62
+#define MXV_B 186
+#define MXV_BY 194
+static int mixCols(void) { return gMixSub == 1 ? 3 : NMIXS; }
 static void drawMixer(void) {
 	rect(0, TAB_H, 320, 240 - TAB_H, PC_BG);
 	rrect(4, 22, 312, 16, 8, PC_PANEL);
 	static const char* ST[3] = {"LEVELS", "FX SEND", "TAPE"}; const u8* A = pnlAcc(2);
 	for (int i = 0; i < 3; i++) { int x = 4 + i * 104, on = i == gMixSub; if (on) { rrect(x + 2, 24, 100, 12, 6, A[0], A[1], A[2]); text(x + 52 - (int)strlen(ST[i]) * 4, 26, ST[i], 1, RGB3(TH->ink)); } else text(x + 52 - (int)strlen(ST[i]) * 4, 26, ST[i], 1, PC_DIM); }
 	if (gMixSub == 2) { drawTapeView(); return; }
-	int solo = gSoloAny(), nr = gMixSub == 1 ? 3 : NMIXS;
-	for (int k = 0; k < nr; k++) {
-		int y = MXR_Y + k * MXR_H; const u8* c = MIX_COL[k]; int off = mixMuted(k) || (solo && k < 8 && !gPartSolo[k]);
-		if (k == 8) rect(4, y - 2, 312, 1, PC_LINE);
-		text(6, y + 5, MIX_NAMES[k], 1, off ? c[0] / 3 : c[0], off ? c[1] / 3 : c[1], off ? c[2] / 3 : c[2]);
+	int solo = gSoloAny(), n = mixCols(), w = 320 / n;
+	for (int k = 0; k < n; k++) {
+		int x = k * w, cx = x + w / 2; const u8* c = MIX_COL[k]; int off = mixMuted(k) || (solo && k < 8 && !gPartSolo[k]);
+		static const char* SN[3] = {"SYNTH", "CHORD", "BASS"}; const char* nm = gMixSub == 1 ? SN[k] : MIX_NAMES[k];
+		text(cx - (int)strlen(nm) * 4, 42, nm, 1, off ? c[0] / 3 : c[0], off ? c[1] / 3 : c[1], off ? c[2] / 3 : c[2]);
 		float t = gMixSub == 1 ? gPartSend[k] : *mixLvl(k) / mixMax(k); if (t > 1) t = 1; if (t < 0) t = 0;
-		rrect(MXR_X0, y + 4, MXR_X1 - MXR_X0, 10, 4, PC_LINE);
-		const u8* fc = gMixSub == 1 ? A : c; int w = (int)((MXR_X1 - MXR_X0) * t);
-		if (w > 0) rrect(MXR_X0, y + 4, w, 10, 4, off ? fc[0] / 3 : fc[0], off ? fc[1] / 3 : fc[1], off ? fc[2] / 3 : fc[2]);
-		char v[8]; snprintf(v, sizeof(v), "%d", (int)lroundf(t * 100)); text(258 - (int)strlen(v) * 8, y + 5, v, 1, PC_TXT);
+		char v[8]; snprintf(v, sizeof(v), "%d", (int)lroundf(t * 100));
+		vfader(cx, MXV_T, MXV_B, w - 6, t, 0, gMixSub == 1 ? A : c, off, v);
 		if (k < 8 && gMixSub == 0) {
-			int m = mixMuted(k), so = gPartSolo[k];
-			rrect(262, y + 1, 26, 16, 4, m ? 255 : TH->pad[0], m ? 80 : TH->pad[1], m ? 80 : TH->pad[2]); text(271, y + 5, "M", 1, RGB3(m ? TH->ink : TH->dim));
-			rrect(292, y + 1, 26, 16, 4, so ? 255 : TH->pad[0], so ? 210 : TH->pad[1], so ? 80 : TH->pad[2]); text(301, y + 5, "S", 1, RGB3(so ? TH->ink : TH->dim));
+			int m = mixMuted(k), so = gPartSolo[k], bw = (w - 6) / 2;
+			rrect(cx - bw - 1, MXV_BY, bw, 16, 4, m ? 255 : TH->pad[0], m ? 80 : TH->pad[1], m ? 80 : TH->pad[2]); text(cx - bw / 2 - 5, MXV_BY + 4, "M", 1, RGB3(m ? TH->ink : TH->dim));
+			rrect(cx + 1, MXV_BY, bw, 16, 4, so ? 255 : TH->pad[0], so ? 210 : TH->pad[1], so ? 80 : TH->pad[2]); text(cx + bw / 2 - 3, MXV_BY + 4, "S", 1, RGB3(so ? TH->ink : TH->dim));
 		}
 	}
-	if (gMixSub == 1) { text(6, MXR_Y + 3 * MXR_H + 10, "HOW MUCH OF EACH PART GOES", 1, PC_DIM); text(6, MXR_Y + 3 * MXR_H + 22, "THROUGH THE FX (THE REST: DRY)", 1, PC_DIM); text(6, MXR_Y + 3 * MXR_H + 40, "DRUMS AND TAPE PLAY DRY", 1, PC_DIM); }
+	if (gMixSub == 1) { text(6, 212, "HOW MUCH OF EACH PART GOES THROUGH", 1, PC_DIM); text(6, 224, "THE FX. DRUMS AND TAPE PLAY DRY", 1, PC_DIM); }
 }
 static int mixTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (release) { gMixDrag = -1; return 0; }
 	if (press && y >= 22 && y < 38) { gMixSub = x * 3 / 320; if (gMixSub > 2) gMixSub = 2; return 1; }
 	if (gMixSub == 2) return tapeTouch(x, y, press, release);
-	int nr = gMixSub == 1 ? 3 : NMIXS, k = press ? (y - MXR_Y + 2) / MXR_H : gMixDrag;   // (+-2 px)
-	if (k < 0 || k >= nr) return 0;
+	int n = mixCols(), w = 320 / n, k = press ? x / w : gMixDrag;
+	if (k < 0 || k >= n) return 0;
 	if (press) {
-		if (gMixSub == 0 && x >= 260 && k < 8) {   // M / S (outside the bar)
-			if (x < 290) { if (k < 4) partMuteToggle(k); else { gTpMute[k - 4] = !gTpMute[k - 4]; tapeVol(k - 4); } }
+		if (gMixSub == 0 && y >= MXV_BY - 2 && k < 8) {   // M / S
+			if (x < k * w + w / 2) { if (k < 4) partMuteToggle(k); else { gTpMute[k - 4] = !gTpMute[k - 4]; tapeVol(k - 4); } }
 			else { gPartSolo[k] = !gPartSolo[k]; say(gPartSolo[k] ? "SOLO" : "SOLO OFF"); for (int t = 0; t < NTRK; t++) tapeVol(t); }
 			return 1;
 		}
-		if (x < MXR_X0 - 8 || x > MXR_X1 + 8) return 0;
+		if (y < MXV_T - 14 || y > MXV_B + 6) return 0;
 		gMixDrag = k;
 	}
-	float t = (x - MXR_X0) / (float)(MXR_X1 - MXR_X0); t = t < 0 ? 0 : t > 1 ? 1 : t;
+	float t = vfaderT(y, MXV_T, MXV_B);
 	if (gMixSub == 1) { gPartSend[k] = t; gSeqSaveDue = 1; return 1; }
 	*mixLvl(k) = t * mixMax(k); if (k >= 4 && k < 8) tapeVol(k - 4); if (k == 3 || k == 8) gEdited = 1; if (k < 3) gSeqSaveDue = 1;
 	return 1;
@@ -10108,7 +10115,7 @@ static void drawDrumGrid(void) {
 static void drumCellSet(int r, int i, int on);
 // HOLD a step: its editor (VELOCITY, RATCHET, CONDITION). HOLD a drum's name: its SOUND (and the row's RATE / LENGTH).
 static int gDgEdR = 0, gDgEdI = 0, gDgDrag = -1, gDvPlay = 0;
-static const char* DV_NAMES[8] = {"TUNE", "P.ENV", "P.DEC", "DECAY", "TONE", "DRIVE", "LEVEL", "PAN"};
+static const char* DV_NAMES[8] = {"TUNE", "PENV", "PDEC", "DCAY", "TONE", "DRIV", "LVL", "PAN"};
 static const int DV_MIN[8] = {-24, -24, 1, 10, 0, 0, 0, 0}, DV_MAX[8] = {24, 24, 200, 200, 200, 100, 150, 200};
 #define DV_RH 14
 static int drumCellOn(int r, int i);
@@ -10133,42 +10140,41 @@ static void dvFmt(int k, int x, char* o, int n) {
 	else if (k == 7) snprintf(o, n, x == 100 ? "C" : x < 100 ? "L%d" : "R%d", x < 100 ? 100 - x : x - 100); else snprintf(o, n, "%d%%", x);
 }
 #define DE_Y (DG_TOP + 2)
+#define DSE_T (DE_Y + 34)
+#define DSV_T (DE_Y + 34)
+#define DSV_B (DE_Y + 122)
+#define DSE_B (DE_Y + 160)
 static void drawDgEd(void) {
 	rectP(0, DG_TOP - 2, 320, 240 - DG_TOP + 2, TH->bg); rectP(0, DG_TOP - 2, 320, 1, TH->line);
 	char t[40]; int r = gDgEdR;
 	rectP(262, DE_Y, 54, 16, TH->keyOn); text(273, DE_Y + 4, "DONE", 1, RGB3(TH->ink));
-	if (gDgEd == 1) {   // a step: rows of bars (label | bar | value), as on the MIX / sliders pages
-		int i = gDgEdI, v = r < 3 ? gMyDrum[r][i] : gDrumX[r - 3][i];
+	if (gDgEd == 1) {   // a step: VEL and TUNE as wide vertical bars, the rest as buttons beside them
+		int i = gDgEdI, v = r < 3 ? gMyDrum[r][i] : gDrumX[r - 3][i], tn = gDrTn[r][i];
 		snprintf(t, sizeof(t), "%s  STEP %d", kitPadName(DG_DRUM[r]), i + 1); text(6, DE_Y + 4, t, 1, RGB3(TH->val));
-		for (int k = 0; k < 5; k++) {
-			int y = DE_Y + 22 + k * 22; static const char* L[5] = {"VEL", "TUNE", "RATCHET", "IF", "NUDGE"};
-			if (curShown() && gDgSelF % 5 == k) outline(2, y - 2, 316, 20, RGB3(TH->keyOn));
-			text(6, y + 4, L[k], 1, RGB3(TH->txt));
-			if (k == 0) { rectP(74, y + 3, 180, 10, TH->pad); rectP(74, y + 3, 180 * v / 255, 10, TH->val); char b[8]; snprintf(b, sizeof(b), "%d", v * 127 / 255); text(262, y + 4, b, 1, RGB3(TH->val)); }
-			if (k == 1) { int tn = gDrTn[r][i], z = 74 + 180 * 24 / 36, xp = 74 + 180 * (tn + 24) / 36; rectP(74, y + 3, 180, 10, TH->pad); rectP(xp < z ? xp : z, y + 3, abs(xp - z) + 1, 10, TH->val); rectP(z, y + 1, 1, 14, TH->line);
-				char b[8]; snprintf(b, sizeof(b), "%+d", tn); text(262, y + 4, b, 1, RGB3(tn ? TH->warn : TH->val)); }
-			if (k == 2) for (int q = 0; q < 4; q++) { int on = gDrRat[r][i] == q; rectP(74 + q * 45, y, 43, 16, on ? TH->keyOn : TH->tab); char b[4]; snprintf(b, sizeof(b), "%d", q + 1); text(74 + q * 45 + 18, y + 4, b, 1, RGB3(on ? TH->ink : TH->tabTxt)); }
-			if (k == 3) { rectP(74, y, 28, 16, TH->tab); text(84, y + 4, "<", 1, RGB3(TH->tabTxt)); rectP(226, y, 28, 16, TH->tab); text(236, y + 4, ">", 1, RGB3(TH->tabTxt));
-				const char* cn = COND_NAMES[gDrCond[r][i]]; text(164 - (int)strlen(cn) * 4, y + 4, cn, 1, RGB3(gDrCond[r][i] ? TH->warn : TH->val)); }
-			if (k == 4) { rectP(74, y, 86, 16, TH->tab); text(90, y + 4, "< EARLIER", 1, RGB3(TH->tabTxt)); rectP(168, y, 86, 16, TH->tab); text(176, y + 4, "LATER >", 1, RGB3(TH->tabTxt)); }
-		}
-		text(6, DE_Y + 136, "TUNE: THIS STEP ONLY, DOWN TO -24", 1, RGB3(TH->dim));
-		text(6, DE_Y + 148, "IF 1:2 = 1ST OF 2 LOOPS; FILL = HELD", 1, RGB3(TH->dim));
-		rectP(6, DE_Y + 162, 96, 16, TH->warn); text(14, DE_Y + 166, "TAKE OUT", 1, RGB3(TH->ink));
+		char b[8]; snprintf(b, sizeof(b), "%d", v * 127 / 255); vfader(34, DSE_T, DSE_B, 50, v / 255.0f, 0, TH->val, 0, b);
+		snprintf(b, sizeof(b), "%+d", tn); vfader(94, DSE_T, DSE_B, 50, (tn + 24) / 36.0f, 24 / 36.0f, tn ? TH->warn : TH->val, 0, b);
+		text(22, DSE_B + 4, "VEL", 1, RGB3(curShown() && gDgSelF % 5 == 0 ? TH->keyOn : TH->txt)); text(78, DSE_B + 4, "TUNE", 1, RGB3(curShown() && gDgSelF % 5 == 1 ? TH->keyOn : TH->txt));
+		int X = 132;
+		text(X, DE_Y + 24, "RATCHET", 1, RGB3(curShown() && gDgSelF % 5 == 2 ? TH->keyOn : TH->txt));
+		for (int q = 0; q < 4; q++) { int on = gDrRat[r][i] == q; rectP(X + q * 46, DE_Y + 36, 44, 20, on ? TH->keyOn : TH->tab); snprintf(b, sizeof(b), "%d", q + 1); text(X + q * 46 + 18, DE_Y + 42, b, 1, RGB3(on ? TH->ink : TH->tabTxt)); }
+		text(X, DE_Y + 64, "IF", 1, RGB3(curShown() && gDgSelF % 5 == 3 ? TH->keyOn : TH->txt));
+		rectP(X, DE_Y + 76, 36, 20, TH->tab); text(X + 14, DE_Y + 82, "<", 1, RGB3(TH->tabTxt)); rectP(X + 148, DE_Y + 76, 36, 20, TH->tab); text(X + 162, DE_Y + 82, ">", 1, RGB3(TH->tabTxt));
+		{ const char* cn = COND_NAMES[gDrCond[r][i]]; text(X + 92 - (int)strlen(cn) * 4, DE_Y + 82, cn, 1, RGB3(gDrCond[r][i] ? TH->warn : TH->val)); }
+		text(X, DE_Y + 104, "NUDGE", 1, RGB3(curShown() && gDgSelF % 5 == 4 ? TH->keyOn : TH->txt));
+		rectP(X, DE_Y + 116, 90, 20, TH->tab); text(X + 8, DE_Y + 122, "< EARLIER", 1, RGB3(TH->tabTxt)); rectP(X + 94, DE_Y + 116, 90, 20, TH->tab); text(X + 106, DE_Y + 122, "LATER >", 1, RGB3(TH->tabTxt));
+		rectP(X, DE_Y + 146, 96, 20, TH->warn); text(X + 12, DE_Y + 152, "TAKE OUT", 1, RGB3(TH->ink));
 	} else {
 		snprintf(t, sizeof(t), "%s SOUND", kitPadName(DG_DRUM[r])); text(6, DE_Y + 4, t, 1, RGB3(TH->val));
 		rectP(196, DE_Y, 58, 16, TH->tab); text(205, DE_Y + 4, "RESET", 1, RGB3(TH->tabTxt));
 		{ int so = gDrSolo == r; rectP(140, DE_Y, 52, 16, so ? TH->keyOn : TH->tab); text(150, DE_Y + 4, "SOLO", 1, RGB3(so ? TH->ink : TH->tabTxt)); }   // SOLO: only this row plays
 		if (curShown()) { int f = gDgSelF % 12, yr = DE_Y + 22 + 8 * DV_RH + 1;
-			if (f < 8) outline(2, DE_Y + 21 + f * DV_RH, 314, DV_RH, RGB3(TH->keyOn)); else outline(f & 1 ? 162 : 2, f < 10 ? yr : yr + 20, f & 1 ? 154 : 156, 18, RGB3(TH->keyOn)); }
-		for (int k = 0; k < 8; k++) {
-			int y = DE_Y + 22 + k * DV_RH, x = dvGet(&gDV[r], k); char b[12];
-			text(6, y + 3, DV_NAMES[k], 1, RGB3(TH->txt));
-			rectP(64, y, 200, 13, TH->pad);
+			if (f >= 8) outline(f & 1 ? 162 : 2, f < 10 ? yr : yr + 20, f & 1 ? 154 : 156, 18, RGB3(TH->keyOn)); }
+		for (int k = 0; k < 8; k++) {   // wide vertical bars, the value on each
+			int x = dvGet(&gDV[r], k), cx = 4 + k * 39 + 19; char b[12];
 			int z = DV_MIN[k] < 0 ? 0 : k == 4 || k == 7 ? 100 : DV_MIN[k];   // fill from the centre / zero
-			int xp = 64 + 200 * (x - DV_MIN[k]) / (DV_MAX[k] - DV_MIN[k]), zp = 64 + 200 * (z - DV_MIN[k]) / (DV_MAX[k] - DV_MIN[k]);
-			rectP(xp < zp ? xp : zp, y + 2, abs(xp - zp) + 1, 9, TH->val); rectP(xp - 1, y, 3, 13, TH->keyOn);
-			dvFmt(k, x, b, sizeof(b)); text(268, y + 3, b, 1, RGB3(TH->val));
+			dvFmt(k, x, b, sizeof(b)); if (strlen(b) > 4) b[4] = 0;
+			vfader(cx, DSV_T, DSV_B, 33, (x - DV_MIN[k]) / (float)(DV_MAX[k] - DV_MIN[k]), (z - DV_MIN[k]) / (float)(DV_MAX[k] - DV_MIN[k]), TH->val, 0, b);
+			const char* nm = DV_NAMES[k]; text(cx - (int)strlen(nm) * 4, DSV_B + 3, nm, 1, RGB3(curShown() && gDgSelF % 12 == k ? TH->keyOn : TH->txt));
 		}
 		int y = DE_Y + 22 + 8 * DV_RH + 2;
 		{ int L = gDrLen[r] < 1 ? 16 : gDrLen[r], n = 0; for (int i = 0; i < L; i++) if (drumCellOn(r, i)) n++; char e[8]; snprintf(e, sizeof(e), "%d", n);   // EUCLID: that many hits, spread evenly
@@ -10195,23 +10201,23 @@ static int dgEdTouch(int x, int y, int press) {   // 1 = redraw
 	if (press && y >= DE_Y && y < DE_Y + 16 && x >= 262) { gDgEd = 0; gDgDrag = -1; return 1; }
 	if (gDgEd == 1) {
 		int i = gDgEdI; u8* vp = r < 3 ? &gMyDrum[r][i] : &gDrumX[r - 3][i];
-		int row = (y - (DE_Y + 20)) / 22; if (y < DE_Y + 20) row = -1;   // (+-2 px: a row is 22 tall)
-		if ((press && row == 0 && x >= 66) || gDgDrag == 100) { if (press) { drumGridMark(); gDgDrag = 100; } int v = (x - 74) * 255 / 180; *vp = (u8)(v < 8 ? 8 : v > 255 ? 255 : v); gDrumSaveDue = 1; return 1; }
-		if ((press && row == 1 && x >= 66) || gDgDrag == 101) { if (press) { drumGridMark(); gDgDrag = 101; } int tn = (int)lroundf((x - 74) * 36.0f / 180) - 24; tn = tn < -24 ? -24 : tn > 12 ? 12 : tn;
+		int X = 132;
+		if ((press && x < 64 && y >= DSE_T - 14 && y < DSE_B + 6) || gDgDrag == 100) { if (press) { drumGridMark(); gDgDrag = 100; } int v = (int)(vfaderT(y, DSE_T, DSE_B) * 255); *vp = (u8)(v < 8 ? 8 : v > 255 ? 255 : v); gDrumSaveDue = 1; return 1; }
+		if ((press && x >= 64 && x < 124 && y >= DSE_T - 14 && y < DSE_B + 6) || gDgDrag == 101) { if (press) { drumGridMark(); gDgDrag = 101; } int tn = (int)lroundf(vfaderT(y, DSE_T, DSE_B) * 36) - 24; tn = tn < -24 ? -24 : tn > 12 ? 12 : tn;
 			if (tn != gDrTn[r][i]) { gDrTn[r][i] = (s8)tn; gDrumSaveDue = 1; if (gDrumBuilt == gKit && gCsndOK) { gDrStepTune = tn; drumHit(DG_DRUM[r], 0.8f); gDrStepTune = 0; csndExecCmds(false); } } return 1; }
 		if (!press) return 0;
-		if (row == 2 && x >= 74 && x < 254) { int k = (x - 74) / 45; if (k > 3) k = 3; drumGridMark(); gDrRat[r][i] = (u8)k; gDrumSaveDue = 1; return 1; }
-		if (row == 3) { int d = x >= 66 && x < 110 ? -1 : x >= 220 && x < 262 ? 1 : 0; if (!d) return 0; drumGridMark(); gDrCond[r][i] = (u8)((gDrCond[r][i] + NCOND + d) % NCOND); gDrumSaveDue = 1; return 1; }
-		if (row == 4 && x >= 74 && x < 254) { drumNudge(r, x < 164 ? -1 : 1); return 1; }
-		if (y >= DE_Y + 160 && y < DE_Y + 180 && x < 104) { drumGridMark(); drumCellSet(r, i, 0); gDgEd = 0; return 1; }
+		if (x < X - 4) return 0;
+		if (y >= DE_Y + 34 && y < DE_Y + 58) { int k = (x - X) / 46; if (k > 3) k = 3; drumGridMark(); gDrRat[r][i] = (u8)k; gDrumSaveDue = 1; return 1; }
+		if (y >= DE_Y + 74 && y < DE_Y + 98) { int d = x < X + 44 ? -1 : x >= X + 140 ? 1 : 0; if (!d) return 0; drumGridMark(); gDrCond[r][i] = (u8)((gDrCond[r][i] + NCOND + d) % NCOND); gDrumSaveDue = 1; return 1; }
+		if (y >= DE_Y + 114 && y < DE_Y + 138) { drumNudge(r, x < X + 92 ? -1 : 1); return 1; }
+		if (y >= DE_Y + 144 && y < DE_Y + 168 && x < X + 100) { drumGridMark(); drumCellSet(r, i, 0); gDgEd = 0; return 1; }
 		return 0;
 	}
 	// SOUND
 	if (press && y >= DE_Y && y < DE_Y + 16 && x >= 140 && x < 192) { gDrSolo = gDrSolo == r ? -1 : r; say(gDrSolo >= 0 ? "SOLO: ONLY THIS ROW PLAYS" : "SOLO OFF"); return 1; }
 	if (press && y >= DE_Y && y < DE_Y + 16 && x >= 196 && x < 254) { gDV[r] = DV_DEF; gDrumWant = gKit + 100; gDvPlay = r + 1; gDrumSaveDue = 1; return 1; }
-	int k = (y - DE_Y - 22) / DV_RH;
-	if (press && k >= 0 && k < 8 && y < DE_Y + 22 + 8 * DV_RH && x >= 56) gDgDrag = k;
-	if (gDgDrag >= 0 && gDgDrag < 8) { int v = DV_MIN[gDgDrag] + (x - 64) * (DV_MAX[gDgDrag] - DV_MIN[gDgDrag]) / 200; dvSet(&gDV[r], gDgDrag, v); gDrumSaveDue = 1; return 1; }
+	if (press && y >= DSV_T - 14 && y < DSV_B + 12 && x >= 4 && x < 4 + 8 * 39) gDgDrag = (x - 4) / 39;
+	if (gDgDrag >= 0 && gDgDrag < 8) { int v = DV_MIN[gDgDrag] + (int)lroundf(vfaderT(y, DSV_T, DSV_B) * (DV_MAX[gDgDrag] - DV_MIN[gDgDrag])); dvSet(&gDV[r], gDgDrag, v); gDrumSaveDue = 1; return 1; }
 	int y2 = DE_Y + 22 + 8 * DV_RH + 2;
 	if (press && y >= y2 + 20 && y < y2 + 36) {   // EUCLID < > / ROTATE < >
 		if (x >= 50 && x < 74) drumEuclid(r, -1); else if (x >= 124 && x < 148) drumEuclid(r, 1);
