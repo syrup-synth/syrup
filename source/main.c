@@ -133,10 +133,11 @@ static const char* AB_NAMES[2] = {"OSC A", "OSC B"};
 static int gVisMode = 0, gVisOsc = 0, gVisOverlay = 1;
 static float gVisBeat = 0;
 static int gVisTrails = 0, gVisParts = 1, gVisBurst = 0;
-#define NTHEMES 20
+#define NTHEMES 22
+#define TH_SYRUP 20   // the new look: dark slate, a colour per section (OSC blue, FILTER orange, FX purple)
 static const char* THEME_NAMES[NTHEMES] = {"ORIGINAL", "PIP GREEN", "DOS BLUE", "AMBER EGA", "MAGENTA", "STICKER", "IMPULSE",
-	"CYBER", "SOLARIZED", "GB POCKET", "VAPORWAVE", "CGA", "SINCLAIR", "X11", "NORD", "ACID", "BBS", "HERCULES", "HERC AMBER", "HERC GREEN"};
-static int gTheme = 16,   /* BBS: the default look */ gScan = 0, gBright = 0;   // gBright: screen brightness 1..5, 0 = leave the system setting
+	"CYBER", "SOLARIZED", "GB POCKET", "VAPORWAVE", "CGA", "SINCLAIR", "X11", "NORD", "ACID", "BBS", "HERCULES", "HERC AMBER", "HERC GREEN", "SYRUP", "SYRUP LIGHT"};
+static int gTheme = TH_SYRUP,   /* SYRUP: the default look */ gScan = 0, gBright = 0;   // gBright: screen brightness 1..5, 0 = leave the system setting
 static const char* BRIGHT_NAMES[6] = {"SYSTEM", "1 DIM", "2", "3", "4", "5 BRIGHT"};
    // graphics-chip visuals (see visFrame); off by default while being tested on hardware
 static int gInAudioTick = 0;
@@ -978,9 +979,12 @@ static volatile int gThruOn = 0;
 static int dspUsable(int c) { return !(gNoiseOn && c == NOISE_CH) && !(gGrains && (c == 21 || c == 22)) && !(gThruOn && (c == THRU_CH0 || c == THRU_CH0 + 1)); }
 static int tapeReserved(int c);
 static int drumReserved(int c);
+static int gDrAlt[7] = {-1, -1, -1, -1, -1, -1, -1};   // the drum channels' partners (borrowed from the free ones: reserved once borrowed)
+static int csUsableExcept(int c);
 static int chipReserved(int c);
 static int echoReserved(int c);
 static int csUsable(int c) { return gCsndOK && (csndChannels & BIT(c)) && !tapeReserved(c) && !drumReserved(c) && !chipReserved(c) && !echoReserved(c); }
+static int csUsableExcept(int c) { return gCsndOK && c >= 0 && c < NCS && (csndChannels & BIT(c)) && !tapeReserved(c) && !chipReserved(c) && !echoReserved(c); }   // the drums' own test (their partners count as theirs)
 static int freeCount(int bk) {
 	int n = 0;
 	if (bk == BK_DSP) { for (int c = 0; c < NCH; c++) if (dspUsable(c) && (gDspOwner[c] == -1 || gDspOwner[c] == -3)) n++; }   // (-3: a SOFT carrier fading out: takeCh can have it)
@@ -1624,7 +1628,7 @@ typedef struct { float* b; int n, i; } APass;
 static Comb gCbL[NCOMB], gCbR[NCOMB];
 static APass gApL[NAP], gApR[NAP];
 static float* gDlL; static float* gDlR;
-#define DLMAX 26000   // ~0.8 s
+#define DLMAX 72000   // ~2.2 s (longer delays: up to 2 s, a bar at 120)
 static int gDlW = 0;
 static float gDlLp[2];
 
@@ -1678,12 +1682,12 @@ static void revTypeApply(void) {   // audio side picks this up; clear the loops 
 static void revParams(float* fb, float* damp) {
 	float sz = gRevSize, dm = gRevDamp;
 	switch (gRevType) {
-	case 1: *fb = 0.62f + 0.24f * sz; *damp = 0.3f + 0.55f * dm; break;    // ROOM: short, woody
-	case 2: *fb = 0.80f + 0.18f * sz; *damp = 0.03f + 0.25f * dm; break;   // PLATE: dense, bright
+	case 1: *fb = 0.64f + 0.28f * sz; *damp = 0.3f + 0.55f * dm; break;    // ROOM: short, woody
+	case 2: *fb = 0.82f + 0.17f * sz; *damp = 0.03f + 0.25f * dm; break;   // PLATE: dense, bright
 	case 3: *fb = 0.86f + 0.1f * sz; *damp = 0.2f + 0.4f * dm; break;      // SPRING: rings on
 	case 4: *fb = 0.86f + 0.1f * sz; *damp = 0.1f + 0.4f * dm; break;      // GATED: big tail, cut short
-	case 5: *fb = 0.84f + 0.14f * sz; *damp = 0.15f + 0.6f * dm; break;    // SWELL
-	default: *fb = 0.70f + 0.28f * sz; *damp = 0.15f + 0.6f * dm; break;   // HALL
+	case 5: *fb = 0.86f + 0.13f * sz; *damp = 0.15f + 0.6f * dm; break;    // SWELL
+	default: *fb = 0.74f + 0.255f * sz; *damp = 0.15f + 0.6f * dm; break;   // HALL
 	}
 }
 // per-sample: input shaping before the combs, output shaping after the allpasses
@@ -1884,8 +1888,9 @@ static volatile float gFxModVal = 0;   // FX COLOR modulation from the mod matri
 static float gBeatPh = 0;              // quarter notes, advanced by the audio clock (sidechain pump)
 static volatile u32 gFxTicks = 0;      // CPU time of the chain per frame (for the meter)
 static const char* MODFX_NAMES[8] = {"OFF", "CHORUS", "FLANGER", "PHASER", "COMB", "FORMANT", "HYPER", "DIMENSION"};
-static const char* DSYNC_NAMES[7] = {"FREE", "1/16", "1/8", "1/8 DOT", "1/4", "1/4 DOT", "1/2"};
-static const float DSYNC_BEATS[7] = {0, 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f};
+#define NDSYNC 9
+static const char* DSYNC_NAMES[NDSYNC] = {"FREE", "1/16", "1/8", "1/8 DOT", "1/4", "1/4 DOT", "1/2", "1/2 DOT", "1 BAR"};
+static const float DSYNC_BEATS[NDSYNC] = {0, 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f};
 static const char* PUMP_NAMES[4] = {"1/2", "1/4", "1/8", "KICK"};   // KICK: ducks on every kick the drums actually play
 static volatile u32 gKickT = 1u << 30;   // samples since the last kick hit
 static const char* BITS_NAMES[6] = {"OFF", "12 BIT", "10 BIT", "8 BIT", "6 BIT", "4 BIT"};
@@ -2044,7 +2049,7 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 		for (int k = 0; k < 3; k++) bqSet(&gForm[k], 3, VF[i][k] * (1 - u) + VF[i + 1][k] * u, 6 + k * 2, 0);
 	}
 	float dSec = gDlySync ? DSYNC_BEATS[gDlySync] * 60.0f / gBPM : ECHO_T[gEchoT];
-	if (dSec > 0.78f) dSec = 0.78f;
+	if (dSec > 2.0f) dSec = 2.0f;
 	float dSmp = dSec * DSPRATE, dMix = (gDlyMix + (gFx == 1 ? fxMixEff() : 0)) * 1.2f, rMix = (gRevMix + (gFx == 3 ? fxMixEff() : 0)) * 1.4f;
 	float fb, damp; revParams(&fb, &damp); if (gFreeze) { fb = 1.0f; damp = 0; }
 	int bits = gLofiBits ? 14 - gLofiBits * 2 : 0, hold = 1 + (int)(gLofiRate * 15);
@@ -2545,6 +2550,7 @@ static const char* PRE_NAMES[3] = {"OFF", "1 BAR", "2 BARS"}; static const char*
 // CLICK (the metronome): COUNT-IN only, RECORDING = the count-in and while the tape or live REC records, ALWAYS =
 // whenever the sequence or the drums run. It plays on the second chip's own output, so it is never on the tape.
 static float gClickLevel = 0.7f;
+static int recAny(void);   // something is recording: the header shows REC, blinking
 static int gPreroll = 1, gClick = 1, gPreFor = 0, gLiveRec = 0; static float gPreBeats = 0, gPreDone = 0;
 // REC QUANT: where live notes land (16TH, 8TH, or OFF = your exact timing kept as the step's NUDGE); TAP REC: knocks on the table (mic) while live REC
 static const char* RQ_NAMES[4] = {"16TH", "8TH", "OFF (NUDGE)", "32ND"}; static const char* TAPR_NAMES[3] = {"OFF", "NOTES", "VELOCITY"};
@@ -3676,7 +3682,7 @@ static void patchApplyRaw(const SPatch* p) {
 	for (int i = 0; i < 2; i++) { gLfo[i].shape = p->lfoShape[i] < NLFOSH ? p->lfoShape[i] : 0; gLfo[i].mode = p->lfoMode[i]; gLfo[i].rate = p->lfoRate[i]; gLfo[i].sync = p->lfoSync[i] < NSYNC ? p->lfoSync[i] : 0; gLfo[i].table = p->lfoTable[i] < T_BUILTIN ? p->lfoTable[i] : 0; gLfo[i].pos = p->lfoPos[i]; gLfo[i].tabKey = -1; }
 	for (int i = 0; i < 4; i++) { gMod[i] = p->mod[i]; gMod[i + 4] = p->mod2[i]; gMacro[i] = p->macro[i]; }
 	for (int i = 0; i < 8; i++) gModCurve[i] = p->modCurve[i] & 3;
-	gModFx = p->modFx % 8; gDlySync = p->dlySync % 7; gShimmer = p->shimmer & 1; gFreeze = p->freeze & 1; gPumpRate = p->pumpRate % 4; gLofiBits = p->lofiBits % 6;
+	gModFx = p->modFx % 8; gDlySync = p->dlySync % NDSYNC; gShimmer = p->shimmer & 1; gFreeze = p->freeze & 1; gPumpRate = p->pumpRate % 4; gLofiBits = p->lofiBits % 6;
 	gModRate = p->modRate; gModDepth = p->modDepth; gModMix = p->modMix; gFxColor = p->fxColor; gEqLow = p->eqLow; gEqMid = p->eqMid; gEqHigh = p->eqHigh;
 	gDlyMix = p->dlyMix; gDlyWow = p->dlyWow; gDlySat = p->dlySat; gRevMix = p->revMix; gOtt = p->ott; gPump = p->pump; gLofiRate = p->lofiRate;
 	chipSet(p->chipLevel); gChipDuty = p->chipDuty; gChipOct = p->chipOct; gCsEcho = p->csEcho; gCsEchoFb = p->csEchoFb; gCsEchoT = p->csEchoT; gOrbit = p->orbit; gOrbitRate = p->orbitRate; gRevType = p->revType % NREVT; gDlyType = p->dlyType % NDLYT; dlyTypeChanged();
@@ -3938,7 +3944,7 @@ static Param P_VOICE[] = {
 	PE("BEND RANGE", &gBendRange, 13, BEND_NAMES, 0), PE("CHORD", &gChord, NCHORD, CHORD_NAMES, 0),
 	PE("GATE", &gGatePat, NGATE, GATE_NAMES, 0), PE("GATE RATE", &gGateRate, 3, GRATE_NAMES, 0), PF("GATE DEPTH", &gGateDepth, 0, 1, 0.05f, "%", 0),
 	PF("CHORUS", &gChorus, 0, 1, 0.02f, "%", 0), PE("GPU VISUALS", &gGpuFx, 2, ONOFF, 0), PE("FX", &gFx, 4, FX_NAMES, 0), PE("ECHO TIME", &gEchoT, 3, ECHO_T_NAMES, 0),
-	PF("ECHO FDBK", &gEchoFb, 0, 0.9f, 0.03f, "%", 0), PE("OUTPUT", &gOutMode, 4, OUT_NAMES, D_OUT), PE("SURROUND", &gSurDepth, 4, DEPTH_NAMES, D_OUT),
+	PF("ECHO FDBK", &gEchoFb, 0, 0.95f, 0.03f, "%", 0), PE("OUTPUT", &gOutMode, 4, OUT_NAMES, D_OUT), PE("SURROUND", &gSurDepth, 4, DEPTH_NAMES, D_OUT),
 	{"TILT CENTER", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_TILT},
 	PF("REV SIZE", &gRevSize, 0, 1, 0.02f, "%", 0), PF("REV DAMP", &gRevDamp, 0, 1, 0.02f, "%", 0), PF("FX MIX", &gFxMix, 0, 1, 0.02f, "%", 0),
 	PE("DRIVE", &gDrive, 15, DRIVE_TYPES, D_A | D_B), PF("DRIVE AMT", &gDriveAmt, 0, 1, 0.02f, "%", D_A | D_B),
@@ -3993,7 +3999,7 @@ static Param P_MASTER[] = {
 	PE("MOD FX", &gModFx, 8, MODFX_NAMES, 0), PF("MOD RATE", &gModRate, 0.02f, 4, 0.02f, "HZ", 0), PF("MOD DEPTH", &gModDepth, 0, 1, 0.02f, "%", 0),
 	PF("MOD MIX", &gModMix, 0, 1, 0.02f, "%", 0), PF("FX COLOR", &gFxColor, 0, 1, 0.02f, "%", 0),
 	PF("EQ LOW", &gEqLow, -12, 12, 0.5f, "DB", 0), PF("EQ MID", &gEqMid, -12, 12, 0.5f, "DB", 0), PF("EQ HIGH", &gEqHigh, -12, 12, 0.5f, "DB", 0),
-	PE("DELAY TYPE", &gDlyType, NDLYT, DLYT_NAMES, D_DLYT), PF("DELAY MIX", &gDlyMix, 0, 1, 0.02f, "%", 0), PE("DELAY SYNC", &gDlySync, 7, DSYNC_NAMES, 0), PF("TAPE WOW", &gDlyWow, 0, 1, 0.02f, "%", 0), PF("TAPE SAT", &gDlySat, 0, 1, 0.02f, "%", 0),
+	PE("DELAY TYPE", &gDlyType, NDLYT, DLYT_NAMES, D_DLYT), PF("DELAY MIX", &gDlyMix, 0, 1, 0.02f, "%", 0), PE("DELAY SYNC", &gDlySync, NDSYNC, DSYNC_NAMES, 0), PF("TAPE WOW", &gDlyWow, 0, 1, 0.02f, "%", 0), PF("TAPE SAT", &gDlySat, 0, 1, 0.02f, "%", 0),
 	PF("REVERB MIX", &gRevMix, 0, 1, 0.02f, "%", 0), PE("REVERB TYPE", &gRevType, NREVT, REVT_NAMES, 0), PE("SHIMMER", &gShimmer, 2, ONOFF2, 0), PE("FREEZE", &gFreeze, 2, ONOFF2, 0),
 	PF("OTT", &gOtt, 0, 1, 0.02f, "%", 0), PF("PUMP", &gPump, 0, 1, 0.02f, "%", 0), PE("PUMP RATE", &gPumpRate, 4, PUMP_NAMES, 0),
 	PE("LOFI BITS", &gLofiBits, 6, BITS_NAMES, 0), PF("LOFI RATE", &gLofiRate, 0, 1, 0.02f, "%", 0),
@@ -4307,7 +4313,15 @@ static const Theme THEMES[NTHEMES] = {
 	 1, {{90, 55, 5}, {200, 120, 10}, {255, 200, 60}}, 1},
 	{"HERC GREEN", {0, 0, 0}, {40, 170, 40}, {32, 125, 32}, {64, 222, 64}, {64, 222, 64}, {0, 0, 0}, {130, 255, 130}, {160, 255, 160},
 	 {64, 222, 64}, {0, 0, 0}, {130, 255, 130}, {40, 150, 40}, {10, 60, 10}, {0, 0, 0}, {10, 46, 10}, {92, 240, 92}, {4, 26, 4}, {14, 62, 14}, {0, 2, 10, 10}, 1,
-	 1, {{15, 70, 15}, {40, 170, 40}, {130, 255, 130}}, 1}
+	 1, {{15, 70, 15}, {40, 170, 40}, {130, 255, 130}}, 1},
+	// SYRUP: the new look - slate panels, soft white text, a colour per section on the sliders pages
+	{"SYRUP", {14, 16, 22}, {48, 55, 72}, {120, 128, 150}, {220, 224, 235}, {92, 200, 255}, {14, 16, 22}, {92, 200, 255}, {255, 90, 90},
+	 {232, 234, 240}, {20, 22, 28}, {92, 200, 255}, {60, 150, 200}, {48, 55, 72}, {14, 16, 22}, {10, 12, 17}, {150, 156, 175}, {24, 28, 38}, {32, 37, 50}, {0, 0, 0, 0}, 0,
+	 1, {{92, 200, 255}, {180, 120, 255}, {255, 170, 70}}, 0},
+	// SYRUP LIGHT: the same, on paper
+	{"SYRUP LIGHT", {236, 236, 240}, {196, 198, 208}, {120, 124, 140}, {30, 32, 40}, {30, 120, 210}, {255, 255, 255}, {20, 110, 200}, {210, 50, 50},
+	 {255, 255, 255}, {40, 42, 50}, {30, 140, 230}, {20, 100, 180}, {170, 172, 182}, {226, 226, 232}, {222, 222, 228}, {70, 74, 90}, {250, 250, 252}, {214, 216, 224}, {0, 0, 0, 0}, 0,
+	 1, {{30, 140, 230}, {150, 80, 220}, {230, 120, 30}}, 0}
 };
 // Every theme is checked when first used: text must stand out from what it sits on (WCAG-style contrast; a colour
 // that's too close is pushed lighter or darker, keeping its hue), and a one-colour theme (GB POCKET, PIP GREEN...)
@@ -4669,7 +4683,7 @@ static int settingsLoad(void) {   // returns the page you were on last time
 		gStickMode = d[0] == 0x53455432 && d[2] >= 0 && d[2] < 4 ? d[2] : SM_DATA;   // older settings: the new default, DATA
 		int b = 0; if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 6) gBright = b;   // older settings: no brightness, SYSTEM
 		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 3) gSeqRate = b;
-		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < NTHEMES) gTheme = b;   // the theme you picked stays picked
+		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < NTHEMES) gTheme = b == 16 ? TH_SYRUP : b;   // the theme you picked stays picked (the old default, BBS: the new look)
 		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 4) gXyGlide = b;
 		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 2) gN3 = b;
 	}
@@ -4704,17 +4718,19 @@ static int stickNudge(float* v, float d) {   // move a float param by d of its r
 	float n = *v + d; n = n < 0 ? 0 : n > 1 ? 1 : n; if (n != *v) { *v = n; return 1; } return 0;
 }
 static int gLatchShow = 0;
+static const u8* pnlAcc(int sec);
 static const u8 PNL_ACC_T[3][3] = {{92, 200, 255}, {255, 170, 70}, {180, 120, 255}};
 static void drawHeader(int page) {
 	int sect = PAGE_SECT[page], ps = page >= 1 && page <= 3 ? 0 : page == 4 ? 1 : page == 10 ? 2 : -1;
-	const u8* acc = ps >= 0 ? PNL_ACC_T[ps] : TH->keyOn;   // the section's colour (OSC blue, FILTER orange, FX purple), else the theme's
-	rect(0, 0, 400, 14, 10, 12, 17);
-	text(4, 3, "SYRUP", 1, acc[0], acc[1], acc[2]);
+	const u8* acc = ps >= 0 ? pnlAcc(ps) : TH->keyOn;   // the section's colour (OSC blue, FILTER orange, FX purple), else the theme's
+	rect(0, 0, 400, 14, RGB3(TH->tab));
+	if (recAny()) { int b = (osGetTime() / 300) & 1; rect(1, 1, 46, 12, b ? 220 : 120, b ? 40 : 20, b ? 40 : 20); rect(6, 5, 4, 4, 255, 255, 255); text(14, 3, "REC", 1, 255, 255, 255); }   // RECORDING: always shown
+	else text(4, 3, "SYRUP", 1, acc[0], acc[1], acc[2]);
 	int x = 58;
 	for (int i = 0; i < 7; i++) {
 		int w = strlen(SECT_NAMES[i]) * 8;
-		if (i == sect) { text(x, 3, SECT_NAMES[i], 1, 230, 232, 240); rect(x, 12, w, 2, acc[0], acc[1], acc[2]); }   // the menu you're in: lit, underlined
-		else text(x, 3, SECT_NAMES[i], 1, 95, 102, 122);
+		if (i == sect) { text(x, 3, SECT_NAMES[i], 1, RGB3(TH->txt)); rect(x, 12, w, 2, acc[0], acc[1], acc[2]); }   // the menu you're in: lit, underlined
+		else text(x, 3, SECT_NAMES[i], 1, RGB3(TH->dim));
 		x += w + 11;
 	}
 	char pn[16]; snprintf(pn, sizeof(pn), "%.9s", gPatchName);
@@ -4723,8 +4739,8 @@ static void drawHeader(int page) {
 	int sx = 8;
 	for (int q = 0; q < NPAGES; q++) { int p = NAV[q]; if (PAGE_SECT[p] != sect) continue;
 		int w = strlen(SUB_NAMES[p]) * 8;
-		if (p == page) { rect(sx - 4, 16, w + 8, 11, acc[0], acc[1], acc[2]); text(sx, 18, SUB_NAMES[p], 1, 14, 16, 22); }
-		else text(sx, 18, SUB_NAMES[p], 1, 120, 128, 150);
+		if (p == page) { rect(sx - 4, 16, w + 8, 11, acc[0], acc[1], acc[2]); text(sx, 18, SUB_NAMES[p], 1, RGB3(TH->ink)); }
+		else text(sx, 18, SUB_NAMES[p], 1, RGB3(TH->dim));
 		sx += w + 16;
 	}
 	// status, right side of the sub-tab row: tempo, notes playing, CPU, transport
@@ -6757,11 +6773,17 @@ static Param* gPnlReq = NULL; static float gPnlReqT = 0; static int gPnlReqDir =
 static int gPnlSubDrag = -1, gPnlSubTo = -1, gPnlSubX0 = 0;   // FX: a block of the chain being dragged
 static int gPnlDrag = -1, gPnlHot = -1; static const Param* gPnlHotP = NULL;
 static const u8 PNL_ACC[3][3] = {{92, 200, 255}, {255, 170, 70}, {180, 120, 255}};
-#define PC_BG 14, 16, 22
-#define PC_PANEL 24, 28, 38
-#define PC_LINE 48, 55, 72
-#define PC_TXT 220, 224, 235
-#define PC_DIM 120, 128, 150
+#define PC_BG RGB3(TH->bg)
+#define PC_PANEL RGB3(TH->pad)
+#define PC_LINE RGB3(TH->grid)
+#define PC_TXT RGB3(TH->txt)
+#define PC_DIM RGB3(TH->dim)
+#define PC_BAR RGB3(TH->tab)
+#define PC_CAP RGB3(TH->keyW)
+static const u8* pnlAcc(int sec) {   // the section's colour: SYRUP themes have their own per section, the others their highlight
+	static const u8 L[3][3] = {{30, 140, 230}, {230, 120, 30}, {150, 80, 220}};
+	if (gTheme == TH_SYRUP) return PNL_ACC[sec < 0 ? 0 : sec]; if (gTheme == TH_SYRUP + 1) return L[sec < 0 ? 0 : sec]; return TH->keyOn;
+}
 static int pnlSec(void) { int p = gCurPage; return p >= 1 && p <= 3 ? 0 : p == 4 ? 1 : p == 10 ? 2 : -1; }
 static const PnlSub* pnlCur(int* n) {
 	int s = pnlSec();
@@ -6827,14 +6849,14 @@ static void drawPanelCard(int page, int sel) {   // the top screen's right side 
 	for (int i = 0; i < nf; i++) {   // the sliders below, at a glance
 		Param* q = pnlFind(S->fd[i], S->page); if (!q) continue; char vv[16]; pnlFmt(q, vv, sizeof(vv));
 		int x = 214 + (i & 1) * 90, y = 116 + (i / 2) * 14, hot = q == p;
-		text(x, y, pnlShort(q->name), 1, hot ? A[0] : 120, hot ? A[1] : 128, hot ? A[2] : 150); text(x + 84 - (int)strlen(vv) * 8, y, vv, 1, PC_TXT);
+		text(x, y, pnlShort(q->name), 1, (hot ? A : TH->dim)[0], (hot ? A : TH->dim)[1], (hot ? A : TH->dim)[2]); text(x + 84 - (int)strlen(vv) * 8, y, vv, 1, PC_TXT);
 	}
-	text(214, 210, "D-PAD + SLIDERS BELOW", 1, 70, 76, 95);
+	text(214, 210, "D-PAD + SLIDERS BELOW", 1, RGB3(TH->dim));
 }
 static int pnlFaders(const PnlSub* s) { int n = 0; while (n < 8 && s->fd[n]) n++; return n; }
 static int pnlChoices(const PnlSub* s) { int n = 0; while (n < 3 && s->ch[n]) n++; return n; }
 static void drawPanel(void) {
-	int ns, sec = pnlSec(); const PnlSub* S = pnlCur(&ns); const u8* A = PNL_ACC[sec];
+	int ns, sec = pnlSec(); const PnlSub* S = pnlCur(&ns); const u8* A = pnlAcc(sec);
 	rect(0, TAB_H, 320, PNL_KB_Y - TAB_H, PC_BG);
 	rrect(4, PNL_SUB_Y, 312, 16, 8, PC_PANEL);   // the sub-pages
 	const PnlSub* L = sec == 0 ? PNL_OSC : sec == 1 ? PNL_FILT : PNL_FX;
@@ -6843,7 +6865,7 @@ static void drawPanel(void) {
 		if (sec == 2 && gPnlSubDrag >= 0 && j == gPnlSubTo) i = gFxOrder[gPnlSubDrag];
 		else if (sec == 2 && gPnlSubDrag >= 0) { int k = j; if (gPnlSubDrag < gPnlSubTo && j >= gPnlSubDrag && j < gPnlSubTo) k = j + 1; if (gPnlSubDrag > gPnlSubTo && j > gPnlSubTo && j <= gPnlSubDrag) k = j - 1; i = gFxOrder[k]; }
 		int x = 4 + j * 312 / ns, w = 312 / ns, on = &L[i] == S; const char* t = L[i].tab;
-		if (sec == 2 && j) text(x - 4, PNL_SUB_Y + 4, ">", 1, 70, 76, 95);
+		if (sec == 2 && j) text(x - 4, PNL_SUB_Y + 4, ">", 1, RGB3(TH->dim));
 		if (on) { rrect(x + 2, PNL_SUB_Y + 2, w - 4, 12, 6, A[0], A[1], A[2]); text(x + w / 2 - (int)strlen(t) * 4, PNL_SUB_Y + 4, t, 1, PC_BG); }
 		else text(x + w / 2 - (int)strlen(t) * 4, PNL_SUB_Y + 4, t, 1, PC_DIM);
 	}
@@ -6860,24 +6882,24 @@ static void drawPanel(void) {
 	for (int i = 0; i < nf; i++) {
 		Param* p = pnlFind(S->fd[i], S->page); if (!p) continue;
 		int cx = x0 + i * fw + fw / 2, hot = p == gPnlHotP; float t = paramNorm(p); char v[16]; pnlFmt(p, v, sizeof(v));
-		text(cx - (int)strlen(v) * 4, PNL_FD_Y, v, 1, hot ? A[0] : 220, hot ? A[1] : 224, hot ? A[2] : 235);
+		text(cx - (int)strlen(v) * 4, PNL_FD_Y, v, 1, (hot ? A : TH->txt)[0], (hot ? A : TH->txt)[1], (hot ? A : TH->txt)[2]);
 		rrect(cx - 3, PNL_TT, 6, PNL_TB - PNL_TT, 3, PC_LINE);
 		int yv = PNL_TB - (int)((PNL_TB - PNL_TT) * t), bip = p->mn < 0;
 		if (bip) { int mid = (PNL_TT + PNL_TB) / 2, a = yv < mid ? yv : mid, b = yv < mid ? mid : yv; rrect(cx - 3, a, 6, b - a + 1, 3, A[0], A[1], A[2]); }
 		else rrect(cx - 3, yv, 6, PNL_TB - yv, 3, A[0], A[1], A[2]);
-		rrect(cx - 12, yv - 4, 24, 9, 3, 236, 238, 244); rect(cx - 8, yv - 1, 16, 2, A[0], A[1], A[2]);
-		const char* sh = pnlShort(p->name); text(cx - (int)strlen(sh) * 4, PNL_TB + 7, sh, 1, hot ? A[0] : 120, hot ? A[1] : 128, hot ? A[2] : 150);
+		rrect(cx - 12, yv - 4, 24, 9, 3, RGB3(TH->keyW)); rect(cx - 8, yv - 1, 16, 2, A[0], A[1], A[2]);
+		const char* sh = pnlShort(p->name); text(cx - (int)strlen(sh) * 4, PNL_TB + 7, sh, 1, (hot ? A : TH->dim)[0], (hot ? A : TH->dim)[1], (hot ? A : TH->dim)[2]);
 	}
 }
 static float gOctFlash[2];
 static const char* PKR[7] = {"OCT-", "OCT+", "CHRD", "LTCH", "SCAL", "PLAY", "PANC"};
 static void drawPanelKeyRow(void) {
-	const u8* A = PNL_ACC[pnlSec() < 0 ? 0 : pnlSec()];
+	const u8* A = pnlAcc(pnlSec());
 	for (int i = 0; i < 7; i++) {
 		int x = 2 + i * 45, on = (i == 2 && gChord) || (i == 3 && gLatchShow) || (i == 4 && gScale) || (i == 5 && gSeqPlaying) || (i < 2 && gOctFlash[i == 0 ? 0 : 1] > 0);
 		const char* t = i == 5 && gSeqPlaying ? "STOP" : PKR[i];
 		if (on) rrect(x, PNL_KR_Y, 42, 16, 6, A[0], A[1], A[2]); else rrect(x, PNL_KR_Y, 42, 16, 6, PC_PANEL);
-		text(x + 21 - (int)strlen(t) * 4, PNL_KR_Y + 4, t, 1, on ? 14 : 150, on ? 16 : 156, on ? 22 : 175);
+		text(x + 21 - (int)strlen(t) * 4, PNL_KR_Y + 4, t, 1, (on ? TH->ink : TH->dim)[0], (on ? TH->ink : TH->dim)[1], (on ? TH->ink : TH->dim)[2]);
 	}
 }
 static int pnlKeyRowAt(int x, int y) { if (y < PNL_KR_Y || y >= PNL_KR_Y + 16) return -1; int i = (x - 2) / 45; return i < 0 ? 0 : i > 6 ? 6 : i; }
@@ -6922,28 +6944,28 @@ static int pnlApply(Param* p) {   // the main loop: what a slider / choice asked
 }
 static void drawMiniKeys(int base, const u8* on) {   // 3 octaves under the sliders
 	static const int WN[7] = {0, 2, 4, 5, 7, 9, 11};
-	const u8* A = PNL_ACC[pnlSec() < 0 ? 0 : pnlSec()];
+	const u8* A = pnlAcc(pnlSec());
 	int y = PNL_KB_Y, h = 240 - y; float ww = KB_WW;
 	rect(0, y - 2, 320, h + 2, PC_BG); rect(0, y - 1, 320, 1, PC_LINE);
 	for (int i = 0; i < NKEYS; i++) {
 		int n = gScale ? scaleNote(base + gRoot, i) : base + (i / 7) * 12 + WN[i % 7], x = (int)(i * ww), lit = n < 128 && on[n];
-		if (lit) rrect(x + 1, y + 1, (int)ww - 1, h - 2, 2, A[0], A[1], A[2]); else rrect(x + 1, y + 1, (int)ww - 1, h - 2, 2, 232, 234, 240);
+		if (lit) rrect(x + 1, y + 1, (int)ww - 1, h - 2, 2, A[0], A[1], A[2]); else { rrect(x + 1, y + 1, (int)ww - 1, h - 2, 2, RGB3(TH->keyLine)); rrect(x + 2, y + 2, (int)ww - 3, h - 4, 2, RGB3(TH->keyW)); }   // (outlined: the dark-key themes)
 		if (gScale && i % scaleLen() == 0 && !lit) rect(x + 2, 240 - 6, (int)ww - 3, 3, A[0], A[1], A[2]);
 	}
 	if (!gScale) for (int i = 0; i < NKEYS; i++) {
 		if (i % 7 == 2 || i % 7 == 6) continue;
 		int n = base + (i / 7) * 12 + WN[i % 7] + 1, bx = (int)((i + 1) * ww - ww * 0.3f), lit = n < 128 && on[n];
-		if (lit) rrect(bx, y + 1, (int)(ww * 0.6f), BLK_H, 2, A[0] * 4 / 5, A[1] * 4 / 5, A[2] * 4 / 5); else rrect(bx, y + 1, (int)(ww * 0.6f), BLK_H, 2, 20, 22, 28);
+		if (lit) rrect(bx, y + 1, (int)(ww * 0.6f), BLK_H, 2, A[0] * 4 / 5, A[1] * 4 / 5, A[2] * 4 / 5); else rrect(bx, y + 1, (int)(ww * 0.6f), BLK_H, 2, RGB3(TH->keyB));
 	}
-	char c[6]; snprintf(c, sizeof(c), "C%d", base / 12 - 1); if (!gScale) text(3, 240 - 10, c, 1, 70, 74, 90);
+	char c[6]; snprintf(c, sizeof(c), "C%d", base / 12 - 1); if (!gScale) text(3, 240 - 10, c, 1, RGB3(TH->dim));
 }
 static void drawPanelTabs(void) {   // the section chips, quieter: names on a dark bar, the one you're in underlined
 	static const char* T[NCHIP] = {"OSC", "FILT", "MOD", "VOICE", "FX", "SEQ", "PADS", "MIX"};
-	int s = pnlSec(); const u8* A = gMixOn ? (const u8*)"\xe6\x96\x5a" : PNL_ACC[s < 0 ? 0 : s];
-	rect(0, 0, 320, TAB_H, 10, 12, 17);
+	int s = pnlSec(); const u8* A = gMixOn ? (const u8*)"\xe6\x96\x5a" : pnlAcc(s);
+	rect(0, 0, 320, TAB_H, RGB3(TH->tab));
 	for (int i = 0; i < NCHIP; i++) {
 		int x = i * 320 / NCHIP, w = 320 / NCHIP, on = i == 7 ? gMixOn : i == 6 ? gPads : i == chipOfPage(gCurPage) && !gPads && !gMixOn;
-		text(x + w / 2 - (int)strlen(T[i]) * 4, 6, T[i], 1, on ? 220 : 120, on ? 224 : 128, on ? 235 : 150);
+		text(x + w / 2 - (int)strlen(T[i]) * 4, 6, T[i], 1, (on ? TH->txt : TH->dim)[0], (on ? TH->txt : TH->dim)[1], (on ? TH->txt : TH->dim)[2]);
 		if (on) rect(x + 6, TAB_H - 3, w - 12, 2, A[0], A[1], A[2]);
 	}
 }
@@ -7892,19 +7914,19 @@ static void drawMixer(void) {
 		rrect(cx - 3, MX_FT, 6, MX_FB - MX_FT, 3, PC_LINE);
 		int yv = MX_FB - (int)((MX_FB - MX_FT) * t);
 		rrect(cx - 3, yv, 6, MX_FB - yv, 3, off ? c[0] / 3 : c[0], off ? c[1] / 3 : c[1], off ? c[2] / 3 : c[2]);
-		rrect(cx - 11, yv - 4, 22, 9, 3, 236, 238, 244);
+		rrect(cx - 11, yv - 4, 22, 9, 3, RGB3(TH->keyW));
 		if (k < 3) {   // FX SEND: a small bar, drag across
 			rrect(x + 3, MX_SY, w - 6, 8, 3, PC_LINE); rrect(x + 3, MX_SY, 4 + (int)((w - 10) * gPartSend[k]), 8, 3, 180, 120, 255);
-		} else if (k < 8) text(cx - 12, MX_SY, "DRY", 1, 70, 76, 95);
+		} else if (k < 8) text(cx - 12, MX_SY, "DRY", 1, RGB3(TH->dim));
 		if (k < 8) {
 			int m = mixMuted(k), s = gPartSolo[k];
-			rrect(x + 2, MX_BY, w / 2 - 3, 14, 4, m ? 255 : 40, m ? 80 : 46, m ? 80 : 60); text(x + 2 + (w / 2 - 3) / 2 - 4, MX_BY + 3, "M", 1, m ? 14 : 150, m ? 16 : 156, m ? 22 : 175);
-			rrect(x + w / 2 + 1, MX_BY, w / 2 - 3, 14, 4, s ? 255 : 40, s ? 210 : 46, s ? 80 : 60); text(x + w / 2 + 1 + (w / 2 - 3) / 2 - 4, MX_BY + 3, "S", 1, s ? 14 : 150, s ? 16 : 156, s ? 22 : 175);
+			rrect(x + 2, MX_BY, w / 2 - 3, 14, 4, m ? 255 : 40, m ? 80 : 46, m ? 80 : 60); text(x + 2 + (w / 2 - 3) / 2 - 4, MX_BY + 3, "M", 1, (m ? TH->ink : TH->dim)[0], (m ? TH->ink : TH->dim)[1], (m ? TH->ink : TH->dim)[2]);
+			rrect(x + w / 2 + 1, MX_BY, w / 2 - 3, 14, 4, s ? 255 : 40, s ? 210 : 46, s ? 80 : 60); text(x + w / 2 + 1 + (w / 2 - 3) / 2 - 4, MX_BY + 3, "S", 1, (s ? TH->ink : TH->dim)[0], (s ? TH->ink : TH->dim)[1], (s ? TH->ink : TH->dim)[2]);
 		}
 		char v[8]; snprintf(v, sizeof(v), "%d", (int)lroundf(t * 100)); text(cx - (int)strlen(v) * 4, 200, v, 1, PC_DIM);
 	}
-	text(6, 214, "FX: HOW MUCH GOES THROUGH THE FX", 1, 70, 76, 95);
-	text(6, 226, "DRUMS / TAPE PLAY DRY", 1, 70, 76, 95);
+	text(6, 214, "FX: HOW MUCH GOES THROUGH THE FX", 1, RGB3(TH->dim));
+	text(6, 226, "DRUMS / TAPE PLAY DRY", 1, RGB3(TH->dim));
 }
 static int mixTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (release) { gMixDrag = -1; return 0; }
@@ -9360,7 +9382,7 @@ static float gTapLevel = 0, gTapHold = 0;
 static const u8 HATVEL[16] = {255, 120, 200, 110, 255, 120, 200, 140, 255, 120, 200, 110, 255, 130, 220, 160};
 static int gNzCh[2] = {-1, -1}; static float gNzVol[2];   // hardware noise drums: retired (they wedged the sound chip); CHIP kit is now sampled LFSR noise
 static int drumReserved(int c) {
-	if (gVoiceMode >= 3 || gDrums) { for (int k = 0; k < NDCH; k++) if (c == gDrumCh[k]) return 1; return 0; }   // kit patch or drums on: all 7 (the drum machine plays on 3..6 too)
+	if (gVoiceMode >= 3 || gDrums) { for (int k = 0; k < NDCH; k++) if (c == gDrumCh[k] || c == gDrAlt[k]) return 1; return 0; }   // (and each one's partner: a chord's notes took them mid-hit - drums cut short under chords)   // kit patch or drums on: all 7 (the drum machine plays on 3..6 too)
 	return 0;
 }
 static u32 csSend(float l, float r);
@@ -9678,7 +9700,7 @@ static void drumService(void) {   // main loop, OUTSIDE the voice lock: a kit ta
 static void drumPickChannels(void) {
 	gNzCh[0] = gNzCh[1] = -1;
 	int n = 0;
-	for (int k = 0; k < NDCH; k++) gDrumCh[k] = -1;
+	for (int k = 0; k < NDCH; k++) gDrumCh[k] = gDrAlt[k] = -1;
 	for (int c = 16; c < NCS && n < NDCH; c++) if (gCsndOK && (csndChannels & BIT(c)) && !chipReserved(c) && !echoReserved(c) && !tapeReserved(c)) gDrumCh[n++] = c;
 }
 static int gDrumHitN[NDRUM];   // hits played per drum (the tests count them)
@@ -9709,12 +9731,12 @@ static void drumHit(int d, float vel) {   // from the audio thread (voice lock h
 	// hat after closed, rim after snare, or the same drum again) - or, with DRUM POLY, rings on longer before it fades.
 	int fadeOld = -1, fadeFr = 2;
 	if (!(gKit == 3 && d >= 1 && d <= 2)) {
-		static int alt[NDCH] = {-1, -1, -1, -1, -1, -1, -1}, onAlt[NDCH], lastD[NDCH] = {-1, -1, -1, -1, -1, -1, -1};
+		int* alt = gDrAlt; static int onAlt[NDCH], lastD[NDCH] = {-1, -1, -1, -1, -1, -1, -1};
 		int slot = gDrumCh[ch] >= 0 ? ch : ch % 3, main_ = gDrumCh[slot];
-		int ok = alt[slot] >= 0 && csUsable(alt[slot]) && gCsOwner[alt[slot]] == -1 && alt[slot] != main_;
+		int ok = alt[slot] >= 0 && csUsableExcept(alt[slot]) && gCsOwner[alt[slot]] == -1 && alt[slot] != main_;
 		for (int k = 0; ok && k < NDCH; k++) if (gDrumCh[k] == alt[slot] || (k != slot && alt[k] == alt[slot])) ok = 0;
 		if (!ok) { alt[slot] = -1; onAlt[slot] = 0;
-			for (int i = 8; i < NCS && alt[slot] < 0; i++) if (csUsable(i) && gCsOwner[i] == -1) { int used = 0; for (int k = 0; k < NDCH; k++) if (gDrumCh[k] == i || alt[k] == i) used = 1; if (!used) alt[slot] = i; } }
+			for (int i = 8; i < NCS && alt[slot] < 0; i++) if (csUsableExcept(i) && gCsOwner[i] == -1) { int used = 0; for (int k = 0; k < NDCH; k++) if (gDrumCh[k] == i || alt[k] == i) used = 1; if (!used) alt[slot] = i; } }
 		if (alt[slot] >= 0 && main_ >= 0) {
 			int was = onAlt[slot] ? alt[slot] : main_;
 			c = onAlt[slot] ? main_ : alt[slot]; onAlt[slot] = !onAlt[slot];
@@ -10029,7 +10051,8 @@ static void drawDrumGrid(void) {
 	snprintf(t, sizeof(t), "%s >", KIT_NAMES[gKit]); rectP(57, DG_Y, 52, 14, TH->tab); text(83 - (int)strlen(t) * 4, DG_Y + 3, t, 1, RGB3(TH->tabTxt));
 	rectP(112, DG_Y, 40, 14, TH->tab); text(132 - 4 * 4, DG_Y + 3, "BEAT", 1, RGB3(TH->tabTxt));   // whole-kit rhythm presets, one tap each
 	{ int a = clrArmed(); rectP(155, DG_Y, 36, 14, a ? TH->warn : TH->tab); text(173 - 3 * 4, DG_Y + 3, a ? "ALL" : "CLR", 1, RGB3(a ? TH->ink : TH->tabTxt)); }
-	rectP(194, DG_Y, 36, 14, gTapRow >= 0 ? TH->warn : TH->tab); text(200, DG_Y + 3, "MIC", 1, RGB3(gTapRow >= 0 ? TH->ink : TH->tabTxt));   // MIC TAP onto the picked row
+	{ int on = gTapRow >= 0, fl = on && (((osGetTime() / 250) & 1) || gMicEnv > 0.06f);   // MIC TAP armed: it flashes (and lights on what it hears)
+	  rectP(194, DG_Y, 36, 14, fl ? TH->warn : on ? TH->keyOnB : TH->tab); text(200, DG_Y + 3, "MIC", 1, RGB3(on ? TH->ink : TH->tabTxt)); }   // MIC TAP onto the picked row
 	rectP(233, DG_Y, 40, 14, gDrFill ? TH->keyOn : TH->tab); text(237, DG_Y + 3, "FILL", 1, RGB3(gDrFill ? TH->ink : TH->tabTxt));   // held: FILL conditions play
 	rectP(276, DG_Y, 40, 14, gAccMode ? TH->keyOn : TH->tab); text(284, DG_Y + 3, "ACC", 1, RGB3(gAccMode ? TH->ink : TH->tabTxt));   // ACC: tap hits to accent them (one by one)
 	int running = gSeqPlaying || (gDrums && gDrumStep >= 0);
@@ -10642,6 +10665,7 @@ static void drawPartNotes(int k, int full) {   // k = 2 BASS over this page (k =
 #define CG_Y (ROLL_TOP + 3)
 #define CG_CW ((320 - CG_KW) / 16.0f)
 static int gCgBtn = -1, gCgQ = 0, gCgRecSt = -1, gCgSt = -1, gCgNew = 0, gCgDrag = 0, gCgA = -1;
+static int recAny(void) { return gLiveRec || gTapeRec >= 0 || gTapRow >= 0 || gMotRec >= 0 || gCgRecSt >= 0; }
 static void drawChordGrid(void) {
 	const u8* c = PART_COL[1]; int now = gSeqPlaying ? ((int)floorf(transportPos16())) % CT_N : -1;
 	rectP(0, ROLL_TOP, 320, VEL_Y - 2 - ROLL_TOP, TH->bg);
@@ -11867,6 +11891,7 @@ int main(void) {
 		}
 		if (startAct == START_QUIT) break;   // QUIT
 		WHERE("WAKE"); wakeTick();
+		{ static int lb = -1; int b = recAny() ? (int)((osGetTime() / 250) & 1) : -1; if (b != lb) { topDirty = botDirty = 1; lb = b; } }   // REC / MIC blink
 		WHERE("VOICE LOCK"); LightLock_Lock(&gVoiceLock);   // audio state below; released before drawing
 		WHERE("MOTION / CAMERA"); BREATHE();
 		if (!gSafeMode) { motionTick(1.0f / 60); camTick(); }
