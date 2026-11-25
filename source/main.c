@@ -1295,7 +1295,9 @@ static void kitNoteOn(int note, float vel); static void kitHitSound(int d, float
 static float gNoteVel[128], gKeyFade[128];   // keyboard feedback: how hard each held note was hit; the glow a released key leaves
 static int gChordKey = -1;
 static void (*gOnsetHook)(int part, int note) = 0;   // tests: who started a note, and when
+static volatile int gClkSilent = 0;   // the clock catching up after a long stall: time moves, notes long due stay unplayed
 static void voiceOn(int note, float vel) {
+	if (gClkSilent) return;
 	if (gOnsetHook) gOnsetHook(gVoicePart, note);
 	mirNote('N', note, vel);
 	if (note >= 0 && note < 128) gNoteVel[note] = vel;
@@ -2494,18 +2496,19 @@ static void audioTick(void* data) {
 	lastId = id; init = 1;
 #endif
 	float dt = nf * 160.0f / DSPRATE + gClockDebt; gClockDebt = 0;
-	if (dt > 0.25f) { dt = 160.0f / DSPRATE; gClockSkips++; }   // a very long stall drops time rather than firing a burst
+	float late = 0; if (dt > 8.0f) dt = 8.0f; if (dt > 0.25f) { late = dt - 0.05f; gClockSkips++; }   // a long stall: the clock still catches up (it stays with the tape and MIDI), the notes it missed don't burst out
 	gInAudioTick = 1;
 	if (tqDrain(1)) gTqUi = 1;   // FM-1 LINK's timed notes, on time to the tick
 	gTickMidi = 1; if (mqDrain(1)) gTqUi = 1;   // network, IR and remote MIDI: as soon as it arrives, not at the next screen frame
 	while (dt > 1e-6f) {   // missed frames: catch up in frame-sized pieces so every step still fires, in order
-		float d = dt > 160.0f / DSPRATE ? 160.0f / DSPRATE : dt; dt -= d;
+		float d = dt > 160.0f / DSPRATE ? 160.0f / DSPRATE : dt; dt -= d; gClkSilent = late > 0; late -= d;
 		if (!gMirror) { seqTick(d); arpTick(d); progTick(); chordArpTick(d); bassTick(d); }   // a mirror plays only what the 3DS sends; ONE TRANSPORT: the arp, the pads' AUTO progression and bass lines all count its 16ths
 		drumTick(d);
 		clickTick();
 		shakeQTick();
 		gateTick(d, seqStepNow());
 	}
+	gClkSilent = 0;
 	mixRampTick(); csRampTick();
 	gInAudioTick = 0; gTickNoMips = 0;
 	if (mipsOk) LightLock_Unlock(&gMipsLock);
@@ -2709,6 +2712,9 @@ static float transportPos16(void) {
 	return (c / 2) * 2 * d + ((c & 1) ? (1.0f + gSwing) * d : 0) + gSeqPh;
 }
 static float stepLen(int i) { return ((i & 1) ? 1.0f - gSwing : 1.0f + gSwing) * seqDiv(); }   // in 16ths
+// ONE TRANSPORT: SWING follows the transport's own step count, not the pattern's - a pattern of an odd length (or a
+// song's patterns of different lengths) used to flip the long / short steps and pull the drums, bass and arps apart
+static float stepLenClk(unsigned c) { return stepLen((int)(c & 1)); }
 // trig conditions, shared by the sequencer and the drums: 0 ALWAYS, 1-5 chance, 6-14 A:B (loop A of every B), FILL,
 // !FILL, PRE / !PRE (the last condition here), NEI / !NEI (the neighbour's), 1ST / !1ST (the first loop after start)
 #define NCOND 23
@@ -2757,11 +2763,11 @@ static void seqFireAt(int idx, unsigned clock, int early, float off0) {
 		for (int a = 0; a < k; a++) {
 			SqN* q = &gSqN[fi[a]]; int j = ord[a], from = q->note;
 			for (int i = 0; i < NVS; i++) { SVoice* v = &gV[i]; if (v->active && !v->isEcho && v->note == from && v->stage < 4 && v->slide != 3) { v->note = notes[j]; v->freq = mtof((float)notes[j]); v->slide = 3; } }
-			mirRetune(from, notes[j], chord ? 2 : 1); q->note = notes[j]; q->left = lens[j] + early; q->slide = sl2; q->thr = (lens[j] == 1 ? off0 : 0) + stepLen((idx + lens[j] - 1) % NSTEP) * g;
+			mirRetune(from, notes[j], chord ? 2 : 1); q->note = notes[j]; q->left = lens[j] + early; q->slide = sl2; q->thr = (lens[j] == 1 ? off0 : 0) + stepLenClk(clock + lens[j] - 1) * g;
 		}
 		for (int i = 0; i < NVS; i++) if (gV[i].slide == 3) gV[i].slide = chord ? 2 : 1;   // chords glide by PAD MORPH, single notes by GLIDE
 		for (int a = k; a < m; a++) { sqRelease(&gSqN[fi[a]]); gSqN[fi[a]].left = 0; gSqN[fi[a]].slide = 0; }   // spare voices let go
-		for (int a = k; a < n && gSqNn < 16; a++) { int j = ord[a]; voiceOn(notes[j], vel); gSeqHits++; SqN* q = &gSqN[gSqNn++]; q->note = notes[j]; q->left = lens[j] + early; q->rel = 0; q->slide = sl2; q->thr = (lens[j] == 1 ? off0 : 0) + stepLen((idx + lens[j] - 1) % NSTEP) * g; }
+		for (int a = k; a < n && gSqNn < 16; a++) { int j = ord[a]; voiceOn(notes[j], vel); gSeqHits++; SqN* q = &gSqN[gSqNn++]; q->note = notes[j]; q->left = lens[j] + early; q->rel = 0; q->slide = sl2; q->thr = (lens[j] == 1 ? off0 : 0) + stepLenClk(clock + lens[j] - 1) * g; }
 		sqCompact(); gSlideOn = sl2; return;
 	}
 	for (int i = 0; i < gSqNn; i++) if (gSqN[i].slide) { sqRelease(&gSqN[i]); gSqN[i].left = 0; gSqN[i].slide = 0; }   // a slide into something else just ends
@@ -2771,7 +2777,7 @@ static void seqFireAt(int idx, unsigned clock, int early, float off0) {
 		if (gSqNn >= 16) break;
 		voiceOn(notes[j], vel); gSeqHits++;
 		SqN* q = &gSqN[gSqNn++]; q->note = notes[j]; q->left = lens[j] + early; q->rel = 0; q->slide = (s->fl & 2) != 0;
-		q->thr = (lens[j] == 1 ? off0 : 0) + stepLen((idx + lens[j] - 1) % NSTEP) * g;
+		q->thr = (lens[j] == 1 ? off0 : 0) + stepLenClk(clock + lens[j] - 1) * g;
 	}
 	gSlideOn = n && (s->fl & 2);
 }
@@ -2812,7 +2818,7 @@ static void seqTick(float dt) {
 		if (gSeq[0].nudge > 0) { gPendFire = 0; gFireOff = gSeq[0].nudge * 0.01f * stepLen(0); } else seqFire();
 		return;
 	}
-	float len = stepLen(gSeqPos);
+	float len = stepLenClk(gSeqClock);
 	float before = gSeqPh;
 	gSeqPh += dt * gBPM / 60.0f * 4.0f;
 	if (gPendFire >= 0 && gSeqPh >= gFireOff) { gPendFire = -1; seqFire(); }   // a late step
@@ -2835,7 +2841,7 @@ static void seqTick(float dt) {
 		sqCompact();
 		Step* s = &gSeq[gSeqPos];
 		if (gEarlyDone) gEarlyDone = 0;
-		else if (s->nudge > 0) { gPendFire = gSeqPos; gFireOff = s->nudge * 0.01f * stepLen(gSeqPos); }
+		else if (s->nudge > 0) { gPendFire = gSeqPos; gFireOff = s->nudge * 0.01f * stepLenClk(gSeqClock); }
 		else { gFireOff = 0; seqFire(); }
 		for (int i = 0; i < gSqNn; i++) { SqN* q = &gSqN[i]; if (q->left == 1 && !q->slide && !q->rel && q->thr <= gSeqPh) sqRelease(q); }   // a gate that ends before the step starts (early notes)
 	}
@@ -7781,7 +7787,7 @@ static void clickNow(int acc) {   // a short tick on a free second-chip channel 
 	csndExecCmds(false);
 }
 static void undoMark(void);
-static float seqNowSteps(void) { float l = stepLen(gSeqPos < 0 ? 0 : gSeqPos); return gSeqClock + (l > 0 ? gSeqPh / l : 0); }
+static float seqNowSteps(void) { float l = stepLenClk(gSeqClock); return gSeqClock + (l > 0 ? gSeqPh / l : 0); }
 static void liveUp(void) {   // the held notes end: their length is how long they were held, to the nearest step
 	if (!gLvN) return;
 	int L = (int)(seqNowSteps() - gLvT0 + 0.5f); if (L < 1) L = 1; if (L > NSTEP) L = NSTEP;
@@ -7789,7 +7795,7 @@ static void liveUp(void) {   // the held notes end: their length is how long the
 	gLvN = 0;
 }
 static int recPos(int* nudge, int* ahead) {   // where a note played now goes, by REC QUANT
-	int Lp = gSeqLen < 1 ? 1 : gSeqLen, p = gSeqPos < 0 ? 0 : gSeqPos; float f = gSeqPh / stepLen(p);   // 0..1 through this step
+	int Lp = gSeqLen < 1 ? 1 : gSeqLen, p = gSeqPos < 0 ? 0 : gSeqPos; float f = gSeqPh / stepLenClk(gSeqClock);   // 0..1 through this step
 	*nudge = 0;
 	if (gRecQ == 1) {   // 8ths: the nearest even step
 		float pos = p + f; int q = (int)(pos / 2 + 0.5f) * 2; *ahead = q - p; return ((q % Lp) + Lp) % Lp;
@@ -9127,6 +9133,10 @@ static int midiApply(u8 st, u8 a, u8 b, int inTick) {
 				if (gMidiClkT) { float bpm = 60000.0f / (float)(t - gMidiClkT); if (bpm > 40 && bpm < 240) { gBPM = (int)(gBPM * 0.7f + bpm * 0.3f + 0.5f); } }
 				gMidiClkT = t;
 			}
+			if (gSeqPlaying && gMidiClk % 24 == 0) {   // and its beats: each quarter note pulls the transport onto the external one (BPM alone drifts)
+				float err = gMidiClk / 6.0f - transportPos16();
+				if (err > -2 && err < 2) { gSeqPh += err * 0.5f; if (gSeqPh < 0) gSeqPh = 0; }
+			}
 		}
 		break;
 	}
@@ -9850,6 +9860,7 @@ static int drumFadeTick(void) {   // audio thread, each 5 ms frame: fading chann
 	return any;
 }
 static void drumHit(int d, float vel) {   // from the audio thread (voice lock held)
+	if (gClkSilent) return;
 	if (gOnsetHook) gOnsetHook(10 + d, 0);
 	if (gDrMuteNow) return;
 	mirNote('D', d, vel);
@@ -9921,7 +9932,7 @@ static void drumTick(float dt) {   // audio thread: 16th-note clock, follows the
 	if (!gSeqPlaying) { gDrumStep = -1; gDrClk = -1; return; }   // ONE TRANSPORT: the drums play with PLAY, never on a clock of their own
 	int step = -1; float frac = 0;
 	static long long clk = 0;   // 16ths since the drums (or the sequence) started
-	if (gSeqPlaying) { static int lastSeq = -1; if (gSeqPos != lastSeq) { step = gSeqPos & 15; lastSeq = gSeqPos; } clk = gSeqClock; float l = stepLen(gSeqPos < 0 ? 0 : gSeqPos); frac = l > 0 ? gSeqPh / l : 0; }
+	if (gSeqPlaying) { static unsigned lastClk = ~0u; if (gSeqClock != lastClk) { step = (int)(gSeqClock & 15); lastClk = gSeqClock; } clk = gSeqClock; float l = stepLenClk(gSeqClock); frac = l > 0 ? gSeqPh / l : 0; }   // the transport's 16ths (a 1-step or 12-step pattern no longer restarts the beat)
 	else {
 		float len = (gDrumStep & 1) ? 1.0f - gSwing : 1.0f + gSwing;
 		gDrumPh += dt * gBPM / 60.0f * 4.0f;
@@ -10686,7 +10697,7 @@ static int drumGridRelease(void) {   // the stylus came up
 static void drumRecHit(int r, float vel) {   // a hit played live onto row r, at the step it's nearest (MIC TAP, or a drum's name tapped while recording)
 	int st = gDrIdx[r] >= 0 ? gDrIdx[r] : (gDrumStep < 0 ? 0 : gDrumStep);   // the row's own step (its RATE / LENGTH)
 	int L = gDrLen[r] < 1 ? 16 : gDrLen[r];
-	if (gSeqPlaying && gDrRate[r] == 0) { float l = stepLen(gSeqPos < 0 ? 0 : gSeqPos); if (gSeqPh > l * 0.5f) st = (st + 1) % L; }   // nearest 16th: a hit just before the step lands on it
+	if (gSeqPlaying && gDrRate[r] == 0) { float l = stepLenClk(gSeqClock); if (gSeqPh > l * 0.5f) st = (st + 1) % L; }   // nearest 16th: a hit just before the step lands on it
 	else if (!gSeqPlaying && gDrRate[r] == 0) { float len = (gDrumStep & 1) ? 1.0f - gSwing : 1.0f + gSwing; if (gDrumPh > len * 0.5f) st = (st + 1) % L; }
 	drumRowToMine(r); if (r >= 3) gDrumX[r - 3][st] = (u8)(vel * 255); else gMyDrum[r][st] = (u8)(vel * 255); gDrumSaveDue = 1;
 	if (gCsndOK) { if (gDrumCh[0] < 0) drumPickChannels(); drumHit(DG_DRUM[r], vel); csndExecCmds(false); }
