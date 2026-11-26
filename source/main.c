@@ -8578,7 +8578,7 @@ static void linkChanged(void) {
 			else say("COULD NOT START HOSTING");
 		} else {
 			static u8 scan[0x4000]; udsNetworkScanInfo* nets = NULL; size_t total = 0;
-			say("SEARCHING...");
+			say("SEARCHING..."); WHERE("LINK: SEARCHING");
 			if (R_SUCCEEDED(udsScanBeacons(scan, sizeof(scan), &nets, &total, LINK_COMM, 0, NULL, false)) && total > 0 &&
 				R_SUCCEEDED(udsConnectNetwork(&nets[0].network, "syrup", 5, &gUdsBind, UDS_BROADCAST_NETWORKNODEID, UDSCONTYPE_Client, 1, UDS_DEFAULT_RECVBUFSIZE))) { gLinkUp = 1; say("JOINED - FOLLOWING THE HOST"); }
 			else say("NO HOST FOUND - SELECT JOIN AGAIN");
@@ -8593,26 +8593,45 @@ static void linkChanged(void) {
 		else say("IR SENDING TEMPO");
 	}
 }
-static void linkFollow(int step, int bpm) {   // receiver: take the tempo, snap the sequencer step
+// The host sends the transport's step count (mod 256 over local wireless, mod 8 over IR) when a step starts, and a
+// heartbeat (the same step again) twice a second. The follower takes the tempo, follows PLAY / STOP, and pulls its
+// own transport onto the host's a little at each new step (no double-fired notes, no jumps), or jumps there when
+// it's more than a step and a half out (joined late). The drums follow too: they run on the same step count.
+static void linkFollow(int step, int mod, int bpm) {
+	static int lastStep = -2;
 	gLinkRx = 0;
 	if (bpm >= 40 && bpm <= 240 && bpm != gBPM) gBPM = bpm;
-	if (step >= 0 && gSeqMode == 1 && gSeqPlaying) { gSeqPos = step % (gSeqLen < 1 ? 1 : gSeqLen); gSeqPh = 0; seqFire(); }
+	int playing = step >= 0;
+	if (playing && gSeqMode != 1) { seqStop(); gSongPos = 0; transportToggle(); lastStep = step; return; }   // the host started: so do we (from the top; the next step lines us up)
+	if (!playing) { if (lastStep >= 0 && gSeqMode == 1) transportToggle(); lastStep = -1; return; }   // the host stopped
+	if (step == lastStep) return;   // a heartbeat: sent mid-step, so it says nothing about where in the step the host is
+	lastStep = step;
+	if (!gSeqPlaying) return;
+	float l = stepLenClk(gSeqClock), ph = l > 0 ? gSeqPh / l : 0, mine = (float)(gSeqClock % (unsigned)mod) + ph, d = (float)step - mine;
+	while (d >= mod * 0.5f) d -= mod; while (d < -mod * 0.5f) d += mod;
+	if (fabsf(d) > 1.5f) {
+		long n = lroundf((float)gSeqClock + ph + d); if (n < 0) n = 0;
+		gSeqClock = (unsigned)n; gSeqPos = (int)(n % (gSeqLen < 1 ? 1 : gSeqLen)); gSeqPh = 0; gPendFire = -1; gEarlyDone = 0; gFireOff = 0; seqFire();
+		return;
+	}
+	float c = d * 0.3f; if (c > 0.08f) c = 0.08f; if (c < -0.08f) c = -0.08f;
+	gSeqPh += c * l; if (gSeqPh < 0) gSeqPh = 0;
 }
 static void linkTick(float dt) {
 	gLinkRx += dt;
 	if (!gLinkUp) return;
 	static int lastStep = -2; static float hb = 0;
-	int stepNow = gSeqPlaying ? gSeqPos : -1, send = 0;
+	int stepNow = gSeqPlaying ? (int)(gSeqClock & 255) : -1, send = 0;
 	if (stepNow != lastStep && stepNow >= 0) send = 1;
 	if ((hb -= dt) <= 0) { hb = 0.5f; send = 1; }   // tempo heartbeat
 	lastStep = stepNow;
-	if (gLink == 1 && send) { LinkPkt p = {'S', (u8)(stepNow < 0 ? 255 : stepNow), (u16)gBPM}; udsSendTo(UDS_BROADCAST_NETWORKNODEID, 1, UDS_SENDFLAG_Default, &p, sizeof(p)); }
-	if (gLink == 3 && send) { u8 b[2] = {(u8)(0xA0 | (stepNow < 0 ? 15 : (stepNow & 15))), (u8)(gBPM - 40)}; iruSendData(b, 2, false); }
+	if (gLink == 1 && send) { LinkPkt p = {(u8)(stepNow < 0 ? 's' : 'S'), (u8)(stepNow < 0 ? 0 : stepNow), (u16)gBPM}; udsSendTo(UDS_BROADCAST_NETWORKNODEID, 1, UDS_SENDFLAG_Default, &p, sizeof(p)); }   // 's': stopped
+	if (gLink == 3 && send) { u8 b[2] = {(u8)(0xA0 | (stepNow < 0 ? 0 : 8 | (stepNow & 7))), (u8)(gBPM - 40)}; iruSendData(b, 2, false); }   // IR: bit 3 = playing, the step mod 8
 	if (gLink == 2) {
 		LinkPkt p; size_t got = 0; u16 src;
-		while (R_SUCCEEDED(udsPullPacket(&gUdsBind, &p, sizeof(p), &got, &src)) && got == sizeof(p)) { if (p.magic == 'S') linkFollow(p.step == 255 ? -1 : p.step, p.bpm); got = 0; }
+		while (R_SUCCEEDED(udsPullPacket(&gUdsBind, &p, sizeof(p), &got, &src)) && got == sizeof(p)) { if (p.magic == 'S' || p.magic == 's') linkFollow(p.magic == 's' ? -1 : p.step, 256, p.bpm); got = 0; }
 	}
-	if (gLink == 4 && gIrBpm) { int st = gIrStep; gIrStep = -1; linkFollow(st == 15 ? -1 : st, gIrBpm); gIrBpm = 0; }
+	if (gLink == 4 && gIrBpm) { int st = gIrStep; gIrStep = -1; linkFollow(st & 8 ? st & 7 : -1, 8, gIrBpm); gIrBpm = 0; }
 	if (gLink == 1) { udsConnectionStatus cs; if (R_SUCCEEDED(udsGetConnectionStatus(&cs))) gLinkPeers = cs.total_nodes > 0 ? cs.total_nodes - 1 : 0; }
 }
 
@@ -8735,7 +8754,11 @@ static void b64(const u8* in, int n, char* out) {
 	out[o] = 0;
 }
 #include "remote_html.h"
-static int sendAll(int s, const void* d, int n) { const char* p = (const char*)d; while (n > 0) { int k = send(s, p, n, 0); if (k <= 0) { if (k < 0 && errno == EAGAIN) { svcSleepThread(1000000); continue; } return 0; } p += k; n -= k; } return 1; }
+static int sendAll(int s, const void* d, int n) {   // a peer that stopped reading (a phone asleep, out of range) gets 300 ms, then it's dropped:
+	const char* p = (const char*)d; u64 t0 = osGetTime();   // waiting on it forever held up every other client, the clock out and network MIDI
+	while (n > 0) { int k = send(s, p, n, 0); if (k <= 0) { if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && osGetTime() - t0 < 300) { svcSleepThread(1000000); continue; } return 0; } p += k; n -= k; }
+	return 1;
+}
 #define NCLI 8
 typedef struct { int s, ws; char buf[2048]; int n; MidiIn run; u8 closing, mir, unit; u64 t; FILE* up; int left; } Cli;   // mir: a MIRROR page listening   // t: last activity (ms); up / left: a file being uploaded
 static void cliClose(Cli* c) { if (c->unit) { c->unit = 0; if (--gUnitClients <= 0) gUnitClients = 0; } if (c->mir) { c->mir = 0; if (--gMirClients <= 0) { gMirClients = 0; gMirOn = 0; } } if (c->up) { fclose(c->up); c->up = NULL; } if (c->s >= 0) close(c->s); c->s = -1; c->ws = 0; c->n = 0; c->closing = 0; }
@@ -9066,7 +9089,7 @@ static void netMidiChanged(void) {
 }
 
 // ---- what incoming MIDI does (main loop, inside the voice lock)
-static int gMidiHeld[16], gMidiClk = 0; static float gMidiBend = 0, gMidiVel = 0.8f;
+static int gMidiHeld[16], gMidiClk = 0, gMidiStarted = 0; static float gMidiBend = 0, gMidiVel = 0.8f;
 static u64 gMidiClkT = 0;
 // CHORD mode reaches MIDI too: a key plays the chord (in semitones: the controller's key isn't a scale degree)
 static u8 gMidiCh[16][4], gMidiChN[16];
@@ -9211,7 +9234,7 @@ static int midiApply(u8 st, u8 a, u8 b, int inTick) {
 		else ch = 0;
 		break; }
 	case 0xF0:
-		if (st == 0xFA || st == 0xFB) { gSeqMode = 1; ch = 1; gMidiClk = 0; }
+		if (st == 0xFA || st == 0xFB) { gSeqMode = 1; ch = 1; gMidiClk = 0; gMidiStarted = 1; }
 		else if (st == 0xFC) { gSeqMode = 0; ch = 1; }
 		else if (st == 0xF8) {   // follow an external clock: 24 per beat
 			if (++gMidiClk % 24 == 0) {
@@ -9220,8 +9243,10 @@ static int midiApply(u8 st, u8 a, u8 b, int inTick) {
 				gMidiClkT = t;
 			}
 			if (gSeqPlaying && gMidiClk % 24 == 0) {   // and its beats: each quarter note pulls the transport onto the external one (BPM alone drifts)
-				float err = gMidiClk / 6.0f - transportPos16();
-				if (err > -2 && err < 2) { gSeqPh += err * 0.5f; if (gSeqPh < 0) gSeqPh = 0; }
+				float err = gMidiClk / 6.0f - transportPos16(), m = gMidiStarted ? 16.0f : 4.0f;   // (no START seen: only the beat lines up, not the bar)
+				err = fmodf(err, m); if (err >= m * 0.5f) err -= m; if (err < -m * 0.5f) err += m;
+				float c = err * 0.35f; if (c > 0.25f) c = 0.25f; if (c < -0.25f) c = -0.25f;   // a jittery Wi-Fi clock nudges, it doesn't jerk; a big gap closes over a few beats
+				gSeqPh += c; if (gSeqPh < 0) gSeqPh = 0;
 			}
 		}
 		break;
