@@ -145,7 +145,7 @@ static int thStep(int t, int d) { return VTH[(thSlot(t) + NVTH + d) % NVTH]; }
 static int gTheme = TH_SYRUP,   /* SYRUP: the default look */ gScan = 0, gBright = 0;   // gBright: screen brightness 1..5, 0 = leave the system setting
 static const char* BRIGHT_NAMES[6] = {"SYSTEM", "1 DIM", "2", "3", "4", "5 BRIGHT"};
    // graphics-chip visuals (see visFrame); off by default while being tested on hardware
-static __thread int gInAudioTick = 0;   // per thread: only the audio thread ever sees it set (another thread reading it mid-tick would skip gMipsLock)
+static int gInAudioTick = 0;   // (set only while the audio tick holds the voice lock; every other reader holds it too, so it can't see it set)
 // crash guard: a marker file holds the last milestone reached; it is removed on a clean exit.
 // If it is still there at launch, the last run crashed -> SAFE MODE (new hardware features off).
 static const char* CRASH_PATH = "sdmc:/3ds/syrup/running.txt";
@@ -169,7 +169,7 @@ static void crashCheck(void) {
 #endif
 	gSafeMode = 1;
 }        // set while the audio thread runs the arp/seq clock (it holds gMipsLock)
-static LightLock gMipsLock; static __thread int gTickNoMips = 0;   // audio tick running without gMipsLock (a rebuild holds it)   // guards the shared FFT buffers (worker on core 1 vs main core)
+static LightLock gMipsLock; static volatile int gTickNoMips = 0;   // audio tick running without gMipsLock (a rebuild holds it)   // guards the shared FFT buffers (worker on core 1 vs main core)
 static Thread gWorker = NULL;
 #define SYRUP_VERSION "1.0 BETA"
 // safe saves: write NAME.new, then swap it in, so pulling the power mid-save can never leave a half-written file
