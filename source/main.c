@@ -540,10 +540,50 @@ static const char* WARP_NAMES[W_COUNT] = {"OFF", "SYNC", "WIN SYNC", "BEND+", "B
 typedef struct {
 	int on, table, warp, oct, semi, uni;
 	float pos, warpAmt, level, fine, detune, blend, width;
+	int dist; float distAmt;   // OSC DIST: this oscillator's own distortion (the DRIVE types), baked into its wavetable
+	int engine;   // ENGINE: 0 = WAVE (the wavetable), 1 = FM (the FM engine's 4 operators at this oscillator's pitch)
 	Table tb; Mips mips;
 	float raw[CYC], cyc[CYC];
 } Osc;
 static Osc gOsc[2];
+// ---------------------------------------------------------------- FM ENGINE: 4 operators, 8 algorithms, feedback on OP 4
+// An oscillator with ENGINE FM plays these operators instead of its wavetable, at its own pitch (OCTAVE / SEMI / FINE)
+// and unison. They're rendered sample by sample on the oscillator's SOFT channel, each operator with its own envelope, so
+// the brightness moves through the note (a wavetable can't). ENV 1 and the filter still shape the whole note on top.
+#define FM_OPS 4
+#define FM_NALG 8
+#define FM_NRAT 22
+#define FM_NWAVE 4
+typedef struct { int algo; float fb, vel; int wave[FM_OPS], ratio[FM_OPS]; float lvl[FM_OPS], a[FM_OPS], d[FM_OPS], s[FM_OPS], r[FM_OPS], det[FM_OPS]; } FmP;
+#define FM_DEF_INIT {0, 0, 0.5f, {0, 0, 0, 0}, {1, 1, 4, 1}, {1.0f, 0.5f, 0, 0}, {0.002f, 0.002f, 0.002f, 0.002f}, {1.2f, 0.6f, 0.5f, 0.5f}, {0.7f, 0.3f, 0.3f, 0.3f}, {0.3f, 0.3f, 0.3f, 0.3f}, {0, 0, 0, 0}}
+static FmP gFm = FM_DEF_INIT; static const FmP FM_DEF = FM_DEF_INIT;
+static const char* ENGINE_NAMES[2] = {"WAVE", "FM"};
+static const char* FMALG_NAMES[FM_NALG] = {"4>3>2>1", "3+4>2>1", "4>3+2>1", "2+3+4>1", "4>3 2>1", "4>3,2,1", "4>3 2 1", "1 2 3 4"};
+// which operators modulate each one (bit k = OP k+1), and which are heard (carriers)
+static const u8 FMALG_MOD[FM_NALG][FM_OPS] = {{2, 4, 8, 0}, {2, 12, 0, 0}, {6, 0, 8, 0}, {14, 0, 0, 0}, {2, 0, 8, 0}, {8, 8, 8, 0}, {0, 0, 8, 0}, {0, 0, 0, 0}};
+static const u8 FMALG_CAR[FM_NALG] = {1, 1, 1, 1, 5, 7, 7, 15};
+static const float FMRAT[FM_NRAT] = {0.5f, 1, 1.41f, 1.5f, 2, 2.5f, 3, 3.5f, 4, 4.5f, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+static const char* FMRAT_NAMES[FM_NRAT] = {"0.5", "1", "1.41", "1.5", "2", "2.5", "3", "3.5", "4", "4.5", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"};
+static const char* FMWAVE_NAMES[FM_NWAVE] = {"SINE", "HALF", "ABS", "QUARTER"};
+#define FMW_BITS 11
+#define FMW_N (1 << FMW_BITS)
+static float gFmWave[FM_NWAVE][FMW_N]; static int gFmWaveOK = 0;
+static void fmWaveInit(void) {
+	if (gFmWaveOK) return;
+	for (int i = 0; i < FMW_N; i++) { float x = sinf(6.28318531f * i / FMW_N);
+		gFmWave[0][i] = x; gFmWave[1][i] = x > 0 ? x : 0; gFmWave[2][i] = fabsf(x); gFmWave[3][i] = (i & (FMW_N / 2 - 1)) < FMW_N / 4 ? fabsf(x) : 0; }
+	gFmWaveOK = 1;
+}
+static void fmSet(const FmP* q) {   // a patch's FM settings, kept in range
+	FmP f = *q; f.algo = f.algo >= 0 && f.algo < FM_NALG ? f.algo : 0;
+	#define FMCL(x, lo, hi) x = (x == x && x >= lo) ? (x <= hi ? x : hi) : lo
+	FMCL(f.fb, 0, 1); FMCL(f.vel, 0, 1);
+	for (int j = 0; j < FM_OPS; j++) { f.wave[j] = f.wave[j] >= 0 && f.wave[j] < FM_NWAVE ? f.wave[j] : 0; f.ratio[j] = f.ratio[j] >= 0 && f.ratio[j] < FM_NRAT ? f.ratio[j] : 1;
+		FMCL(f.lvl[j], 0, 1); FMCL(f.a[j], 0, 4); FMCL(f.d[j], 0, 4); FMCL(f.s[j], 0, 1); FMCL(f.r[j], 0, 4); FMCL(f.det[j], -50, 50); }
+	#undef FMCL
+	gFm = f;
+}
+static int fmAny(void) { return (gOsc[0].on && gOsc[0].engine == 1) || (gOsc[1].on && gOsc[1].engine == 1); }
 
 static const char* SUB_SHAPES[6] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "PULSE 25", "ROUNDED"};
 static const char* NOISE_TYPES[6] = {"WHITE", "PINK", "CRACKLE", "BROWN", "BLUE", "CORRUPT"};
@@ -572,8 +612,8 @@ static const char* CURVE_NAMES[4] = {"LINEAR", "EXP", "LOG", "S-CURVE"};
 static float gTiltX, gTiltY, gMicEnv, gTwist, gShake, gShakeD, gCamLight, gCamColor;
 static float gSpinX, gSpinY, gMicBright, gCamMove;   // gyro pitch/roll speed, voice brightness ("ss" vs "oo"), how much the picture changes
 static int gHeadphones;   // (0 until the first check)
-enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_FXMIX, DST_GRPOS, DST_COUNT };
-static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF", "FX MIX", "GRAIN POS"};   // GRAIN POS: an LFO sweeps where the grains read   // VOLUME: when routed, the source IS the loudness (breath control)
+enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_FXMIX, DST_GRPOS, DST_FMAMT, DST_COUNT };
+static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF", "FX MIX", "GRAIN POS", "FM AMOUNT"};   // GRAIN POS: an LFO sweeps where the grains read   // VOLUME: when routed, the source IS the loudness (breath control)
 static const char* VOICE_MODES[10] = {"POLY", "MONO", "LEGATO", "808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT", "PERC KIT", "WAVE KIT", "SAMPLE KIT"};   // KIT: keys play the drum kit
 static const char* FX_NAMES[4] = {"OFF", "ECHO", "SPACE", "REVERB"};
 static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
@@ -601,9 +641,46 @@ static AHDSR gEnv1 = {0.005f, 0.0f, 0.6f, 0.7f, 0.35f}, gEnv2 = {0.002f, 0.0f, 0
 static AHDSR gEnv3 = {0.0f, 0.0f, 0.3f, 0.0f, 0.2f}, gEnv4 = {0.5f, 0.0f, 1.0f, 0.5f, 0.8f};   // ENV 3 / 4: mod-only envelopes (a pluck and a swell to start with)
 static LFO gLfo[2] = {{0, 0, 0.6f, 0, 0, 0}, {1, 1, 4.0f, 0, 0, 0}};
 static int gClkOut = 0;   // MIDI CLOCK OUT: 24 pulses a beat + START / STOP to the Network MIDI session, from the audio clock
-#define MCOQ 128
-static u8 gMcoSt[MCOQ]; static u64 gMcoT[MCOQ]; static volatile u32 gMcoW = 0, gMcoR = 0; static volatile u32 gMcoPulses = 0; static double gClkOutPh = 0;
-static void mcoPush(u8 st) { u32 w = gMcoW, n = (w + 1) % MCOQ; if (n == gMcoR) return; gMcoSt[w] = st; gMcoT[w] = osGetTime() * 10; __sync_synchronize(); gMcoW = n; if (st == 0xF8) gMcoPulses++; }
+#define MCOQ 256
+static u8 gMcoSt[MCOQ], gMcoA[MCOQ], gMcoB[MCOQ]; static u64 gMcoT[MCOQ]; static volatile u32 gMcoW = 0, gMcoR = 0; static volatile u32 gMcoPulses = 0; static double gClkOutPh = 0; static volatile int gMcoSpin = 0;
+static void mcoPush3(u8 st, u8 a, u8 b) {   // MIDI OUT queue (any thread, never waits long): the network thread sends it to the Network MIDI session
+	int tries = 0; while (__sync_lock_test_and_set(&gMcoSpin, 1)) { if (++tries > 4000) return; }
+	u32 w = gMcoW, n = (w + 1) % MCOQ;
+	if (n != gMcoR) { gMcoSt[w] = st; gMcoA[w] = a; gMcoB[w] = b; gMcoT[w] = osGetTime() * 10; __sync_synchronize(); gMcoW = n; if (st == 0xF8) gMcoPulses++; }
+	__sync_lock_release(&gMcoSpin);
+}
+static void mcoPush(u8 st) { mcoPush3(st, 0, 0); }
+// MIDI CHANNELS (HARDWARE page): each part listens on its own channel and sends what it plays on its own channel, like most
+// synths - SYNTH (the keys, the sequencer, the arp), CHORD, BASS, DRUMS (General MIDI notes, channel 10).
+// IN: 0 = OFF, 1-16, 17 = ALL (every channel no other part has). OUT: 0 = OFF, 1-16.
+enum { MP_SYNTH, MP_CHORD, MP_BASS, MP_DRUMS, NMPART };
+static int gChIn[NMPART] = {17, 2, 3, 10}, gChOut[NMPART] = {1, 2, 3, 10};
+static const char* CHIN_NAMES[18] = {"OFF", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "ALL"};
+static const char* CHOUT_NAMES[17] = {"OFF", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"};
+static u8 gOutOn[NMPART][128];   // notes sent on and not yet off (so a release only sends what was started, and PANIC knows what's hanging)
+static u8 gOutCh[NMPART][128];   // the channel each was sent on (the setting can change while it's held)
+static int midiPartOf(int mc) {   // a channel (0-15) -> the part that plays it, -1 = none
+	for (int p = MP_CHORD; p < NMPART; p++) if (gChIn[p] == mc + 1) return p;
+	if (gChIn[MP_SYNTH] == mc + 1 || gChIn[MP_SYNTH] == 17) return MP_SYNTH;
+	return -1;
+}
+static volatile int gPeerOk;   // (below: a Network MIDI session is open - nothing queues for nobody)
+static void midiOutNote(int part, int note, float vel, int on) {   // a part's note to MIDI OUT
+	if (!gPeerOk && !gOutOn[part & 3][note & 127]) return;
+	if (part < 0 || part >= NMPART || note < 0 || note > 127) return;
+	if (on) {
+		int c = gChOut[part]; if (c < 1 || c > 16) return;
+		if (gOutOn[part][note]) mcoPush3((u8)(0x80 | gOutCh[part][note]), (u8)note, 0);   // the same note again: end the last one first
+		int v = (int)(vel * 127 + 0.5f); v = v < 1 ? 1 : v > 127 ? 127 : v;
+		gOutOn[part][note] = 1; gOutCh[part][note] = (u8)(c - 1); mcoPush3((u8)(0x90 | (c - 1)), (u8)note, (u8)v);
+	} else if (gOutOn[part][note]) { gOutOn[part][note] = 0; mcoPush3((u8)(0x80 | gOutCh[part][note]), (u8)note, 0); }
+}
+static volatile int gDrFromMidi = 0;   // a drum hit that came in over MIDI (not sent back out)
+static const u8 GM_DRUM[10] = {36, 38, 42, 46, 39, 37, 45, 50, 56, 49};   // the drum machine's sounds as General MIDI notes
+static u64 gDrOffAt[10];   // DRUMS OUT: each hit's note-off is due 50 ms later (ms)
+static void midiDrumOut(int d, float vel) { if (gDrFromMidi || d < 0 || d >= 10) return; midiOutNote(MP_DRUMS, GM_DRUM[d], vel, 1); if (gOutOn[MP_DRUMS][GM_DRUM[d]]) gDrOffAt[d] = osGetTime() + 50; }
+static void midiDrumOffTick(void) { u64 t = 0; for (int d = 0; d < 10; d++) if (gDrOffAt[d]) { if (!t) t = osGetTime(); if (t >= gDrOffAt[d]) { gDrOffAt[d] = 0; midiOutNote(MP_DRUMS, GM_DRUM[d], 0, 0); } } }
+static void midiOutAllOff(void) { for (int p = 0; p < NMPART; p++) for (int n = 0; n < 128; n++) if (gOutOn[p][n]) midiOutNote(p, n, 0, 0); }
 static int gLfoCC[2] = {0, 0};   // LFO1/2 CC OUT: send the LFO as this CC (0 = off) to the Network MIDI session, channel 1
 static ModSlot gMod[8] = {{SRC_ENV2, DST_CUTOFF, 0.35f}, {SRC_STICK, DST_APOS, 0.5f}, {SRC_LFO1, DST_BPOS, 0.0f}, {SRC_OFF, DST_PITCH, 0.0f}};
 static int gVoiceMode = 0, gChord = 0, gFx = 0, gEchoT = 1, gDrive = 0, gBendRange = 2;
@@ -624,9 +701,13 @@ static void oscMorph(Osc* o, float pos) {   // raw = interpolated table frame at
 	for (int n = 0; n < CYC; n++) o->raw[n] = A[n] + (B[n] - A[n]) * t;
 }
 
-static float drive(float s) {
+static float driveShape(int type, float amt, float s);
+static float drive(float s) { return driveShape(gDrive, gDriveAmt, s); }
+// The shapers, by type (DRIVE_TYPES). Used on a single cycle before it's band-limited, so even hard clipping and
+// folding stay alias-free: the extra harmonics are cut where each note needs them, like the wavetable's own.
+static float driveShape(int type, float gDriveAmt, float s) {
 	float d = 1.0f + gDriveAmt * 9.0f;
-	switch (gDrive) {
+	switch (type) {
 	case 1: return tanhf(s * d) / tanhf(d);
 	case 2: { float v = s * d; return v > 1 ? 1 : (v < -1 ? -1 : v); }
 	case 3: return sinf(s * d * 1.5708f);
@@ -674,6 +755,7 @@ static void oscWarp(Osc* o, float amt, const Osc* other, float ratio) {
 		if (w == W_FLIP && p > a) s = -s;
 		if (w == W_AM) s *= 1.0f + a * rd(other->raw, p * ratio);
 		if (w == W_RM) s *= (1 - a) + a * rd(other->raw, p * ratio) * 1.5f;
+		if (o->dist && o->distAmt > 0) s = driveShape(o->dist, o->distAmt, s);   // this oscillator's DIST first, then the shared DRIVE
 		if (gDrive) s = drive(s);
 		o->cyc[n] = s;
 	}
@@ -840,6 +922,9 @@ typedef struct {
 	u32 ph[SOFT_L], inc[SOFT_L];
 	float gl[SOFT_L], gr[SOFT_L], cl[SOFT_L], cr[SOFT_L];   // targets (main loop) and where the render is
 	int role[SOFT_L];
+	// FM ENGINE: the layers of an ENGINE FM oscillator render the operators (fm[k]); one set of envelopes for the note
+	u8 fm[SOFT_L]; u32 fph[SOFT_L][FM_OPS]; float fprev[SOFT_L][2];
+	FmP fp; float fe[FM_OPS]; int fst[FM_OPS]; int fgate; float fvel, famt;
 } SoftCh;
 static u8 gSoftFresh[NCH], gSoftLive[NCH]; static float gSoftLimS = 0, gSoftLimA = 0;   // fresh: its mix goes straight on (the render fades it in); live: a carrier this frame
 static int gSoftPend[SOFT_L], gSoftPendN = 0;   // startVoice -> startLayer: the layers the carrier takes
@@ -855,11 +940,66 @@ static void softInit(void) {
 	for (int i = 0; i <= SOFT_FADE; i++) gSCurve[i] = 0.5f - 0.5f * cosf(3.14159265f * i / SOFT_FADE);
 	gSoftInit = 1;
 }
-static void softBlock(int ch, s16* out) {   // one block of one channel (gSoftLock held)
-	SoftCh* S = &gSoftC[ch]; int n = S->n;
+static float fmEnvStep(SoftCh* S, int j, float dt) {   // an operator's envelope over one block (gSoftLock held)
+	const FmP* P = &S->fp; float e = S->fe[j]; int st = S->fst[j];
+	if (!S->fgate && st != 4) st = 4;
+	switch (st) {
+	case 1: e += dt / (P->a[j] + 0.0005f); if (e >= 1) { e = 1; st = 2; } break;
+	case 2: e -= dt * (1 - P->s[j]) / (P->d[j] + 0.0005f); if (e <= P->s[j]) { e = P->s[j]; st = 3; } break;
+	case 3: e = P->s[j]; break;
+	case 4: e -= dt / (P->r[j] + 0.0005f); if (e < 0) e = 0; break;
+	}
+	S->fe[j] = e; S->fst[j] = st; return e;
+}
+static void fmLayer(SoftCh* S, int k, const float* g0, const float* g1, float* L, float* R, float gl, float dgl, float gr, float dgr) {   // one FM layer into the block
+	const FmP* P = &S->fp; int alg = P->algo < 0 || P->algo >= FM_NALG ? 0 : P->algo; const u8* M = FMALG_MOD[alg];
+	u32 ph[FM_OPS], inc[FM_OPS]; const float* W[FM_OPS]; float g[FM_OPS], dg[FM_OPS];
+	for (int j = 0; j < FM_OPS; j++) {
+		int ri = P->ratio[j] < 0 || P->ratio[j] >= FM_NRAT ? 1 : P->ratio[j];
+		inc[j] = (u32)((float)S->inc[k] * FMRAT[ri] * (P->det[j] ? powf(2.0f, P->det[j] / 1200.0f) : 1.0f));
+		ph[j] = S->fph[k][j]; W[j] = gFmWave[P->wave[j] & 3]; g[j] = g0[j]; dg[j] = (g1[j] - g0[j]) * (1.0f / SOFT_BLK);
+	}
+	float f0 = S->fprev[k][0], f1 = S->fprev[k][1], fb = P->fb * P->fb * 0.3f * FMW_N;
+	u8 car = FMALG_CAR[alg];
+	for (int i = 0; i < SOFT_BLK; i++) {
+		float o[FM_OPS], sum = 0;
+		{ float r = W[3][((ph[3] >> (32 - FMW_BITS)) + (int)((f0 + f1) * fb)) & (FMW_N - 1)]; f1 = f0; f0 = r; o[3] = r * g[3]; }   // OP 4: its own output fed back
+		for (int j = 2; j >= 0; j--) {
+			float in = 0; u8 m = M[j];
+			if (m & 2) in += o[1]; if (m & 4) in += o[2]; if (m & 8) in += o[3];
+			o[j] = W[j][((ph[j] >> (32 - FMW_BITS)) + (int)(in * FMW_N)) & (FMW_N - 1)] * g[j];
+		}
+		for (int j = 0; j < FM_OPS; j++) { if (car & (1 << j)) sum += o[j]; ph[j] += inc[j]; g[j] += dg[j]; }
+		float v = sum * 26000.0f;
+		L[i] += v * gl; R[i] += v * gr; gl += dgl; gr += dgr;
+	}
+	for (int j = 0; j < FM_OPS; j++) S->fph[k][j] = ph[j];
+	S->fprev[k][0] = f0; S->fprev[k][1] = f1;
+}
+static void softBlockS(SoftCh* S, s16* out);
+static void softBlock(int ch, s16* out) { softBlockS(&gSoftC[ch], out); }
+static void softBlockS(SoftCh* S, s16* out) {   // one block of one channel (gSoftLock held)
+	int n = S->n;
 	float L[SOFT_BLK], R[SOFT_BLK];
 	memset(L, 0, sizeof(L)); memset(R, 0, sizeof(R));
+	float fg0[FM_OPS], fg1[FM_OPS]; int anyFm = 0;
+	for (int k = 0; k < n; k++) if (S->fm[k]) anyFm = 1;
+	if (anyFm) {   // the operators' gains over this block: a carrier's is its level, a modulator's its index (in cycles)
+		const FmP* P = &S->fp; int alg = P->algo < 0 || P->algo >= FM_NALG ? 0 : P->algo; u8 car = FMALG_CAR[alg]; int nc = 0;
+		for (int j = 0; j < FM_OPS; j++) if (car & (1 << j)) nc++;
+		float cn = 1.0f / sqrtf((float)(nc ? nc : 1)), vs = 1 - P->vel * (1 - S->fvel), am = S->famt;
+		for (int j = 0; j < FM_OPS; j++) {
+			float e0 = S->fe[j], e1 = fmEnvStep(S, j, SOFT_BLK / 32728.0f), lv = P->lvl[j];
+			float sc = (car & (1 << j)) ? lv * cn : lv * lv * 1.6f * vs * am;
+			fg0[j] = e0 * sc; fg1[j] = e1 * sc;
+		}
+	}
 	for (int k = 0; k < n; k++) {
+		if (S->fm[k]) {
+			float gl = S->cl[k], gr = S->cr[k], dgl = (S->gl[k] - gl) * (1.0f / SOFT_BLK), dgr = (S->gr[k] - gr) * (1.0f / SOFT_BLK);
+			fmLayer(S, k, fg0, fg1, L, R, gl, dgl, gr, dgr);
+			S->cl[k] = S->gl[k]; S->cr[k] = S->gr[k]; continue;
+		}
 		const s16* t = S->tab[k]; if (!t) continue;
 		u32 ph = S->ph[k], inc = S->inc[k], sh = S->sh[k], mk = S->mask[k];
 		float gl = S->cl[k], gr = S->cr[k], dgl = (S->gl[k] - gl) * (1.0f / SOFT_BLK), dgr = (S->gr[k] - gr) * (1.0f / SOFT_BLK);
@@ -1178,7 +1318,10 @@ static void softStart(SVoice* v, int ch) {   // a SOFT carrier: its layers' tabl
 		int r = gSoftPend[k], u = r <= R_A2 ? r - R_A0 : r - R_B0;
 		S->role[k] = r; S->tab[k] = tab[k]; S->sh[k] = 32 - bits[k]; S->mask[k] = (1u << bits[k]) - 1;
 		S->ph[k] = 0; (void)u;   // every layer from the cycle's start, as the hardware layers do (the unison attack keeps its punch and the patches their level)
+		S->fm[k] = gOsc[r >= R_B0].engine == 1;
 	}
+	{ int fm = 0; for (int k = 0; k < S->n; k++) fm |= S->fm[k];
+	  if (fm) { fmWaveInit(); S->fp = gFm; S->fgate = 1; S->fvel = v->vel; S->famt = 1; for (int j = 0; j < FM_OPS; j++) { S->fe[j] = 0; S->fst[j] = 1; } } }
 	for (int b = 0; b < SOFT_NB; b++) gSoftWB[ch][b].status = NDSP_WBUF_DONE;
 	ndspChnWaveBufClear(ch); ndspChnReset(ch); ndspChnSetFormat(ch, NDSP_FORMAT_STEREO_PCM16);
 	ndspChnSetInterp(ch, NDSP_INTERP_NONE); ndspChnSetRate(ch, 32728);
@@ -1210,9 +1353,10 @@ static void startVoice(int vi) {
 		if (gSubLevel > 0.01f) { roles[nr] = R_SUB; bks[nr++] = subBk(nr); }
 		}
 	}
-	if (!v->isEcho && gSoftMode && gAudioClock && gSoftCpu < 0.6f && gQScream < 0.001f) {   // SOFT LAYERS: the oscillator layers ride one channel (SCREAM wants a filter per layer: hardware)
+	int fmv = !v->isEcho && gAudioClock && fmAny() && v->subOnly != 1;   // FM ENGINE: its operators only play on the SOFT path
+	if (fmv || (!v->isEcho && gSoftMode && gAudioClock && gSoftCpu < 0.6f && gQScream < 0.001f)) {   // SOFT LAYERS: the oscillator layers ride one channel (SCREAM wants a filter per layer: hardware)
 		int no = 0; for (int i = 0; i < nr; i++) if (roles[i] <= R_B2) no++;
-		if (no >= 2) {
+		if (no >= 2 || (fmv && no >= 1)) {
 			int k = 0, r2[R_COUNT], b2[R_COUNT], n2 = 0; gSoftPendN = 0;
 			for (int i = 0; i < nr; i++) if (roles[i] <= R_B2) { if (k < SOFT_L) gSoftPend[k++] = roles[i]; } else { r2[n2] = roles[i]; b2[n2++] = bks[i]; }
 			gSoftPendN = k; roles[0] = R_SOFT; bks[0] = BK_DSP; nr = 1;
@@ -1312,6 +1456,7 @@ static volatile int gClkSilent = 0;   // the clock catching up after a long stal
 static void voiceOn(int note, float vel) {
 	if (gClkSilent) return;
 	if (gOnsetHook) gOnsetHook(gVoicePart, note);
+	if (gMidiChNow < 0) midiOutNote(gVoicePart, note, vel, 1);   // MIDI OUT on the part's channel (not what came in over MIDI)
 	mirNote('N', note, vel);
 	if (note >= 0 && note < 128) gNoteVel[note] = vel;
 	if (!gAudioOK) return;
@@ -1337,6 +1482,7 @@ static void voiceOn(int note, float vel) {
 }
 
 static void voiceOff(int note) {
+	if (note >= 0 && note < 128) midiOutNote(gVoicePart, note, 0, 0);
 	mirNote('O', note, 0);
 	for (int i = 0; i < NVS; i++) {
 		SVoice* v = &gV[i];
@@ -1345,7 +1491,7 @@ static void voiceOff(int note) {
 		for (int k = 0; k < NVS; k++) if (gV[k].active && gV[k].isEcho && gV[k].parent == v->id && gV[k].gate < 0) gV[k].gate = v->held;
 	}
 }
-static void allOff(void) { mirEmit('A', NULL, 0); for (int i = 0; i < NVS; i++) if (gV[i].active) { if (gV[i].isEcho && !gV[i].started) gV[i].active = 0; else gV[i].stage = gV[i].stage2 = 4; } }
+static void allOff(void) { midiOutAllOff(); mirEmit('A', NULL, 0); for (int i = 0; i < NVS; i++) if (gV[i].active) { if (gV[i].isEcho && !gV[i].started) gV[i].active = 0; else gV[i].stage = gV[i].stage2 = 4; } }
 
 static void envStep(float* e, int* st, const AHDSR* E, float dt, float* hold, float relMul) {
 	switch (*st) {
@@ -1536,7 +1682,7 @@ static void voicesUpdate(float dt, float bend) {
 		for (int k = 0; k < v->nch; k++) {
 			int ch = v->ch[k], role = v->role[k]; if (ch < 0) continue;
 			if (role == R_SOFT) {   // SOFT LAYERS: each layer's level, pan and pitch go to the render; the channel is the filter
-				SoftCh* S = &gSoftC[ch];
+				SoftCh* S = &gSoftC[ch]; int fmOn = 0; for (int j = 0; j < S->n; j++) fmOn |= S->fm[j];
 				LightLock_Lock(&gSoftLock);   // the render reads gl / gr / inc mid-block on the DSP thread (lock order: voice -> soft)
 				for (int j = 0; j < S->n; j++) {
 					int r = S->role[j], o = r >= R_B0, u = r - (o ? R_B0 : R_A0); float det = 0, pan = 0.5f, ug = 1;
@@ -1548,6 +1694,7 @@ static void voicesUpdate(float dt, float bend) {
 					S->gl[j] = L; S->gr[j] = R; S->inc[j] = (u32)(rate / 32728.0f * 4294967296.0f);
 					gSoftLimS += L * L + R * R; gSoftLimA += L > R ? L : R;
 				}
+				if (fmOn) { S->fp = gFm; S->fgate = v->stage != 4; float a = 1 + modSum(DST_FMAMT, v); S->famt = a < 0 ? 0 : a > 3 ? 3 : a; }   // FM: the settings move live; the gate lets the operators' envelopes go
 				S->armed = 1; LightLock_Unlock(&gSoftLock);
 				dL[ch] = dR[ch] = SOFT_HEAD; gSoftLive[ch] = 1;
 				filterSet(ch, cutoff, res);
@@ -2540,7 +2687,7 @@ static void audioTick(void* data) {
 		float d = dt > 160.0f / DSPRATE ? 160.0f / DSPRATE : dt; dt -= d; gClkSilent = late > 0; late -= d;
 		if (!gMirror) { seqTick(d); arpTick(d); progTick(); chordArpTick(d); bassTick(d); }   // a mirror plays only what the 3DS sends; ONE TRANSPORT: the arp, the pads' AUTO progression and bass lines all count its 16ths
 		drumTick(d);
-		clickTick();
+		clickTick(); midiDrumOffTick();
 		shakeQTick();
 		gateTick(d, seqStepNow());
 		if (gClkOut) {   // MIDI CLOCK OUT: straight time (swing is ours), START on PLAY with the first pulse, STOP with STOP
@@ -2948,8 +3095,14 @@ typedef struct {
 	int arpStrumDir; float arpStrum;   // v14: ARP STRUM
 	int gatePat, gateRate; float gateDepth;   // v15: TRANCE GATE
 	AHDSR env3, env4; int dlTrig[2];   // v16: ENV 3 / 4, drawn LFO 3 / 4 trigger (FREE / NOTE / ONCE)
+	int oscDist[2]; float oscDistAmt[2];   // v17: OSC DIST
+	int oscEngine[2]; FmP fm;   // v18: FM ENGINE
 } SPatch;
-#define PATCH_MAGIC 0x53595240   // "SYR@" (v16)
+#define PATCH_MAGIC 0x53595242   // "SYRB" (v18)
+#define PATCH_MAGIC17 0x53595241 // v17 (no FM engine)
+#define PATCH_V17_SIZE offsetof(SPatch, oscEngine)
+#define PATCH_MAGIC16 0x53595240 // v16 (no OSC DIST)
+#define PATCH_V16_SIZE offsetof(SPatch, oscDist)
 #define PATCH_MAGIC15 0x5359523F // v15 (no ENV 3 / 4)
 #define PATCH_V15_SIZE offsetof(SPatch, env3)
 #define PATCH_MAGIC14 0x5359523E // v14 (no trance gate)
@@ -2995,6 +3148,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->filtType = 0; p->cutoff = 0.8f; p->res = 0.1f; p->keytrack = 0.3f;
 	p->env1 = (AHDSR){0.005f, 0, 0.6f, 0.7f, 0.35f};
 	p->env2 = (AHDSR){0.002f, 0, 0.45f, 0.2f, 0.4f};
+	p->fm = FM_DEF;
 	p->env3 = (AHDSR){0.0f, 0, 0.3f, 0.0f, 0.2f}; p->env4 = (AHDSR){0.5f, 0, 1.0f, 0.5f, 0.8f};
 	p->lfoShape[0] = 0; p->lfoRate[0] = 0.6f; p->lfoShape[1] = 0; p->lfoRate[1] = 5.0f;
 	p->mod[0] = (ModSlot){SRC_ENV2, DST_CUTOFF, 0.0f};
@@ -3024,6 +3178,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 
 #define OA p->osc[0]
 #define OB p->osc[1]
+#define FMOP(j, R, L, A, D, S, RL) do { p->fm.ratio[j] = R; p->fm.lvl[j] = L; p->fm.a[j] = A; p->fm.d[j] = D; p->fm.s[j] = S; p->fm.r[j] = RL; } while (0)
 #define MOD(i, s, d, a) p->mod[i] = (ModSlot){s, d, a}
 #define ENV1(A, H, D, S, R) p->env1 = (AHDSR){A, H, D, S, R}
 #define ENV2(A, H, D, S, R) p->env2 = (AHDSR){A, H, D, S, R}
@@ -3101,6 +3256,9 @@ static void b_reese(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = 
 	lane(p, 0, 4, 2, 0.3f, 0.7f, 2); lane(p, 1, 5, 3, 0.1f, 0.4f, 2); p->xyMode = 3; }
 static void b_wobble(SPatch* p) { p->master = 0.55f; OA.table = T_GROWL; OA.oct = -1; p->voiceMode = 1; ENV1(0.003f, 0, 0.3f, 0.9f, 0.1f); LFO(0, LS_SINE, 0, 2); p->lfoSync[0] = LY_8;
 	MOD(2, SRC_LFO1, DST_APOS, 0.6f); MOD(3, SRC_LFO1, DST_OFCUT, 0.35f); OUTF(OF_L12, 0.4f, 0.45f, 0.5f, 0); p->ott = 0.5f; p->subLevel = 0.35f; NOSTICK; MOD(1, SRC_STICK, DST_AWARP, 0.6f); OA.warp = W_BENDPM; }
+static void b_fmslap(SPatch* p) { p->master = 0.7f; p->oscEngine[0] = 1; OA.on = 1; OA.oct = -1; p->voiceMode = 1; p->fm.algo = 0; p->fm.vel = 0.9f; p->fm.fb = 0.3f;   // a snapping 2-op bass, a little grit from OP 3
+	FMOP(0, 1, 1.0f, 0.001f, 0.9f, 0.6f, 0.1f); FMOP(1, 1, 0.62f, 0.001f, 0.16f, 0.12f, 0.1f); FMOP(2, 4, 0.25f, 0.001f, 0.08f, 0, 0.1f); FMOP(3, 1, 0.2f, 0.001f, 0.05f, 0, 0.1f);
+	p->cutoff = 0.9f; ENV1(0.001f, 0, 1.0f, 0.75f, 0.12f); }
 static void b_fmknock(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -1; OA.warp = W_FM; OA.warpAmt = 0.25f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 0;
 	ENV2(0.0f, 0, 0.14f, 0.0f, 0.1f); MOD(2, SRC_ENV2, DST_AWARP, 0.6f); ENV1(0.002f, 0, 0.35f, 0.4f, 0.12f); p->voiceMode = 1; p->eqLow = 1.5f; }
 static void b_diode(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SQR; OA.oct = -1; DRV(6, 0.55f); p->voiceMode = 1; ENV1(0.002f, 0, 0.35f, 0.6f, 0.1f);
@@ -3118,6 +3276,9 @@ static void b_upright(SPatch* p) { p->master = 0.8f; OA.table = T_BASIC; OA.pos 
 static void b_chip(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = TRI; OA.oct = -1; CHIP(0.4f, 1, -1); p->voiceMode = 1; ENV1(0.002f, 0, 0.3f, 0.8f, 0.05f); p->lofiBits = 1; }
 
 // ---- LEAD
+static void l_fmbrass(SPatch* p) { p->master = 0.6f; p->oscEngine[0] = 1; OA.on = 1; p->fm.algo = 1; p->fm.vel = 0.5f; p->fm.fb = 0.35f;   // brass: the brightness swells in after the note
+	FMOP(0, 1, 0.9f, 0.04f, 0.4f, 0.85f, 0.2f); FMOP(1, 1, 0.55f, 0.09f, 0.5f, 0.45f, 0.25f); FMOP(2, 1, 0.25f, 0.12f, 0.6f, 0.3f, 0.25f); FMOP(3, 1, 0.15f, 0.05f, 0.4f, 0.2f, 0.2f);
+	p->fm.det[2] = 7; p->cutoff = 0.95f; p->glide = 0.04f; ENV1(0.03f, 0, 0.5f, 0.9f, 0.25f); MOD(3, SRC_M1, DST_FMAMT, 1.0f); REVB(0.2f, RV_HALL); }   // MACRO 1: brighter
 static void l_gulfsync(SPatch* p) { p->master = 0.55f; OA.table = T_SYNC; OA.warp = W_SYNC; ENV2(0.0f, 0, 0.5f, 0.2f, 0.3f); MOD(2, SRC_ENV2, DST_AWARP, 0.6f);
 	p->voiceMode = 2; p->glide = 0.04f; ENV1(0.004f, 0, 0.3f, 0.85f, 0.25f); DLYS(0.22f, S8D, DL_TAPE); REVB(0.15f, RV_PLATE); }
 static void l_talkbox(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA.uni = 2; OA.detune = 8; MFX(FX_FORMANT, 0.1f, 0.5f, 0.5f); p->voiceMode = 2; p->glide = 0.05f;
@@ -3186,6 +3347,10 @@ static void p_hallchoir(SPatch* p) { p->master = 0.7f; OA.table = T_VOWELS; OA.l
 static void k_epsat(SPatch* p) { p->master = 0.65f; OA.table = T_BASIC; OA.pos = SINE; OA.warp = W_FM; OA.warpAmt = 0.2f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 2;
 	ENV2(0.0f, 0, 0.6f, 0.1f, 0.4f); MOD(2, SRC_ENV2, DST_AWARP, 0.35f); MOD(3, SRC_VEL, DST_AWARP, 0.3f); LFO(0, LS_SINE, 0, 4.5f); MOD2(0, SRC_LFO1, DST_PAN, 0.4f);
 	ENV1(0.002f, 0, 1.4f, 0.3f, 0.5f); DLYS(0.15f, S8D, DL_TAPE); REVB(0.18f, RV_ROOM); }
+// FM ENGINE presets: OSC A plays the 4 operators (FMOP: operator, ratio index, level, attack, decay, sustain, release)
+static void k_fmtine(SPatch* p) { p->master = 0.7f; p->oscEngine[0] = 1; OA.on = 1; p->fm.algo = 4; p->fm.vel = 0.8f;   // two stacks: a tine (14x) on the body, a soft bell on top
+	FMOP(0, 1, 0.9f, 0.001f, 2.6f, 0, 0.45f); FMOP(1, 18, 0.32f, 0.001f, 0.3f, 0, 0.2f); FMOP(2, 1, 0.6f, 0.001f, 1.8f, 0, 0.45f); FMOP(3, 1, 0.42f, 0.001f, 1.1f, 0.05f, 0.3f);
+	p->fm.det[2] = 6; p->cutoff = 1.0f; p->keytrack = 0; ENV1(0.001f, 0, 3.0f, 0.0f, 0.5f); LFO(0, LS_SINE, 0, 4.5f); MOD2(0, SRC_LFO1, DST_PAN, 0.35f); MOD(3, SRC_M1, DST_FMAMT, 1.0f); REVB(0.2f, RV_ROOM); }
 static void k_drawbar(SPatch* p) { p->master = 0.55f; OA.table = T_HARMONIX; OA.pos = 0.35f; ENV1(0.005f, 0, 0.1f, 1.0f, 0.06f); MFX(FX_CHORUS, 5.5f, 0.4f, 0.5f); DRV(1, 0.25f); REVB(0.18f, RV_SPRING); }
 static void k_lofiup(SPatch* p) { p->master = 0.75f; OA.table = T_DIGITAL; OA.pos = 0.2f; OB.on = 1; OB.table = T_BASIC; OB.pos = TRI; OB.level = 0.4f; ENV1(0.002f, 0, 1.6f, 0.0f, 0.6f);
 	MOD(2, SRC_VEL, DST_CUTOFF, 0.4f); p->cutoff = 0.55f; p->lofiBits = 1; p->lofiRate = 0.2f; DLYS(0.12f, S4, DL_TAPE); p->dlyWow = 0.7f; REVB(0.2f, RV_ROOM); }
@@ -3209,6 +3374,9 @@ static void u_nylon(SPatch* p) { p->master = 0.7f; OA.table = wtFile("SP PLUCK D
 static void u_marimba(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.pos = SINE; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 2; OB.level = 0.2f; ENV1(0.001f, 0, 0.5f, 0.0f, 0.3f);
 	OUTF(OF_COMBP, 0.5f, 0.2f, 0, 0); REVB(0.2f, RV_ROOM); }
 static void u_kalimba(SPatch* p) { p->master = 0.7f; OA.table = T_DIGITAL; OA.pos = 0.45f; ENV1(0.001f, 0, 0.8f, 0.0f, 0.5f); MOD(2, SRC_RAND, DST_PITCH, 0.003f); REVB(0.25f, RV_PLATE); DLYS(0.15f, S8, DL_PING); }
+static void u_fmbell(SPatch* p) { p->master = 0.6f; p->oscEngine[0] = 1; OA.on = 1; p->fm.algo = 4; p->fm.vel = 0.6f;   // 3.5x and 13x: a struck bell
+	FMOP(0, 1, 0.85f, 0.001f, 4.0f, 0, 1.6f); FMOP(1, 7, 0.55f, 0.001f, 2.2f, 0, 1.2f); FMOP(2, 8, 0.4f, 0.001f, 2.5f, 0, 1.2f); FMOP(3, 18, 0.35f, 0.001f, 0.9f, 0, 0.6f);
+	p->cutoff = 1.0f; p->keytrack = 0; ENV1(0.001f, 0, 4.0f, 0.0f, 1.8f); REVB(0.35f, RV_HALL); }
 static void u_digiharp(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.pos = 0.6f; OA.warp = W_FM; OA.warpAmt = 0.3f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1;
 	ENV2(0.0f, 0, 0.3f, 0, 0.2f); MOD(2, SRC_ENV2, DST_AWARP, 0.5f); ENV1(0.001f, 0, 0.7f, 0.0f, 0.4f); DLYS(0.25f, S8D, DL_PING); REVB(0.2f, RV_HALL); }
 static void u_stab99(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 3; OA.detune = 14; p->chord = 1; ENV1(0.001f, 0, 0.25f, 0.0f, 0.15f); ENV2(0.0f, 0, 0.15f, 0, 0.1f);
@@ -3659,17 +3827,17 @@ static void i_allinone(SPatch* p) { p->master = 0.72f;   // bass + chord + lead 
 	REVB(0.18f, RV_HALL); DLYS(0.12f, S8D, DL_PING); NOSTICK; }
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
-	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}, {"DARK 808", b_dark808}, {"303 SCREAM", b_303scream}},
+	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}, {"DARK 808", b_dark808}, {"303 SCREAM", b_303scream}, {"FM SLAP BASS", b_fmslap}},
 	{{"GULF SYNC", l_gulfsync}, {"TALK BOX", l_talkbox}, {"WIDE UNISON", l_bigunison}, {"WHISTLE", l_whistle}, {"FOLD SCREAM", l_scream}, {"LADDER TAPE", l_moogtape},
 	 {"CHIP HERO", l_chiphero}, {"G-FUNK SINE", l_glidesine}, {"RINGER", l_ringer}, {"ACID SCREAM", l_acidscream}, {"PAD BENDER", l_bender},
-	 {"FLUTE", l_flute}, {"STICK THEREMIN", l_theremin}, {"XY SCULPT", l_xysculpt}, {"BUSY BOY", l_busyboy}},
+	 {"FLUTE", l_flute}, {"STICK THEREMIN", l_theremin}, {"XY SCULPT", l_xysculpt}, {"BUSY BOY", l_busyboy}, {"FM BRASS", l_fmbrass}},
 	{{"WARM FELT", p_felt}, {"GLASS HOUR", p_glass}, {"VOWEL DUSK", p_vowel}, {"COMB WEATHER", p_combweather}, {"CLOUD BANK", p_cloudbank}, {"STRINGS 77", p_strings77},
 	 {"DRAWN SWELL", p_drawnswell}, {"MOTION HAZE", p_haze}, {"SWELL BACKWARD", p_reverse}, {"DEEP SONAR", p_sonar}, {"GRAIN CHOIR", p_hallchoir}, {"GATE 85", p_gate85}, {"SPIN PAD", p_spinpad}, {"XY MORPH", p_xymorph}, {"CINE SWELL", p_cineswell},
 	 {"TABLE TIDE", p_tabletide}, {"GRAIN HALO", p_grainhalo}, {"PRISM SHIFT", p_prismshift}, {"SHIMMER DRIFT", p_shimmerdrift}},
 	{{"EP SATURDAY", k_epsat}, {"DRAWBAR", k_drawbar}, {"LOFI UPRIGHT", k_lofiup}, {"CLAV FUNK", k_clav}, {"WURLI BARK", k_wurli}, {"VIBES", k_vibes},
-	 {"TOY KEYS", k_toy}, {"HARPSI", k_harpsi}, {"ROTARY", k_rotary}, {"CUMBIA ORGANO", k_cumbiaorg}, {"REEL PIANO", k_reel}, {"GLASS TOP", k_glasstop}, {"TAPE RHODES", k_taperhodes}},
+	 {"TOY KEYS", k_toy}, {"HARPSI", k_harpsi}, {"ROTARY", k_rotary}, {"CUMBIA ORGANO", k_cumbiaorg}, {"REEL PIANO", k_reel}, {"GLASS TOP", k_glasstop}, {"TAPE RHODES", k_taperhodes}, {"FM TINE PIANO", k_fmtine}},
 	{{"NYLON", u_nylon}, {"MARIMBA WOOD", u_marimba}, {"KALIMBA", u_kalimba}, {"DIGI HARP", u_digiharp}, {"STAB 1999", u_stab99}, {"KOTO SPRING", u_koto},
-	 {"CHIP PLINK", u_chipplink}, {"GRAIN PLUCK", u_grain}, {"STEEL PAN", u_steel}, {"RAIN ON TIN", u_raintin}, {"SOFT PLUCK", u_softpluck}, {"KS GUITAR", u_ksguitar}, {"KS BASS", u_ksbass}, {"KS HARP", u_ksharp}},
+	 {"CHIP PLINK", u_chipplink}, {"GRAIN PLUCK", u_grain}, {"STEEL PAN", u_steel}, {"RAIN ON TIN", u_raintin}, {"SOFT PLUCK", u_softpluck}, {"KS GUITAR", u_ksguitar}, {"KS BASS", u_ksbass}, {"KS HARP", u_ksharp}, {"FM BELL", u_fmbell}},
 	{{"ORGAN STAB", c_organstab}, {"NEO SOUL 9", c_neosoul}, {"DUB CHORD", c_dub}, {"TECHNO STAB", c_techno}, {"STRUM GUITAR", c_strum}, {"OMNI HARP", c_omni},
 	 {"PUMP CHORDS", c_pump}, {"GOSPEL ORGAN", c_gospel}, {"SHOEGAZE WALL", c_shoegaze},
 	 {"STRUM 8THS", c_strum8}, {"HARP ROLL", c_harproll}, {"RAKE 16THS", c_rake},
@@ -3717,12 +3885,12 @@ static void userLoad(void) {
 	if (len == (long)(sizeof(SPatch) * NUSER)) {
 		SPatch tmp[NUSER];
 		if (fread(tmp, sizeof(SPatch), NUSER, f) == NUSER) for (int i = 0; i < NUSER; i++) if (tmp[i].magic == PATCH_MAGIC) gUser[i] = tmp[i];
-	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER) || len == (long)(PATCH_V11_SIZE * NUSER) || len == (long)(PATCH_V12_SIZE * NUSER) || len == (long)(PATCH_V13_SIZE * NUSER) || len == (long)(PATCH_V14_SIZE * NUSER) || len == (long)(PATCH_V15_SIZE * NUSER)) {   // older save files: newer fields get defaults
+	} else if (len == (long)(PATCH_V1_SIZE * NUSER) || len == (long)(PATCH_V16_SIZE * NUSER) || len == (long)(PATCH_V17_SIZE * NUSER) || len == (long)(PATCH_V2_SIZE * NUSER) || len == (long)(PATCH_V3_SIZE * NUSER) || len == (long)(PATCH_V4_SIZE * NUSER) || len == (long)(PATCH_V5_SIZE * NUSER) || len == (long)(PATCH_V6_SIZE * NUSER) || len == (long)(PATCH_V7_SIZE * NUSER) || len == (long)(PATCH_V8_SIZE * NUSER) || len == (long)(PATCH_V9_SIZE * NUSER) || len == (long)(PATCH_V10_SIZE * NUSER) || len == (long)(PATCH_V11_SIZE * NUSER) || len == (long)(PATCH_V12_SIZE * NUSER) || len == (long)(PATCH_V13_SIZE * NUSER) || len == (long)(PATCH_V14_SIZE * NUSER) || len == (long)(PATCH_V15_SIZE * NUSER)) {   // older save files: newer fields get defaults
 		long rs = len / NUSER;
 		for (int i = 0; i < NUSER; i++) {
 			SPatch t; patchInit(&t);
 			SPatch d; patchInit(&d);
-			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10 || t.magic == PATCH_MAGIC11 || t.magic == PATCH_MAGIC12 || t.magic == PATCH_MAGIC13 || t.magic == PATCH_MAGIC14 || t.magic == PATCH_MAGIC15)) {
+			if (fread(&t, rs, 1, f) == 1 && (t.magic == PATCH_MAGIC17 || t.magic == PATCH_MAGIC16 || t.magic == PATCH_MAGIC1 || t.magic == PATCH_MAGIC2 || t.magic == PATCH_MAGIC3 || t.magic == PATCH_MAGIC4 || t.magic == PATCH_MAGIC5 || t.magic == PATCH_MAGIC6 || t.magic == PATCH_MAGIC7 || t.magic == PATCH_MAGIC8 || t.magic == PATCH_MAGIC9 || t.magic == PATCH_MAGIC10 || t.magic == PATCH_MAGIC11 || t.magic == PATCH_MAGIC12 || t.magic == PATCH_MAGIC13 || t.magic == PATCH_MAGIC14 || t.magic == PATCH_MAGIC15)) {
 				memcpy((char*)&t + rs, (char*)&d + rs, sizeof(SPatch) - rs);   // fields this save didn't have: defaults
 				t.magic = PATCH_MAGIC; gUser[i] = t;
 			}
@@ -3746,7 +3914,9 @@ static void patchCapture(SPatch* p) {
 		Osc* s = &gOsc[o]; OscP* q = &p->osc[o];
 		q->on = s->on; q->table = s->table < T_BUILTIN ? s->table : T_BASIC; q->warp = s->warp; q->oct = s->oct; q->semi = s->semi; q->uni = s->uni;
 		q->pos = s->pos; q->warpAmt = s->warpAmt; q->level = s->level; q->fine = s->fine; q->detune = s->detune; q->blend = s->blend; q->width = s->width;
+		p->oscDist[o] = s->dist; p->oscDistAmt[o] = s->distAmt; p->oscEngine[o] = s->engine;
 	}
+	p->fm = gFm;
 	p->subShape = gSubShape; p->subOct = gSubOct; p->noiseType = gNoiseType; p->filtType = gFiltType;
 	p->subLevel = gSubLevel; p->noiseLevel = gNoiseLevel; p->cutoff = gCutoff; p->res = gRes; p->keytrack = gKeytrack;
 	p->env1 = gEnv1; p->env2 = gEnv2; p->env3 = gEnv3; p->env4 = gEnv4; p->dlTrig[0] = gDlTrig[0]; p->dlTrig[1] = gDlTrig[1];
@@ -3792,8 +3962,11 @@ static void patchApplyRaw(const SPatch* p) {
 		int newTable = q->table != s->table;
 		s->on = q->on; s->table = q->table; s->warp = q->warp; s->oct = q->oct; s->semi = q->semi; s->uni = q->uni < 1 ? 1 : (q->uni > 3 ? 3 : q->uni);
 		s->pos = q->pos; s->warpAmt = q->warpAmt; s->level = q->level; s->fine = q->fine; s->detune = q->detune; s->blend = q->blend; s->width = q->width;
+		s->dist = p->oscDist[o] >= 0 && p->oscDist[o] < 15 ? p->oscDist[o] : 0; s->distAmt = p->oscDistAmt[o] >= 0 && p->oscDistAmt[o] <= 1 ? p->oscDistAmt[o] : 0;
+		s->engine = p->oscEngine[o] == 1;
 		if (newTable || !s->tb.nFrames) tableSelect(&s->tb, s->table);
 	}
+	fmSet(&p->fm);
 	int subChg = p->subShape != gSubShape, noiseChg = p->noiseType != gNoiseType;
 	gSubShape = p->subShape; gSubOct = p->subOct; gNoiseType = p->noiseType % 6; gFiltType = p->filtType;
 	gSubLevel = p->subLevel; gNoiseLevel = p->noiseLevel; gCutoff = p->cutoff; gRes = p->res; gKeytrack = p->keytrack;
@@ -3845,8 +4018,8 @@ static void patchApplyRaw(const SPatch* p) {
 
 
 static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every factory patch to a similar loudness
-	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.49f, 0.90f, 1.42f, 1.32f, 1.28f, 0.68f, 0.97f, 1.19f, 1.00f},
-	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f, 1.00f},
+	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.49f, 0.90f, 1.42f, 1.32f, 1.28f, 0.68f, 0.97f, 1.19f, 0.80f},
+	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f, 1.00f, 1.00f},
 	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.64f, 1.35f, 2.50f, 1.31f, 2.00f, 1.35f, 2.00f, 1.30f},
 	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.11f, 0.95f, 1.80f, 1.00f, 1.00f},
 	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.58f, 1.56f, 0.62f, 1.07f, 1.00f},
@@ -3905,7 +4078,9 @@ static void lastWrite(void) {
 static int lastLoad(void) {
 	FILE* f = safeRead(LAST_PATH); if (!f) return 0;
 	int h[4] = {0}; static SPatch p; patchInit(&p); SPatch d = p;
-	int ok = fread(h, sizeof(h), 1, f) == 1 && (h[0] == LAST_MAGIC || h[0] == LAST_MAGIC1) && fread(&p, 1, sizeof(p), f) >= PATCH_V15_SIZE && (p.magic == PATCH_MAGIC || p.magic == PATCH_MAGIC15);
+	int ok = fread(h, sizeof(h), 1, f) == 1 && (h[0] == LAST_MAGIC || h[0] == LAST_MAGIC1) && fread(&p, 1, sizeof(p), f) >= PATCH_V15_SIZE && (p.magic == PATCH_MAGIC || p.magic == PATCH_MAGIC15 || p.magic == PATCH_MAGIC16 || p.magic == PATCH_MAGIC17);
+	if (ok && p.magic == PATCH_MAGIC17) { memcpy((char*)&p + PATCH_V17_SIZE, (char*)&d + PATCH_V17_SIZE, sizeof(SPatch) - PATCH_V17_SIZE); p.magic = PATCH_MAGIC; }   // v17: no FM engine
+	if (ok && p.magic == PATCH_MAGIC16) { memcpy((char*)&p + PATCH_V16_SIZE, (char*)&d + PATCH_V16_SIZE, sizeof(SPatch) - PATCH_V16_SIZE); p.magic = PATCH_MAGIC; }   // v16: no OSC DIST
 	if (ok && p.magic == PATCH_MAGIC15) { memcpy((char*)&p + PATCH_V15_SIZE, (char*)&d + PATCH_V15_SIZE, sizeof(SPatch) - PATCH_V15_SIZE); p.magic = PATCH_MAGIC; }   // v15: ENV 3 / 4 get defaults
 	fclose(f); if (!ok) return 0;
 	if (ok && h[0] == LAST_MAGIC1 && h[1] == 16) h[1] = NSTYLES - 1;   // the USER bank moved up one
@@ -4007,6 +4182,8 @@ static const char* SLOT_NAMES[NUSER] = {"USER 1", "USER 2", "USER 3", "USER 4", 
 	PF("WT POS", &gOsc[o].pos, 0, 1, 0.01f, "%", D), \
 	PE("WARP", &gOsc[o].warp, W_COUNT, WARP_NAMES, D), \
 	PF("WARP AMT", &gOsc[o].warpAmt, 0, 1, 0.01f, "%", D), \
+	PE("DIST", &gOsc[o].dist, 15, DRIVE_TYPES, D), \
+	PF("DIST AMT", &gOsc[o].distAmt, 0, 1, 0.02f, "%", D), \
 	PF("LEVEL", &gOsc[o].level, 0, 1, 0.01f, "%", 0), \
 	PI_("OCTAVE", &gOsc[o].oct, -3, 3, D_A | D_B), \
 	PI_("SEMI", &gOsc[o].semi, -12, 12, 0), \
@@ -4024,7 +4201,32 @@ static Param P_SUBN[] = {
 	PF("SUB LEVEL", &gSubLevel, 0, 1, 0.01f, "%", 0),
 	PE("NOISE TYPE", &gNoiseType, 6, NOISE_TYPES, D_NOISE), PF("NOISE LEVEL", &gNoiseLevel, 0, 1, 0.01f, "%", 0),
 	PF("CHIP SQUARE", &gChipLevel, 0, 1, 0.02f, "%", D_CHIP), PE("CHIP WIDTH", &gChipDuty, 7, DUTY_NAMES, 0), PI_("CHIP OCTAVE", &gChipOct, -2, 5, 0),
+	PE("DIST A", &gOsc[0].dist, 15, DRIVE_TYPES, D_A), PF("DIST A AMT", &gOsc[0].distAmt, 0, 1, 0.02f, "%", D_A),   // (OSC > DIST: both oscillators' distortion side by side)
+	PE("DIST B", &gOsc[1].dist, 15, DRIVE_TYPES, D_B), PF("DIST B AMT", &gOsc[1].distAmt, 0, 1, 0.02f, "%", D_B),
+	// FM ENGINE (OSC > FM and OPS): either oscillator can play it
+	PE("ENGINE A", &gOsc[0].engine, 2, ENGINE_NAMES, 0), PE("ENGINE B", &gOsc[1].engine, 2, ENGINE_NAMES, 0), PE("ALGO", &gFm.algo, FM_NALG, FMALG_NAMES, 0),
+	PF("FEEDBACK", &gFm.fb, 0, 1, 0.01f, "%", 0), PF("FM VEL", &gFm.vel, 0, 1, 0.02f, "%", 0),
+	PE("OP1 RATIO", &gFm.ratio[0], FM_NRAT, FMRAT_NAMES, 0), PE("OP1 WAVE", &gFm.wave[0], FM_NWAVE, FMWAVE_NAMES, 0), PF("OP1 LEVEL", &gFm.lvl[0], 0, 1, 0.01f, "%", 0), PF("OP1 DETUNE", &gFm.det[0], -50, 50, 1, "CT", 0),
+	PF("OP1 ATK", &gFm.a[0], 0, 4, 0.005f, "S", 0), PF("OP1 DEC", &gFm.d[0], 0, 4, 0.01f, "S", 0), PF("OP1 SUS", &gFm.s[0], 0, 1, 0.01f, "%", 0), PF("OP1 REL", &gFm.r[0], 0, 4, 0.01f, "S", 0),
+	PE("OP2 RATIO", &gFm.ratio[1], FM_NRAT, FMRAT_NAMES, 0), PE("OP2 WAVE", &gFm.wave[1], FM_NWAVE, FMWAVE_NAMES, 0), PF("OP2 LEVEL", &gFm.lvl[1], 0, 1, 0.01f, "%", 0), PF("OP2 DETUNE", &gFm.det[1], -50, 50, 1, "CT", 0),
+	PF("OP2 ATK", &gFm.a[1], 0, 4, 0.005f, "S", 0), PF("OP2 DEC", &gFm.d[1], 0, 4, 0.01f, "S", 0), PF("OP2 SUS", &gFm.s[1], 0, 1, 0.01f, "%", 0), PF("OP2 REL", &gFm.r[1], 0, 4, 0.01f, "S", 0),
+	PE("OP3 RATIO", &gFm.ratio[2], FM_NRAT, FMRAT_NAMES, 0), PE("OP3 WAVE", &gFm.wave[2], FM_NWAVE, FMWAVE_NAMES, 0), PF("OP3 LEVEL", &gFm.lvl[2], 0, 1, 0.01f, "%", 0), PF("OP3 DETUNE", &gFm.det[2], -50, 50, 1, "CT", 0),
+	PF("OP3 ATK", &gFm.a[2], 0, 4, 0.005f, "S", 0), PF("OP3 DEC", &gFm.d[2], 0, 4, 0.01f, "S", 0), PF("OP3 SUS", &gFm.s[2], 0, 1, 0.01f, "%", 0), PF("OP3 REL", &gFm.r[2], 0, 4, 0.01f, "S", 0),
+	PE("OP4 RATIO", &gFm.ratio[3], FM_NRAT, FMRAT_NAMES, 0), PE("OP4 WAVE", &gFm.wave[3], FM_NWAVE, FMWAVE_NAMES, 0), PF("OP4 LEVEL", &gFm.lvl[3], 0, 1, 0.01f, "%", 0), PF("OP4 DETUNE", &gFm.det[3], -50, 50, 1, "CT", 0),
+	PF("OP4 ATK", &gFm.a[3], 0, 4, 0.005f, "S", 0), PF("OP4 DEC", &gFm.d[3], 0, 4, 0.01f, "S", 0), PF("OP4 SUS", &gFm.s[3], 0, 1, 0.01f, "%", 0), PF("OP4 REL", &gFm.r[3], 0, 4, 0.01f, "S", 0),
 	PEND};
+// OSC > OPS: the sliders edit the operator picked with OP (their pointers follow it: fmOpBind)
+static int gFmSel = 0; static const char* FMSEL_NAMES[FM_OPS] = {"1", "2", "3", "4"};
+static Param P_FMOP[] = {
+	PE("OP", &gFmSel, FM_OPS, FMSEL_NAMES, 0), PE("OP RATIO", &gFm.ratio[0], FM_NRAT, FMRAT_NAMES, 0), PE("OP WAVE", &gFm.wave[0], FM_NWAVE, FMWAVE_NAMES, 0),
+	PF("OP LEVEL", &gFm.lvl[0], 0, 1, 0.01f, "%", 0), PF("OP ATK", &gFm.a[0], 0, 4, 0.005f, "S", 0), PF("OP DEC", &gFm.d[0], 0, 4, 0.01f, "S", 0),
+	PF("OP SUS", &gFm.s[0], 0, 1, 0.01f, "%", 0), PF("OP REL", &gFm.r[0], 0, 4, 0.01f, "S", 0), PF("OP DETUNE", &gFm.det[0], -50, 50, 1, "CT", 0),
+	PEND};
+static void fmOpBind(void) {
+	int j = gFmSel < 0 || gFmSel >= FM_OPS ? 0 : gFmSel;
+	P_FMOP[1].p = &gFm.ratio[j]; P_FMOP[2].p = &gFm.wave[j]; P_FMOP[3].p = &gFm.lvl[j]; P_FMOP[4].p = &gFm.a[j]; P_FMOP[5].p = &gFm.d[j];
+	P_FMOP[6].p = &gFm.s[j]; P_FMOP[7].p = &gFm.r[j]; P_FMOP[8].p = &gFm.det[j];
+}
 static Param P_FILT[] = {
 	PE("FILTER", &gFiltType, 5, FILT_TYPES, 0), PF("CUTOFF", &gCutoff, 0, 1, 0.01f, "HZ", 0),
 	PE("FILTER 2", &gFilt2, 3, FILT2_NAMES, 0), PE("LOW CUT", &gLowCut, 6, LOWCUT_NAMES, 0),
@@ -4112,6 +4314,10 @@ static Param P_HW[] = {
 	PE("ADD EDITOR", &gAddEdit, 2, ONOFF, D_ADDED), {"RULE > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	PE("CAM WAVE", &gCamVid, 3, VID_NAMES, D_CAMV), PF("WT SCAN", &gWtScan, 0, 4, 0.05f, "X", 0),
 	PE("WI-FI MIDI", &gMidiNet, 2, ONOFF, D_NETMIDI), {"WEB UPLOAD", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT}, PF("NET BUFFER", &gNetLat, 0, 60, 1, "MS", 0),
+	PE("SYNTH CH IN", &gChIn[MP_SYNTH], 18, CHIN_NAMES, D_THEME), PE("SYNTH CH OUT", &gChOut[MP_SYNTH], 17, CHOUT_NAMES, D_THEME),
+	PE("CHORD CH IN", &gChIn[MP_CHORD], 18, CHIN_NAMES, D_THEME), PE("CHORD CH OUT", &gChOut[MP_CHORD], 17, CHOUT_NAMES, D_THEME),
+	PE("BASS CH IN", &gChIn[MP_BASS], 18, CHIN_NAMES, D_THEME), PE("BASS CH OUT", &gChOut[MP_BASS], 17, CHOUT_NAMES, D_THEME),
+	PE("DRUMS CH IN", &gChIn[MP_DRUMS], 18, CHIN_NAMES, D_THEME), PE("DRUMS CH OUT", &gChOut[MP_DRUMS], 17, CHOUT_NAMES, D_THEME),
 	{"UPDATE SYRUP", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_UPDATE},
 	{"GET WAVETABLES", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	{"NET > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
@@ -4724,7 +4930,7 @@ static const char* paramHelp(const char* n) {
 	static const char* H[][2] = {
 		{"STYLE", "PICK A STYLE OF PATCH"}, {"PATCH", "PICK A PATCH - IT LOADS AS YOU SCROLL"}, {"SAVE SLOT", "WHICH USER SLOT TO SAVE INTO"},
 		{"SAVE NOW", "PRESS > TO SAVE THIS SOUND"}, {"INIT PATCH", "PRESS > FOR A PLAIN SAW TO START FROM"},
-		{"ON", "OSCILLATOR ON / OFF"}, {"TABLE", "WHICH WAVETABLE"}, {"WT POS", "POSITION IN THE WAVETABLE"}, {"WARP", "HOW THE WAVE IS BENT"},
+		{"ON", "OSCILLATOR ON / OFF"}, {"TABLE", "WHICH WAVETABLE"}, {"WT POS", "POSITION IN THE WAVETABLE"}, {"WARP", "HOW THE WAVE IS BENT"}, {"DIST", "THIS OSCILLATOR'S DISTORTION"}, {"DIST AMT", "HOW HARD IT DISTORTS"}, {"DIST A", "OSC A'S DISTORTION"}, {"DIST B", "OSC B'S DISTORTION"}, {"DIST A AMT", "HOW HARD OSC A DISTORTS"}, {"DIST B AMT", "HOW HARD OSC B DISTORTS"}, {"ENGINE A", "OSC A: WAVETABLE OR THE FM ENGINE"}, {"ENGINE B", "OSC B: WAVETABLE OR THE FM ENGINE"}, {"ALGO", "HOW THE 4 OPERATORS MODULATE (> = INTO)"}, {"FEEDBACK", "OP 4 MODULATES ITSELF: GRIT, NOISE"}, {"FM VEL", "HARDER NOTES = BRIGHTER"}, {"OP", "WHICH OPERATOR THE SLIDERS EDIT"}, {"OP RATIO", "OPERATOR PITCH x THE NOTE"}, {"OP WAVE", "OPERATOR WAVE: SINE AND 3 BENT ONES"}, {"OP LEVEL", "CARRIER: VOLUME  MODULATOR: BRIGHTNESS"}, {"OP ATK", "OPERATOR ATTACK"}, {"OP DEC", "OPERATOR DECAY"}, {"OP SUS", "OPERATOR SUSTAIN LEVEL"}, {"OP REL", "OPERATOR RELEASE"}, {"OP DETUNE", "OPERATOR FINE TUNE, CENTS"},
 		{"WARP AMT", "HOW MUCH WARP"}, {"LEVEL", "VOLUME OF THIS OSCILLATOR"}, {"OCTAVE", "OCTAVE UP / DOWN"}, {"SEMI", "SEMITONES UP / DOWN"},
 		{"FINE", "FINE TUNE IN CENTS"}, {"UNISON", "STACKED VOICES PER NOTE (1-3)"}, {"DETUNE", "SPREAD BETWEEN UNISON VOICES"},
 		{"BLEND", "LEVEL OF THE OUTER UNISON VOICES"}, {"WIDTH", "STEREO SPREAD OF UNISON"},
@@ -4770,7 +4976,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS; KICK = SIDECHAIN FROM THE DRUMS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM PART ON / OFF: IT PLAYS WITH PLAY"}, {"KIT", "DRUM SOUNDS"}, {"ACCENT", "HOW MUCH LOUDER ACC STEPS HIT"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"CLICK", "METRONOME: COUNT-IN / RECORDING / ALWAYS (NEVER ON TAPE)"}, {"CLICK LEVEL", "METRONOME VOLUME"}, {"SEQ RATE", "A STEP IS A 16TH, A 32ND OR AN 8TH"}, {"REC QUANT", "16TH, 8TH, 32ND, OR OFF (KEEPS YOUR TIMING)"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"LAYERS", "SOFT: A NOTE'S UNISON ON ONE CHANNEL (MANY MORE NOTES)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"SYNTH CH IN", "MIDI CHANNEL THE KEYS PLAY FROM (ALL = ANY FREE ONE)"}, {"SYNTH CH OUT", "KEYS, SEQUENCER, ARP NOTES SENT ON THIS CHANNEL"}, {"CHORD CH IN", "MIDI CHANNEL THAT PLAYS THE CHORD PART"}, {"CHORD CH OUT", "THE CHORD PART'S NOTES SENT ON THIS CHANNEL"}, {"BASS CH IN", "MIDI CHANNEL THAT PLAYS THE BASS PART"}, {"BASS CH OUT", "BASS LINE NOTES SENT ON THIS CHANNEL"}, {"DRUMS CH IN", "GENERAL MIDI DRUM NOTES (36 KICK, 38 SNARE...)"}, {"DRUMS CH OUT", "EVERY DRUM HIT SENT AS A GM NOTE"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"CLICK", "METRONOME: COUNT-IN / RECORDING / ALWAYS (NEVER ON TAPE)"}, {"CLICK LEVEL", "METRONOME VOLUME"}, {"SEQ RATE", "A STEP IS A 16TH, A 32ND OR AN 8TH"}, {"REC QUANT", "16TH, 8TH, 32ND, OR OFF (KEEPS YOUR TIMING)"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"LAYERS", "SOFT: A NOTE'S UNISON ON ONE CHANNEL (MANY MORE NOTES)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -4803,7 +5009,7 @@ static int paramDst(const void* p) {   // the matrix destination that moves this
 	return -1;
 }
 static const char* SET_PATH = "sdmc:/3ds/syrup/settings.bin";
-static void settingsSave(int page) { FILE* f = safeOpen(SET_PATH); if (!f) return; int d[9] = {0x53455432, page, gStickMode, gSpkEq, gBright, gSeqRate, gTheme, gXyGlide, gN3}; safeClose(f, SET_PATH, fwrite(d, sizeof(d), 1, f) == 1); }
+static void settingsSave(int page) { FILE* f = safeOpen(SET_PATH); if (!f) return; int d[17] = {0x53455432, page, gStickMode, gSpkEq, gBright, gSeqRate, gTheme, gXyGlide, gN3, gChIn[0], gChIn[1], gChIn[2], gChIn[3], gChOut[0], gChOut[1], gChOut[2], gChOut[3]}; safeClose(f, SET_PATH, fwrite(d, sizeof(d), 1, f) == 1); }
 static int settingsLoad(void) {   // returns the page you were on last time
 	FILE* f = safeRead(SET_PATH); int d[4] = {0}, pg = 0; if (!f) return pg;   // first run: the browser
 	if (fread(d, sizeof(d), 1, f) == 1 && (d[0] == 0x53455431 || d[0] == 0x53455432)) {
@@ -4814,6 +5020,8 @@ static int settingsLoad(void) {   // returns the page you were on last time
 		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < NTHEMES) gTheme = b == 16 || b == 18 || b == 19 ? TH_SYRUP : b;   // the theme you picked stays picked (the old default, BBS: the new look)
 		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 4) gXyGlide = b;
 		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 2) gN3 = b;
+		for (int k = 0; k < NMPART; k++) if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 18) gChIn[k] = b;   // MIDI CHANNELS (older settings: the defaults)
+		for (int k = 0; k < NMPART; k++) if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 17) gChOut[k] = b;
 	}
 	fclose(f); return pg;
 }
@@ -5826,6 +6034,7 @@ static int strumCap(void) {
 	if (cap > want) cap = want; if (cap < 1) cap = 1; return cap;
 }
 static void voiceFade(int note, float sec) {   // let a note go fast but not dead: a short release, no click
+	if (note >= 0 && note < 128) midiOutNote(gVoicePart, note, 0, 0);
 	mirNote('F', note, sec);
 	for (int i = 0; i < NVS; i++) { SVoice* v = &gV[i]; if (v->active && !v->isEcho && v->note == note && v->stage != 4 && v->part == gVoicePart) { v->stage = v->stage2 = 4; v->relMul = sec / (gEnv1.r + 0.0005f); } }
 }
@@ -6927,10 +7136,13 @@ static void drawSeqStrip(void) {
 // A section has sub-pages (OSC A | OSC B | SUB+NOISE, FILTER | ENV 1 | ..., LOFI | MOD | ...): a row of choices (tap the
 // left / right of one: back / on) and up to 8 sliders (drag). Each setting goes through the same path as the D-pad.
 typedef struct { const char* tab; int page; const char* ch[3]; const char* fd[8]; } PnlSub;
-static const PnlSub PNL_OSC[3] = {
+static const PnlSub PNL_OSC[6] = {
 	{"OSC A", 1, {"ON", "TABLE", "WARP"}, {"WT POS", "WARP AMT", "LEVEL", "DETUNE", "OCTAVE", "SEMI", "UNISON", "BLEND"}},
 	{"OSC B", 2, {"ON", "TABLE", "WARP"}, {"WT POS", "WARP AMT", "LEVEL", "DETUNE", "OCTAVE", "SEMI", "UNISON", "BLEND"}},
-	{"SUB+NOISE", 3, {"SUB SHAPE", "NOISE TYPE", "CHIP WIDTH"}, {"SUB LEVEL", "SUB OCTAVE", "NOISE LEVEL", "CHIP SQUARE", "CHIP OCTAVE", "FINE"}}};
+	{"SUB+NOISE", 3, {"SUB SHAPE", "NOISE TYPE", "CHIP WIDTH"}, {"SUB LEVEL", "SUB OCTAVE", "NOISE LEVEL", "CHIP SQUARE", "CHIP OCTAVE", "FINE"}},
+	{"DIST", 3, {"DIST A", "DIST B"}, {"DIST A AMT", "DIST B AMT"}},
+	{"FM", 3, {"ENGINE A", "ENGINE B", "ALGO"}, {"FEEDBACK", "FM VEL", "OP1 LEVEL", "OP2 LEVEL", "OP3 LEVEL", "OP4 LEVEL"}},
+	{"OPS", 3, {"OP", "OP RATIO", "OP WAVE"}, {"OP LEVEL", "OP ATK", "OP DEC", "OP SUS", "OP REL", "OP DETUNE"}}};
 static const PnlSub PNL_FILT[4] = {
 	{"FILTER", 4, {"FILTER", "FILTER 2", "OUT FILTER"}, {"CUTOFF", "RES", "KEYTRACK", "LOW CUT", "DRIVE AMT", "OUT CUTOFF", "OUT RES", "OUT DRIVE"}},
 	{"ENV 1", 4, {"DRIVE"}, {"ENV1 ATK", "ENV1 HOLD", "ENV1 DEC", "ENV1 SUS", "ENV1 REL"}},
@@ -6942,7 +7154,7 @@ static const PnlSub PNL_FX[5] = {
 	{"EQ", 10, {"SPEAKER EQ"}, {"EQ LOW", "EQ MID", "EQ HIGH", "3D ORBIT", "ORBIT RATE"}},
 	{"SPACE", 10, {"REVERB TYPE", "DELAY TYPE", "DELAY SYNC"}, {"REVERB MIX", "REV SIZE", "REV DAMP", "DELAY MIX", "TAPE WOW", "TAPE SAT", "FX MIX"}},
 	{"OTT", 10, {"PUMP RATE", "SHIMMER", "FREEZE"}, {"OTT", "PUMP", "MASTER"}}};
-static int gPnlSub[3] = {0, 0, 3};   // FILT / FX: the sub-page (OSC's is its page)
+static int gPnlSub[3] = {0, 0, 3};   // FILT / FX: the sub-page (OSC's is its page; gPnlSub[0] on SUB+NOISE: 1 DIST, 2 FM, 3 OPS)
 static Param* gPnlReq = NULL; static float gPnlReqT = 0; static int gPnlReqDir = 0, gPnlReqV = -1;   // ReqV: an exact value (a list pick)   // a slider / choice asks the main loop
 static int gPnlSubDrag = -1, gPnlSubTo = -1, gPnlSubX0 = 0;   // FX: a block of the chain being dragged
 static int gPnlDrag = -1, gPnlHot = -1; static const Param* gPnlHotP = NULL;
@@ -6961,7 +7173,7 @@ static const u8* pnlAcc(int sec) {   // the section's colour: SYRUP themes have 
 static int pnlSec(void) { int p = gCurPage; return p >= 1 && p <= 3 ? 0 : p == 4 ? 1 : p == 10 ? 2 : -1; }
 static const PnlSub* pnlCur(int* n) {
 	int s = pnlSec();
-	if (s == 0) { if (n) *n = 3; return &PNL_OSC[gCurPage - 1]; }
+	if (s == 0) { if (n) *n = 6; if (gCurPage != 3 || gPnlSub[0] < 0 || gPnlSub[0] > 3) gPnlSub[0] = 0; return &PNL_OSC[gCurPage == 3 ? 2 + gPnlSub[0] : gCurPage - 1]; }   // (DIST, FM, OPS: tabs of the SUB+NOISE page)
 	if (s == 1) { if (n) *n = 4; return &PNL_FILT[gPnlSub[1] & 3]; }
 	if (n) *n = 5; return &PNL_FX[gPnlSub[2] % 5];
 }
@@ -6969,6 +7181,7 @@ static Param* pnlFind(const char* name, int page) {
 	if (!name) return NULL;
 	for (int i = 0; PAGES[page][i].name; i++) if (!strcmp(PAGES[page][i].name, name)) return &PAGES[page][i];
 	for (int pg = 0; pg < NPAGES; pg++) for (int i = 0; PAGES[pg][i].name; i++) if (!strcmp(PAGES[pg][i].name, name)) return &PAGES[pg][i];
+	fmOpBind(); for (int i = 0; P_FMOP[i].name; i++) if (!strcmp(P_FMOP[i].name, name)) return &P_FMOP[i];   // OSC > OPS
 	return NULL;
 }
 static void rrect(int x, int y, int w, int h, int rad, u8 r, u8 g, u8 b) {   // a rounded rectangle
@@ -6991,7 +7204,7 @@ static void vfader(int cx, int top, int bot, int w, float t, float zero, const u
 static float vfaderT(int y, int top, int bot) { float t = (bot - y) / (float)(bot - top); return t < 0 ? 0 : t > 1 ? 1 : t; }
 static const char* pnlShort(const char* n) {   // a slider's name in 4 letters
 	static const char* L[][2] = {{"WT POS", "POS"}, {"WARP AMT", "WARP"}, {"LEVEL", "LVL"}, {"DETUNE", "DTUN"}, {"OCTAVE", "OCT"}, {"UNISON", "UNI"}, {"BLEND", "BLND"},
-		{"SUB LEVEL", "SUB"}, {"SUB OCTAVE", "SOCT"}, {"NOISE LEVEL", "NOIS"}, {"CHIP SQUARE", "CHIP"}, {"CHIP OCTAVE", "COCT"}, {"CUTOFF", "CUT"}, {"KEYTRACK", "KEY"},
+		{"SUB LEVEL", "SUB"}, {"SUB OCTAVE", "SOCT"}, {"DIST A AMT", "A"}, {"DIST B AMT", "B"}, {"FEEDBACK", "FB"}, {"FM VEL", "VEL"}, {"OP1 LEVEL", "OP1"}, {"OP2 LEVEL", "OP2"}, {"OP3 LEVEL", "OP3"}, {"OP4 LEVEL", "OP4"}, {"OP LEVEL", "LVL"}, {"OP ATK", "ATK"}, {"OP DEC", "DEC"}, {"OP SUS", "SUS"}, {"OP REL", "REL"}, {"OP DETUNE", "DTUN"}, {"NOISE LEVEL", "NOIS"}, {"CHIP SQUARE", "CHIP"}, {"CHIP OCTAVE", "COCT"}, {"CUTOFF", "CUT"}, {"KEYTRACK", "KEY"},
 		{"LOW CUT", "LOW"}, {"DRIVE AMT", "DRV"}, {"OUT CUTOFF", "OCUT"}, {"OUT RES", "ORES"}, {"OUT DRIVE", "ODRV"}, {"OUT ENV2", "OENV"}, {"LOFI RATE", "RATE"},
 		{"MIX OVERDRIVE", "OVDR"}, {"FILTER SCREAM", "SCRM"}, {"MOD RATE", "RATE"}, {"MOD DEPTH", "DPTH"}, {"MOD MIX", "MIX"}, {"FX COLOR", "COLR"}, {"CHORUS", "CHOR"},
 		{"EQ LOW", "LOW"}, {"EQ MID", "MID"}, {"EQ HIGH", "HIGH"}, {"3D ORBIT", "ORBT"}, {"ORBIT RATE", "ORAT"}, {"REVERB MIX", "REV"}, {"REV SIZE", "SIZE"},
@@ -7025,7 +7238,7 @@ static void pnlFmt(const Param* p, char* v, int len) {   // a value in 5 letters
 static const char* pnlChName(const char* n) {
 	static const char* L[][2] = {{"FILTER", "TYPE"}, {"FILTER 2", "F2"}, {"OUT FILTER", "OUT"}, {"REVERB TYPE", "REV"}, {"DELAY TYPE", "DLY"}, {"DELAY SYNC", "SYNC"},
 		{"SUB SHAPE", "SUB"}, {"NOISE TYPE", "NOISE"}, {"CHIP WIDTH", "CHIP"}, {"LOFI BITS", "BITS"}, {"DSP GRIT", "GRIT"}, {"MASTER FX", "FX"}, {"MOD FX", "TYPE"},
-		{"SPEAKER EQ", "SPKR"}, {"PUMP RATE", "PUMP"}, {"SHIMMER", "SHIM"}, {"FREEZE", "FRZ"}};
+		{"SPEAKER EQ", "SPKR"}, {"PUMP RATE", "PUMP"}, {"SHIMMER", "SHIM"}, {"FREEZE", "FRZ"}, {"ENGINE A", "A"}, {"ENGINE B", "B"}, {"OP RATIO", "RATIO"}, {"OP WAVE", "WAVE"}, {"ALGO", "ALG"}};
 	for (unsigned i = 0; i < sizeof(L) / sizeof(L[0]); i++) if (!strcmp(L[i][0], n)) return L[i][1];
 	return n;
 }
@@ -7059,6 +7272,7 @@ static void drawPanel(void) {
 		if (sec == 2 && gPnlSubDrag >= 0 && j == gPnlSubTo) i = gFxOrder[gPnlSubDrag];
 		else if (sec == 2 && gPnlSubDrag >= 0) { int k = j; if (gPnlSubDrag < gPnlSubTo && j >= gPnlSubDrag && j < gPnlSubTo) k = j + 1; if (gPnlSubDrag > gPnlSubTo && j > gPnlSubTo && j <= gPnlSubDrag) k = j - 1; i = gFxOrder[k]; }
 		int x = 4 + j * 312 / ns, w = 312 / ns, on = &L[i] == S; const char* t = L[i].tab;
+		if ((int)strlen(t) * 8 > w - 6 && !strcmp(t, "SUB+NOISE")) t = "SUB";   // (six OSC tabs: the long one shortens)
 		if (sec == 2 && j) text(x - 4, PNL_SUB_Y + 4, ">", 1, RGB3(TH->dim));
 		if (on) { rrect(x + 2, PNL_SUB_Y + 2, w - 4, 12, 6, A[0], A[1], A[2]); text(x + w / 2 - (int)strlen(t) * 4, PNL_SUB_Y + 4, t, 1, PC_BG); }
 		else text(x + w / 2 - (int)strlen(t) * 4, PNL_SUB_Y + 4, t, 1, PC_DIM);
@@ -7112,7 +7326,7 @@ static int pnlTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (press && y >= PNL_SUB_Y && y < PNL_SUB_Y + 16) {
 		int i = (x - 4) * ns / 312; if (i < 0) i = 0; if (i >= ns) i = ns - 1;
 		if (sec == 2) { gPnlSubDrag = gPnlSubTo = i; gPnlSubX0 = x; return 1; }
-		if (sec == 0) gPageWant = i + 1; else gPnlSub[sec] = i;
+		if (sec == 0) { gPageWant = i < 3 ? i + 1 : 3; gPnlSub[0] = i < 3 ? 0 : i - 2; } else gPnlSub[sec] = i;
 		gPnlHotP = NULL; return 1;
 	}
 	if (press && y >= PNL_CH_Y && y < PNL_CH_Y + 18) {
@@ -9096,7 +9310,7 @@ static void netMain(void* arg) {
 				if (pl) { snprintf(b, sizeof(b), "\"clk\":%.4f", (double)ci + cf); for (int i = 0; i < NCLI; i++) if (cl[i].s >= 0 && cl[i].unit) unitSay(&cl[i], b); }
 			}
 		}
-		while (gMcoR != gMcoW) { u32 r = gMcoR; if (gMcoSt[r] == 0xF8 || gMcoSt[r] == 0xFA || gMcoSt[r] == 0xFC) rtpSendTs(gMcoSt[r], 0, 0, gMcoT[r]); gMcoR = (r + 1) % MCOQ; idle = 0; }   // MIDI CLOCK OUT, stamped with when it was due
+		while (gMcoR != gMcoW) { u32 r = gMcoR; __sync_synchronize(); rtpSendTs(gMcoSt[r], gMcoA[r], gMcoB[r], gMcoT[r]); gMcoR = (r + 1) % MCOQ; idle = 0; }   // MIDI OUT (clock, the parts' notes), stamped with when it was due
 		if (gMirClients > 0 && gMirR != gMirW) {   // MIRROR: whole events out, one WebSocket frame to every mirror
 			static u8 fr[4 + 16384]; u32 r = gMirR, n = (gMirW - r) & (MIRQ - 1), take = 0; if (n > 16384) n = 16384;
 			while (take + 3 <= n) { u32 L = gMirQ[(r + take + 1) & (MIRQ - 1)] | (u32)gMirQ[(r + take + 2) & (MIRQ - 1)] << 8; if (take + 3 + L > n) break; take += 3 + L; }
@@ -9268,8 +9482,18 @@ static void acidGen(void);
 static int midiApply(u8 st, u8 a, u8 b, int inTick) {
 	int ch = 0;
 	if (inTick && ((st & 0xF0) == 0xC0 || ((st & 0xF0) == 0xB0 && ((a >= 102 && a <= 108) || gLearnP)))) { mainQPush(st, a, b); return 0; }
-	int mc = st & 15;
-	if (mc == 9 && ((st & 0xF0) == 0x90 || (st & 0xF0) == 0x80) && midiDrumPad(a, (st & 0xF0) == 0x90 && b, b, inTick)) return 1;   // channel 10: the drum machine's sounds
+	int mc = st & 15, mp = midiPartOf(mc);
+	if (gMpe && mp != MP_DRUMS && gChIn[MP_SYNTH] == 17) mp = MP_SYNTH;   // MPE: a note per channel, all the lead's
+	if (((st & 0xF0) == 0x90 || (st & 0xF0) == 0x80) && mp != MP_SYNTH) {   // MIDI CHANNELS: the CHORD / BASS / DRUMS parts' own notes
+		int on = (st & 0xF0) == 0x90 && b;
+		if (mp == MP_DRUMS) { gDrFromMidi = 1; midiDrumPad(a, on, b, inTick); gDrFromMidi = 0; return 1; }
+		if (mp == MP_CHORD || mp == MP_BASS) {
+			gMidiChNow = mc; gVoicePart = mp == MP_CHORD ? 1 : 2;
+			if (on && !gPartMute[gVoicePart]) voiceOn(a, 0.25f + 0.75f * b / 127.0f); else if (!on) voiceFade(a, 0.05f);
+			gVoicePart = 0; gMidiChNow = -1; return 1;
+		}
+		return 0;   // a channel no part listens on
+	}
 	switch (st & 0xF0) {
 	case 0xD0: {   // channel pressure (aftertouch): MPE - that channel's note; else every note
 		float pr = a / 127.0f; int hit = 0;
@@ -10057,6 +10281,7 @@ static void drumHit(int d, float vel) {   // from the audio thread (voice lock h
 	if (gClkSilent) return;
 	if (gOnsetHook) gOnsetHook(10 + d, 0);
 	if (gDrMuteNow) return;
+	if (vel > 0.05f) midiDrumOut(d, vel);   // MIDI OUT: the drum's General MIDI note on the DRUMS channel
 	mirNote('D', d, vel);
 	if (d >= 0 && d < NDRUM && vel > 0.05f) { gPadFlash[d] = 1; gDrumHitN[d]++; }
 	static const int DCH[NDRUM] = {0, 1, 2, 2, 3, 1, 4, 4, 5, 6};   // open hat chokes the closed hat (same channel), rim cuts the snare

@@ -134,6 +134,8 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | Section | What's there |
 |---|---|
 | OSC A / OSC B | Table, WT POS, warp + amount, level, octave / semi / fine, unison 1-3 with detune, blend, width |
+| OSC DIST | Each oscillator's own distortion (the DRIVE types + amount), baked into its wave before band-limiting: OSC > DIST |
+| FM ENGINE | ENGINE A / B: WAVE (the wavetable) or FM. 4 operators, 8 algorithms, feedback on OP 4; each operator has a ratio (0.5 to 16, incl. 1.41 and 3.5 for bells), a wave (sine, half, abs, quarter), level, fine tune and its own ADSR, so the brightness moves through the note. FM VEL: harder notes brighter. Mod destination FM AMOUNT scales every modulator. OSC > FM (engines, algorithm, levels) and OSC > OPS (OP picks the operator the sliders edit). Presets: FM TINE PIANO, FM BELL, FM SLAP BASS, FM BRASS |
 | Warps | Sync, Windowed Sync, Bend+, Bend-, Bend+/-, PWM, Asym+, Asym-, Asym+/-, Flip, Mirror, Remap 1-4, Quantize, FM / AM / RM from the other oscillator |
 | SUB | Sine, triangle, saw, square; 0 / -1 / -2 octaves |
 | NOISE | White, pink, vinyl crackle |
@@ -260,6 +262,7 @@ When it starts, Syrup shows an address such as `http://192.168.1.23:8080`. Your 
 - **Web MIDI:** the remote page also forwards a USB MIDI keyboard plugged into the computer. Browsers only allow Web MIDI on secure pages. In desktop Chrome, add the Syrup address under `chrome://flags/#unsafely-treat-insecure-origin-as-secure`. iPhone Safari has no Web MIDI.
 - **Network MIDI (AppleMIDI / RTP-MIDI):** connect from macOS Audio MIDI Setup (Network), from rtpMIDI on Windows, or from iOS apps that support network MIDI sessions. Use the 2DS's IP address on port 5004.
 - **MIDI handled:** notes (and the arpeggiator), pitch bend, program change, mod wheel, start/stop and clock (tempo follows).
+- **MIDI CHANNELS** (HARDWARE page): each part has its own channel in and out, like most synths. Defaults: SYNTH in ALL (any channel no other part has) / out 1, CHORD 2, BASS 3, DRUMS 10 (General MIDI notes: 36 kick, 38 snare, 42 hat, 46 open hat, 39 clap, 37 rim, 45 / 50 toms, 56 bell, 49 crash). Whatever a part plays (keys, sequencer, arp, the chord part, bass lines, every drum hit) goes out on its channel over the Network MIDI session, so a DAW can record each part on its own track. Notes that came in over MIDI are not sent back out. OFF turns a part's in or out off; the channels are kept with the settings.
 - **CC map:** 74 cutoff, 71 resonance, 70 WT position, 1 and 16-19 macros, 102/103 previous/next patch, 104 RIFF line, 120/123 all notes off.
 - **MIDI LEARN** (START menu): pick a control on a page with the D-pad, choose MIDI LEARN, turn a knob. Up to 16 bindings, kept on the SD card; a learned CC takes over the fixed map.
 - **Aftertouch / MPE:** channel pressure and poly aftertouch drive the PRESSURE mod source. With MPE on (VOICE+FX), notes on channels 2-16 each get their own bend (+-48 semitones), pressure and slide (CC 74, the MPE SLIDE source).
