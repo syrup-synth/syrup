@@ -83,3 +83,4 @@
 - Demo example session (a ready-made song to open and pull apart)
 - Deferred from the v2 spec: tracker-style VU mixer view, performance mode with punch-ins, project stems
 - Reverse tape (play tape tracks backwards)
+- Standalone Mac / PC app anyone can download (built from the web version)
