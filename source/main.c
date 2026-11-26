@@ -10519,7 +10519,10 @@ static int dgEdTouch(int x, int y, int press) {   // 1 = redraw
 	}
 	// SOUND
 	if (press && y >= DE_Y && y < DE_Y + 16 && x >= 140 && x < 192) { gDrSolo = gDrSolo == r ? -1 : r; say(gDrSolo >= 0 ? "SOLO: ONLY THIS ROW PLAYS" : "SOLO OFF"); return 1; }
-	if (press && y >= DE_Y && y < DE_Y + 16 && x >= 196 && x < 254) { gDV[r] = DV_DEF; gDrumWant = gKit + 100; gDvPlay = r + 1; gDrumSaveDue = 1; return 1; }
+	if (press && y >= DE_Y && y < DE_Y + 16 && x >= 196 && x < 254) {   // RESET: a second tap within 2 s (a finger slipping up off a fader used to wipe the sound)
+		static u64 armT = 0; static int armR = -1; u64 t = osGetTime();
+		if (armR != r || t - armT > 2000 || t - armT < 200) { armR = r; armT = t; say("RESET THIS DRUM'S SOUND? TAP RESET AGAIN"); return 1; }
+		armR = -1; gDV[r] = DV_DEF; gDrumWant = gKit + 100; gDvPlay = r + 1; gDrumSaveDue = 1; say("DRUM SOUND RESET"); return 1; }
 	if (press && y >= DSV_T - 14 && y < DSV_B + 12 && x >= 4 && x < 4 + 8 * 39) gDgDrag = (x - 4) / 39;
 	if (gDgDrag >= 0 && gDgDrag < 8) { int v = DV_MIN[gDgDrag] + (int)lroundf(vfaderT(y, DSV_T, DSV_B) * (DV_MAX[gDgDrag] - DV_MIN[gDgDrag])); dvSet(&gDV[r], gDgDrag, v); gDrumSaveDue = 1; return 1; }
 	int y2 = DE_Y + 22 + 8 * DV_RH + 2;
@@ -10683,6 +10686,18 @@ static const char* BEATS[NBEAT][10] = {
 	{"x.....x...x.....", "....x.......x...", "x.x.x.x.x.x.x.x.", "", "", "", "..........x..x..", "...x...x........"},
 };
 static const u8 BEAT_RATE[NBEAT] = {[24] = 3};   // SLOW ROCK: 3/4 speed (triplet eighths)
+// YOUR OWN BEAT IS SAFE: a BEAT preset only replaces the grid at once when the grid is empty or still the last preset
+// pasted. Otherwise the first pick asks ("AGAIN TO REPLACE IT") and only a second pick within 3 s replaces it.
+static u32 gBeatHash = 0; static int gBeatArmed = 0; static u64 gBeatArmT = 0;
+static u32 hashMix(u32 h, const void* p, int n) { const u8* b = (const u8*)p; for (int i = 0; i < n; i++) h = (h ^ b[i]) * 16777619u; return h; }
+static u32 drumGridHash(void) { u32 h = 2166136261u; h = hashMix(h, gMyDrum, sizeof(gMyDrum)); h = hashMix(h, gDrumX, sizeof(gDrumX)); h = hashMix(h, gDrLen, sizeof(gDrLen));
+	h = hashMix(h, gDrRat, sizeof(gDrRat)); h = hashMix(h, gDrCond, sizeof(gDrCond)); h = hashMix(h, gDrAcc, sizeof(gDrAcc)); return h; }
+static int drumGridEmpty(void) { for (int i = 0; i < DSTEP; i++) { for (int r = 0; r < 3; r++) if (gMyDrum[r][i]) return 0; for (int r = 0; r < 7; r++) if (gDrumX[r][i]) return 0; } return 1; }
+static int beatMayPaste(void) {   // 1 = go ahead and replace the grid
+	if (drumGridEmpty() || drumGridHash() == gBeatHash) { gBeatArmed = 0; return 1; }
+	u64 t = osGetTime(); if (gBeatArmed && t - gBeatArmT < 3000) { gBeatArmed = 0; return 1; }
+	gBeatArmed = 1; gBeatArmT = t; say("YOUR OWN BEAT: AGAIN TO REPLACE IT"); return 0;
+}
 static void beatPaste(int b) {
 	if (b < 0 || b >= NBEAT) return;
 	drumGridMark(); myDrumLoad();
@@ -10696,7 +10711,7 @@ static void beatPaste(int b) {
 		}
 		if (r < 3) { *DPAT[r] = MINE_IDX[r]; gDrumSel[r] = MINE_IDX[r]; }
 	}
-	gBeatSel = b; gDrumSaveDue = 1; gBeatFromPatch = 0;
+	gBeatSel = b; gDrumSaveDue = 1; gBeatFromPatch = 0; gBeatHash = drumGridHash();
 	if (!gDrums) { gDrums = 1; drumsChanged(); }
 	char m[40]; snprintf(m, sizeof(m), "BEAT: %s (SELECT+L UNDOES)", BEAT_NAMES[b]); say(m);
 }
@@ -10815,7 +10830,7 @@ static int drumGridTouch(int x, int y, int press) {   // 1 = redraw
 		if (x >= 237) { gAccMode = !gAccMode; gDgEditMode = 0; say(gAccMode ? "ACCENT: TAP HITS TO ACCENT THEM (ACC AGAIN: DONE)" : "ACCENT DONE"); return 1; }
 		if (x < 43) { transportToggle(); return 1; }   // the same PLAY / STOP as the piano roll's: one transport
 		if (x < 85) { gKit = (gKit + 1) % NKIT; gDrumWant = gKit; return 1; }
-		if (x < 125) { beatPaste(gBeatNext); gBeatNext = (gBeatNext + 1) % NBEAT; return 1; }   // BEAT: the next rhythm each tap
+		if (x < 125) { if (beatMayPaste()) { beatPaste(gBeatNext); gBeatNext = (gBeatNext + 1) % NBEAT; } return 1; }   // BEAT: the next rhythm each tap (your own beat: asked first)
 		if (x >= 161 && x < 197) {   // MIC: knocks near the mic play and record onto the picked row (tap a row's name to pick)
 			if (gTapRow >= 0) { gTapRow = -1; gDrumRec = 0; gDrumSaveDue = 1; say("MIC TAP OFF"); }
 			else { gTapRow = gDgSel; if (!gDrums) { gDrums = 1; drumsChanged(); } if (gSeqMode != 1) transportToggle(); drumGridMark(); char m[48]; snprintf(m, sizeof(m), "MIC TAP: KNOCK FOR %s (TAP A NAME TO SWITCH)", kitPadName(DG_DRUM[gTapRow])); say(m); }
@@ -11298,6 +11313,7 @@ static void drawBeatList(void) {
 static int beatListTouch(int x, int y) {
 	if (y < BT_Y + 5 || y >= BT_Y + 5 + 15 * 9 || x < 8 || x >= 8 + 2 * 95) return 0;
 	int i = (x - 8) / 95 * 15 + (y - BT_Y - 5) / 9; if (i < 0 || i >= NBEAT_) return 0;
+	if (!beatMayPaste()) return 1;
 	gBeatSel = i; beatPaste(i); if (!gDrums) { gDrums = 1; drumsChanged(); } gBeatFromPatch = 0; say(BEAT_NAMES_[i]); return 1;
 }
 static void drawDrumsPanel(void) {   // the top screen: what's playing and how to drive the grid (the sequencer itself is below)
@@ -12330,7 +12346,7 @@ int main(void) {
 					nextT = now + (rep ? 110 : 320); rep = 1;
 					if (page == 0) kDown |= d < 0 ? KEY_DUP : KEY_DDOWN;
 					else if (page == 7) { gRollChord = (gRollChord + NCHORD + d) % NCHORD; say(gRollChord ? CHORD_NAMES[gRollChord] : "ROLL CHORD: 1 NOTE"); topDirty = 1; }
-					else { gBeatSel = (gBeatSel + NBEAT + d) % NBEAT; beatPaste(gBeatSel); gBeatFromPatch = 0; say(BEAT_NAMES_[gBeatSel]); topDirty = botDirty = 1; }
+					else { if (beatMayPaste()) { gBeatSel = (gBeatSel + NBEAT + d) % NBEAT; beatPaste(gBeatSel); gBeatFromPatch = 0; say(BEAT_NAMES_[gBeatSel]); } topDirty = botDirty = 1; }
 				}
 			}
 		}
@@ -12734,7 +12750,7 @@ int main(void) {
 				if (p->dirty & D_OUT) outputApply();
 				if ((p->dirty & (D_DRUMS | D_EUCLID | D_DREC)) || p->p == &gBeatSel || p->p == &gDrumSel[0] || p->p == &gDrumSel[1] || p->p == &gDrumSel[2] || p->p == &gDrumLevel) gBeatFromPatch = 0;   // you changed the beat: it stays when you change patch
 				for (int r = 0; r < 3; r++) if (p->p == &gDrumSel[r]) drumPaste(r, gDrumSel[r], 1);
-				if (p->p == &gBeatSel) { beatPaste(gBeatSel); if (!gDrums) { gDrums = 1; drumsChanged(); } }   // a factory pattern: pasted into the grid
+				if (p->p == &gBeatSel) { if (beatMayPaste()) { beatPaste(gBeatSel); if (!gDrums) { gDrums = 1; drumsChanged(); } } }   // a factory pattern: pasted into the grid (your own beat: asked first)
 				if ((p->dirty & D_DRUMS) && p->p == &gDrumRec) drumRecChanged();
 				else if (p->dirty & D_DRUMS) drumsChanged();
 				else if (p->dirty & D_EUCLID) {   // touching a row's HITS or ROTATE switches that row to EUCLID and starts the drums
