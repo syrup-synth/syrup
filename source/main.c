@@ -2795,7 +2795,8 @@ static void seqFireAt(int idx, unsigned clock, int early, float off0) {
 	int notes[8], lens[8], n = 0, skip = s->skip && rand() % 100 < s->skip;
 	if (!skip && s->cond && s->n) { int L = gSeqLen < 1 ? 1 : gSeqLen; skip = !condTest(s->cond, (int)(clock / L), &gSeqPre, gSeqPre); }   // IF: the step's condition
 	if (!skip) {
-		for (int i = 0; i < s->n && n < 8; i++) { if (noteOnCustomRow(s->note[i])) continue; lens[n] = noteLen(s, i); notes[n++] = snapScale(s->note[i] + gSeqTr + s->pitch); }
+		int toEnd = (gSeqLen < 1 ? 1 : gSeqLen) - idx; if (toEnd < 1) toEnd = 1;   // a long note ends with the pattern: it used to ring on into the next bar
+		for (int i = 0; i < s->n && n < 8; i++) { if (noteOnCustomRow(s->note[i])) continue; lens[n] = noteLen(s, i); if (lens[n] > toEnd) lens[n] = toEnd; notes[n++] = snapScale(s->note[i] + gSeqTr + s->pitch); }
 		for (int r = 0; r < 8 && n < 8; r++) if (rowCustom(r) && rowCellOn(r, clock % rowLenOf(r))) { lens[n] = 1; notes[n++] = snapScale(gRowNote[r] + gSeqTr + s->pitch); }
 	}
 	if (gPartMute[0]) n = 0;   // the SYNTH part is muted

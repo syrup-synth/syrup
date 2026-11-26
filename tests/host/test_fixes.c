@@ -30,6 +30,11 @@ static void SCRIPT(int fr) {
 		if (twice != again) fail("ARP: the first step played twice");
 		transportToggle(); seqTick(0.0001f); gArpN = 0; gArp = 0;
 	}
+	// 2b. a long note on the last step ends with the pattern (it rang on into the next bar)
+	if (fr == 80) { memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 16; stepSetNote(15, 60, 1); gSeq[15].len[0] = 4; gSqNn = 0; seqFireAt(15, 15, 0, 0);
+		int left = gSqNn ? gSqN[0].left : -1; printf("fixes: 4-step note on step 16 of 16 rings %d step(s)\n", left);
+		if (left < 1 || left > 1) fail("SEQ: a note on the last step should end with the pattern (%d steps)", left);
+		allOff(); gSqNn = 0; memset(gSeq, 0, sizeof(gSeq)); }
 	// 3. FX clears are done by the effects path
 	if (fr == 82) { fxTailsClear(); ofReset(); if (!gFxClrReq) fail("FX: the main loop should only ask for the clear"); }
 	if (fr == 86) { if (gFxClrReq) fail("FX: the effects path should have done the clear (%d left)", gFxClrReq); }
