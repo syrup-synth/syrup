@@ -21,6 +21,7 @@
 //   Circle pad: left/right pitch bend, up/down = STICK mod source
 
 #include <3ds.h>
+#include <time.h>
 #include <citro3d.h>
 #include <citro2d.h>
 #include <stddef.h>
@@ -3917,11 +3918,12 @@ static const char* presetName(int style, int idx) { return style == NSTYLES - 1 
 // ---- preset browser (PATCH page): < > style, ^ v patch, A saves to a USER slot
 // USER lists the 8 slots plus INIT PATCH; an empty slot keeps the current sound so you can save into it.
 static int gSaveArm = -1; static u64 gSaveArmT = 0;
+static const char* gAskHint = "NAME THIS PATCH";   // (the next askName's hint; it goes back to the patch one)
 static int askName(const char* cur, char* out, int len) {   // the system keyboard; 1 = a new name was typed
 	allOff();
 	SwkbdState kb; char buf[40] = "";
 	swkbdInit(&kb, SWKBD_TYPE_NORMAL, 2, 13);
-	swkbdSetHintText(&kb, "NAME THIS PATCH");
+	swkbdSetHintText(&kb, gAskHint); gAskHint = "NAME THIS PATCH";
 	swkbdSetInitialText(&kb, cur);
 	swkbdSetValidation(&kb, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
 	if (swkbdInputText(&kb, buf, sizeof(buf)) != SWKBD_BUTTON_CONFIRM) return 0;
@@ -12085,6 +12087,31 @@ static int sessionCount(void) {
 	int n = 0; for (int k = 1; k < 100; k++) { char p[96]; snprintf(p, sizeof(p), "sdmc:/3ds/syrup/sessions/S%02d-seq.bin", k); FILE* f = fopen(p, "rb"); if (!f) break; fclose(f); n = k; }
 	return n;
 }
+// SESSION NAMES: a session gets a name when it's saved: the keyboard opens with a random one already in it (two
+// words, syrup-flavoured) and the date and time are kept with it. LOAD SESSION shows both.
+static const char* SNW1[] = {"AMBER", "MAPLE", "GOLDEN", "STICKY", "WARM", "CANDY", "SLOW", "VELVET", "HONEY", "BURNT", "DARK", "SILVER", "NEON", "LATE", "SUGAR", "COPPER", "MOSS", "CHERRY", "SMOKY", "PALE"};
+static const char* SNW2[] = {"DRIP", "POUR", "SWIRL", "GLAZE", "STACK", "WAFFLE", "BLOOM", "DRIFT", "WAVE", "LOOP", "HAZE", "GROOVE", "SPARK", "TIDE", "SYRUP", "CRUMB", "ORBIT", "PULSE", "RIPPLE", "FLOAT"};
+static void sessionRandomName(char* out, int n) {
+	unsigned r = (unsigned)time(NULL) * 2654435761u ^ (unsigned)osGetTime() * 40503u;
+	snprintf(out, n, "%s %s", SNW1[r % 20], SNW2[(r >> 8) % 20]);
+}
+static void sessionWhen(char* out, int n) {   // "NOV 25 22:41"
+	static const char* MON[12] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+	time_t t = time(NULL);
+#ifdef __3DS__
+	struct tm* tm = gmtime(&t);   // (the 3DS clock is local time already: gmtime leaves it as set)
+#else
+	struct tm* tm = localtime(&t);
+#endif
+	if (tm) snprintf(out, n, "%s %d %02d:%02d", MON[tm->tm_mon % 12], tm->tm_mday, tm->tm_hour, tm->tm_min); else snprintf(out, n, "");
+}
+static void sessionNameRead(int k, char* name, int nn, char* when, int wn) {   // "" when the session has none (saved before names)
+	name[0] = when[0] = 0; char p[96]; snprintf(p, sizeof(p), "sdmc:/3ds/syrup/sessions/S%02d-name.txt", k);
+	FILE* f = fopen(p, "rb"); if (!f) return;
+	char b[96] = ""; size_t n = fread(b, 1, sizeof(b) - 1, f); fclose(f); b[n] = 0;
+	char* nl = strchr(b, '\n'); if (nl) { *nl = 0; snprintf(when, wn, "%.20s", nl + 1); char* e = strchr(when, '\n'); if (e) *e = 0; }
+	snprintf(name, nn, "%.20s", b);
+}
 static int sessionSaveNow(void) {   // main loop, voice lock let go: write what's live, then copy it into the next slot
 	saverIdle();   // (the SAVER isn't halfway through one of these files)
 	lastWrite(); seqWriteSnap(); myDrumLoad(); myDrumSave();
@@ -12092,6 +12119,10 @@ static int sessionSaveNow(void) {   // main loop, voice lock let go: write what'
 	mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777); mkdir("sdmc:/3ds/syrup/sessions", 0777);
 	int ok = 1; for (int f = 0; f < 3; f++) { char a[96], b[96]; snprintf(a, sizeof(a), "sdmc:/3ds/syrup/%s", SESS_F[f]); snprintf(b, sizeof(b), "sdmc:/3ds/syrup/sessions/S%02d-%s", k, SESS_F[f]); if (!fileCopy(a, b) && f == 1) ok = 0; }
 	gSessAt = k; return ok ? k : 0;
+}
+static void sessionNameWrite(int k, const char* name) {
+	char p[96], w[24]; snprintf(p, sizeof(p), "sdmc:/3ds/syrup/sessions/S%02d-name.txt", k); sessionWhen(w, sizeof(w));
+	FILE* f = fopen(p, "wb"); if (f) { fprintf(f, "%s\n%s\n", name, w); fclose(f); }
 }
 static void tapeErase(int t); static void seqLoad(void);
 static int sessionLoadFiles(void) {   // voice lock let go: copy the next session's files into place (0 = none saved)
@@ -12104,7 +12135,9 @@ static int sessionLoadFiles(void) {   // voice lock let go: copy the next sessio
 static void sessionLoadApply(int n) {   // voice lock held: the copied files become the live session
 	if (gSeqMode == 1) transportToggle();
 	playSet(NULL, 0, 0.8f); lastLoad(); seqLoad(); gMyDrumLoaded = 0; myDrumLoad();
-	char m[48]; snprintf(m, sizeof(m), "SESSION %d OF %d (LOAD AGAIN: THE ONE BEFORE)", gSessAt, n); say(m);
+	char nm[24], wh[24], m[48]; sessionNameRead(gSessAt, nm, sizeof(nm), wh, sizeof(wh));
+	if (nm[0]) snprintf(m, sizeof(m), "%d/%d %s  %s", gSessAt, n, nm, wh); else snprintf(m, sizeof(m), "SESSION %d OF %d (LOAD AGAIN: THE ONE BEFORE)", gSessAt, n);
+	say(m);
 }
 static void sessionClear(void) {   // voice lock held: a clean start
 	if (gSeqMode == 1) transportToggle();
@@ -13035,8 +13068,10 @@ int main(void) {
 		if (gUserSaveDue) { gUserSaveDue = 0; WHERE("USER SAVE"); if (!userSave()) say("COULDN'T SAVE THE PATCH TO THE SD CARD"); }
 		if (gSessDue) { int w = gSessDue; gSessDue = 0;   // SESSIONS: the file work, with the voice lock let go
 			if (w == 3) { int n = sessionLoadFiles(); if (n) { LightLock_Lock(&gVoiceLock); sessionLoadApply(n); LightLock_Unlock(&gVoiceLock); } topDirty = botDirty = 1; }
-			else { LightLock_Lock(&gVoiceLock); seqSnap(); lastSnap(); LightLock_Unlock(&gVoiceLock); int n = sessionSaveNow(); char m[40];
-				if (w == 2) { gSessClear = 1; snprintf(m, sizeof(m), "SAVED AS SESSION %d - NEW SESSION", n); } else snprintf(m, sizeof(m), n > 0 ? "SESSION %d SAVED" : "COULDN'T SAVE THE SESSION", n); say(m); } }
+			else { char def[24], nm[24]; sessionRandomName(def, sizeof(def));   // the name: the keyboard, a random one already typed in (cancel keeps it)
+				LightLock_Lock(&gVoiceLock); gAskHint = "NAME THIS SESSION"; if (!askName(def, nm, sizeof(nm))) snprintf(nm, sizeof(nm), "%s", def); seqSnap(); lastSnap(); LightLock_Unlock(&gVoiceLock);
+				int n = sessionSaveNow(); char m[48]; if (n > 0) sessionNameWrite(n, nm);
+				if (w == 2) { gSessClear = 1; snprintf(m, sizeof(m), "SAVED %s - NEW SESSION", nm); } else snprintf(m, sizeof(m), n > 0 ? "SAVED: %s (SESSION %d)" : "COULDN'T SAVE THE SESSION", nm, n); say(m); } }
 		if (gSeqSaveDue && !(gSaveBusy & SV_SEQ)) { gSeqSaveDue = 0; LightLock_Lock(&gVoiceLock); seqSnap(); LightLock_Unlock(&gVoiceLock); saverWant(SV_SEQ); }
 		{ static int sk = 0; int now = skipRecent(); if (now != sk) { sk = now; topDirty = 1; } }
 

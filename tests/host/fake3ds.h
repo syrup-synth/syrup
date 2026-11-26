@@ -258,10 +258,18 @@ typedef struct { int dummy; } SwkbdState;
 typedef enum { SWKBD_BUTTON_NONE = -1, SWKBD_BUTTON_LEFT = 0, SWKBD_BUTTON_MIDDLE, SWKBD_BUTTON_RIGHT, SWKBD_BUTTON_CONFIRM = SWKBD_BUTTON_RIGHT } SwkbdButton;
 enum { SWKBD_TYPE_NORMAL = 0 }; enum { SWKBD_NOTEMPTY_NOTBLANK = 3 };
 static inline void swkbdInit(SwkbdState* s, int t, int b, int m) { (void)s; (void)t; (void)b; (void)m; }
-static inline void swkbdSetHintText(SwkbdState* s, const char* t) { (void)s; (void)t; }
-static inline void swkbdSetInitialText(SwkbdState* s, const char* t) { (void)s; (void)t; }
+static const char *FAKE_SWHINT = "", *FAKE_SWINIT = "";
+static inline void swkbdSetHintText(SwkbdState* s, const char* t) { (void)s; FAKE_SWHINT = t ? t : ""; }
+static inline void swkbdSetInitialText(SwkbdState* s, const char* t) { (void)s; FAKE_SWINIT = t ? t : ""; }
 static inline void swkbdSetValidation(SwkbdState* s, int a, int b, int c) { (void)s; (void)a; (void)b; (void)c; }
+#ifdef FAKE_WEB   /* the web version: the browser's own prompt, the name already in it (it used to type "TEST NAME" there too) */
+#include <emscripten.h>
+EM_JS(int, fake_web_prompt, (const char* hint, const char* init, char* out, int n), {
+  var r = window.prompt(UTF8ToString(hint), UTF8ToString(init)); if (r === null) return 0; stringToUTF8(r, out, n); return 1; });
+static inline SwkbdButton swkbdInputText(SwkbdState* s, char* o, size_t n) { (void)s; return fake_web_prompt(FAKE_SWHINT, FAKE_SWINIT, o, (int)n) ? SWKBD_BUTTON_CONFIRM : SWKBD_BUTTON_NONE; }
+#else
 static inline SwkbdButton swkbdInputText(SwkbdState* s, char* o, size_t n) { (void)s; snprintf(o, n, "test name \xc3\xa9"); return SWKBD_BUTTON_CONFIRM; }
+#endif
 /* model queries and DSP health */
 static int FAKE_NEW3DS = 0; static Result APT_CheckNew3DS(bool* o) { *o = FAKE_NEW3DS; return 0; }
 static u32 ndspGetDroppedFrames(void) { return 0; } static u32 ndspGetFrameCount(void) { return 0; }
