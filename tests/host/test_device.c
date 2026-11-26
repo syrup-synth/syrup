@@ -39,6 +39,13 @@ static void SCRIPT(int fr) {
 	if (fr == 90) { if (gOsc[0].distAmt <= c0) fail("A should turn the picked slider up (%.2f)", gOsc[0].distAmt); gPageWant = 10; }
 	if (fr >= 94 && fr < 120) CY = -150;   // MASTER FX: the circle pad steps the chain on the left
 	if (fr == 92) r0 = (float)gPnlSub[2];
-	if (fr == 121) { if ((float)gPnlSub[2] == r0) fail("circle pad on MASTER FX should step the chain's block"); done = 1; }
+	if (fr == 121) { if ((float)gPnlSub[2] == r0) fail("circle pad on MASTER FX should step the chain's block"); gPageWant = 5; }
+	if (fr == 124) { c0 = gLfo[0].rate; r0 = gLfo[1].rate; }
+	if (fr >= 125 && fr < 140) { CX = 150; CY = 150; }   // LFO+MOD: the picture's two LFOs
+	if (fr == 141) { if (gLfo[0].rate <= c0 || gLfo[1].rate <= r0) fail("circle pad on LFO+MOD should move LFO 1 / 2 RATE (%.2f %.2f)", gLfo[0].rate, gLfo[1].rate); gPageWant = 8; c0 = (float)gVisMode; }
+	if (fr >= 144 && fr < 160) CY = -150;   // VIS: the mode
+	if (fr == 161) { if ((float)gVisMode == c0) fail("circle pad on VIS should change the mode"); gPageWant = 0; }
+	if (fr == 164) { c0 = (float)gPreset; HD = KEY_B; }
+	if (fr == 170) { if ((float)gPreset == c0 && gBrFocus) fail("B on PATCH should move through the list"); done = 1; }
 }
-int main(void) { TEST_DEVICE = 1; mkdir("sd", 0777); mkdir("shots", 0777); remove("sd/settings.bin"); loadFont(); FRMAX = 123; app_main(); if (!done) fail("didn't run"); printf("device: the DEVICE controls\n"); return gFails ? 1 : 0; }
+int main(void) { TEST_DEVICE = 1; mkdir("sd", 0777); mkdir("shots", 0777); remove("sd/settings.bin"); loadFont(); FRMAX = 172; app_main(); if (!done) fail("didn't run"); printf("device: the DEVICE controls\n"); return gFails ? 1 : 0; }

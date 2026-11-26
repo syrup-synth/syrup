@@ -5077,7 +5077,9 @@ static const Param* gStickP = NULL;   // the param stickNudge last moved (for th
 static void pagePair(int page, float** px_, float** py_) {   // the two values a stick moves on each page
 	switch (page) {
 		case 1: case 2: *px_ = &gOsc[page - 1].pos; *py_ = gCtl ? &gCutoff : &gOsc[page - 1].warpAmt; break;   // (DEVICE: what the picture shows - the wave's position and its warp)
-		case 5: case 0: *px_ = &gMacro[0]; *py_ = &gMacro[1]; break;
+		case 3: if (!gCtl) { *px_ = &gSubLevel; *py_ = &gNoiseLevel; break; } *px_ = &gCutoff; *py_ = &gRes; break;   // (DEVICE: SUB and NOISE)
+		case 5: if (!gCtl) { *px_ = &gLfo[0].rate; *py_ = &gLfo[1].rate; break; } /* fall through */   // (DEVICE: the two LFOs the picture shows)
+		case 0: *px_ = &gMacro[0]; *py_ = &gMacro[1]; break;
 		case 6: *px_ = &gFxMix; *py_ = &gChorus; break;
 		case 7: *px_ = &gSwing; *py_ = &gSeqGate; break;
 		case 10: *px_ = &gDlyMix; *py_ = &gRevMix; break;
@@ -13155,6 +13157,10 @@ int main(void) {
 		if (gSessClear) { gSessClear = 0; sessionClear(); latch = 0; curKey = -1; topDirty = botDirty = 1; }
 		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
 
+		if (page == 0 && !gCtl) {   // DEVICE: A B X Y browse too (X / B up / down, Y / A the styles / patches list), like the D-pad
+			kDown |= (kDown & KEY_X ? KEY_DUP : 0) | (kDown & KEY_B ? KEY_DDOWN : 0) | (kDown & KEY_Y ? KEY_DLEFT : 0) | (kDown & KEY_A ? KEY_DRIGHT : 0);
+			kHeld |= (kHeld & KEY_X ? KEY_DUP : 0) | (kHeld & KEY_B ? KEY_DDOWN : 0);
+		}
 		if (page == 0) {   // preset browser: the D-pad moves through the list itself
 			int ds = 0, dp = 0, fresh = 0;
 			if (kDown & KEY_DLEFT) { gBrFocus = 0; topDirty = 1; } else if (kDown & KEY_DRIGHT) { gBrFocus = 1; topDirty = 1; }   // < > : the STYLES list or the PATCHES list
@@ -13344,10 +13350,11 @@ int main(void) {
 		int smNow = stickModeNow();
 		if (smNow == SM_DATA || gStepEd >= 0) { gStickDX = fabsf(sx) > 0.12f ? sx : 0; cx = 0; }   // DATA (and the step editor, any mode): X edits the selected value (no bend), Y stays the STICK source
 		else gStickDX = 0;
-		if (!gCtl && smNow == SM_PAGE && gStepEd < 0 && (page == 7 || page == 10 || page == 11) && !gEdStick) {   // DEVICE, the pages with a list on the left: up / down steps it
+		if (!gCtl && smNow == SM_PAGE && gStepEd < 0 && (page == 7 || page == 8 || page == 10 || page == 11) && !gEdStick) {   // DEVICE, the pages with a list on the left: up / down steps it
 			static float acc = 0; acc += sy * fabsf(sy) * dt * 10; int d = acc >= 1 ? -1 : acc <= -1 ? 1 : 0; if (d) acc = 0; if (fabsf(sy) < 0.05f) acc = 0;
 			if (d && page == 7) { gRollChord = (gRollChord + NCHORD + d) % NCHORD; say(gRollChord ? CHORD_NAMES[gRollChord] : "ROLL CHORD: 1 NOTE"); topDirty = 1; }
 			if (d && page == 11) { if (beatMayPaste()) { gBeatSel = (gBeatSel + NBEAT + d) % NBEAT; beatPaste(gBeatSel); gBeatFromPatch = 0; say(BEAT_NAMES_[gBeatSel]); } topDirty = botDirty = 1; }
+			if (d && page == 8) { gVisMode = (gVisMode + NVISM + d) % NVISM; say(VISM_NAMES[gVisMode]); topDirty = 1; }   // VIS: the mode
 			if (d && page == 10) { int j = 0; for (int f = 0; f < NFXB; f++) if (gFxOrder[f] == gPnlSub[2]) j = f; j = (j + d + NFXB) % NFXB; gPnlSub[2] = gFxOrder[j]; gChSel = gPnlSub[2]; gPnlHotP = NULL; topDirty = botDirty = 1; }   // MASTER FX: the block in the chain
 			cx = 0; gStick = 0;
 		}
