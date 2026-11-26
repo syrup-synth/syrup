@@ -113,7 +113,7 @@
         <button class="b" id="phone" title="Play this Syrup from a phone: chord pads, drum pads, keys, XY, knobs">PHONE</button>
         <button class="b" id="full">FULL</button>
         <button class="b" id="inst" style="display:none" title="Install Syrup as an app on this Mac or PC (from the Claude desktop app)">INSTALL APP</button>
-        <button class="b" id="gpl" title="Controller buttons: by position (Nintendo) or by the letters on an Xbox-style pad">ABXY: POS</button>
+        <button class="b" id="gpl" title="Controller buttons: by position (3DS layout) or by the letters on an Xbox-style pad">ABXY: POS</button>
       </div>
       <div id="msg">Loading…</div>
     </div>
@@ -144,7 +144,7 @@
   <div class="note">
     <b>Both screens</b> take taps: on the top one, tap a setting to pick it and drag sideways to change it, or tap a style or patch in the browser.<br>
     Keyboard: arrows = D-pad, <b>I J K L</b> = circle pad, <b>X</b> = A, <b>Z</b> = B, <b>S</b> = X, <b>A</b> = Y, <b>Q / W</b> = L / R, <b>1 / 2</b> = ZL / ZR, <b>Shift</b> = SELECT, <b>Enter</b> = START.<br>
-    <b>Game controller</b> (Bluetooth or USB): buttons in Nintendo positions, left stick = circle pad, right stick = C-stick, bumpers = L / R, triggers = ZL / ZR (ZR plays / stops, ZL records). <b>MIDI</b> plays it from a controller (Chrome / Edge on a computer, or the Web MIDI Browser app on iPhone). Your sounds and drum grid are kept in this browser. Turn the phone sideways for the wide layout.
+    <b>Game controller</b> (Bluetooth or USB): buttons in 3DS positions, left stick = circle pad, right stick = C-stick, bumpers = L / R, triggers = ZL / ZR (ZR plays / stops, ZL records). <b>MIDI</b> plays it from a controller (Chrome / Edge on a computer, or the Web MIDI Browser app on iPhone). Your sounds and drum grid are kept in this browser. Turn the phone sideways for the wide layout.
   </div>
 </div>
 <button class="b" id="tapsnd">TAP FOR SOUND</button>
@@ -276,9 +276,9 @@ document.getElementById('full').onclick = function () {
   else msg.textContent = 'On iPhone: Share > Add to Home Screen, then open Syrup from there for full screen.';
 };
 if (navigator.standalone || matchMedia('(display-mode: standalone)').matches) document.getElementById('full').style.display = 'none';   // already full screen
-// ---- a game controller (Bluetooth / USB: Xbox, PlayStation, Switch Pro, MFi): Nintendo layout, left stick = circle pad
+// ---- a game controller (Bluetooth / USB: Xbox, PlayStation, Switch Pro, MFi): 3DS layout, left stick = circle pad
 // standard mapping: 0 bottom, 1 right, 2 left, 3 top, 4 / 5 bumpers, 6 / 7 triggers, 8 select, 9 start, 12-15 d-pad
-var GPPOS = [[1, 1], [0, 2], [3, 1024], [2, 2048]], GPLAB = [[0, 1], [1, 2], [2, 1024], [3, 2048]];   // by position (Nintendo) / by letter (Xbox)
+var GPPOS = [[1, 1], [0, 2], [3, 1024], [2, 2048]], GPLAB = [[0, 1], [1, 2], [2, 1024], [3, 2048]];   // by position (3DS) / by letter (Xbox)
 var GPMAP = [[1, 1], [0, 2], [3, 1024], [2, 2048], [4, 512], [5, 256], [6, 16384], [7, 32768], [8, 4], [9, 8], [12, 64], [13, 128], [14, 32], [15, 16]];
 var gpName = '';
 function pollPads() {
@@ -296,7 +296,7 @@ var gpl = document.getElementById('gpl'), gpLab = 0;
 try { gpLab = +(localStorage.getItem('syrup-gplab') || 0); } catch (e) {}
 function gpApply() { var m = gpLab ? GPLAB : GPPOS; for (var i = 0; i < 4; i++) GPMAP[i] = m[i]; gpl.textContent = gpLab ? 'ABXY: LETTERS' : 'ABXY: POS'; }
 gpApply();
-gpl.onclick = function () { gpLab = 1 - gpLab; gpApply(); try { localStorage.setItem('syrup-gplab', gpLab); } catch (e) {} msg.textContent = gpLab ? 'Buttons follow the letters (Xbox-style pads)' : 'Buttons follow the positions (Nintendo layout)'; };
+gpl.onclick = function () { gpLab = 1 - gpLab; gpApply(); try { localStorage.setItem('syrup-gplab', gpLab); } catch (e) {} msg.textContent = gpLab ? 'Buttons follow the letters (Xbox-style pads)' : 'Buttons follow the positions (3DS layout)'; };
 addEventListener('gamepadconnected', function () { msg.textContent = 'Controller connected'; });
 requestAnimationFrame(pollPads);
 // ---- per window: which MIDI channel and input it listens to (so several windows can be several instruments:

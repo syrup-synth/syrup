@@ -4,3 +4,4 @@ build/
 *.elf
 *.map
 *.cia
+sd/

@@ -2,7 +2,7 @@
 
 ![SYRUP](../art/syrup_logo.png)
 
-A Serum-style wavetable synth for Nintendo 2DS / 3DS (homebrew).
+A wavetable synth and groovebox for the 3DS and 2DS (homebrew), and the web.
 
 The 3DS's DSP chip plays the oscillators: each voice layer is a DSP channel looping a single-cycle waveform at the note's pitch, through that channel's own biquad filter. The main processor only rebuilds a cycle when something changes or is modulated:
 
@@ -82,9 +82,9 @@ Four MACRO knobs (mod sources MACRO 1-4); XY PAD can play MACRO 1+2 or 3+4 inste
 ## HARDWARE page (HW tab)
 
 - **TAPE** (SEQ page, or the quick ring): four tracks recorded from Syrup's output, starting with the sequence so every take lines up. The tracks already on tape start with the sequence too. TRACK SPEED on each track: 1/4 1/3 1/2 2/3 3/4 1X 4/3 3/2 X2 X3 X4 (faster ones repeat, so they stay on the bar). TAPE ALIGN (ARP+SEQ page) trims new takes by a few ms if they sit early or late. Drums, kits and the sub are recorded through CHIP > FX, which the tape turns on by itself.
-- **TAPE > TABLE / MIC > TABLE / CAM > TABLE:** turn the last tape track, one second of mic (sing or play into it), or a camera photo (each image row becomes a frame) into a 64-frame wavetable. It's saved as a Serum-style .wav in /3ds/syrup/ and loaded into OSC A. Pitched audio is cut into clean single cycles; anything else becomes even slices.
+- **TAPE > TABLE / MIC > TABLE / CAM > TABLE:** turn the last tape track, one second of mic (sing or play into it), or a camera photo (each image row becomes a frame) into a 64-frame wavetable. It's saved as a standard wavetable .wav in /3ds/syrup/ and loaded into OSC A. Pitched audio is cut into clean single cycles; anything else becomes even slices.
 - **UPDATE SYRUP:** checks the latest build over Wi-Fi and installs it (CIA through the system installer, or replaces /3ds/syrup.3dsx when run from the Homebrew Launcher). Close and reopen Syrup afterwards.
-- **GET WAVETABLES:** downloads the Syrup Pack (35 original wavetables in `wavetables/` of this repo) over Wi-Fi into /3ds/syrup/, skipping ones you already have. Any Serum-format .wav you copy there works too.
+- **GET WAVETABLES:** downloads the Syrup Pack (35 original wavetables in `wavetables/` of this repo) over Wi-Fi into /3ds/syrup/, skipping ones you already have. Any standard wavetable .wav you copy there works too.
 - **CAMERA:** CAM LIGHT and CAM COLOR mod sources (thumbnail on the page).
 - **Motion:** TWIST (gyroscope) and SHAKE mod sources join TILT and BREATH.
 - **LINK:** sync tempo and sequencer steps with another console running Syrup, over local wireless (one HOSTs, the other JOINs) or infrared (IR SEND / IR RECEIVE, consoles pointed at each other).
@@ -130,7 +130,7 @@ Patches (format v12) also carry the drums (on/off, kit, patterns, euclid rows, l
 
 To save, press A twice on the PATCH page: the first press shows which USER slot it will use (the first empty one, or the slot you're on in USER), the second opens the 3DS keyboard to name the patch (up to 13 characters). Pressing A twice on a saved USER slot saves over it and lets you rename it. User patches are stored in `sdmc:/3ds/syrup/user_presets.bin`. INIT PATCH (the last entry in USER) resets to a single saw.
 
-## Engine (laid out like Serum)
+## Engine
 
 | Section | What's there |
 |---|---|
@@ -179,13 +179,13 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 
 Built in: Basic Shapes, PWM, Harmonix, Vowels, Sync Saw, FM Growl, Digital.
 
-Your own: copy Serum-format wavetables (`.wav`, 2048-sample frames, 16/24/32-bit) into `sdmc:/3ds/syrup/`. They appear after the built-in tables.
+Your own: copy wavetables (`.wav`, the common 2048-sample-frame format, 16/24/32-bit) into `sdmc:/3ds/syrup/`. They appear after the built-in tables.
 
 ## Install
 
 FBI > Remote Install > Scan QR Code, and scan [`install-qr.png`](../install-qr.png). Sound needs the DSP firmware dump (run DSP1 once).
 
-## Differences from Serum
+## Engine notes
 
 - WT POS and warp modulation are shared by all notes playing (one cycle per oscillator). Filter, pitch, level and pan modulation are per note.
 - FM / AM / RM from the other oscillator use whole-octave ratios.

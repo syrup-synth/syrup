@@ -1,4 +1,4 @@
-// Matt's first fix batch: SELECT is PLAY/STOP for the sequencer AND the drums (on release), SELECT+L/R undo/redo,
+// First fix batch: SELECT is PLAY/STOP for the sequencer AND the drums (on release), SELECT+L/R undo/redo,
 // SELECT+DOWN panic, L/R octave, OCT flash, CLEAR needs two presses, MONO + CHORD plays the key you hit, PADS from
 // the SEQ tab, RIFF stays in its octave, HELP slides on L/R.
 #include "syrup_host.c"

@@ -1,6 +1,6 @@
 // FILTER SCREAM stress: every scream patch pushed hard (scream + res maxed, fast notes, bends, cutoff sweeps, voice
 // stealing, master FX on/off, patch changes while ringing). The engine must keep running, stay finite, and go quiet
-// after PANIC. Matt's report: SCREAM froze the sound engine until power-off.
+// after PANIC. Reported: SCREAM froze the sound engine until power-off.
 #include "syrup_host.c"
 #include "harness.h"
 #include <time.h>

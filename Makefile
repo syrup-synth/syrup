@@ -34,7 +34,7 @@ include $(DEVKITARM)/3ds_rules
 TARGET		:=	syrup
 APP_TITLE	:=	Syrup
 APP_DESCRIPTION	:=	Wavetable synth
-APP_AUTHOR	:=	Soul Provider Records
+APP_AUTHOR	:=	Syrup
 BUILD		:=	build
 SOURCES		:=	source source/ndsp
 DATA		:=	data

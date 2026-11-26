@@ -1,12 +1,12 @@
-// SYRUP v2 - Serum-style wavetable synth for Nintendo 2DS / 3DS (homebrew, libctru)
+// SYRUP - wavetable synth and groovebox for 3DS / 2DS (homebrew, libctru)
 //
 // The DSP plays the oscillators: every voice layer is a DSP channel looping a single-cycle
 // waveform at the note's pitch, through the channel's own biquad filter. The ARM rebuilds the
 // cycles only when something changes (or is modulated): morph between wavetable frames at
-// WT POS, apply the warp (Serum's list, incl. FM/AM/RM from the other oscillator, baked into
+// WT POS, apply the warp (incl. FM/AM/RM from the other oscillator, baked into
 // the cycle), drive, then FFT into band-limited copies so high notes don't alias.
 //
-// Layout follows Serum: OSC A, OSC B, SUB, NOISE, FILTER, ENV1 (amp, AHDSR), ENV2, LFO1-2,
+// Layout: OSC A, OSC B, SUB, NOISE, FILTER, ENV1 (amp, AHDSR), ENV2, LFO1-2,
 // a 4-slot mod matrix, voicing (poly/mono/legato + glide) and FX (chorus, echo, space, drive).
 // Paraphonic note: WT POS / WARP modulation is shared by all notes (one cycle per oscillator);
 // filter, pitch, level and pan modulation are per note.
@@ -380,7 +380,7 @@ static void genBuiltin(Table* tb, int t) {
 static u32 rd32(const u8* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((u32)p[3] << 24); }
 static u16 rd16(const u8* p) { return p[0] | (p[1] << 8); }
 
-// Serum wavetable: RIFF WAV (PCM16/24/32f), frame size from the 'clm ' chunk ("<!>2048 ..."), default 2048
+// Wavetable .wav: RIFF WAV (PCM16/24/32f), frame size from the 'clm ' chunk ("<!>2048 ..."), default 2048
 static int loadWav(Table* tb, const char* path) {
 	FILE* f = fopen(path, "rb");
 	if (!f) return 0;
@@ -1049,7 +1049,7 @@ static void filterSet(int ch, float hz, float res) {
 			return;
 		}
 		// Poles stay just INSIDE the unit circle (r < 1). Past 1 the DSP's filter saturated on its own and, on hardware,
-		// could lock the DSP up: no sound, PANIC dead, the app unable to close (Matt: only a power-off cleared it). At
+		// could lock the DSP up: no sound, PANIC dead, the app unable to close (only a power-off cleared it). At
 		// r = 0.999 it still rings like mad off every note (a Q in the hundreds) but always dies away.
 		float w = TWO_PI * hz / DSPRATE, cw = cosf(w), r = 0.975f + gQScream * 0.022f + res * 0.002f;
 		if (r > 0.999f) r = 0.999f;
@@ -2869,7 +2869,7 @@ static void seqTick(float dt) {
 	}
 }
 
-// ---------------------------------------------------------------- presets (organised by style, like Serum's browser)
+// ---------------------------------------------------------------- presets (organised by style)
 typedef struct {
 	int on, table, warp, oct, semi, uni;
 	float pos, warpAmt, level, fine, detune, blend, width;
@@ -4837,7 +4837,7 @@ static void drawHeader(int page) {
 static void drawFooter(int page, int sel) {
 	rect(0, 226, 400, 1, LINE);
 	if (!gAudioOK) {   // no DSP firmware dump yet: say exactly how to make one (Luma's Rosalina menu works right here)
-		static const char* L[] = {"NO SOUND YET: ONE-TIME SETUP", "", "THE 3DS SOUND CHIP NEEDS ITS FIRMWARE", "COPIED TO THE SD CARD (NINTENDO'S, SO", "SYRUP CAN'T INCLUDE IT). TO MAKE IT:", "",
+		static const char* L[] = {"NO SOUND YET: ONE-TIME SETUP", "", "THE 3DS SOUND CHIP NEEDS ITS FIRMWARE", "COPIED TO THE SD CARD (IT'S OEM, SO", "SYRUP CAN'T INCLUDE IT). TO MAKE IT:", "",
 			"1. PRESS L + DOWN + SELECT (ROSALINA)", "2. MISCELLANEOUS OPTIONS >", "   DUMP DSP FIRMWARE", "3. PRESS B, THEN QUIT AND REOPEN SYRUP", "", "(SYRUP TRIED TO DO THIS ITSELF AND COULDN'T)"};
 		int n = sizeof(L) / sizeof(L[0]) - (gDspAuto == -1 ? 0 : 2), h = n * 12 + 16, y0 = 113 - h / 2;   // the last line only if Syrup tried
 		rect(40, y0, 320, h, BG); rect(40, y0, 320, 1, WARN); rect(40, y0 + h - 1, 320, 1, WARN); rect(40, y0, 1, h, WARN); rect(359, y0, 1, h, WARN);
@@ -5048,7 +5048,7 @@ static void drawHelp(void) {   // L / R flip the slides; any other button closes
 		 "  CLEAR ........ PRESS > TWICE",
 		 "  WHILE IT PLAYS: KEYS TRANSPOSE", NULL},
 		{"SOUND",
-		 "  OWN WAVETABLES: SERUM .WAV IN /3DS/SYRUP/",
+		 "  OWN WAVETABLES: .WAV IN /3DS/SYRUP/",
 		 "  MOD SOURCES: TILT, SPIN, BREATH (MIC), CAMERA",
 		 "  DRUMS + TAPE PLAY ON THE SECOND SOUND CHIP",
 		 "  TAPE REC TURNS CHIP > FX ON SO DRUMS RECORD",
@@ -7338,7 +7338,7 @@ static void motionTick(float dt) {
 	beatLightTick(dt);
 }
 
-// ---- turning audio or pictures into a wavetable (saved as a Serum-style .wav in /3ds/syrup)
+// ---- turning audio or pictures into a wavetable (saved as a standard wavetable .wav in /3ds/syrup)
 #define WT_FR 64
 static void wtWriteWav(const char* path, const float* fr, int nf) {
 	FILE* f = fopen(path, "wb"); if (!f) return;
@@ -11888,8 +11888,8 @@ static void wakeTick(void) {   // main loop, after a wake: Wi-Fi MIDI and the IR
 	if (gLinkResume) { gLink = gLinkResume; gLinkResume = 0; linkChanged(); }
 }
 
-// ---- SOUND SETUP, automatic: the DSP firmware (sdmc:/3ds/dspfirm.cdc) is Nintendo's, so Syrup can't ship it, but it
-// sits inside the system's own Nintendo 3DS Sound app. On the first start without it, Syrup reads that app's code
+// ---- SOUND SETUP, automatic: the DSP firmware (sdmc:/3ds/dspfirm.cdc) is OEM code, so Syrup can't ship it, but it
+// sits inside the system's own 3DS Sound app. On the first start without it, Syrup reads that app's code
 // from NAND, unpacks it, finds the firmware ("DSP1", 0x100 bytes into it) and writes the file - what Rosalina's
 // "Dump DSP firmware" and the DSP1 app do - so there's nothing to set up by hand. If it can't, the screen still
 // shows the Rosalina steps.
@@ -11928,7 +11928,7 @@ static int dspAutoDump(void) {
 #ifdef SYRUP_HOST
 	return 0;
 #else
-	static const u32 SOUND[] = {0x00021500, 0x00022500, 0x00020500, 0x00026500, 0x00027500, 0x00028500};   // Nintendo 3DS Sound: USA EUR JPN CHN KOR TWN
+	static const u32 SOUND[] = {0x00021500, 0x00022500, 0x00020500, 0x00026500, 0x00027500, 0x00028500};   // 3DS Sound: USA EUR JPN CHN KOR TWN
 	static const u32 CODE[5] = {0, 0, 2, 0x646F632E, 0x00000065};   // ExeFS ".code"
 	for (unsigned t = 0; t < sizeof(SOUND) / sizeof(SOUND[0]); t++) {
 		u32 ap[4] = {SOUND[t], 0x00040010, MEDIATYPE_NAND, 0};
@@ -11962,7 +11962,7 @@ static int dspAsk(void) {   // the first start without the firmware: say what Sy
 #ifdef SYRUP_HOST
 	return 0;
 #else
-	static const char* L[] = {"ONE-TIME SOUND SETUP", "", "THE 3DS SOUND CHIP NEEDS ITS FIRMWARE", "ON THE SD CARD. IT'S NINTENDO'S, SO", "SYRUP DOESN'T INCLUDE IT - BUT YOUR", "CONSOLE HAS IT IN ITS OWN SOUND APP.", "",
+	static const char* L[] = {"ONE-TIME SOUND SETUP", "", "THE 3DS SOUND CHIP NEEDS ITS FIRMWARE", "ON THE SD CARD. IT'S OEM CODE, SO", "SYRUP DOESN'T INCLUDE IT - BUT YOUR", "CONSOLE HAS IT IN ITS OWN SOUND APP.", "",
 		"SYRUP CAN COPY IT FROM THERE TO", "SD:/3DS/DSPFIRM.CDC (IT STAYS ON", "THIS CONSOLE; NOTHING IS SENT).", "", "A: COPY IT NOW", "B: I'LL DO IT MYSELF (ROSALINA)"};
 	int n = sizeof(L) / sizeof(L[0]);
 	while (aptMainLoop()) {

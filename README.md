@@ -2,42 +2,40 @@
 
 ![SYRUP](art/syrup_logo.png)
 
-**A wavetable synth for the Nintendo 2DS and 3DS.** Serum-style oscillators played by the console's DSP chip, a filter and envelope section, a master effects chain, a step sequencer with a piano roll, drums, a four-track tape recorder and a granular engine. It all runs on the handheld, with nothing to plug in.
+**A wavetable synth and groovebox for the 3DS and 2DS.** Two wavetable oscillators played by the console's DSP chip, filters, modulation, master effects, a piano-roll sequencer, a drum machine and a four-track tape, all running on the handheld. There's also a web version that runs in any browser.
 
-> **Beta.** Syrup 1.0 is in beta. Things may still break; see [Reporting bugs](#reporting-bugs).
+> **Open beta.** Things may still break; see [Reporting bugs](#reporting-bugs).
 
-## Install
+**Play it in your browser:** https://syrup-synth.github.io/syrup/
 
-You need a 2DS / 3DS with custom firmware (Luma3DS).
+## Install on a 3DS / 2DS
 
-**Sound needs a one-time setup.** The console's sound chip runs Nintendo firmware that homebrew can't include, so you copy it to the SD card once:
-
-1. Press **L + Down + Select** to open the Rosalina menu (this works anywhere, even inside Syrup).
-2. Choose **Miscellaneous options > Dump DSP firmware**. It saves `dspfirm.cdc` to `/3ds/` on the SD card.
-3. Close the menu with B, quit Syrup and open it again.
-
-No Luma3DS menu? Run the DSP1 app once instead. If the file is missing, Syrup shows these steps on screen.
+You need a 3DS or 2DS with custom firmware (Luma3DS).
 
 - **QR code:** FBI > Remote Install > Scan QR Code, and scan [`install-qr.png`](install-qr.png). It installs the newest `syrup.cia`.
 - **Manual:** download `syrup.cia` (install with FBI) or `syrup.3dsx` (copy to `/3ds/` on the SD card, open from the Homebrew Launcher) from [Releases](../../releases).
 - **Updates:** HARDWARE page > UPDATE SYRUP downloads and installs the newest build over Wi-Fi.
 
+**Sound needs a one-time setup.** The console's sound chip needs its own firmware on the SD card, which homebrew can't include. On first start Syrup offers to copy it from the console's built-in sound app (press A). Or do it yourself:
+
+1. Press **L + Down + Select** to open the Rosalina menu (this works anywhere, even inside Syrup).
+2. Choose **Miscellaneous options > Dump DSP firmware**. It saves `dspfirm.cdc` to `/3ds/` on the SD card.
+3. Close the menu with B, quit Syrup and open it again.
+
 ## What's in it
 
-- **Two wavetable oscillators** plus sub and noise. Warp modes (sync, bend, PWM, FM / AM / RM from the other oscillator), unison, built-in tables, and your own Serum `.wav` tables.
-- **Filters:** per-voice filter with two envelopes, plus an OUT FILTER on the master (ladder, acid and more).
-- **Modulation:** LFOs (including ones you draw), a mod matrix, four macros, motion lanes. The console's tilt, twist, shake, breath (mic) and camera can all be mod sources.
-- **Master FX:** a reorderable chain with chorus, phaser, delay types, reverb types, shimmer, OTT, pump and lo-fi.
-- **Sequencer:** 16 patterns of 16 steps with a piano roll, a 64-slot song mode, per-step locks, live and tap recording with preroll, and an arpeggiator (including CHORD with ARP STRUM).
-- **Drums:** six synthesised kits, including WAVE KIT (built from your wavetable), with patterns, Euclid rows, tuning, chance and mute.
-- **Tape:** four tracks that capture everything you hear, in time with the sequencer. Each track can play back at a bar-friendly speed (1/4 to X4).
-- **TAPE:** four tracks that bounce the sequencer in sync, with mute, level and WAV export to the SD card.
-- **Grains:** play a loop, a wavetable or the mic as grains. The HARDWARE page has a waveform editor for it.
-- **Second sound chip:** chip voices, chip echo and CHIP > FX.
-- **Presets:** about 200 factory patches in styles, plus 8 user slots.
-- **Extras:** Wi-Fi and IR MIDI (MPE, aftertouch, MIDI LEARN, LFOs out as CCs), a phone remote page, chord PADS with progressions and a strum strip, a trance gate, a visualizer, and themes.
+- **Sound:** two wavetable oscillators plus sub and noise, warp modes (sync, bend, PWM, FM / AM / RM), unison, built-in tables and your own `.wav` wavetables. Two filters, LFOs with classic shapes or your own hand-drawn ones, four macros and a mod matrix. 236 factory patches.
+- **Effects:** a reorderable master chain with chorus, phaser, delays (tape, digital, ping-pong, dub), reverbs (hall, room, plate, spring), shimmer, OTT, pump and lo-fi. 15 drive types.
+- **Sequencer:** piano roll with 64-step patterns, 16 patterns and song mode, per-step locks (gate, cutoff, slide, nudge, probability), live recording with undo, an arpeggiator and a 303-style RIFF generator.
+- **Chords:** chord pads with progressions, bass lines and an arp of their own.
+- **Drums:** a 10-row drum sequencer with ratchets, velocity and chance / fill conditions, a sound editor for every drum, 30 preset beats, and synth, chip, wavetable or sample kits.
+- **Tape:** four tracks that bounce the sequence in time, with overdub, mute, level and WAV export.
+- **Hardware:** the console's second sound chip for chip voices, echo and grains. Tilt, twist, shake, breath (mic) and camera as mod sources. Mic-based velocity for drums. Camera, mic, tape or a web page turned into wavetables.
+- **Connect:** Wi-Fi MIDI in and out, Network MIDI (Mac, iOS, DAWs), MIDI clock in and out, IR MIDI, MIDI LEARN, MPE and aftertouch.
+- **Phone:** START > LINK PHONE shows a QR code. REMOTE turns the phone into keys, chord pads, drum pads, an XY pad and knobs. 2ND UNIT opens a full second Syrup on the phone, with its own sounds and patterns, on the 3DS's tempo and play / stop.
+- **Streaming:** a browser view of Syrup for OBS or other streaming software.
 
-The full list of every page, parameter and control is in [docs/REFERENCE.md](docs/REFERENCE.md).
+Every page, parameter and control is in [docs/REFERENCE.md](docs/REFERENCE.md). What's planned is in [ROADMAP.md](ROADMAP.md).
 
 ## Controls
 
@@ -47,19 +45,22 @@ The full list of every page, parameter and control is in [docs/REFERENCE.md](doc
 | L / R | Octave down / up |
 | D-pad up / down | Pick a parameter |
 | D-pad left / right | Change it (hold to repeat) |
-| Circle pad | Default: edits the selected value. HARDWARE > CIRCLE PAD switches it to pitch bend + mod, page values or macros |
-| SELECT (tap) | Play / stop the sequencer and drums |
+| Circle pad | Edits the selected value (HARDWARE > CIRCLE PAD switches it to pitch bend + mod, page values or macros) |
+| SELECT (tap) | Play / stop (sequencer and drums together) |
+| SELECT + B | Record |
 | SELECT + circle pad | Quick select: up = any page, left / right = the page's main lists, down = REC / PLAY / TAPE |
 | SELECT + L / R | Undo / redo |
 | SELECT + D-pad down | Panic |
-| START | Menu: SAVE PATCH, BROWSER, PANIC, HELP, THEME, MIDI LEARN, QUIT |
+| START | Menu: sessions, patches, browser, panic, help, theme, MIDI learn, link phone, quit |
 | A / B | Chord mode / latch |
-| Touch keyboard | Play (lower on a key = louder, slide to glide); OCT / CHORD / LATCH to its left |
+| Touch keyboard | Play (lower on a key = louder, slide to glide) |
 | XY pad | Wavetable position and cutoff (the corner button changes what it controls) |
+
+The web version takes a computer keyboard, a game controller or a MIDI keyboard.
 
 ## Files on the SD card
 
-Everything lives in `sdmc:/3ds/syrup/`: user patches, sequences, settings, your wavetables (`.wav`), and tape exports in `tape/`.
+Everything lives in `sdmc:/3ds/syrup/`: sessions, user patches, settings, your wavetables (`.wav`), sample kits in `kits/`, and tape exports in `tape/`.
 
 ## Reporting bugs
 
@@ -67,4 +68,4 @@ Open an [issue](../../issues) with what you did, what happened, and which build 
 
 ## Building
 
-Needs devkitPro (devkitARM, libctru, citro2d / citro3d, 3ds-curl). `make` builds `syrup.3dsx`; the GitHub Actions workflow also builds the `.cia`. Host tests (no console needed) are run with `python3 tests/host/run_tests.py`.
+Needs devkitPro (devkitARM, libctru, citro2d / citro3d, 3ds-curl). `make` builds `syrup.3dsx`; the GitHub Actions workflow also builds the `.cia`. The web version builds with Emscripten (`bash web/build.sh`). Host tests (no console needed): `python3 tests/host/run_tests.py`.
