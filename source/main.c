@@ -5700,12 +5700,43 @@ static void drawGrid(void) {
 #define PV_SONG_H 11
 #define PV_TOOLS_Y (PV_SONG_Y + 4 * PV_SONG_H + 4)   // REV ROT HUM / UNDO
 #define PV_TAPE_Y (PV_TOOLS_Y + 20)
+// PATTERN LOCK (PAT > LOCK): a locked pattern can't be changed - notes, RIFF, CLEAR, the tools, live REC, a COPY>
+// onto it. Whatever changes it is put back at once (it's checked every frame against a copy taken when it was locked).
+static u8 gPatLock[NPAT]; static SeqPat gLockSnap[NPAT]; static const char* LOCK_PATH = "sdmc:/3ds/syrup/patlock.bin";
+static void patLockSave(void) { FILE* f = safeOpen(LOCK_PATH); if (!f) return; safeClose(f, LOCK_PATH, fwrite(gPatLock, sizeof(gPatLock), 1, f) == 1); }
+static void patLockSet(int i, int on) {
+	if (i < 0 || i >= NPAT) return;
+	if (on) { if (i == gPatCur) patStore(); gLockSnap[i] = gPat[i]; }
+	gPatLock[i] = (u8)on; patLockSave();
+}
+static void patLockLoad(void) {   // after the patterns are loaded: lock what was locked, as it is now
+	FILE* f = safeRead(LOCK_PATH); memset(gPatLock, 0, sizeof(gPatLock)); if (!f) return;
+	u8 l[NPAT]; if (fread(l, sizeof(l), 1, f) == 1) for (int i = 0; i < NPAT; i++) if (l[i] == 1) { gPatLock[i] = 1; gLockSnap[i] = gPat[i]; }
+	fclose(f);
+}
+static int patLockTick(void) {   // main loop, voice lock held: put back any change to a locked pattern; 1 = it did
+	int fixed = -1;
+	for (int i = 0; i < NPAT; i++) if (gPatLock[i]) {
+		if (i == gPatCur) {
+			static SeqPat w; memcpy(w.st, gSeq, sizeof(gSeq)); w.len = (s16)gSeqLen; w.base = (s16)gSeqBase; memcpy(w.rowLen, gRowLen, 8); memcpy(w.rowHits, gRowHits, 8); memcpy(w.rowRot, gRowRot, 8); memcpy(w.rowNote, gRowNote, 8);
+			const SeqPat* L = &gLockSnap[i];
+			if (memcmp(w.st, L->st, sizeof(w.st)) || w.len != L->len || w.base != L->base || memcmp(w.rowLen, L->rowLen, 8) || memcmp(w.rowHits, L->rowHits, 8) || memcmp(w.rowRot, L->rowRot, 8) || memcmp(w.rowNote, L->rowNote, 8)) {
+				memcpy(gSeq, L->st, sizeof(gSeq)); gSeqLen = L->len < 1 ? 16 : L->len > NSTEP ? NSTEP : L->len; gSeqBase = L->base;
+				memcpy(gRowLen, L->rowLen, 8); memcpy(gRowHits, L->rowHits, 8); memcpy(gRowRot, L->rowRot, 8); memcpy(gRowNote, L->rowNote, 8);
+				gPat[i] = *L; fixed = i;
+			}
+		} else if (memcmp(&gPat[i], &gLockSnap[i], sizeof(SeqPat))) { gPat[i] = gLockSnap[i]; fixed = i; }
+	}
+	if (fixed >= 0) { static u64 t = 0; if (osGetTime() - t > 1500) { char m[48]; snprintf(m, sizeof m, "PATTERN %c IS LOCKED (PAT > LOCK)", 'A' + fixed); say(m); t = osGetTime(); } return 1; }
+	return 0;
+}
 static void drawPatView(void) {
 	text(4, PV_Y, "PATTERN", 1, RGB3(TH->dim));
 	for (int i = 0; i < NPAT; i++) {
 		int x = 4 + i * 19, y = PV_Y + 10, cur = i == gPatCur, q = i == gPatNext;
 		rectP(x, y, 17, 14, cur ? TH->keyOn : TH->tab); if (q) outline(x, y, 17, 14, RGB3(TH->val));
 		char c[2] = {(char)('A' + i), 0}; const u8* tc = cur ? TH->ink : patUsed(i) ? TH->val : TH->tabTxt; text(x + 5, y + 3, c, 1, tc[0], tc[1], tc[2]);
+		if (gPatLock[i]) { rectP(x + 12, y + 1, 4, 4, TH->warn); }   // locked: a corner mark
 	}
 	static const char* PB[5] = {"COPY>", "CLEAR", "SONG", "+ADD", "<DEL"};
 	for (int i = 0; i < 5; i++) {
@@ -5713,8 +5744,8 @@ static void drawPatView(void) {
 		rectP(x, y, 59, 14, lit ? TH->keyOn : TH->tab); const u8* tc = lit ? TH->ink : TH->tabTxt;
 		text(x + 30 - (int)strlen(PB[i]) * 4, y + 3, PB[i], 1, tc[0], tc[1], tc[2]);
 	}
-	{ static const char* PTB[3] = {"REV", "ROT", "HUM"};
-		for (int i = 0; i < 3; i++) { int x = 130 + i * 62; rectP(x, PV_TOOLS_Y, 58, 14, TH->tab); text(x + 29 - (int)strlen(PTB[i]) * 4, PV_TOOLS_Y + 3, PTB[i], 1, RGB3(TH->tabTxt)); } }
+	{ static const char* PTB[4] = {"REV", "ROT", "HUM", "LOCK"};
+		for (int i = 0; i < 4; i++) { int x = 130 + i * 47, lk = i == 3 && gPatLock[gPatCur]; rectP(x, PV_TOOLS_Y, 44, 14, lk ? TH->warn : TH->tab); const u8* tc = lk ? TH->ink : TH->tabTxt; text(x + 22 - (int)strlen(PTB[i]) * 4, PV_TOOLS_Y + 3, PTB[i], 1, tc[0], tc[1], tc[2]); } }
 	rectP(4, PV_TAPE_Y, 312, 18, TH->keyOn); text(160 - 9 * 4, PV_TAPE_Y + 5, "TAPE  >>>", 1, RGB3(TH->ink));   // bounce to tape
 	if (gUndoOk) { rectP(4, PV_TOOLS_Y, 122, 14, TH->tab); char u[20]; snprintf(u, sizeof(u), "UNDO (PAT %c)", 'A' + gUndoIdx); text(65 - (int)strlen(u) * 4, PV_TOOLS_Y + 3, u, 1, RGB3(TH->tabTxt)); }   // takes back the last ACID / CLEAR
 	for (int i = 0; i < NSONG; i++) {
@@ -5759,7 +5790,9 @@ static void patViewTouch(int x, int y) {   // on press
 		return;
 	}
 	if (y >= PV_TOOLS_Y && y < PV_TOOLS_Y + 14 && x >= 130) {
-		int b = (x - 130) / 62; if (b > 2) b = 2;
+		int b = (x - 130) / 47; if (b > 3) b = 3;
+		if (b == 3) { int on = !gPatLock[gPatCur]; patLockSet(gPatCur, on); char m[48]; snprintf(m, sizeof m, on ? "PATTERN %c LOCKED: NO CHANGES" : "PATTERN %c UNLOCKED", 'A' + gPatCur); say(m); return; }
+		if (gPatLock[gPatCur]) { char m[48]; snprintf(m, sizeof m, "PATTERN %c IS LOCKED (PAT > LOCK)", 'A' + gPatCur); say(m); return; }
 		undoMark();
 		if (b == 0) { patReverse(); say("REVERSED (UNDO TAKES IT BACK)"); }
 		if (b == 1) { patRotate(); say("ROTATED ONE STEP LATER"); }
@@ -12617,7 +12650,7 @@ static int sessionLoadFiles(void) {   // voice lock let go: copy the next sessio
 }
 static void sessionLoadApply(int n) {   // voice lock held: the copied files become the live session
 	if (gSeqMode == 1) transportToggle();
-	playSet(NULL, 0, 0.8f); lastLoad(); seqLoad(); gMyDrumLoaded = 0; myDrumLoad();
+	playSet(NULL, 0, 0.8f); lastLoad(); seqLoad(); memset(gPatLock, 0, sizeof(gPatLock)); patLockSave(); gMyDrumLoaded = 0; myDrumLoad();   // (another session: its patterns, nothing locked)
 	char nm[24], wh[24], m[48];
 	if (gSessAt == 0) { gBPM = 156; say(n > 0 ? "EXAMPLE SESSION (LOAD AGAIN: YOUR NEWEST)" : "EXAMPLE SESSION: F MINOR, 156 BPM - PLAY IT"); return; }
 	sessionNameRead(gSessAt, nm, sizeof(nm), wh, sizeof(wh));
@@ -12625,6 +12658,7 @@ static void sessionLoadApply(int n) {   // voice lock held: the copied files bec
 	say(m);
 }
 static void sessionClear(void) {   // voice lock held: a clean start
+	memset(gPatLock, 0, sizeof(gPatLock)); patLockSave();   // (a new session: nothing locked)
 	if (gSeqMode == 1) transportToggle();
 	playSet(NULL, 0, 0.8f); panicAll();
 	memset(gPat, 0, sizeof(gPat)); seqClear(); gPatCur = 0; gSongLen = 0; gSongOn = 0; gSeqLen = 16;
@@ -12738,7 +12772,7 @@ int main(void) {
 	userLoad(); learnLoad();   // MIDI LEARN bindings
 	upCheckTook();
 	seqDefault();
-	seqLoad();
+	seqLoad(); patLockLoad();
 	presetLoad(gStyle, gPreset);   // start on PAD / SYRUP PAD
 	lastLoad();                    // ... or where you left off (AUTOSAVE)
 	LightEvent_Init(&gJobEv, RESET_ONESHOT);
@@ -13508,7 +13542,8 @@ int main(void) {
 		  gDrumInSeq = page == 7 && gGridOn && gPatView == 3 && !gPads;
 		  if (!gDrumOnB && !gDrumInSeq && (gDgEd || gTapRow >= 0)) { gDgEd = 0; if (gTapRow >= 0) { gTapRow = -1; gDrumRec = 0; } } }
 		{ static int hwT = 0; if (gHwOnB && ++hwT % 6 == 0) botDirty = 1; }
-		if (gMutFlash > 0 && --gMutFlash == 0) botDirty = 1;   // MUT lit for a moment   // live sensor meters   // live matrix dots, drawn LFO / motion playheads
+		if (gMutFlash > 0 && --gMutFlash == 0) botDirty = 1;   // MUT lit for a moment
+		if (patLockTick()) topDirty = botDirty = 1;   // PATTERN LOCK   // live sensor meters   // live matrix dots, drawn LFO / motion playheads
 		motTick(dt);
 		if (gAuditionT > 0 && (gAuditionT -= 1.0f / 60) <= 0 && !gSeqPlaying && curKey < 0) playSet(NULL, 0, 0.8f);
 		{ static int lastPos = -2, lastMode = -1; if (gGridOn && (gSeqPos != lastPos || gSeqMode != lastMode)) { lastPos = gSeqPos; lastMode = gSeqMode; botDirty = 1; } }

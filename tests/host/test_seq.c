@@ -134,7 +134,7 @@ static void SCRIPT(int fr) {
 		histStep(0); if (!stepHasNote(6, 60)) fail("REDO (SELECT+R) should bring REV back"); histStep(1); if (!stepHasNote(0, 60)) fail("UNDO again should restore");
 		patViewTouch(212, PV_TOOLS_Y + 6); if (!stepHasNote(1, 60) || !stepHasNote(4, 64) || gSeq[0].n) fail("ROT: everything one step later");
 		gSeq[7] = gSeq[4]; memset(&gSeq[4], 0, sizeof(Step)); patViewTouch(212, PV_TOOLS_Y + 6); if (!stepHasNote(0, 64)) fail("ROT should wrap the last step to step 1");
-		{ int v0 = gSeq[0].vel; int ch = 0; for (int k = 0; k < 6; k++) { patViewTouch(274, PV_TOOLS_Y + 6); if (gSeq[0].vel != v0) ch = 1; if (gSeq[0].nudge < -50 || gSeq[0].nudge > 50) fail("HUM nudge out of range"); }
+		{ int v0 = gSeq[0].vel; int ch = 0; for (int k = 0; k < 6; k++) { patViewTouch(245, PV_TOOLS_Y + 6); if (gSeq[0].vel != v0) ch = 1; if (gSeq[0].nudge < -50 || gSeq[0].nudge > 50) fail("HUM nudge out of range"); }
 		  if (!ch) fail("HUM should change velocities"); if (gSeq[1].n || gSeq[1].vel) fail("HUM should leave empty steps alone"); }
 		gPatView = 0;
 	}
