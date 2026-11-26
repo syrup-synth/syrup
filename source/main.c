@@ -5076,7 +5076,7 @@ static int gPageMarkDue = 0;   // SD writes the main loop makes once it has let 
 static const Param* gStickP = NULL;   // the param stickNudge last moved (for the value pop-up)
 static void pagePair(int page, float** px_, float** py_) {   // the two values a stick moves on each page
 	switch (page) {
-		case 1: case 2: *px_ = &gOsc[page - 1].pos; *py_ = &gCutoff; break;
+		case 1: case 2: *px_ = &gOsc[page - 1].pos; *py_ = gCtl ? &gCutoff : &gOsc[page - 1].warpAmt; break;   // (DEVICE: what the picture shows - the wave's position and its warp)
 		case 5: case 0: *px_ = &gMacro[0]; *py_ = &gMacro[1]; break;
 		case 6: *px_ = &gFxMix; *py_ = &gChorus; break;
 		case 7: *px_ = &gSwing; *py_ = &gSeqGate; break;
@@ -5138,17 +5138,18 @@ static void drawHeader(int page) {
 static void drawHeaderDevice(int page, const u8* acc) {
 	static const char* T[NCHIP] = {"OSC", "FILT", "MOD", "VOICE", "FX", "SEQ", "PADS", "MIX"};
 	rect(0, 0, 400, 14, RGB3(TH->tab));
-	if (recAny()) { int b = (osGetTime() / 300) & 1; rect(1, 1, 38, 12, b ? 220 : 120, b ? 40 : 20, b ? 40 : 20); rect(5, 5, 4, 4, 255, 255, 255); text(12, 3, "REC", 1, 255, 255, 255); }
-	else if (gSeqPlaying) { rect(1, 1, 38, 12, 40, 170, 90); for (int k = 0; k < 4; k++) rect(5 + k, 4 + k, 1, 7 - 2 * k, 255, 255, 255); text(12, 3, "RUN", 1, 255, 255, 255); }
-	else { rect(1, 1, 38, 12, RGB3(TH->bg)); rect(5, 4, 6, 6, RGB3(TH->dim)); text(14, 3, "STP", 1, RGB3(TH->dim)); }
 	int cur = gMixOn ? 7 : gPads ? 6 : chipOfPage(page);
+	{ int on = page == 0 && cur < 0; if (on) rect(0, 1, 40, 12, acc[0], acc[1], acc[2]); text(0, 3, "PATCH", 1, RGB3(on ? TH->ink : TH->dim)); }   // the patches: left of OSC (L from OSC gets there)
+	{ const int X = 361;   // the transport, top right (VIS / HW show there when you're on them)
+	  if (page == 8 || page == 9) { const char* sd = page == 8 ? "VIS" : "HW"; rect(X, 1, 38, 12, acc[0], acc[1], acc[2]); text(X + 19 - (int)strlen(sd) * 4, 3, sd, 1, RGB3(TH->ink)); }
+	  else if (recAny()) { int b = (osGetTime() / 300) & 1; rect(X, 1, 38, 12, b ? 220 : 120, b ? 40 : 20, b ? 40 : 20); rect(X + 4, 5, 4, 4, 255, 255, 255); text(X + 11, 3, "REC", 1, 255, 255, 255); }
+	  else if (gSeqPlaying) { rect(X, 1, 38, 12, 40, 170, 90); for (int k = 0; k < 4; k++) rect(X + 4 + k, 4 + k, 1, 7 - 2 * k, 255, 255, 255); text(X + 11, 3, "RUN", 1, 255, 255, 255); }
+	  else { rect(X + 4, 4, 6, 6, RGB3(TH->dim)); text(X + 13, 3, "STP", 1, RGB3(TH->dim)); } }
 	for (int i = 0; i < NCHIP; i++) {
 		int x = 40 + i * 40, on = i == cur;
 		text(x + 20 - (int)strlen(T[i]) * 4, 3, T[i], 1, RGB3(on ? TH->txt : TH->dim));
 		if (on) rect(x + 6, 12, 28, 2, acc[0], acc[1], acc[2]);
 	}
-	const char* side = page == 0 && cur < 0 ? "PATCH" : page == 8 ? "VIS" : page == 9 ? "HW" : NULL;
-	if (side) { int w = (int)strlen(side) * 8; rect(400 - w - 3, 1, w + 2, 12, acc[0], acc[1], acc[2]); text(400 - w - 2, 3, side, 1, RGB3(TH->ink)); }
 	// row 2: this part's pages on the left; the patch and the tempo on the right
 	int sect = PAGE_SECT[page], sx = 8;
 	for (int q = 0; q < NPAGES; q++) { int p = NAV[q]; if (PAGE_SECT[p] != sect) continue;
@@ -5646,8 +5647,8 @@ static void drawGrid(void) {
 			int a0 = st < RP0 ? RP0 : st, e0 = e > RP0 + ROLL_VIEW ? RP0 + ROLL_VIEW : e; if (a0 >= e0) continue;   // this page's part of it
 			int x = rollX(a0) + 1, w = rollX(e0) - x - 1, y = rollY(nt) + 1;
 			int play = gSeqPlaying && gSeqPos >= st && gSeqPos < e;
-			int vh = 3 + (ROLL_RH - 6) * p->vel / 255;   // velocity: how much of the bar is lit
-			rectP(x, y, w, ROLL_RH - 3, TH->grid); rectP(x, y + ROLL_RH - 3 - vh, w, vh, play ? TH->keyOn : st < gSeqLen ? TH->val : TH->dim);
+			rectP(x, y, w, ROLL_RH - 3, play ? TH->keyOn : st < gSeqLen ? TH->val : TH->dim);   // the note, solid
+			{ int vw = (w - 4) * p->vel / 255; if (vw < 1) vw = 1; rectP(x + 2, y + ROLL_RH - 6, w - 4, 2, TH->grid); rectP(x + 2, y + ROLL_RH - 6, vw, 2, TH->bg); }   // VELOCITY: a bar along the bottom of the note, as long as it's hard
 			if (a0 == st) rectP(x, y, 2, ROLL_RH - 3, TH->txt);   // the note's start (on this page)
 			if (p->fl & 1) rectP(x + 3, y + 2, 3, ROLL_RH - 7, TH->bg);   // accent
 			if (p->fl & 2) rectP(x + w, y + ROLL_RH / 2 - 2, 3, 2, TH->keyOn);   // slide into the next note
@@ -8223,12 +8224,28 @@ static void tapeStartPlay(int except) {   // every track on tape (but the one re
 	csndExecCmds(false); gTapeT0 = osGetTime(); gTapeWithSeq = gSeqMode == 1 || gTapeRec >= 0;
 	if (short_) say("TAPE: NOT ENOUGH CHIP CHANNELS FOR EVERY TRACK");
 }
+// TAPE SEAM: a take loops end to start, and the two rarely meet at the same level: a click every pass. The take is
+// faded out over its last 3 ms and in over its first 3 ms (re-encoded in one pass), so the seam always meets near
+// zero, where the ADPCM decoder restarts (it reloads from silence at the loop point).
+#define TAPE_XF 96
+static void tapeSeam(int t, int len) {
+	if (t < 0 || len < TAPE_XF * 4) return;
+	for (int k = 0; k < 2; k++) {
+		u8* d = gTp[t][k]; Ima de = {0, 0}, en = {0, 0};
+		for (int i = 0; i < len; i++) {
+			int b = d[i >> 1], v = imaDec(&de, (i & 1) ? b >> 4 : b & 15);
+			if (i < TAPE_XF || i >= len - TAPE_XF) { float f = i < TAPE_XF ? (i + 0.5f) / TAPE_XF : (len - i - 0.5f) / TAPE_XF; f = 0.5f - 0.5f * cosf(3.14159265f * f); v = (int)lroundf(v * f); }
+			int c = imaEnc(&en, v); if (i & 1) d[i >> 1] = (u8)((d[i >> 1] & 15) | (c << 4)); else d[i >> 1] = (u8)((d[i >> 1] & 0xF0) | c);   // (the decoder already read this byte: rewriting it in place is safe)
+		}
+	}
+}
 static void tapeRecStop(int keep) {
 	ndspSetCapture(NULL); gTapeState = 0; int t = gTapeRec; gTapeRec = -1;
 	if (gTapeThruWas >= 0) { gThru = gTapeThruWas; gTapeThruWas = -1; }
 	gSeqMode = 0; seqStop(); tapeStopPlay();
 	if (t < 0) return;
 	if (keep) {
+		tapeSeam(t, gTapeRecLen);   // no click where the loop comes round
 		if (gCsndOK) for (int k = 0; k < 2; k++) CSND_FlushDataCache(gTp[t][k], gTapeRecLen / 2);
 		gTpHave[t] = 1; gTapeLast = t; if (!gTapeLen) gTapeLen = gTapeRecLen;
 		char m[40]; snprintf(m, sizeof(m), "TAPE: TRACK %d RECORDED", t + 1); say(m);
@@ -13126,9 +13143,9 @@ int main(void) {
 					if (i < n) { gPreset = i - 1; if (browseStep(0, 1, 1)) { curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; } }
 			}
 			if (TTOUCH && !was && TTY < 14 && !gCtl) {   // DEVICE tabs: the transport, OSC ... MIX, PATCH / VIS / HW
-				if (TTX < 40) transportToggle();
+				if (TTX < 40) tabWant = 0;   // PATCH
 				else if (TTX < 360) tabWant = 1 + (TTX - 40) / 40;
-				else tabWant = page == 0 ? 9 : page == 8 ? 10 : 0;   // the right edge steps PATCH > VIS > HW
+				else if (page == 8) tabWant = 10; else if (page == 9) tabWant = 9; else transportToggle();   // the right edge: the transport (on VIS / HW: between the two)
 				topDirty = botDirty = 1;
 			}
 			else if (TTOUCH && !was && TTY < 28) {   // the TABS: a menu (tapping the one you're in steps through its pages), or one of its pages
@@ -13167,6 +13184,15 @@ int main(void) {
 			if (kDown & KEY_DUP) { liveRecToggle(); topDirty = botDirty = 1; }
 			if (kDown & KEY_DDOWN) { tapTempo(); topDirty = 1; }
 		}
+		int devPnl = !gCtl && gPnl && page != 0 && pnlSec() >= 0;   // DEVICE with the sliders up: X / B walk the tab's own controls (what the card on the right shows)
+		if (devPnl && (eD & (KEY_DUP | KEY_DDOWN))) {
+			const PnlSub* S = pnlCur(NULL); Param* L[20]; int m = 0, at = -1;
+			for (int i = 0; i < 4 && S->ch[i]; i++) { Param* q = pnlFind(S->ch[i], S->page); if (q) L[m++] = q; }
+			for (int i = 0; i < 16 && S->fd[i] && m < 20; i++) { Param* q = pnlFind(S->fd[i], S->page); if (q) L[m++] = q; }
+			for (int i = 0; i < m; i++) if (L[i] == gPnlHotP) at = i;
+			if (m) { at = at < 0 ? 0 : (at + ((eD & KEY_DDOWN) ? 1 : -1) + m) % m; gPnlHotP = L[at]; gSelReq = L[at]->name; topDirty = botDirty = 1; }
+			eD &= ~(KEY_DUP | KEY_DDOWN);
+		}
 		if (eD & KEY_DUP)   { sel[page] = (sel[page] + n - 1) % n; topDirty = 1; }
 		if (eD & KEY_DDOWN) { sel[page] = (sel[page] + 1) % n; topDirty = 1; }
 		int dir = 0, fast = 0;
@@ -13189,7 +13215,7 @@ int main(void) {
 		if (dir && PAGES[page][sel[page]].p == &gTheme) { dir = 0; gThemePick = !gThemePick; botDirty = 1; }   // THEME: < or > opens the picker
 		Param* pnlP = gPnlReq; gPnlReq = NULL;   // a PANEL slider / choice: through the same path as the D-pad
 		if (dir || pnlP) {
-			Param* p = pnlP ? pnlP : &PAGES[page][sel[page]]; if (pnlP) dir = 0;
+			Param* p = pnlP ? pnlP : devPnl && gPnlHotP ? (Param*)gPnlHotP : &PAGES[page][sel[page]]; if (pnlP) dir = 0;   // (DEVICE sliders: Y / A and the C-stick turn the picked one)
 			if ((p->dirty & (D_LOOPTAB | D_MICTAB | D_CAMTAB | D_DLWT | D_UPDATE)) && dir > 0 && !fast) {
 				if (p->dirty & D_UPDATE) upStart();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "NET > TABLE")) netTabStart();
@@ -13284,7 +13310,14 @@ int main(void) {
 		int smNow = stickModeNow();
 		if (smNow == SM_DATA || gStepEd >= 0) { gStickDX = fabsf(sx) > 0.12f ? sx : 0; cx = 0; }   // DATA (and the step editor, any mode): X edits the selected value (no bend), Y stays the STICK source
 		else gStickDX = 0;
-		if ((smNow == SM_PAGE || smNow == SM_MACROS) && !stickRouted && gStepEd < 0) {   // PAGE / MACROS (a patch that routes STICK keeps bend + STICK): the pad pushes two values up and down (hold it over to keep moving)
+		if (!gCtl && smNow == SM_PAGE && gStepEd < 0 && (page == 7 || page == 10 || page == 11) && !gEdStick) {   // DEVICE, the pages with a list on the left: up / down steps it
+			static float acc = 0; acc += sy * fabsf(sy) * dt * 10; int d = acc >= 1 ? -1 : acc <= -1 ? 1 : 0; if (d) acc = 0; if (fabsf(sy) < 0.05f) acc = 0;
+			if (d && page == 7) { gRollChord = (gRollChord + NCHORD + d) % NCHORD; say(gRollChord ? CHORD_NAMES[gRollChord] : "ROLL CHORD: 1 NOTE"); topDirty = 1; }
+			if (d && page == 11) { if (beatMayPaste()) { gBeatSel = (gBeatSel + NBEAT + d) % NBEAT; beatPaste(gBeatSel); gBeatFromPatch = 0; say(BEAT_NAMES_[gBeatSel]); } topDirty = botDirty = 1; }
+			if (d && page == 10) { int j = 0; for (int f = 0; f < NFXB; f++) if (gFxOrder[f] == gPnlSub[2]) j = f; j = (j + d + NFXB) % NFXB; gPnlSub[2] = gFxOrder[j]; gChSel = gPnlSub[2]; gPnlHotP = NULL; topDirty = botDirty = 1; }   // MASTER FX: the block in the chain
+			cx = 0; gStick = 0;
+		}
+		else if ((smNow == SM_PAGE || smNow == SM_MACROS) && (!stickRouted || !gCtl) && gStepEd < 0) {   // (DEVICE: the pad always works the picture)   // PAGE / MACROS (a patch that routes STICK keeps bend + STICK): the pad pushes two values up and down (hold it over to keep moving)
 			float* px_ = NULL; float* py_ = NULL;
 			if (smNow == SM_MACROS) { px_ = &gMacro[0]; py_ = &gMacro[1]; }
 			else pagePair(page, &px_, &py_);

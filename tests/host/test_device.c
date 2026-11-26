@@ -10,8 +10,8 @@ static void SCRIPT(int fr) {
 	if (fr == 6) HD = KEY_A;
 	if (fr == 8) { if (gFiltType != 1) fail("A should turn the picked setting up (FILTER %d)", gFiltType); HD = KEY_Y; }
 	if (fr == 10) { if (gFiltType != 0) fail("Y should turn it down (%d)", gFiltType); HD = KEY_B; }
-	if (fr == 12) { c0 = gCutoff; HD = KEY_A; }
-	if (fr == 14) { if (gCutoff <= c0) fail("B then A: the next setting (CUTOFF) should go up (%.3f -> %.3f)", c0, gCutoff); }
+	if (fr == 12) { if (!gPnlHotP || strcmp(gPnlHotP->name, "FILTER")) fail("B with the sliders up should pick the tab's first control (%s)", gPnlHotP ? gPnlHotP->name : "none"); gPnlHotP = pnlFind("CUTOFF", 4); c0 = gCutoff; HD = KEY_A; }
+	if (fr == 14) { if (gCutoff <= c0) fail("A should turn the picked slider (CUTOFF) up (%.3f -> %.3f)", c0, gCutoff); }
 	if (fr == 16) HD = KEY_DRIGHT;
 	if (fr == 18) { if (gSeqMode != 1) fail("D-pad > should start the transport"); HD = KEY_DLEFT; }
 	if (fr == 20) { if (gSeqMode == 1) fail("D-pad < should stop it"); }
@@ -31,6 +31,14 @@ static void SCRIPT(int fr) {
 	if (fr == 76) { if (gCurPage != 0) fail("R from HW should be PATCH (%d)", gCurPage); HD = KEY_R; }
 	if (fr == 78) { if (gCurPage != 1) fail("R from PATCH should be OSC (%d)", gCurPage); HD = KEY_DDOWN; }
 	if (fr == 80) HD = KEY_DDOWN;   // TAP TEMPO
-	if (fr == 82) { if (gBPM < 40 || gBPM > 240) fail("TAP TEMPO out of range (%d)", gBPM); shotTop("shots/device_osc.ppm"); done = 1; }
+	if (fr == 82) { if (gBPM < 40 || gBPM > 240) fail("TAP TEMPO out of range (%d)", gBPM); shotTop("shots/device_osc.ppm"); }
+	// the sliders' card: X / B walk the tab's own controls, A turns the picked one
+	if (fr == 84) { gPnlHotP = NULL; HD = KEY_B; }
+	if (fr == 86) { if (!gPnlHotP || strcmp(gPnlHotP->name, "ON")) fail("B on OSC A should pick its first control (%s)", gPnlHotP ? gPnlHotP->name : "none"); HD = KEY_X; }
+	if (fr == 88) { if (!gPnlHotP || strcmp(gPnlHotP->name, "DIST A AMT")) fail("X from the first should wrap to the last (%s)", gPnlHotP ? gPnlHotP->name : "none"); c0 = gOsc[0].distAmt; HD = KEY_A; }
+	if (fr == 90) { if (gOsc[0].distAmt <= c0) fail("A should turn the picked slider up (%.2f)", gOsc[0].distAmt); gPageWant = 10; }
+	if (fr >= 94 && fr < 120) CY = -150;   // MASTER FX: the circle pad steps the chain on the left
+	if (fr == 92) r0 = (float)gPnlSub[2];
+	if (fr == 121) { if ((float)gPnlSub[2] == r0) fail("circle pad on MASTER FX should step the chain's block"); done = 1; }
 }
-int main(void) { TEST_DEVICE = 1; mkdir("sd", 0777); mkdir("shots", 0777); remove("sd/settings.bin"); loadFont(); FRMAX = 84; app_main(); if (!done) fail("didn't run"); printf("device: the DEVICE controls\n"); return gFails ? 1 : 0; }
+int main(void) { TEST_DEVICE = 1; mkdir("sd", 0777); mkdir("shots", 0777); remove("sd/settings.bin"); loadFont(); FRMAX = 123; app_main(); if (!done) fail("didn't run"); printf("device: the DEVICE controls\n"); return gFails ? 1 : 0; }
