@@ -49,7 +49,7 @@ static void SCRIPT(int fr) {
 	if (fr == 268) { int bad = 0, n = 0; for (int st = 0; st < 64; st++) for (int k = 0; k < gSeq[st].n; k++) { n++; int pc = ((gSeq[st].note[k] - gRoot) % 12 + 12) % 12; if (pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10) bad++; if (partDegAt(st) < 0) bad++; }
 		if (gSeqLen != 64 || !n || bad) fail("RIFF: 4 bars, in key, only under chords (len %d, %d notes, %d off)", gSeqLen, n, bad); }
 	if (fr == 269) shotBot("shots/part_riff.ppm");
-	// HICHORD: back to CHORD, REC on, the transport playing: hold V, push the stick up (7th) - written as long as it's held
+	// FLAVOR: back to CHORD, REC on, the transport playing: hold V, push the stick up (7th) - written as long as it's held
 	// NUDGE: the last note written moves a step with <NDG / NDG>
 	if (fr == 269) { memset(gSeq, 0, sizeof(gSeq)); gSeqLen = 16; stepSetNote(4, 60, 1); gSeq[4].vel = 150; gNdSt = 4; gNdNt = 60; gridButtons(3 * 320 / GRID_BTNS + 5); gridButtons(3 * 320 / GRID_BTNS + 5); gridButtons(2 * 320 / GRID_BTNS + 5);
 		if (!stepHasNote(5, 60) || stepHasNote(4, 60) || gSeq[5].vel != 150) fail("NUDGE: the note should be one step later, velocity kept"); }
@@ -57,8 +57,8 @@ static void SCRIPT(int fr) {
 	if (fr == 273) { memset(gCtDeg, -1, sizeof(gCtDeg)); ctSet(8, 3, 4, 0); gCgSel = 8; nudgeDo(-1); nudgeDo(-1); if (gCtDeg[6] != 3 || gCtLen[6] != 4 || gCtDeg[8] != -1) fail("NUDGE: the chord should be 2 steps earlier (%d %d)", gCtDeg[6], gCtLen[6]); }
 	if (fr == 274) { memset(gCtDeg, -1, sizeof(gCtDeg)); gLiveRec = 1; gRollPg = 0; }
 	if (fr >= 276 && fr < 300) { TOUCH = 1; TX = 10; TY = CG_Y + (6 - 4) * CG_RH + 6; if (fr > 280) CY = 120; }
-	if (fr == 290) { if (gCgBtn != 4 || gCgQ != 1) fail("HICHORD: holding V with the stick up = V7 (%d %d)", gCgBtn, gCgQ); shotBot("shots/part_hichord.ppm"); shotTop("shots/part_hichord_top.ppm"); }
-	if (fr == 302) { CY = 0; gLiveRec = 0; int a = -1; for (int i = 0; i < CT_N; i++) if (gCtDeg[i] == 4) a = i; if (a < 0) fail("HICHORD: REC should write the held chord");
-		else if (gCtLen[a] < 3 || gCtLen[a] > 5 || gCtQ[a] != 1) fail("HICHORD: as long as it was held (~3 steps), a 7th (%d %d)", gCtLen[a], gCtQ[a]); transportToggle(); done = 1; }
+	if (fr == 290) { if (gCgBtn != 4 || gCgQ != 1) fail("FLAVOR: holding V with the stick up = V7 (%d %d)", gCgBtn, gCgQ); shotBot("shots/part_hichord.ppm"); shotTop("shots/part_hichord_top.ppm"); }
+	if (fr == 302) { CY = 0; gLiveRec = 0; int a = -1; for (int i = 0; i < CT_N; i++) if (gCtDeg[i] == 4) a = i; if (a < 0) fail("FLAVOR: REC should write the held chord");
+		else if (gCtLen[a] < 3 || gCtLen[a] > 5 || gCtQ[a] != 1) fail("FLAVOR: as long as it was held (~3 steps), a 7th (%d %d)", gCtLen[a], gCtQ[a]); transportToggle(); done = 1; }
 }
 int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 306; app_main(); if (!done) fail("didn't run"); printf("parts: CHORD bars, BASS line, mute, DRUMS, saved\n"); return gFails ? 1 : 0; }

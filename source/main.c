@@ -3636,7 +3636,7 @@ static void i_bells(SPatch* p) { p->master = 0.6f; OA.table = T_DIGITAL; OA.pos 
 static void i_saw85(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 5; OA.detune = 22; OA.width = 1; OB.on = 1; OB.table = T_PWM; OB.pos = 0.4f; OB.oct = 1; OB.level = 0.22f;
 	ENV1(0.6f, 0, 1.0f, 0.95f, 2.2f); LFO(0, LS_SINE, 0, 0.09f); LFO(1, LS_TRI, 0, 0.31f); MOD(2, SRC_LFO1, DST_PITCH, 0.006f); MOD(3, SRC_LFO2, DST_OFCUT, 0.08f);   // the wow of an old cassette
 	OUTF(OF_L12, 0.62f, 0.12f, 0, 0); MFX(FX_CHORUS, 0.35f, 0.7f, 0.5f); REVB(0.45f, RV_HALL); DLYS(0.2f, S4, DL_TAPE); p->dlyWow = 0.6f; p->eqLow = -3; }
-static void i_analord(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SQR; OA.oct = -1; OA.level = 0.8f; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = -1; OB.detune = 9; OB.level = 0.5f;
+static void i_acidbox(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SQR; OA.oct = -1; OA.level = 0.8f; OB.on = 1; OB.table = T_BASIC; OB.pos = SAW; OB.oct = -1; OB.detune = 9; OB.level = 0.5f;
 	ENV1(0.002f, 0, 0.25f, 0.4f, 0.12f); ENV2(0.0f, 0, 0.22f, 0.0f, 0.1f); MOD(0, SRC_ENV2, DST_OFCUT, 0.5f); MOD(2, SRC_VEL, DST_OFCUT, 0.2f);
 	OUTF(OF_ACID, 0.3f, 0.7f, 0.35f, 0.35f); p->voiceMode = 1; p->glide = 0.07f; DLYS(0.18f, S8D, DL_DUB); REVB(0.12f, RV_SPRING); NOSTICK; lane(p, 0, 4, 4, 0.2f, 0.8f, 1); p->xyMode = 3; }
 static void i_sub(SPatch* p) { p->master = 0.8f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -1; OB.on = 1; OB.table = T_BASIC; OB.pos = TRI; OB.level = 0.18f;
@@ -3698,7 +3698,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"VOWEL KIT", d_wvowel}, {"FM KIT", d_wgrowl}, {"PLUCK KIT", d_wpluck}, {"SYNC KIT", d_wsync}, {"PULSE KIT", d_wpwm}, {"SOFT KIT", d_wharm}},
 	{{"BOOM BAP BASS", g_boombap}, {"TRAP SP-12", g_trap}, {"EUCLID CHIP", g_euclid}, {"BEATBOX TAP", g_beatbox}, {"LOOP PARTNER", g_loopcomp},
 	 {"TAPE LOOP", g_tapeloop}, {"VARIECHO", g_variecho}, {"SLOWDOWN", g_slowdown}},
-	{{"MUSIC BOX", i_bells}, {"SAW 85", i_saw85}, {"ANALORD", i_analord}, {"DEEP SUB", i_sub}, {"PREPARED", i_prepared},
+	{{"MUSIC BOX", i_bells}, {"SAW 85", i_saw85}, {"ACID BOX", i_acidbox}, {"DEEP SUB", i_sub}, {"PREPARED", i_prepared},
 	 {"SQUELCH", i_squelch}, {"WARP STRINGS", i_warpstr}, {"TOY BOX", i_toybox}, {"ALL-IN-ONE", i_allinone}},
 };
 #define NUSER 8
@@ -5841,7 +5841,7 @@ static int strumScaleNote(int base, int q) {   // STRUM NOTES SCALE: string q = 
 	int r = padDeg(base, gPadSel), k = -40; while (scaleNote(base + gRoot, k) < r) k++;
 	return scaleNote(base + gRoot, k + q) - 12;
 }
-static int gPadFlip = 0;   // HICHORD: the stick pulled down = the chord's other colour (major <-> minor)
+static int gPadFlip = 0;   // FLAVOR: the stick pulled down = the chord's other colour (major <-> minor)
 static int padChord(int base, int pad, int band, int side, int* out) {
 	int r = padDeg(base, pad), t3 = padDeg(base, pad + 2), t5 = padDeg(base, pad + 4), t7 = padDeg(base, pad + 6), t9 = padDeg(base, pad + 8);
 	if (gPadFlip && t5 - r == 7) t3 = r + (t3 - r == 4 ? 3 : 4);
@@ -5872,7 +5872,7 @@ static int PROGS[NPROG][4] = {{0, 0, 0, 0}, {0, 4, 5, 3}, {5, 3, 0, 4}, {0, 5, 3
 // step, -1 none; gCtLen: how many steps it lasts. One chord at a time.
 #define CT_N 64
 static s8 gCtDeg[CT_N] = {[0 ... CT_N - 1] = -1}; static u8 gCtLen[CT_N], gCtQ[CT_N]; static int gCtGap = 0;
-#define NCTQ 5   // a chord's colour (HICHORD's stick): 0 triad, 1 7th, 2 9th, 3 sus4, 4 inversion
+#define NCTQ 5   // a chord's colour (FLAVOR's stick): 0 triad, 1 7th, 2 9th, 3 sus4, 4 inversion
 static const char* CTQ_SUF[NCTQ] = {"", "7", "9", "SUS", "/I"};
 static void trkLiveNote(int c, int note, float vel);
 static int gCtHeld[6], gCtHeldN = 0;   // the CHORD part's notes sounding (its own voices, not the keys')
@@ -11003,7 +11003,7 @@ static void ctEnsure(void) {   // writing in the CHORD part: the progression bec
 	if (pr) for (int b = 0; b < 4; b++) ctSet(b * 16, PROGS[pr][b], 16, 0);
 	gProg = PROG_CUSTOM;
 }
-static int stickQ(void) {   // HICHORD: the circle pad colours the chord - up 7TH, right 9TH, down SUS4, left INVERSION
+static int stickQ(void) {   // FLAVOR: the circle pad colours the chord - up 7TH, right 9TH, down SUS4, left INVERSION
 	circlePosition cp; hidCircleRead(&cp); int ax = abs(cp.dx), ay = abs(cp.dy);
 	if (ax < 60 && ay < 60) return 0;
 	if (ay >= ax) return cp.dy > 0 ? 1 : 3;
@@ -11081,7 +11081,7 @@ static void drawPartNotes(int k, int full) {   // k = 2 BASS over this page (k =
 		partGhostRect(x, rollY(nt) + 1, w, 2, full);
 	}
 }
-// CHORD part, HICHORD style: the 7 chords of the key down the left are buttons (hold one: it plays; the circle pad colours
+// CHORD part, FLAVOR style: the 7 chords of the key down the left are buttons (hold one: it plays; the circle pad colours
 // it; with REC and PLAY it's written as long as you hold it). The grid: a page = a bar of 16 steps, chords any length -
 // tap / drag along a row to write one, tap a chord to take it out.
 #define CG_KW 44
@@ -11202,7 +11202,7 @@ static void drawPartsHead(int x0, int y0, int w) {
 static void drawPartTopInfo(void) {   // the left panel's lower half on the SEQ page: CHORD = how to play it, BASS = the lines
 	const u8* c = PART_COL[gSeqPart];
 	if (gSeqPart == 1) {
-		text(10, RC_Y - 2, "HICHORD: HOLD A CHORD", 1, RGB3(TH->dim));
+		text(10, RC_Y - 2, "FLAVOR: HOLD A CHORD", 1, RGB3(TH->dim));
 		int cx = 100, cy = RC_Y + 40;   // the circle pad and what each way does
 		outline(cx - 14, cy - 10, 28, 20, c[0] / 2, c[1] / 2, c[2] / 2); rect(cx - 3, cy - 3, 6, 6, c[0], c[1], c[2]);
 		static const char* QN[5] = {"TRIAD", "7TH", "9TH", "SUS4", "INV"};
@@ -12465,7 +12465,7 @@ int main(void) {
 			else if (page == 7 && gGridOn && !gPatView && !gPads) mode = gStepEd >= 0 ? 1 : 4;
 			if (kHeld & KEY_SELECT) mode = 0;   // SELECT held: the pad is the QUICK ring
 			if (mode == 1 && (kHeld & KEY_TOUCH) && gGtLong) mode = 0;   // the note still held: its PARAMETER LOCKS have the pad and B
-			// HICHORD: a pad held, the circle pad reshapes its chord as you play - up 7TH, up-right 9TH, right SUS4, left INVERSION,
+			// FLAVOR: a pad held, the circle pad reshapes its chord as you play - up 7TH, up-right 9TH, right SUS4, left INVERSION,
 			// down MAJOR <-> MINOR (down-left: that + 7TH), back to the middle: the chord you touched
 			gEdStick = 0;
 			{ static int hcDir = -1, hcI = -1, hcB = 0, hcS = 1; int held = 0;
@@ -12480,7 +12480,7 @@ int main(void) {
 						case 6: flip = 1; nm = "MAJOR <> MINOR"; break; case 5: flip = 1; band = 1; nm = "OTHER COLOUR + 7TH"; break; case 3: band = 1; side = 0; nm = "7TH, INVERTED"; break; case 7: side = 2; band = 1; nm = "7SUS4"; break; }
 					hcDir = dir; gPadFlip = flip; float v;
 					padsGo(gPadBase, hcI, band, side, PAD_H / 2, 1, &v); gPdB = hcB; gPdS = hcS;
-					if (dir >= 0) { char m[32]; snprintf(m, sizeof m, "HICHORD: %s", nm); say(m); }
+					if (dir >= 0) { char m[32]; snprintf(m, sizeof m, "FLAVOR: %s", nm); say(m); }
 					topDirty = botDirty = 1;
 				}
 				mode = 0; gEdStick = 1;
@@ -12805,7 +12805,7 @@ int main(void) {
 				if (!prevTouch) {
 					int b = t.px * NCHIP / 320, again = !gPads && chipOfPage(page) == b;
 					if (b == 7) { gMixOn = !gMixOn; if (gMixOn) gPads = 0; }
-					else if (b == 6) { gMixOn = 0; gPads = !gPads; gPadSel = -1; if (gPads && page == 7) page = 1; /* the piano roll owns the whole screen: leave it for the pads */ if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: HOLD ONE + CIRCLE PAD = HICHORD (UP 7TH, RIGHT SUS4, DOWN MINOR)"); }
+					else if (b == 6) { gMixOn = 0; gPads = !gPads; gPadSel = -1; if (gPads && page == 7) page = 1; /* the piano roll owns the whole screen: leave it for the pads */ if (!latch) playSet(NULL, 0, 0.8f); if (gPads) say("PADS: HOLD ONE + CIRCLE PAD = FLAVOR (UP 7TH, RIGHT SUS4, DOWN MINOR)"); }
 					else {
 						gPads = 0; gMixOn = 0;
 						if (b == 0) page = again ? (page % 3) + 1 : 1;   // OSC A -> OSC B -> SUB+NOISE (the sub-tabs say which)
@@ -12910,6 +12910,7 @@ int main(void) {
 		if (prevTouch && !touching && grainEdTouch(0, 0, 0, 1)) botDirty = 1;
 		if (gDrumOnB && prevTouch && !touching && gPtHold) { if (partTouch(gLastTX, gLastTY, 0, 1, page)) topDirty = botDirty = 1; }
 		else if (gDrumOnB && prevTouch && !touching && drumGridRelease()) botDirty = 1;   // let go of the grain editor: SCAN carries on from there
+		{ static int padsWas = 0; if (gPads && !padsWas && latch) { latch = 0; gLatchShow = 0; allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = botDirty = 1; } padsWas = gPads; }   // PADS on: LATCH off (a latched chord would keep ringing under the pads)
 		if (gPads && prevTouch && !touching) { if (latch || gLiveRec || gSeqMode == 2) padsSettle(1); else gPadPend = 0; gStrumZone = -1; if (gLiveRec) liveUp(); if (!latch && gPadSel >= 0) playSet(NULL, 0, 0.8f); botDirty = 1; }   // let go of the pad
 		padsTick(dt); if (!gAudioClock) { progTick(); chordArpTick(dt); bassTick(dt); } if (gProgDirty) { gProgDirty = 0; if (gPads) botDirty = 1; }
 		int freshPress = touching && !prevTouch;   // a new tap restrikes the key even if it's the one still held (LATCH, drum pads)

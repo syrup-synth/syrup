@@ -21,7 +21,7 @@ Syrup is one C program (`source/main.c`, on libctru, citro2d and citro3d) built 
 
 ## 3. Sequencing, drums, tape and connectivity
 
-- **One transport, two sequencers.** The piano roll (64-step patterns with per-step locks, ratchets and trig conditions, 16 patterns, song mode) and the drum sequencer (10 rows, each with its own length, rate and Euclid fill, per-drum sound shaping, WAV kits from `/3ds/syrup/kits`). The chord pads (strum strip, morphing, HiChord moves, progressions, their own arp) and bass lines (11 patterns plus HOLD and a custom line) play on the same clock. Swing follows the clock's own step count, so odd-length patterns stay together.
+- **One transport, two sequencers.** The piano roll (64-step patterns with per-step locks, ratchets and trig conditions, 16 patterns, song mode) and the drum sequencer (10 rows, each with its own length, rate and Euclid fill, per-drum sound shaping, WAV kits from `/3ds/syrup/kits`). The chord pads (strum strip, morphing, FLAVOR moves (hold a pad, the circle pad adds a 7th, 9th, sus4, inversion or flips it minor), progressions, their own arp) and bass lines (11 patterns plus HOLD and a custom line) play on the same clock. Swing follows the clock's own step count, so odd-length patterns stay together.
 - **Tape and grains.** Four tracks recorded from the output as IMA-ADPCM (`TAPE_MAX`, 2 minutes a track), which the sound chip decodes itself, with speeds from 1/4 to X4 and WAV export. GRAINS plays the tape, OSC A's table or the mic as grains.
 - **Safety.** A crash guard (`running.txt` turns on safe mode at the next start), background SD saving (`saverMain`), and the DSP firmware copied automatically from the console's own sound app (`dspAutoDump`).
 - **Connectivity.**
