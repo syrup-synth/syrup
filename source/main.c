@@ -564,7 +564,7 @@ static const u8 FMALG_MOD[FM_NALG][FM_OPS] = {{2, 4, 8, 0}, {2, 12, 0, 0}, {6, 0
 static const u8 FMALG_CAR[FM_NALG] = {1, 1, 1, 1, 5, 7, 7, 15};
 static const float FMRAT[FM_NRAT] = {0.5f, 1, 1.41f, 1.5f, 2, 2.5f, 3, 3.5f, 4, 4.5f, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
 static const char* FMRAT_NAMES[FM_NRAT] = {"0.5", "1", "1.41", "1.5", "2", "2.5", "3", "3.5", "4", "4.5", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"};
-static const char* FMWAVE_NAMES[FM_NWAVE] = {"SINE", "HALF", "ABS", "QUARTER"};
+static const char* FMWAVE_NAMES[FM_NWAVE] = {"SINE", "HALF", "ABS", "QTR"};
 #define FMW_BITS 11
 #define FMW_N (1 << FMW_BITS)
 static float gFmWave[FM_NWAVE][FMW_N]; static int gFmWaveOK = 0;
@@ -7195,14 +7195,16 @@ static void drawSeqStrip(void) {
 // ---- PANEL (OSC / FILT / FX): the section's settings as sliders on the touch screen, a smaller keyboard under them.
 // A section has sub-pages (OSC A | OSC B | SUB+NOISE, FILTER | ENV 1 | ..., LOFI | MOD | ...): a row of choices (tap the
 // left / right of one: back / on) and up to 8 sliders (drag). Each setting goes through the same path as the D-pad.
-typedef struct { const char* tab; int page; const char* ch[3]; const char* fd[8]; } PnlSub;
+typedef struct { const char* tab; int page; const char* ch[4]; const char* fd[16]; } PnlSub;   // more than 8 sliders: two rows of 8 (thick, shorter)
 static const PnlSub PNL_OSC[6] = {
 	{"OSC A", 1, {"ON", "TABLE", "WARP"}, {"WT POS", "WARP AMT", "LEVEL", "DETUNE", "OCTAVE", "SEMI", "UNISON", "BLEND"}},
 	{"OSC B", 2, {"ON", "TABLE", "WARP"}, {"WT POS", "WARP AMT", "LEVEL", "DETUNE", "OCTAVE", "SEMI", "UNISON", "BLEND"}},
 	{"SUB+NOISE", 3, {"SUB SHAPE", "NOISE TYPE", "CHIP WIDTH"}, {"SUB LEVEL", "SUB OCTAVE", "NOISE LEVEL", "CHIP SQUARE", "CHIP OCTAVE", "FINE"}},
 	{"DIST", 3, {"DIST A", "DIST B"}, {"DIST A AMT", "DIST B AMT"}},
-	{"FM", 3, {"ENGINE A", "ENGINE B", "ALGO"}, {"FEEDBACK", "FM VEL", "OP1 LEVEL", "OP2 LEVEL", "OP3 LEVEL", "OP4 LEVEL"}},
-	{"OPS", 3, {"OP", "OP RATIO", "OP WAVE"}, {"OP LEVEL", "OP ATK", "OP DEC", "OP SUS", "OP REL", "OP DETUNE"}}};
+	{"FM", 3, {"ENGINE A", "ENGINE B", "ALGO", "FEEDBACK"}, {"OP1 LEVEL", "OP1 RATIO", "OP1 WAVE", "OP1 DETUNE", "OP2 LEVEL", "OP2 RATIO", "OP2 WAVE", "OP2 DETUNE",
+		"OP3 LEVEL", "OP3 RATIO", "OP3 WAVE", "OP3 DETUNE", "OP4 LEVEL", "OP4 RATIO", "OP4 WAVE", "OP4 DETUNE"}},   // all four operators: two rows, an operator to each half
+	{"ENV", 3, {"ALGO", "FM VEL", "FEEDBACK"}, {"OP1 ATK", "OP1 DEC", "OP1 SUS", "OP1 REL", "OP2 ATK", "OP2 DEC", "OP2 SUS", "OP2 REL",
+		"OP3 ATK", "OP3 DEC", "OP3 SUS", "OP3 REL", "OP4 ATK", "OP4 DEC", "OP4 SUS", "OP4 REL"}}};
 static const PnlSub PNL_FILT[4] = {
 	{"FILTER", 4, {"FILTER", "FILTER 2", "OUT FILTER"}, {"CUTOFF", "RES", "KEYTRACK", "LOW CUT", "DRIVE AMT", "OUT CUTOFF", "OUT RES", "OUT DRIVE"}},
 	{"ENV 1", 4, {"DRIVE"}, {"ENV1 ATK", "ENV1 HOLD", "ENV1 DEC", "ENV1 SUS", "ENV1 REL"}},
@@ -7264,12 +7266,13 @@ static void vfader(int cx, int top, int bot, int w, float t, float zero, const u
 static float vfaderT(int y, int top, int bot) { float t = (bot - y) / (float)(bot - top); return t < 0 ? 0 : t > 1 ? 1 : t; }
 static const char* pnlShort(const char* n) {   // a slider's name in 4 letters
 	static const char* L[][2] = {{"WT POS", "POS"}, {"WARP AMT", "WARP"}, {"LEVEL", "LVL"}, {"DETUNE", "DTUN"}, {"OCTAVE", "OCT"}, {"UNISON", "UNI"}, {"BLEND", "BLND"},
-		{"SUB LEVEL", "SUB"}, {"SUB OCTAVE", "SOCT"}, {"DIST A AMT", "A"}, {"DIST B AMT", "B"}, {"FEEDBACK", "FB"}, {"FM VEL", "VEL"}, {"OP1 LEVEL", "OP1"}, {"OP2 LEVEL", "OP2"}, {"OP3 LEVEL", "OP3"}, {"OP4 LEVEL", "OP4"}, {"OP LEVEL", "LVL"}, {"OP ATK", "ATK"}, {"OP DEC", "DEC"}, {"OP SUS", "SUS"}, {"OP REL", "REL"}, {"OP DETUNE", "DTUN"}, {"NOISE LEVEL", "NOIS"}, {"CHIP SQUARE", "CHIP"}, {"CHIP OCTAVE", "COCT"}, {"CUTOFF", "CUT"}, {"KEYTRACK", "KEY"},
+		{"SUB LEVEL", "SUB"}, {"SUB OCTAVE", "SOCT"}, {"DIST A AMT", "A"}, {"DIST B AMT", "B"}, {"FEEDBACK", "FB"}, {"FM VEL", "VEL"}, {"OP LEVEL", "LVL"}, {"OP ATK", "ATK"}, {"OP DEC", "DEC"}, {"OP SUS", "SUS"}, {"OP REL", "REL"}, {"OP DETUNE", "DTUN"}, {"NOISE LEVEL", "NOIS"}, {"CHIP SQUARE", "CHIP"}, {"CHIP OCTAVE", "COCT"}, {"CUTOFF", "CUT"}, {"KEYTRACK", "KEY"},
 		{"LOW CUT", "LOW"}, {"DRIVE AMT", "DRV"}, {"OUT CUTOFF", "OCUT"}, {"OUT RES", "ORES"}, {"OUT DRIVE", "ODRV"}, {"OUT ENV2", "OENV"}, {"LOFI RATE", "RATE"},
 		{"MIX OVERDRIVE", "OVDR"}, {"FILTER SCREAM", "SCRM"}, {"MOD RATE", "RATE"}, {"MOD DEPTH", "DPTH"}, {"MOD MIX", "MIX"}, {"FX COLOR", "COLR"}, {"CHORUS", "CHOR"},
 		{"EQ LOW", "LOW"}, {"EQ MID", "MID"}, {"EQ HIGH", "HIGH"}, {"3D ORBIT", "ORBT"}, {"ORBIT RATE", "ORAT"}, {"REVERB MIX", "REV"}, {"REV SIZE", "SIZE"},
 		{"REV DAMP", "DAMP"}, {"DELAY MIX", "DLY"}, {"TAPE WOW", "WOW"}, {"TAPE SAT", "SAT"}, {"FX MIX", "FX"}, {"MASTER", "VOL"}, {"PUMP", "PUMP"}, {"OTT", "OTT"}};
 	for (unsigned i = 0; i < sizeof(L) / sizeof(L[0]); i++) if (!strcmp(L[i][0], n)) return L[i][1];
+	if (n[0] == 'O' && n[1] == 'P' && n[2] >= '1' && n[2] <= '4' && n[3] == ' ') { const char* r = n + 4; return !strcmp(r, "LEVEL") ? "LVL" : !strcmp(r, "DETUNE") ? "DTUN" : !strcmp(r, "RATIO") ? "RAT" : r; }   // OP1 ATK -> ATK (the operator's number sits by its group)
 	if (!strncmp(n, "ENV", 3) && strlen(n) > 5) return n + 5;   // ENV1 ATK -> ATK
 	return n;
 }
@@ -7298,7 +7301,7 @@ static void pnlFmt(const Param* p, char* v, int len) {   // a value in 5 letters
 static const char* pnlChName(const char* n) {
 	static const char* L[][2] = {{"FILTER", "TYPE"}, {"FILTER 2", "F2"}, {"OUT FILTER", "OUT"}, {"REVERB TYPE", "REV"}, {"DELAY TYPE", "DLY"}, {"DELAY SYNC", "SYNC"},
 		{"SUB SHAPE", "SUB"}, {"NOISE TYPE", "NOISE"}, {"CHIP WIDTH", "CHIP"}, {"LOFI BITS", "BITS"}, {"DSP GRIT", "GRIT"}, {"MASTER FX", "FX"}, {"MOD FX", "TYPE"},
-		{"SPEAKER EQ", "SPKR"}, {"PUMP RATE", "PUMP"}, {"SHIMMER", "SHIM"}, {"FREEZE", "FRZ"}, {"ENGINE A", "A"}, {"ENGINE B", "B"}, {"OP RATIO", "RATIO"}, {"OP WAVE", "WAVE"}, {"ALGO", "ALG"}};
+		{"SPEAKER EQ", "SPKR"}, {"PUMP RATE", "PUMP"}, {"SHIMMER", "SHIM"}, {"FREEZE", "FRZ"}, {"ENGINE A", "A"}, {"ENGINE B", "B"}, {"FEEDBACK", "FB"}, {"FM VEL", "VEL"}, {"OP RATIO", "RATIO"}, {"OP WAVE", "WAVE"}, {"ALGO", "ALG"}};
 	for (unsigned i = 0; i < sizeof(L) / sizeof(L[0]); i++) if (!strcmp(L[i][0], n)) return L[i][1];
 	return n;
 }
@@ -7315,13 +7318,23 @@ static void drawPanelCard(int page, int sel) {   // the top screen's right side 
 	int nf = pnlFaders(S);
 	for (int i = 0; i < nf; i++) {   // the sliders below, at a glance
 		Param* q = pnlFind(S->fd[i], S->page); if (!q) continue; char vv[16]; pnlFmt(q, vv, sizeof(vv));
-		int x = 214 + (i & 1) * 90, y = 116 + (i / 2) * 14, hot = q == p;
+		int x = 214 + (i & 1) * 90, y = 116 + (i / 2) * (nf > 8 ? 11 : 14), hot = q == p;
 		text(x, y, pnlShort(q->name), 1, (hot ? A : TH->dim)[0], (hot ? A : TH->dim)[1], (hot ? A : TH->dim)[2]); text(x + 84 - (int)strlen(vv) * 8, y, vv, 1, PC_TXT);
 	}
 	text(214, 210, gCtl ? "D-PAD + SLIDERS BELOW" : "ABXY + SLIDERS BELOW", 1, RGB3(TH->dim));
 }
-static int pnlFaders(const PnlSub* s) { int n = 0; while (n < 8 && s->fd[n]) n++; return n; }
-static int pnlChoices(const PnlSub* s) { int n = 0; while (n < 3 && s->ch[n]) n++; return n; }
+static int pnlFaders(const PnlSub* s) { int n = 0; while (n < 16 && s->fd[n]) n++; return n; }
+static int pnlChoices(const PnlSub* s) { int n = 0; while (n < 4 && s->ch[n]) n++; return n; }
+static void pnlGeom(int nf, int i, int* cx, int* top, int* bot, int* w) {   // where slider i sits: one row of up to 8, or two rows of 8 in two groups of 4
+	if (nf > 8) { int r = i / 8, c = i % 8; *cx = 4 + 39 * c + 19 + (c >= 4 ? 4 : 0); *top = PNL_FD_Y + r * 53 + 10; *bot = *top + 30; *w = 32; return; }
+	int fw = nf ? 312 / nf : 312; if (fw > 52) fw = 52; int x0 = 160 - fw * nf / 2;
+	*cx = x0 + i * fw + fw / 2; *top = PNL_TT; *bot = PNL_TB; *w = fw - 6 > 46 ? 46 : fw - 6;
+}
+static int pnlAt(int nf, int x, int y) {   // which slider a touch is on (-1: none)
+	if (nf > 8) { if (y < PNL_FD_Y || y >= PNL_KR_Y) return -1; int r = (y - PNL_FD_Y) / 53, c = (x - 4 - (x >= 164 ? 4 : 0)) / 39; if (r > 1) r = 1; if (c < 0 || c > 7) return -1; int i = r * 8 + c; return i < nf ? i : -1; }
+	int fw = nf ? 312 / nf : 312; if (fw > 52) fw = 52; int x0 = 160 - fw * nf / 2;
+	if (y < PNL_FD_Y || y >= PNL_KR_Y || x < x0 || x >= x0 + fw * nf) return -1; return (x - x0) / fw;
+}
 static void drawPanel(void) {
 	int ns, sec = pnlSec(); const PnlSub* S = pnlCur(&ns); const u8* A = pnlAcc(sec);
 	rect(0, TAB_H, 320, PNL_KB_Y - TAB_H, PC_BG);
@@ -7342,19 +7355,20 @@ static void drawPanel(void) {
 	for (int i = 0; i < nc; i++) {
 		Param* p = pnlFind(S->ch[i], S->page); if (!p) continue;
 		int x = 8 + i * 308 / nc, w = 308 / nc; char v[24]; paramFmt(p, v, sizeof(v));
-		char sh[8]; snprintf(sh, sizeof(sh), "%.5s", pnlChName(p->name));
-		int room = (w - 8) / 8 - (int)strlen(sh) - 1; if (room < 3) room = 3; if ((int)strlen(v) > room) v[room] = 0;
-		text(x, PNL_CH_Y + 5, sh, 1, PC_DIM); text(x + ((int)strlen(sh) + 1) * 8, PNL_CH_Y + 5, v, 1, A[0], A[1], A[2]);
+		char sh[8]; snprintf(sh, sizeof(sh), "%.5s", nc >= 4 && !strcmp(p->name, "ALGO") ? "" : pnlChName(p->name));   // (four across: the algorithm speaks for itself)
+		int room = (w - 8) / 8 - (int)strlen(sh) - (*sh ? 1 : 0); if (room < 3) room = 3; if ((int)strlen(v) > room) v[room] = 0;
+		text(x, PNL_CH_Y + 5, sh, 1, PC_DIM); text(x + (*sh ? ((int)strlen(sh) + 1) * 8 : 0), PNL_CH_Y + 5, v, 1, A[0], A[1], A[2]);
 		if (p->type != PT_F) downTri(x + w - 14, PNL_CH_Y + 7, TH->dim);
 	}
-	int nf = pnlFaders(S), fw = nf ? 312 / nf : 312; if (fw > 52) fw = 52; int x0 = 160 - fw * nf / 2;
+	int nf = pnlFaders(S);
+	if (nf > 8) rect(162, PNL_FD_Y + 4, 1, 98, RGB3(TH->line));   // two rows: a line between the halves
 	for (int i = 0; i < nf; i++) {
 		Param* p = pnlFind(S->fd[i], S->page); if (!p) continue;
-		int cx = x0 + i * fw + fw / 2, hot = p == gPnlHotP; float t = paramNorm(p); char v[16]; pnlFmt(p, v, sizeof(v));
-
-		int fwid = fw - 6 > 46 ? 46 : fw - 6;   // wide bars: a thumb's width
-		vfader(cx, PNL_TT, PNL_TB, fwid, t, p->mn < 0 ? (0 - p->mn) / (p->mx - p->mn) : 0, A, 0, v);
-		const char* sh = pnlShort(p->name); text(cx - (int)strlen(sh) * 4, PNL_TB + 7, sh, 1, (hot ? A : TH->dim)[0], (hot ? A : TH->dim)[1], (hot ? A : TH->dim)[2]);
+		int cx, top, bot, fwid, hot = p == gPnlHotP; pnlGeom(nf, i, &cx, &top, &bot, &fwid); float t = paramNorm(p); char v[16]; pnlFmt(p, v, sizeof(v));
+		vfader(cx, top, bot, fwid, t, p->mn < 0 ? (0 - p->mn) / (p->mx - p->mn) : 0, A, 0, v);   // wide bars: a thumb's width
+		const char* sh = pnlShort(p->name); int ly = nf > 8 ? bot + 3 : PNL_TB + 7;
+		text(cx - (int)strlen(sh) * 4, ly, sh, 1, (hot ? A : TH->dim)[0], (hot ? A : TH->dim)[1], (hot ? A : TH->dim)[2]);
+		if (nf > 8 && i % 4 == 0 && p->name[0] == 'O' && p->name[1] == 'P' && p->name[2] >= '1' && p->name[2] <= '4') { char d[2] = {p->name[2], 0}; text(cx - 22, ly, d, 1, A[0], A[1], A[2]); }   // the operator's number
 	}
 }
 static float gOctFlash[2];
@@ -7396,19 +7410,20 @@ static int pnlTouch(int x, int y, int press, int release) {   // 1 = redraw
 		if (p->type != PT_F && p->names != PRESS_RIGHT && (p->mx - p->mn < LS_MAX || p->names == TABLE_NAME_DUMMY)) { lsOpenParam(p); return 1; }
 		int w = 308 / nc, rx = x - 8 - i * w; gPnlReq = p; gPnlReqDir = rx < w * 2 / 5 ? -1 : 1; return 1;
 	}
-	int nf = pnlFaders(S), fw = nf ? 312 / nf : 312; if (fw > 52) fw = 52; int x0 = 160 - fw * nf / 2;
-	if (press) { if (y < PNL_FD_Y || y >= PNL_KR_Y || x < x0 || x >= x0 + fw * nf) return 0; gPnlDrag = (x - x0) / fw; }
+	int nf = pnlFaders(S);
+	if (press) { int i = pnlAt(nf, x, y); if (i < 0) return 0; gPnlDrag = i; }
 	if (gPnlDrag < 0 || gPnlDrag >= nf) return 0;
+	int gcx, gtop, gbot, gw; pnlGeom(nf, gPnlDrag, &gcx, &gtop, &gbot, &gw); (void)gcx; (void)gw;
 	Param* p = pnlFind(S->fd[gPnlDrag], S->page); if (!p) return 0;
 	gPnlHotP = p; gSelReq = p->name;
 	if (p->type == PT_I || p->type == PT_E) {   // OCTAVE, SEMI, UNISON...: steps from where you touched (a tap never jumps an octave), 14 px a step
 		static int y0, v0; if (press) { y0 = y; v0 = *(int*)p->p; return 1; }
 		int mx = (int)p->mx; if (p->names == TABLE_NAME_DUMMY) mx = gTableCount - 1;
-		int v = v0 + (y0 - y) / 14; v = v < (int)p->mn ? (int)p->mn : v > mx ? mx : v;
+		int v = v0 + (y0 - y) / (nf > 8 ? 8 : 14); v = v < (int)p->mn ? (int)p->mn : v > mx ? mx : v;
 		if (v == *(int*)p->p) return 0;
 		gPnlReq = p; gPnlReqDir = 0; gPnlReqV = v; return 1;
 	}
-	float t = (PNL_TB - y) / (float)(PNL_TB - PNL_TT); t = t < 0 ? 0 : t > 1 ? 1 : t;
+	float t = (gbot - y) / (float)(gbot - gtop); t = t < 0 ? 0 : t > 1 ? 1 : t;
 	if (fabsf(t - paramNorm(p)) < 0.002f) return press;
 	gPnlReq = p; gPnlReqT = t; gPnlReqDir = 0; return 1;
 }
