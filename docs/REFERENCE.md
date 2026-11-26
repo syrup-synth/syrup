@@ -88,7 +88,6 @@ Four MACRO knobs (mod sources MACRO 1-4); XY PAD can play MACRO 1+2 or 3+4 inste
 - **CAMERA:** CAM LIGHT and CAM COLOR mod sources (thumbnail on the page).
 - **Motion:** TWIST (gyroscope) and SHAKE mod sources join TILT and BREATH.
 - **LINK:** sync tempo and sequencer steps with another console running Syrup, over local wireless (one HOSTs, the other JOINs) or infrared (IR SEND / IR RECEIVE, consoles pointed at each other).
-- **BEAT LIGHT:** both screens' backlights flash on each arp / sequencer step.
 - OUTPUT AUTO (VOICE+FX) switches to surround when headphones are plugged in; New 3DS / New 2DS run at 804 MHz automatically.
 - Visualizer: TRAILS (the GPU keeps and fades the last frame) and PARTICLES (sparks on notes and beats).
 
@@ -408,6 +407,7 @@ It can't check what only the hardware does: real chip quirks, CPU load on a 2DS,
 ## Mirror, Stream and the phone pages
 - **MIRROR**: turn WI-FI MIDI on, then open `http://<the 3DS>:8080/mirror` on a computer. The page loads Syrup for the web (from `3ds/syrup/web/index.html` on the SD card, or GitHub Pages) and follows the 3DS: notes, drum hits, glides, the live mod values, the page, the patch, the pattern and the drum grid. Its sound is off until you press SOUND ON.
 - **STREAM**: `http://<the 3DS>:8080/stream` is the clean view for OBS (a Browser source, 1920x1080, "Control audio via OBS"): the VISUALIZER full window. Options: `ov=pckb` overlays (Patch, Chord name, Keys, Bpm), `bg=clear` makes the background see-through, `sound=1`, `view=follow` shows the 3DS's own pages instead.
+- **SESSIONS** (START menu): SAVE SESSION keeps the sound, the patterns + song and the drums together. It opens the keyboard with a random two-word name already in it (keep it or type your own) and keeps the date and time with it. LOAD SESSION steps through them newest first (each shows its name and date), then the **EXAMPLE SESSION** (a full demo song in F minor at 156 BPM), then back to the newest. NEW SESSION saves this one and starts clean.
 - **LINK PHONE** (START menu): turns WI-FI MIDI on and puts a QR code on the bottom screen; point the phone's camera at it and the phone pages open. On the phone, **SOUND HERE** loads Syrup on the phone and plays along with the 3DS (the mirror). A or B closes the QR.
 - **2ND UNIT** (the tab at the top of LINK PHONE, or LEFT / RIGHT): the QR opens a whole Syrup on the phone or a computer (`http://<the 3DS>:8080/unit`) with its own patch, patterns and drums, running on the 3DS's tempo and transport like a second unit. The 3DS is the master clock; PLAY / STOP and BPM work from either side. The browser runs itself ahead by its own sound delay; if it still sounds early or late, the **IN TIME BY EAR** - / + in its LINK panel nudges it 5 ms at a time (kept). The phone pages also have a **2ND UNIT** button.
 - **Phone pages** (`http://<the 3DS>:8080/`): KEYS, CHORDS (the pads: top 9th, middle 7th, bottom triad; slide = MORPH; the progression row; a strum strip), DRUMS (General MIDI notes on channel 10 play the drum machine), XY, KNOBS (the first 8 settings of the page on the 3DS, CC 20-27).

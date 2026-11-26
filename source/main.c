@@ -239,7 +239,6 @@ static void mipsBuildLevel(Mips* m, int L) {
 
 // new cycle -> spectrum, normalise (from the 512-harmonic peak), rebuild the levels in use
 static void mipsSet(Mips* m, const float* cyc, u32 needMask) {
-	__atomic_store_n(&m->built, 0, __ATOMIC_SEQ_CST);   // first: the old levels stop counting as built for the new spectrum before anything changes
 	for (int n = 0; n < CYC; n++) { m->spec[n].re = cyc[n]; m->spec[n].im = 0; }
 	fft(m->spec, CYC, 0);
 	if (gInWorker) fxService();
@@ -3926,7 +3925,8 @@ static int askName(const char* cur, char* out, int len) {   // the system keyboa
 	swkbdSetHintText(&kb, gAskHint); gAskHint = "NAME THIS PATCH";
 	swkbdSetInitialText(&kb, cur);
 	swkbdSetValidation(&kb, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
-	if (swkbdInputText(&kb, buf, sizeof(buf)) != SWKBD_BUTTON_CONFIRM) return 0;
+	gAway = 1; SwkbdButton bt = swkbdInputText(&kb, buf, sizeof(buf)); gAway = 0; gBeat++;   // (typing is a wait on purpose: no hang report)
+	if (bt != SWKBD_BUTTON_CONFIRM) return 0;
 	int n = 0;
 	for (const unsigned char* c = (const unsigned char*)buf; *c && n < len - 1 && n < 13; c++) {
 		if (*c >= 0x80) { while ((c[1] & 0xC0) == 0x80) c++; out[n++] = '?'; continue; }   // one ? per non-ASCII character
@@ -4114,7 +4114,7 @@ static Param P_HW[] = {
 	{"UPDATE SYRUP", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_UPDATE},
 	{"GET WAVETABLES", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
 	{"NET > TABLE", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT},
-	PE("LINK", &gLink, 6, LINK_NAMES_P, D_LINK), PE("BEAT LIGHT", &gBeatLight, 2, ONOFF, 0),
+	PE("LINK", &gLink, 6, LINK_NAMES_P, D_LINK),   // (BEAT LIGHT taken out: Matt, Nov 25)
 	PEND};
 static const char* ONOFF2[2] = {"OFF", "ON"};
 static Param P_MASTER[] = {
@@ -7633,6 +7633,16 @@ static const float CSECHO_BEATS[4] = {0.5f, 0.75f, 1.0f, 1.5f};
 static int gEchoUnits[2] = {-1, -1}, gEchoCh[2] = {-1, -1}, gEchoOn = 0, gEchoLen = 0, gEchoBpm = 0;
 static s16* gEchoBuf[2];
 static int echoReserved(int c) { return gEchoOn && (c == gEchoCh[0] || c == gEchoCh[1]); }
+// The second chip has two capture units, shared by CHIP ECHO and CHIP > FX (never both at once). If one can't be had
+// (another app holding it, the chip not answering), say so once, then wait 3 s before trying again: it used to try
+// (and say it) every frame.
+static u64 gCapFailT = 0;
+static void capBusy(const char* what) {
+	u64 t = osGetTime(); static u64 saidT = 0;
+	if (t - saidT > 10000) { saidT = t; char m[48]; snprintf(m, sizeof m, "%s: THE CHIP'S CAPTURE IS BUSY", what); say(m); }
+	gCapFailT = t;
+}
+static int capWait(void) { return gCapFailT && osGetTime() - gCapFailT < 3000; }   // 1 = too soon to try again
 static int gCsWaitFree = 0;   // set by the main loop's echo / CHIP > FX ticks (voice lock held): the wait lets the lock go meanwhile
 static void csWait(void) {   // never spin on the chip's done flag: a wedged chip would hang Syrup forever
 	csndExecCmds(false);
@@ -7660,7 +7670,7 @@ static void echoStart(void) {
 		if (!gEchoBuf[k]) gEchoBuf[k] = (s16*)linearAlloc(32728 * 2);
 		if (!gEchoBuf[k]) return;
 		memset(gEchoBuf[k], 0, len * 2); CSND_FlushDataCache(gEchoBuf[k], len * 2);
-		u32 u; if (R_FAILED(CSND_AcquireCapUnit(&u))) { if (k) CSND_ReleaseCapUnit(gEchoUnits[0]); say("NO CAPTURE UNIT FREE"); return; }
+		u32 u; if (R_FAILED(CSND_AcquireCapUnit(&u))) { if (k) { CSND_ReleaseCapUnit(gEchoUnits[0]); gEchoUnits[0] = -1; } capBusy("CHIP ECHO"); return; }
 		gEchoUnits[k] = u;
 	}
 	int n = 0;   // two channels nobody else uses
@@ -7693,7 +7703,7 @@ static void echoTickL(void) {
 	static int bpmFor = 0, bpmLast = 0; if (gBPM != bpmLast) { bpmLast = gBPM; bpmFor = 0; } else if (bpmFor < 1000) bpmFor++;
 	int bpmMoved = gEchoOn && gEchoBpm != gBPM && bpmFor >= 15;   // a new tempo re-times the echo once it has settled (~1/4 s), not on every BPM step of a drag
 	gCsWaitFree = 1;
-	if (want && (!gEchoOn || bpmMoved || pitchWas != gCsEchoPitch)) { pitchWas = gCsEchoPitch; echoStart(); }
+	if (want && ((!gEchoOn && !capWait()) || bpmMoved || pitchWas != gCsEchoPitch)) { pitchWas = gCsEchoPitch; echoStart(); }
 	else if (!want && gEchoOn) echoStop();
 	gCsWaitFree = 0;
 	static float lastFb = -1;
@@ -8221,7 +8231,7 @@ static void thruStart(void) {
 	echoStop();
 	for (int k = 0; k < 2; k++) {
 		if (!gThruBuf[k]) gThruBuf[k] = (s16*)linearAlloc(THRU_N * 2);
-		u32 u; if (!gThruBuf[k] || R_FAILED(CSND_AcquireCapUnit(&u))) { if (k && gThruUnits[0] >= 0) { CSND_ReleaseCapUnit(gThruUnits[0]); gThruUnits[0] = -1; } say("CHIP > FX: NO CAPTURE UNIT FREE"); gThru = 0; return; }
+		u32 u; if (!gThruBuf[k] || R_FAILED(CSND_AcquireCapUnit(&u))) { if (k && gThruUnits[0] >= 0) { CSND_ReleaseCapUnit(gThruUnits[0]); gThruUnits[0] = -1; } capBusy("CHIP > FX"); gThru = 0; return; }
 		gThruUnits[k] = u;
 		memset(gThruBuf[k], 0, THRU_N * 2); CSND_FlushDataCache(gThruBuf[k], THRU_N * 2);
 	}
@@ -8247,7 +8257,7 @@ static void thruStart(void) {
 static void thruTick(void) {   // main loop, voice lock held
 	int want = gThru && gCsndOK && gAudioOK;
 	gCsWaitFree = 1;
-	if (want && !gThruOn) thruStart();
+	if (want && !gThruOn && !capWait()) thruStart();
 	else if (!want && gThruOn) thruStop();
 	gCsWaitFree = 0;
 	if (!gThruOn) return;
@@ -10000,6 +10010,8 @@ static void drumBuild(int kitArg) {   // synthesise kick / snare / hat into line
 				for (int i = 0; i < n; i++) { float v = gDrF[i]; out[i] = (s16)((v > 1 ? 1 : v < -1 ? -1 : v) * 30000); } len[d] = n;
 			}
 		}
+		{ int L = len[d], F = L / 6 < 1000 ? L / 6 : 1000;   // every drum fades out over its last 30 ms: a sound cut off mid-swing (the 808 kick was still at a fifth of its level) clicked at its end
+		  for (int i = 0; i < F; i++) { int k = L - F + i; out[k] = (s16)(out[k] * (float)(F - 1 - i) / F); } }
 		if (gCsndOK) CSND_FlushDataCache(out, len[d] * 2);
 	}
 	LightLock_Lock(&gVoiceLock);   // the swap under the lock: a hit never gets a new buffer with the old length
@@ -12141,17 +12153,27 @@ static void sessionNameWrite(int k, const char* name) {
 	FILE* f = fopen(p, "wb"); if (f) { fprintf(f, "%s\n%s\n", name, w); fclose(f); }
 }
 static void tapeErase(int t); static void seqLoad(void);
-static int sessionLoadFiles(void) {   // voice lock let go: copy the next session's files into place (0 = none saved)
-	int n = sessionCount(); if (!n) { say("NO SAVED SESSIONS YET (START > SAVE SESSION)"); return 0; }
-	gSessAt = gSessAt <= 1 || gSessAt > n ? n : gSessAt - 1;   // newest first, then back
+#include "example_session.h"
+static int sessionLoadFiles(void) {   // voice lock let go: copy the next session's files into place (returns how many are saved, or -1: the example)
+	int n = sessionCount();
+	// newest first, then back, then the EXAMPLE (gSessAt 0), then the newest again
+	gSessAt = n == 0 ? 0 : gSessAt < 0 || gSessAt > n || gSessAt == 0 ? n : gSessAt - 1;
 	saverIdle();   // (the SAVER isn't halfway through one of these files)
+	if (gSessAt == 0) {
+		static const unsigned char* EX[3] = {EX_LAST, EX_SEQ, EX_DRUMS}; static const int EXN[3] = {sizeof(EX_LAST), sizeof(EX_SEQ), sizeof(EX_DRUMS)};
+		mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777);
+		for (int f = 0; f < 3; f++) { char b[96]; snprintf(b, sizeof(b), "sdmc:/3ds/syrup/%s", SESS_F[f]); FILE* o = fopen(b, "wb"); if (o) { fwrite(EX[f], 1, EXN[f], o); fclose(o); } }
+		return n ? n : -1;
+	}
 	for (int f = 0; f < 3; f++) { char a[96], b[96]; snprintf(a, sizeof(a), "sdmc:/3ds/syrup/sessions/S%02d-%s", gSessAt, SESS_F[f]); snprintf(b, sizeof(b), "sdmc:/3ds/syrup/%s", SESS_F[f]); fileCopy(a, b); }
 	return n;
 }
 static void sessionLoadApply(int n) {   // voice lock held: the copied files become the live session
 	if (gSeqMode == 1) transportToggle();
 	playSet(NULL, 0, 0.8f); lastLoad(); seqLoad(); gMyDrumLoaded = 0; myDrumLoad();
-	char nm[24], wh[24], m[48]; sessionNameRead(gSessAt, nm, sizeof(nm), wh, sizeof(wh));
+	char nm[24], wh[24], m[48];
+	if (gSessAt == 0) { gBPM = 156; say(n > 0 ? "EXAMPLE SESSION (LOAD AGAIN: YOUR NEWEST)" : "EXAMPLE SESSION: F MINOR, 156 BPM - PLAY IT"); return; }
+	sessionNameRead(gSessAt, nm, sizeof(nm), wh, sizeof(wh));
 	if (nm[0]) snprintf(m, sizeof(m), "%d/%d %s  %s", gSessAt, n, nm, wh); else snprintf(m, sizeof(m), "SESSION %d OF %d (LOAD AGAIN: THE ONE BEFORE)", gSessAt, n);
 	say(m);
 }
@@ -12189,7 +12211,7 @@ static void saverMain(void* a) {
 		if (gSaverQuit) break;
 	}
 }
-static void saverIdle(void) { for (int t = 0; t < 300 && (gSaveBusy || gSaveWant); t++) svcSleepThread(10000000); }
+static void saverIdle(void) { for (int t = 0; t < 300 && (gSaveBusy || gSaveWant); t++) { svcSleepThread(10000000); gBeat++; } }   // (a wait on purpose: the hang watcher stays quiet)
 static void saverWant(int w) {
 	if (!gSaver) { saverRun(w); return; }
 	__atomic_or_fetch(&gSaveWant, w, __ATOMIC_SEQ_CST); LightEvent_Signal(&gSaveEv);
@@ -12318,7 +12340,7 @@ int main(void) {
 	saverStart();
 	if (gCsndOK && gDrumBuilt != gKit && gDrumWant < 0) gDrumWant = gKit;   // the kit is made now, not on the first drum tap (that took a second)
 #ifndef SYRUP_HOST
-	{ s32 pr = 0x30; svcGetThreadPriority(&pr, CUR_THREAD_HANDLE); threadCreate(hangWatch, NULL, 0x2000, pr > 0x19 ? pr - 1 : pr, 0, true); }
+	{ s32 pr = 0x30; svcGetThreadPriority(&pr, CUR_THREAD_HANDLE); threadCreate(hangWatch, NULL, 0x8000, pr > 0x19 ? pr - 1 : pr, 0, true); }
 #endif
 	while (aptMainLoop()) {
 #ifndef SYRUP_HOST
@@ -13083,7 +13105,7 @@ int main(void) {
 		if (gBrightSaveDue) { gBrightSaveDue = 0; gSavePage = page; gSaveMark[0] = 0; saverWant(SV_PAGE); }
 		if (gUserSaveDue) { gUserSaveDue = 0; WHERE("USER SAVE"); if (!userSave()) say("COULDN'T SAVE THE PATCH TO THE SD CARD"); }
 		if (gSessDue) { int w = gSessDue; gSessDue = 0;   // SESSIONS: the file work, with the voice lock let go
-			if (w == 3) { int n = sessionLoadFiles(); if (n) { LightLock_Lock(&gVoiceLock); sessionLoadApply(n); LightLock_Unlock(&gVoiceLock); } topDirty = botDirty = 1; }
+			if (w == 3) { int n = sessionLoadFiles(); LightLock_Lock(&gVoiceLock); sessionLoadApply(n < 0 ? 0 : n); LightLock_Unlock(&gVoiceLock); topDirty = botDirty = 1; }
 			else { char def[24], nm[24]; sessionRandomName(def, sizeof(def));   // the name: the keyboard, a random one already typed in (cancel keeps it)
 				LightLock_Lock(&gVoiceLock); gAskHint = "NAME THIS SESSION"; if (!askName(def, nm, sizeof(nm))) snprintf(nm, sizeof(nm), "%s", def); seqSnap(); lastSnap(); LightLock_Unlock(&gVoiceLock);
 				int n = sessionSaveNow(); char m[48]; if (n > 0) sessionNameWrite(n, nm);
