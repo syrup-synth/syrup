@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Syrup">
 <meta name="theme-color" content="#120d08">
-<title>Syrup — web</title>
+<title>Syrup</title>
 <style>
   :root { --bg: #120d08; --panel: #1d150d; --line: #3a2a18; --txt: #e8c48a; --dim: #8a6a44; --hot: #f5a623; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -112,6 +112,7 @@
         <button class="b" id="kbd" title="Computer keyboard: the 3DS buttons, or a piano (Z S X D C... and Q 2 W 3 E...)">KEYS: PAD</button>
         <button class="b" id="phone" title="Play this Syrup from a phone: chord pads, drum pads, keys, XY, knobs">PHONE</button>
         <button class="b" id="full">FULL</button>
+        <button class="b" id="inst" style="display:none" title="Install Syrup as an app on this Mac or PC (from the Claude desktop app)">INSTALL APP</button>
         <button class="b" id="gpl" title="Controller buttons: by position (Nintendo) or by the letters on an Xbox-style pad">ABXY: POS</button>
       </div>
       <div id="msg">Loading…</div>
@@ -466,6 +467,29 @@ function unitStart() {
       msg.textContent = 'SECOND UNIT: looking for the 3DS...'; setTimeout(conn, was ? 500 : 1500); };
   })();
 }
+// ---- DESKTOP APP: opened in the Claude desktop app, Syrup can install as its own Mac / PC app (own window and icon).
+// Anywhere else (GitHub Pages, a 3DS loader, a phone) there's no window.claude and none of this runs.
+(function () {
+  if (!window.claude || !window.claude.use) return;
+  window.claude.use('desktop').then(function (d) {
+    if (!d) return;
+    if (d.app) {   // the installed app's own window: its icon and size
+      var c = document.createElement('canvas'); c.width = c.height = 256; var g = c.getContext('2d');
+      g.fillStyle = '#1a1410'; g.fillRect(0, 0, 256, 256);
+      g.fillStyle = '#f0a040'; g.beginPath(); g.moveTo(128, 30); g.bezierCurveTo(150, 80, 205, 120, 205, 160); g.arc(128, 160, 77, 0, Math.PI); g.bezierCurveTo(51, 120, 106, 80, 128, 30); g.fill();
+      g.fillStyle = '#1a1410'; g.font = 'bold 110px ui-monospace,Menlo,Consolas,monospace'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('S', 128, 168);
+      d.app.dock.setIcon(c.toDataURL('image/png')).catch(function () {});
+      d.window.setOptions({ width: 1100, height: 780, minWidth: 640, minHeight: 480 }).catch(function () {});
+      return;
+    }
+    if (!d.install) return;
+    d.install.state().then(function (st) {
+      if (st !== 'available') return;
+      var b = document.getElementById('inst'); b.style.display = '';
+      b.onclick = function () { d.install.request().then(function (r) { if (r === 'installed') b.style.display = 'none'; }).catch(function () {}); };
+    }).catch(function () {});
+  }).catch(function () {});
+})();
 // ---- MIRROR / STREAM: this page was opened from a 3DS (WI-FI MIDI on, http://<the 3DS>:8080/mirror or /stream).
 // It runs Syrup muted and plays / draws exactly what the 3DS sends; STREAM is the clean view for OBS (browser source).
 // /stream?ov=pckb (overlays: Patch, Chord, Keys, Bpm; ov= for none) &bg=clear (see-through background) &sound=1
