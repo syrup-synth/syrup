@@ -46,8 +46,12 @@ static void SCRIPT(int fr) {
 	if (fr == 266) { if (gSeqPart != 0 || !gGridOn) fail("PARTS: SYNTH should go back to the roll"); gRollLow = 47; shotBot("shots/part_synth.ppm"); shotTop("shots/part_synth_top.ppm"); }
 	// RIFF: with chords, 4 bars, every note in the chord under it
 	if (fr == 267) { gPartMute[0] = 0; TOUCH = 1; TX = 6 * 320 / GRID_BTNS + 10; TY = XY_Y + 5; }
-	if (fr == 268) { int bad = 0, n = 0; for (int st = 0; st < 64; st++) for (int k = 0; k < gSeq[st].n; k++) { n++; int pc = ((gSeq[st].note[k] - gRoot) % 12 + 12) % 12; if (pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10) bad++; if (partDegAt(st) < 0) bad++; }
-		if (gSeqLen != 64 || !n || bad) fail("RIFF: 4 bars, in key, only under chords (len %d, %d notes, %d off)", gSeqLen, n, bad); }
+	if (fr == 268) { int bad = 0, n = 0; for (int st = 0; st < 64; st++) for (int k = 0; k < gSeq[st].n; k++) { n++; int pc = ((gSeq[st].note[k] - gRoot) % 12 + 12) % 12; if (pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10) bad++; }
+		if (gSeqLen != 64 || !n || bad) fail("RIFF: 4 bars, in key (len %d, %d notes, %d off)", gSeqLen, n, bad);
+		// RIFF without chords: RIFF CHORDS OFF, or a muted CHORD part, writes one bar in the key
+		gRiffChords = 0; acidGen(); if (gSeqLen != 16 || !gSeq[0].n) fail("RIFF CHORDS OFF: one bar in the key (len %d)", gSeqLen);
+		gRiffChords = 1; gPartMute[1] = 1; acidGen(); if (gSeqLen != 16) fail("RIFF: a muted CHORD part shouldn't lead it (len %d)", gSeqLen);
+		gPartMute[1] = 0; acidGen(); }
 	if (fr == 269) shotBot("shots/part_riff.ppm");
 	// FLAVOR: back to CHORD, REC on, the transport playing: hold V, push the stick up (7th) - written as long as it's held
 	// NUDGE: the last note written moves a step with <NDG / NDG>

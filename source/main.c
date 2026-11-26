@@ -827,7 +827,7 @@ static void buildNoise(void) {
 #define NVS 48
 #define NCS 32
 #define NOISE_CH 23
-enum { R_A0, R_A1, R_A2, R_B0, R_B1, R_B2, R_SUB, R_TAP, R_SOFT, R_COUNT };   // R_SOFT: one DSP channel carrying a note's oscillator layers mixed in software (SOFT LAYERS)
+enum { R_A0, R_A1, R_A2, R_B0, R_B1, R_B2, R_SUB, R_TAP, R_SOFT, R_SSUB, R_COUNT };   // R_SSUB: the SUB on its own SOFT channel (sample-smooth level: no zipper clicks)   // R_SOFT: one DSP channel carrying a note's oscillator layers mixed in software (SOFT LAYERS)
 enum { BK_DSP, BK_CSND };
 typedef struct {
 	int active, started, note, stage, stage2, stage3, stage4, isEcho, nch;
@@ -925,6 +925,7 @@ typedef struct {
 	// FM ENGINE: the layers of an ENGINE FM oscillator render the operators (fm[k]); one set of envelopes for the note
 	u8 fm[SOFT_L]; u32 fph[SOFT_L][FM_OPS]; float fprev[SOFT_L][2];
 	FmP fp; float fe[FM_OPS]; int fst[FM_OPS]; int fgate; float fvel, famt;
+	volatile float ag;   // the limiter (and TRANCE GATE): applied in the render, sample by sample - as a channel volume it stepped every 5 ms (clicks)
 } SoftCh;
 static u8 gSoftFresh[NCH], gSoftLive[NCH]; static float gSoftLimS = 0, gSoftLimA = 0;   // fresh: its mix goes straight on (the render fades it in); live: a carrier this frame
 static int gSoftPend[SOFT_L], gSoftPendN = 0;   // startVoice -> startLayer: the layers the carrier takes
@@ -996,19 +997,19 @@ static void softBlockS(SoftCh* S, s16* out) {   // one block of one channel (gSo
 	}
 	for (int k = 0; k < n; k++) {
 		if (S->fm[k]) {
-			float gl = S->cl[k], gr = S->cr[k], dgl = (S->gl[k] - gl) * (1.0f / SOFT_BLK), dgr = (S->gr[k] - gr) * (1.0f / SOFT_BLK);
+			float ag = S->ag, tl = S->gl[k] * ag, tr = S->gr[k] * ag, gl = S->cl[k], gr = S->cr[k], dgl = (tl - gl) * (1.0f / SOFT_BLK), dgr = (tr - gr) * (1.0f / SOFT_BLK);
 			fmLayer(S, k, fg0, fg1, L, R, gl, dgl, gr, dgr);
-			S->cl[k] = S->gl[k]; S->cr[k] = S->gr[k]; continue;
+			S->cl[k] = tl; S->cr[k] = tr; continue;
 		}
 		const s16* t = S->tab[k]; if (!t) continue;
 		u32 ph = S->ph[k], inc = S->inc[k], sh = S->sh[k], mk = S->mask[k];
-		float gl = S->cl[k], gr = S->cr[k], dgl = (S->gl[k] - gl) * (1.0f / SOFT_BLK), dgr = (S->gr[k] - gr) * (1.0f / SOFT_BLK);
+		float ag = S->ag, tl = S->gl[k] * ag, tr = S->gr[k] * ag, gl = S->cl[k], gr = S->cr[k], dgl = (tl - gl) * (1.0f / SOFT_BLK), dgr = (tr - gr) * (1.0f / SOFT_BLK);
 		for (int i = 0; i < SOFT_BLK; i++) {
 			u32 ix = ph >> sh; int a = t[ix], b = t[(ix + 1) & mk];
 			float v = a + (b - a) * (int)((ph << (32 - sh)) >> 17) * (1.0f / 32768.0f);   // linear, 15-bit fraction (signed: the difference can be negative)
 			L[i] += v * gl; R[i] += v * gr; gl += dgl; gr += dgr; ph += inc;
 		}
-		S->ph[k] = ph; S->cl[k] = S->gl[k]; S->cr[k] = S->gr[k];
+		S->ph[k] = ph; S->cl[k] = tl; S->cr[k] = tr;
 	}
 	for (int i = 0; i < SOFT_BLK; i++) {
 		float e = 1;
@@ -1094,6 +1095,9 @@ static void gateTick(float dt, int seqStep) {   // audio tick, every 5 ms piece
 static void mixRampTick(void) {   // audio tick, voice lock held
 	static float lastG = -1, lastGate = 1; float g = gAutoGain * gGateG; int gch = g != lastG; lastG = g; (void)lastGate;
 	for (int c = 0; c < NCH; c++) if (gMixLive[c]) {
+		if (gSoftC[c].on) { gSoftC[c].ag = g; float m[12]; int moved = 0;   // a SOFT carrier: the limiter / gate go to its render (smooth); its volume is the envelope's ramp alone
+			for (int k = 0; k < 12; k++) { float d = gMixTgt[c][k] - gMixCur[c][k]; if (d > 1e-5f || d < -1e-5f) { gMixCur[c][k] += fabsf(d) < 0.002f ? d : d * (d > 0 ? 0.5f : 0.75f); moved = 1; } }
+			if (moved) { for (int k = 0; k < 12; k++) m[k] = gMixCur[c][k]; ndspChnSetMix(c, m); } continue; }
 		int moved = gch;
 		for (int k = 0; k < 12; k++) { float d = gMixTgt[c][k] - gMixCur[c][k]; if (d > 1e-5f || d < -1e-5f) { gMixCur[c][k] += fabsf(d) < 0.002f ? d : d * (d > 0 ? 0.5f : 0.75f); /* up a little slower than down: no added sustain */ moved = 1; } }
 		if (moved) { float m[12]; for (int k = 0; k < 12; k++) m[k] = gMixCur[c][k] * g; ndspChnSetMix(c, m); }
@@ -1239,6 +1243,7 @@ static void startLayer(SVoice* v, int vi, int i, int role, int bk) {
 	int ch = takeCh(bk, vi);
 	v->ch[i] = ch; v->bk[i] = bk; v->role[i] = role;
 	if (role == R_SOFT) { v->lev[i] = 0; if (ch >= 0) softStart(v, ch); return; }
+	if (role == R_SSUB) { v->lev[i] = 0; if (ch >= 0) { int sv[SOFT_L], sn = gSoftPendN; memcpy(sv, gSoftPend, sizeof sv); gSoftPend[0] = R_SUB; gSoftPendN = 1; softStart(v, ch); memcpy(gSoftPend, sv, sizeof sv); gSoftPendN = sn; } return; }
 	float f = roleFreq(v, role);
 	v->lev[i] = (role == R_TAP || (role == R_SUB && gCsndOK)) ? levelDamped(f, baseCutoff() * v->cutMul + 200) : levelFor(f * 1.03f);   // (a SUB sounds the same on either chip)
 	Mips* m = roleMips(role);
@@ -1302,7 +1307,7 @@ static void softStart(SVoice* v, int ch) {   // a SOFT carrier: its layers' tabl
 	softInit();
 	const s16* tab[SOFT_L]; int bits[SOFT_L];
 	for (int k = 0; k < gSoftPendN; k++) {   // each layer's mip level, built if it isn't (as startLayer does)
-		int r = gSoftPend[k]; float f = roleFreq(v, r); int lev = levelFor(f * 1.03f); Mips* m = roleMips(r);
+		int r = gSoftPend[k]; float f = roleFreq(v, r); int lev = r == R_SUB && gCsndOK ? levelDamped(f, baseCutoff() * v->cutMul + 200) : levelFor(f * 1.03f); Mips* m = roleMips(r);   // (a SUB sounds the same as on the second chip)
 		if (!gInAudioTick) LightLock_Lock(&gMipsLock);
 		if (!(m->built & (1u << lev))) {
 			if (gInAudioTick) { int L = lev + 1; while (L < NLEV && !(m->built & (1u << L))) L++; if (L < NLEV) lev = L; else if (!gTickNoMips) mipsBuildLevel(m, lev); }
@@ -1313,12 +1318,12 @@ static void softStart(SVoice* v, int ch) {   // a SOFT carrier: its layers' tabl
 	}
 	LightLock_Lock(&gSoftLock);
 	SoftCh* S = &gSoftC[ch]; memset(S, 0, sizeof(*S));
-	S->n = gSoftPendN;
+	S->n = gSoftPendN; S->ag = gAutoGain * gGateG;
 	for (int k = 0; k < S->n; k++) {
 		int r = gSoftPend[k], u = r <= R_A2 ? r - R_A0 : r - R_B0;
 		S->role[k] = r; S->tab[k] = tab[k]; S->sh[k] = 32 - bits[k]; S->mask[k] = (1u << bits[k]) - 1;
 		S->ph[k] = 0; (void)u;   // every layer from the cycle's start, as the hardware layers do (the unison attack keeps its punch and the patches their level)
-		S->fm[k] = gOsc[r >= R_B0].engine == 1;
+		S->fm[k] = r <= R_B2 && gOsc[r >= R_B0].engine == 1;
 	}
 	{ int fm = 0; for (int k = 0; k < S->n; k++) fm |= S->fm[k];
 	  if (fm) { fmWaveInit(); S->fp = gFm; S->fgate = 1; S->fvel = v->vel; S->famt = 1; for (int j = 0; j < FM_OPS; j++) { S->fe[j] = 0; S->fst[j] = 1; } } }
@@ -1354,15 +1359,17 @@ static void startVoice(int vi) {
 		}
 	}
 	int fmv = !v->isEcho && gAudioClock && fmAny() && v->subOnly != 1;   // FM ENGINE: its operators only play on the SOFT path
-	if (fmv || (!v->isEcho && gSoftMode && gAudioClock && gSoftCpu < 0.6f && gQScream < 0.001f)) {   // SOFT LAYERS: the oscillator layers ride one channel (SCREAM wants a filter per layer: hardware)
+	int subSoft = 0; if (!v->isEcho && gAudioClock) for (int i = 0; i < nr; i++) if (roles[i] == R_SUB && bks[i] == BK_DSP) subSoft = 1;   // a SUB on the DSP is rendered (smooth level); the oscillators go with it, so the two start in step (in phase, as before)
+	if (fmv || subSoft || (!v->isEcho && gSoftMode && gAudioClock && gSoftCpu < 0.6f && gQScream < 0.001f)) {   // SOFT LAYERS: the oscillator layers ride one channel (SCREAM wants a filter per layer: hardware)
 		int no = 0; for (int i = 0; i < nr; i++) if (roles[i] <= R_B2) no++;
-		if (no >= 2 || (fmv && no >= 1)) {
+		if (no >= 2 || ((fmv || subSoft) && no >= 1)) {
 			int k = 0, r2[R_COUNT], b2[R_COUNT], n2 = 0; gSoftPendN = 0;
 			for (int i = 0; i < nr; i++) if (roles[i] <= R_B2) { if (k < SOFT_L) gSoftPend[k++] = roles[i]; } else { r2[n2] = roles[i]; b2[n2++] = bks[i]; }
 			gSoftPendN = k; roles[0] = R_SOFT; bks[0] = BK_DSP; nr = 1;
 			for (int i = 0; i < n2; i++) { roles[nr] = r2[i]; bks[nr++] = b2[i]; }
 		}
 	}
+	if (subSoft) for (int i = 0; i < nr; i++) if (roles[i] == R_SUB && bks[i] == BK_DSP) roles[i] = R_SSUB;   // SUB on the DSP: rendered in software, so its level moves sample by sample (the channel volume stepped every 5 ms: clicks on a pure sub)
 	for (int i = 0; i < nr; i++) { if (bks[i] == BK_DSP) nd++; else nc++; }
 	if ((nr == 0 && (v->isEcho || gChipLevel <= 0.001f)) || (nd && !stealFor(BK_DSP, nd, vi)) || (nc && !stealFor(BK_CSND, nc, vi))) { v->active = 0; return; }
 	v->nch = nr;
@@ -1681,10 +1688,16 @@ static void voicesUpdate(float dt, float bend) {
 
 		for (int k = 0; k < v->nch; k++) {
 			int ch = v->ch[k], role = v->role[k]; if (ch < 0) continue;
-			if (role == R_SOFT) {   // SOFT LAYERS: each layer's level, pan and pitch go to the render; the channel is the filter
+			if (role == R_SOFT || role == R_SSUB) {   // SOFT LAYERS: each layer's level, pan and pitch go to the render; the channel is the filter
 				SoftCh* S = &gSoftC[ch]; int fmOn = 0; for (int j = 0; j < S->n; j++) fmOn |= S->fm[j];
 				LightLock_Lock(&gSoftLock);   // the render reads gl / gr / inc mid-block on the DSP thread (lock order: voice -> soft)
 				for (int j = 0; j < S->n; j++) {
+					if (S->role[j] == R_SUB) {   // the SUB: its level, centred, the note's pitch (no unison)
+						float pan = 0.5f + v->pan + panMod; if (pan < 0) pan = 0; if (pan > 1) pan = 1;
+						float g = vg * (v->subOnly ? 0.9f : gSubLevel) * (gCsndOK ? 1 : fcomp), L = g * sqrtf(1 - pan) * 1.41f, R = g * sqrtf(pan) * 1.41f;
+						S->gl[j] = L; S->gr[j] = R; S->inc[j] = (u32)(roleFreq(v, R_SUB) * pm / 32728.0f * 4294967296.0f);
+						gSoftLimS += L * L + R * R; gSoftLimA += L > R ? L : R; continue;
+					}
 					int r = S->role[j], o = r >= R_B0, u = r - (o ? R_B0 : R_A0); float det = 0, pan = 0.5f, ug = 1;
 					uniParams(&gOsc[o], u, &det, &pan, &ug); ug /= sqrtf((float)gOsc[o].uni);
 					if (gChorus > 0 && gOsc[o].uni > 1 && u > 0) det += gChorus * 12.0f * sinf(gChorusPh + u * 2.1f + o);
@@ -1697,7 +1710,8 @@ static void voicesUpdate(float dt, float bend) {
 				if (fmOn) { S->fp = gFm; S->fgate = v->stage != 4; float a = 1 + modSum(DST_FMAMT, v); S->famt = a < 0 ? 0 : a > 3 ? 3 : a; }   // FM: the settings move live; the gate lets the operators' envelopes go
 				S->armed = 1; LightLock_Unlock(&gSoftLock);
 				dL[ch] = dR[ch] = SOFT_HEAD; gSoftLive[ch] = 1;
-				filterSet(ch, cutoff, res);
+				if (role == R_SSUB) filterSet(ch, gCsndOK ? 20000.0f : cutoff * 0.6f + 300, gCsndOK ? 0 : res);   // the SUB keeps the second chip's sound: unfiltered
+				else filterSet(ch, cutoff, res);
 				continue;
 			}
 			float det = 0, pan = 0.5f, ug = 1, lv = 1, f = roleFreq(v, role);
@@ -1752,7 +1766,8 @@ static void voicesUpdate(float dt, float bend) {
 	for (int c = 0; c < NCH; c++) if (dL[c] >= 0) {
 		float mix[12] = {0};
 		int pt = gDspOwner[c] >= 0 && gDspOwner[c] < NVS ? gV[gDspOwner[c]].part : -1; float pg = pt >= 0 ? partGain(pt) : 1, ps = pt >= 0 ? gPartSend[pt] : 1;   // MIX: the part's level and FX send
-		mix[0] = dL[c] * gAutoGain * pg; mix[1] = dR[c] * gAutoGain * pg;
+		float agc = gSoftC[c].on ? 1.0f : gAutoGain;   // (SOFT: the limiter is applied in its render)
+		mix[0] = dL[c] * agc * pg; mix[1] = dR[c] * agc * pg;
 		if (gQMixDrive > 0.001f && masterActive()) { float k = 1.0f + gQMixDrive * 15.0f; mix[0] *= k; mix[1] *= k; }   // MIX OVERDRIVE
 		if (masterActive()) { mix[4] = mix[0] * ps; mix[5] = mix[1] * ps; mix[0] *= 1 - ps; mix[1] *= 1 - ps; }   // the sound through the master chain (the part's FX send: the rest dry)
 		else {
@@ -1769,7 +1784,7 @@ static void voicesUpdate(float dt, float bend) {
 			} else { memset(gMixCur[c], 0, sizeof(gMixCur[c])); ndspChnSetMix(c, gMixCur[c]); ndspChnWaveBufAdd(c, &gWB[c]); }
 			gMixLive[c] = !echo;
 		}
-		{ float ig = gAutoGain > 1e-4f ? 1.0f / gAutoGain : 0; for (int k = 0; k < 12; k++) gMixTgt[c][k] = mix[k] * ig; }   // the ramp moves the envelope; the limiter gain applies straight
+		{ float ig = agc > 1e-4f ? 1.0f / agc : 0; for (int k = 0; k < 12; k++) gMixTgt[c][k] = mix[k] * ig; }   // the ramp moves the envelope; the limiter gain applies straight
 		if (gSoftFresh[c]) { gSoftFresh[c] = 0; memcpy(gMixCur[c], gMixTgt[c], sizeof(gMixCur[c])); ndspChnSetMix(c, mix); }   // a SOFT carrier: its level is in the stream (faded in there)
 		if (!gMixLive[c] || !gAudioClock) { memcpy(gMixCur[c], gMixTgt[c], sizeof(mix)); ndspChnSetMix(c, mix); }   // channels outside the voices (noise) and no audio clock: as before
 	}
@@ -2550,6 +2565,7 @@ static void arpSetPool(const int* notes, int n, float vel) {
 // the arp walks through the wavetable as it walks through the notes. WT DEPTH: how much of the table the steps cover.
 static int gWtArp = 0, gWtArpSteps = 4, gWtArpOsc = 0, gWtArpIdx = 0, gWtArpDir = 1; static float gWtArpDepth = 1.0f; static volatile float gWtArpOff = 0; static volatile int gWtArpSnap = 0;
 static const char* WTARP_NAMES[5] = {"OFF", "UP", "DOWN", "UP+DOWN", "RANDOM"}; static const char* WTARPOSC_NAMES[3] = {"OSC A", "OSC B", "A + B"};
+static int gRiffChords = 1; static const char* RIFFC_NAMES[2] = {"OFF (KEY ONLY)", "FOLLOW"};   // RIFF CHORDS: OFF writes in the key alone, chords or not
 static void wtArpStep(void) {   // the arp's next step: the next table position (audio tick)
 	if (!gWtArp) { gWtArpOff = 0; return; }
 	int n = gWtArpSteps < 2 ? 2 : gWtArpSteps > 16 ? 16 : gWtArpSteps, k;
@@ -4314,7 +4330,7 @@ static Param P_PLAY[] = {
 	PE("ROLL CHORD", &gRollChord, NCHORD, CHORD_NAMES, 0), PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
 	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("SEQ KEYS", &gSeqKeys, 2, SEQKEYS_NAMES, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0), PE("PAD BASS SOUND", &gPadBassSub, 4, BASSSND_NAMES, 0), PE("ROLL SCALE", &gRollScale, 3, RSC_NAMES, 0), PE("STRUM NOTES", &gStrumScale, 2, STRN_NAMES, 0), PE("STRUM VOICES", &gStrumVox, 4, STRUMVOX_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
 	PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0), PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0),
-	PE("WT ARP", &gWtArp, 5, WTARP_NAMES, 0), PI_("WT STEPS", &gWtArpSteps, 2, 16, 0), PF("WT DEPTH", &gWtArpDepth, 0, 1, 0.05f, "%", 0), PE("WT ARP OSC", &gWtArpOsc, 3, WTARPOSC_NAMES, 0),
+	PE("RIFF CHORDS", &gRiffChords, 2, RIFFC_NAMES, 0), PE("WT ARP", &gWtArp, 5, WTARP_NAMES, 0), PI_("WT STEPS", &gWtArpSteps, 2, 16, 0), PF("WT DEPTH", &gWtArpDepth, 0, 1, 0.05f, "%", 0), PE("WT ARP OSC", &gWtArpOsc, 3, WTARPOSC_NAMES, 0),
 	PE("STRUM DIR", &gArpStrumDir, NSTRD, STRUMDIR_NAMES, 0), PE("REC QUANT", &gRecQ, 4, RQ_NAMES, 0), PE("PREROLL", &gPreroll, 4, PRE_NAMES, 0), PE("SONG LOOP", &gSongLoop, 2, ONOFF, 0), PE("CLICK", &gClick, 4, CLICK_NAMES, 0), PF("CLICK LEVEL", &gClickLevel, 0, 1, 0.05f, "%", 0), PI_("TAPE ALIGN", &gTapeAlign, -50, 50, 0), PE("TAPE DRUMS", &gTapeDrums, 2, ONOFF, 0),
 	PE("SHAKE QUANT", &gShakeQ, 3, SHQ_NAMES, 0), PE("TAP REC", &gTapRec, 3, TAPR_NAMES, 0),
 	PEND};
@@ -4980,7 +4996,7 @@ static const char* paramHelp(const char* n) {
 		{"SURROUND", "SURROUND DEPTH"}, {"TILT CENTER", "PRESS > TO RE-CENTRE THE TILT"}, {"REV SIZE", "REVERB ROOM SIZE"},
 		{"REV DAMP", "DARKER REVERB TAIL"}, {"FX MIX", "HOW MUCH EFFECT"}, {"DRIVE", "DISTORTION TYPE"}, {"DRIVE AMT", "HOW MUCH DISTORTION"},
 		{"MASTER", "OUTPUT VOLUME"}, {"ROOT", "KEY OF THE SCALE"}, {"SCALE", "LOCK THE KEYS TO A SCALE"}, {"ARP", "ARPEGGIATOR PATTERN"},
-		{"ARP RATE", "ARPEGGIATOR SPEED"}, {"ARP OCTAVES", "OCTAVES THE ARP CLIMBS"}, {"ARP GATE", "ARP NOTE LENGTH"}, {"ARP STRUM", "CHORD ARP: TIME BETWEEN STRINGS"}, {"WT ARP", "EACH ARP STEP JUMPS TO THE NEXT WT POSITION"}, {"WT STEPS", "HOW MANY TABLE POSITIONS THE ARP WALKS"}, {"WT DEPTH", "HOW MUCH OF THE TABLE THE STEPS COVER"}, {"WT ARP OSC", "WHICH OSCILLATOR'S TABLE STEPS"}, {"STRUM DIR", "DOWN, UP, OR BOTH LIKE A GUITAR"}, {"BPM", "TEMPO"},
+		{"ARP RATE", "ARPEGGIATOR SPEED"}, {"ARP OCTAVES", "OCTAVES THE ARP CLIMBS"}, {"ARP GATE", "ARP NOTE LENGTH"}, {"ARP STRUM", "CHORD ARP: TIME BETWEEN STRINGS"}, {"RIFF CHORDS", "RIFF: FOLLOW THE CHORD PART, OR THE KEY ONLY"}, {"WT ARP", "EACH ARP STEP JUMPS TO THE NEXT WT POSITION"}, {"WT STEPS", "HOW MANY TABLE POSITIONS THE ARP WALKS"}, {"WT DEPTH", "HOW MUCH OF THE TABLE THE STEPS COVER"}, {"WT ARP OSC", "WHICH OSCILLATOR'S TABLE STEPS"}, {"STRUM DIR", "DOWN, UP, OR BOTH LIKE A GUITAR"}, {"BPM", "TEMPO"},
 		{"SEQ GATE", "STEP NOTE LENGTH"}, {"SEQ KEYS", "KEYS PLAY ALONG OR TRANSPOSE"}, {"PAD MORPH", "PADS: SLIDE GLIDES TO THE NEXT CHORD (0 = RETRIGGER)"}, {"PAD BASS SOUND", "PADS BASS: WHOLE PATCH, SUB OSC, OSC A OR OSC B ALONE"}, {"ROLL SCALE", "PIANO ROLL: SHOW THE SCALE, OR ONLY ITS NOTES"}, {"STRUM NOTES", "PADS STRUM STRIP: CHORD TONES OR THE SCALE"}, {"STRUM VOICES", "STRINGS RINGING AT ONCE (NEVER STEALS THE CHORD)"},
 		{"SWING", "SHUFFLE FEEL"},
 		{"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},
@@ -5886,6 +5902,7 @@ static int stepEdTouch(int x, int y, int press, int release) {
 // not the keyboard's octave. The roll lines up on that root so the whole riff is on screen.
 static int riffBase(void) { int b = gRollLow + ((gRoot - gRollLow) % 12 + 12) % 12; if (b - gRollLow > 6) b -= 12; if (b < 12) b += 12; return b; }
 static int riffNote(int base, int row) { static const int MAJ[8] = {0, 2, 4, 5, 7, 9, 11, 12}; return gScale ? scaleNote(base, row) : base + MAJ[row]; }
+static int riffFollow(void);
 static void acidGen(void) {
 	int base = riffBase();
 	static const int W[8] = {38, 7, 14, 9, 12, 8, 12, 0};   // weights per grid row: RIFF stays inside the octave you're on (row 7, the octave up, never)
@@ -5906,11 +5923,11 @@ static void acidGen(void) {
 	for (int st = 0; st < 16; st++) if ((gSeq[st].fl & 2) && !gSeq[(st + 1) % 16].n) gSeq[st].fl &= ~2;   // no slide into a rest
 	if (!gSeq[0].n) { gSeq[0].n = 1; gSeq[0].note[0] = (u8)base; gSeq[0].vel = 190; gSeq[0].fl = 1; }
 	gSeqLen = 16; gSeqBase = base; gSeqTr = 0;
-	if (partHasChords()) {   // CHORDS: the riff runs 4 bars and its notes come from the chord under each step (roots on the beat)
+	if (riffFollow()) {   // CHORDS: the riff runs 4 bars and its notes come from the chord under each step (roots on the beat)
 		for (int b = 1; b < 4; b++) memcpy(&gSeq[b * 16], &gSeq[0], sizeof(Step) * 16);
 		for (int st = 0; st < 64; st++) {
 			Step* sp = &gSeq[st]; if (!sp->n) continue;
-			int d = partDegAt(st); if (d < 0) { memset(sp, 0, sizeof(*sp)); continue; }
+			int d = partDegAt(st); if (d < 0) continue;   // no chord here: the note of the key stays
 			int nt[5], n = ctNotes(d, partQAt(st), nt), k = rand() % 100, pick = st % 4 == 0 ? (k < 60 ? 0 : k < 85 ? 2 : 1) : (k < 35 ? 0 : k < 60 ? 1 : k < 85 ? 2 : n - 1);
 			if (pick >= n) pick = 0;
 			int pc = nt[pick], note = base + ((pc - base) % 12 + 12) % 12;
@@ -11428,6 +11445,7 @@ static int partDegAt(int st) {   // the chord (scale degree) under step st of th
 }
 static int partQAt(int st) { int a; if (gProg == PROG_CUSTOM && ctAt(st & (CT_N - 1), &a) >= 0) return gCtQ[a]; return 0; }
 static int partHasChords(void) { if (gProg == PROG_CUSTOM) { for (int i = 0; i < CT_N; i++) if (gCtDeg[i] >= 0) return 1; return 0; } return gProg || gPadSel >= 0; }
+static int riffFollow(void) { return gRiffChords && !gPartMute[1] && (gProg == PROG_CUSTOM ? partHasChords() : gProg != 0); }   // RIFF CHORDS FOLLOW: only a real CHORD part (a progression or the chord track, not muted) - a pad you touched isn't one
 static int partBassNote(int deg, char c) {   // a line's letter -> a note for that chord (as bassNoteOf, for any bar)
 	int b = gPadBase, r = padDeg(b, deg) - 12;
 	switch (c) { case '3': return padDeg(b, deg + 2) - 12; case '5': return padDeg(b, deg + 4) - 12; case '7': return padDeg(b, deg + 6) - 12; case 'O': return r + 12; default: return r; }
