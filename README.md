@@ -35,7 +35,7 @@ You need a 3DS or 2DS with custom firmware (Luma3DS).
 - **Phone:** START > LINK PHONE shows a QR code. REMOTE turns the phone into keys, chord pads, drum pads, an XY pad and knobs. 2ND UNIT opens a full second Syrup on the phone, with its own sounds and patterns, on the 3DS's tempo and play / stop.
 - **Streaming:** a browser view of Syrup for OBS or other streaming software.
 
-Every page, parameter and control is in [docs/REFERENCE.md](docs/REFERENCE.md). What's planned is in [ROADMAP.md](ROADMAP.md).
+Every page, parameter and control is in [docs/REFERENCE.md](docs/REFERENCE.md); how the engine is built is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). What's planned is in [ROADMAP.md](ROADMAP.md).
 
 ## Controls
 
