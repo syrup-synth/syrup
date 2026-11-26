@@ -64,6 +64,8 @@ With MASTER FX on, every DSP voice goes through the effect bus to a chain that r
 
 ## DRUMS (PLAY tab)
 
+- **MUT** (drum grid): each tap mutates the beat a little: hits slide a step, drop out, gain a ratchet or a new velocity, and new hits grow next to the ones there. The kick's downbeats stay; empty rows stay empty. MUTATE (DRUMS page) sets how much; SELECT + L takes a tap back.
+
 A synthesised kit (808, 909, LOFI, CHIP) on three channels of the second sound chip with KICK / SNARE / HAT pattern presets, DRUM LEVEL, BPM and SWING. It follows the sequencer when that's playing and drives the PUMP.
 
 **The DRUMS grid** (the DRUMS page's bottom screen; SELECT + circle pad left gets there): a row for each of the 10 drums, 16 steps.
@@ -136,6 +138,7 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | OSC A / OSC B | Table, WT POS, warp + amount, level, octave / semi / fine, unison 1-3 with detune, blend, width |
 | OSC DIST | Each oscillator's own distortion (the DRIVE types + amount), baked into its wave before band-limiting: OSC > DIST |
 | FM ENGINE | ENGINE A / B: WAVE (the wavetable) or FM. 4 operators, 8 algorithms, feedback on OP 4; each operator has a ratio (0.5 to 16, incl. 1.41 and 3.5 for bells), a wave (sine, half, abs, quarter), level, fine tune and its own ADSR, so the brightness moves through the note. FM VEL: harder notes brighter. Mod destination FM AMOUNT scales every modulator. OSC > FM (engines, algorithm, levels) and OSC > OPS (OP picks the operator the sliders edit). Presets: FM TINE PIANO, FM BELL, FM SLAP BASS, FM BRASS |
+| WT ARP | ARP+SEQ page: WT ARP (UP, DOWN, UP+DOWN, RANDOM) jumps the table position on every arp step, through WT STEPS positions (2-16) over WT DEPTH of the table, on OSC A, B or both |
 | Warps | Sync, Windowed Sync, Bend+, Bend-, Bend+/-, PWM, Asym+, Asym-, Asym+/-, Flip, Mirror, Remap 1-4, Quantize, FM / AM / RM from the other oscillator |
 | SUB | Sine, triangle, saw, square; 0 / -1 / -2 octaves |
 | NOISE | White, pink, vinyl crackle |
@@ -148,6 +151,19 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | FX | Chorus, echo (ping-pong), space (early reflections), reverb (size, damp), FX mix, drive (tube, hard, fold, rectify), master |
 
 ## Controls
+
+**CONTROLS: DEVICE** (the default; HARDWARE page > CONTROLS). Think of the 3DS as a hardware synth: the bottom screen is the panel, the top screen is the unit's display, and the top's tabs (OSC FILT MOD VOICE FX SEQ PADS MIX) sit right over the bottom's.
+
+| Input | DEVICE |
+|---|---|
+| Circle pad | The left of the top screen: the page's picture and its two main values (OSC: WT POS + cutoff, FILT: cutoff + res, FX: delay + reverb ...). A patch that routes STICK keeps bend + STICK |
+| A / B / X / Y | The right of the top screen, the settings list: X / B pick (up / down), Y / A change (down / up, hold to repeat) |
+| D-pad | Transport: > PLAY / STOP, < STOP, ^ REC (with the count-in), v TAP TEMPO |
+| C-stick (New 3DS) | Turns the knob that's picked (up / right = more); tap a slider on the bottom screen to pick it |
+| L / R | Through every part of the device: PATCH, OSC, FILT, MOD, VOICE, FX, SEQ, PADS, MIX, VIS, HW |
+| Top left | The transport: STP / RUN / REC. Top right: PATCH, VIS or HW when you're there |
+
+CLASSIC (the old layout) is below.
 
 | Input | Action |
 |---|---|

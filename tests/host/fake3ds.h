@@ -23,6 +23,7 @@ typedef struct{ThreadFunc f;void*a;}TA; static void* tramp(void* x){TA* t=x; t->
 /* FAKE_SYNC_WORKER (default): no thread on core 1, so Syrup rebuilds wavetables inline on the main loop and every
    run renders the same audio whatever the machine's speed. Tests of the core-1 worker / effects hand-over turn it off. */
 static int FAKE_SYNC_WORKER = 1;
+static int TEST_DEVICE = 0;   /* tests: the DEVICE controls (the rest use CLASSIC) */
 static Thread threadCreate(ThreadFunc f,void*a,size_t st,int pr,int core,bool det){(void)st;(void)pr;(void)det; if(core==1&&FAKE_SYNC_WORKER) return NULL;
 #ifdef FAKE_WEB
  (void)f;(void)a; return NULL;   /* the web build has one thread: everything runs on the main loop */

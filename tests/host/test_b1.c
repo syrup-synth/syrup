@@ -97,7 +97,7 @@ static void SCRIPT(int fr) {
 		if (gDrumX[1][0] || gMyDrum[0][0]) fail("DRUM GRID: CLR twice should clear every drum");
 		histStep(1); if (!gDrumX[1][0]) fail("DRUM GRID: undo should bring the CLR back");
 		// MIC: on, onto the picked row; leaving the page turns it off
-		drumGridTouch(10, DG_TOP + 3 * DG_RH + 5, 1); drumGridTouch(175, DG_Y + 5, 1); if (gTapRow != 3) fail("MIC: should tap onto the picked row (OP HAT) (%d)", gTapRow); }
+		drumGridTouch(10, DG_TOP + 3 * DG_RH + 5, 1); drumGridTouch(158, DG_Y + 5, 1); if (gTapRow != 3) fail("MIC: should tap onto the picked row (OP HAT) (%d)", gTapRow); }
 	if (fr == 113) {   // CLR, then a name: clears just that row; BEAT pastes the whole kit; a factory KICK pattern is a paste
 		drumGridTouch(140, DG_Y + 5, 1); drumGridTouch(10, DG_TOP + 4 * DG_RH + 5, 1);
 		if (gDrumX[1][0]) fail("CLR + CLAP's name should clear the clap row");
