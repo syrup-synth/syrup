@@ -82,18 +82,18 @@ static void SCRIPT(int fr) {
 			found++; SPatch pp; patchInit(&pp); PRESETS[st][i].fn(&pp); if (pp.oscEngine[0] != 1) fail("PRESET %s should use the FM engine", NM[k]); }
 		if (found != 4) fail("FM: 4 FM presets expected (%d)", found);
 		// tabs
-		gCurPage = 3; gPnlSub[0] = 2; int n; const PnlSub* S = pnlCur(&n);
-		if (n != 6 || strcmp(S->tab, "FM")) fail("FM: OSC should have an FM tab (%d %s)", n, S->tab);
-		gPnlSub[0] = 3; S = pnlCur(&n); if (strcmp(S->tab, "ENV")) fail("FM: OSC should have an ENV tab"); if (pnlFaders(S) != 16) fail("ENV: 16 sliders, two rows (%d)", pnlFaders(S));
+		gCurPage = 3; gPnlSub[0] = 1; int n; const PnlSub* S = pnlCur(&n);
+		if (n != 5 || strcmp(S->tab, "FM")) fail("FM: OSC should have an FM tab (%d %s)", n, S->tab);
+		gPnlSub[0] = 2; S = pnlCur(&n); if (strcmp(S->tab, "ENV")) fail("FM: OSC should have an ENV tab"); if (pnlFaders(S) != 16) fail("ENV: 16 sliders, two rows (%d)", pnlFaders(S));
 		{ int cx, top, bot, w; pnlGeom(16, 13, &cx, &top, &bot, &w); if (pnlAt(16, cx, top + 5) != 13) fail("two rows: a touch on slider 13 should find it (%d)", pnlAt(16, cx, top + 5)); }
 		gFmSel = 2; Param* pl = pnlFind("OP LEVEL", 3); if (!pl || pl->p != &gFm.lvl[2]) fail("OPS: OP LEVEL should edit operator 3");
 		gFmSel = 0; pl = pnlFind("OP RATIO", 3); if (!pl || pl->p != &gFm.ratio[0]) fail("OPS: OP RATIO should follow OP");
 		if (!pnlFind("ENGINE A", 3) || !pnlFind("ALGO", 3) || !pnlFind("OP4 REL", 3)) fail("FM: settings missing");
 		{ SPatch p; patchInit(&p); k_fmtine(&p); patchApply(&p); }
-		gPnlSub[0] = 2; gPageWant = 3;
+		gPnlSub[0] = 1; gPageWant = 3;
 	}
 		if (fr == 10) shotBot("shots/fm_tab.ppm");
-	if (fr == 12) { gPnlSub[0] = 3; gCurPage = 1; gPageWant = 3; }
+	if (fr == 12) { gPnlSub[0] = 2; gCurPage = 1; gPageWant = 3; }
 	if (fr == 16) shotBot("shots/fm_env.ppm");
 	// the FM presets through the whole engine, next to a wavetable keys patch: a level in the same range, no clipping
 	static void (*const PF_[5])(SPatch*) = {k_epsat, k_fmtine, u_fmbell, b_fmslap, l_fmbrass}; static const int NT[5] = {60, 60, 72, 36, 60};

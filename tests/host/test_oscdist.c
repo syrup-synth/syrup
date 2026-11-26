@@ -26,12 +26,11 @@ static void SCRIPT(int fr) {
 		memset(gUser, 0, sizeof gUser); userLoad();
 		if (gUser[0].magic != PATCH_MAGIC || gUser[0].oscDist[0] != 0) fail("DIST: a v16 patch should load with DIST off (magic %08x dist %d)", gUser[0].magic, gUser[0].oscDist[0]);
 		remove("sd/user_presets.bin");
-		gCurPage = 3; gPnlSub[0] = 1; int n; const PnlSub* S = pnlCur(&n);
-		if (n != 6 || strcmp(S->tab, "DIST")) fail("DIST: OSC should have a DIST tab (%d %s)", n, S->tab);
-		if (!pnlFind("DIST A AMT", 3) || !pnlFind("DIST B", 3)) fail("DIST: the tab's settings should be there");
-		gPageWant = 3;
+		gCurPage = 1; int n; const PnlSub* S = pnlCur(&n); int has = 0; for (int i = 0; i < 16 && S->fd[i]; i++) if (!strcmp(S->fd[i], "DIST A AMT")) has = 1;
+		if (!has) fail("DIST: OSC A's tab should have its DIST sliders");
+		if (!pnlFind("DIST A AMT", 1) || !pnlFind("DIST B", 2)) fail("DIST: the settings should be there");
+		gPageWant = 1;
 	}
-	if (fr == 8) { gPnlSub[0] = 1; }
 	if (fr == 12) { shotBot("shots/osc_dist.ppm"); done = 1; }
 }
 int main(void) { mkdir("sd", 0777); mkdir("shots", 0777); loadFont(); FRMAX = 14; app_main(); if (!done) fail("didn't run"); printf("oscdist: per-oscillator distortion\n"); return gFails ? 1 : 0; }

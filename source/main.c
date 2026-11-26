@@ -7196,17 +7196,16 @@ static void drawSeqStrip(void) {
 // A section has sub-pages (OSC A | OSC B | SUB+NOISE, FILTER | ENV 1 | ..., LOFI | MOD | ...): a row of choices (tap the
 // left / right of one: back / on) and up to 8 sliders (drag). Each setting goes through the same path as the D-pad.
 typedef struct { const char* tab; int page; const char* ch[4]; const char* fd[16]; } PnlSub;   // more than 8 sliders: two rows of 8 (thick, shorter)
-static const PnlSub PNL_OSC[6] = {
-	{"OSC A", 1, {"ON", "TABLE", "WARP"}, {"WT POS", "WARP AMT", "LEVEL", "DETUNE", "OCTAVE", "SEMI", "UNISON", "BLEND"}},
-	{"OSC B", 2, {"ON", "TABLE", "WARP"}, {"WT POS", "WARP AMT", "LEVEL", "DETUNE", "OCTAVE", "SEMI", "UNISON", "BLEND"}},
+static const PnlSub PNL_OSC[5] = {
+	{"OSC A", 1, {"ON", "TABLE", "WARP"}, {"WT POS", "WARP AMT", "LEVEL", "OCTAVE", "SEMI", "FINE", "UNISON", "DETUNE", "BLEND", "WIDTH", "DIST A", "DIST A AMT"}},
+	{"OSC B", 2, {"ON", "TABLE", "WARP"}, {"WT POS", "WARP AMT", "LEVEL", "OCTAVE", "SEMI", "FINE", "UNISON", "DETUNE", "BLEND", "WIDTH", "DIST B", "DIST B AMT"}},   // (two rows: the wave, its pitch; its unison, its distortion)
 	{"SUB+NOISE", 3, {"SUB SHAPE", "NOISE TYPE", "CHIP WIDTH"}, {"SUB LEVEL", "SUB OCTAVE", "NOISE LEVEL", "CHIP SQUARE", "CHIP OCTAVE", "FINE"}},
-	{"DIST", 3, {"DIST A", "DIST B"}, {"DIST A AMT", "DIST B AMT"}},
 	{"FM", 3, {"ENGINE A", "ENGINE B", "ALGO", "FEEDBACK"}, {"OP1 LEVEL", "OP1 RATIO", "OP1 WAVE", "OP1 DETUNE", "OP2 LEVEL", "OP2 RATIO", "OP2 WAVE", "OP2 DETUNE",
 		"OP3 LEVEL", "OP3 RATIO", "OP3 WAVE", "OP3 DETUNE", "OP4 LEVEL", "OP4 RATIO", "OP4 WAVE", "OP4 DETUNE"}},   // all four operators: two rows, an operator to each half
 	{"ENV", 3, {"ALGO", "FM VEL", "FEEDBACK"}, {"OP1 ATK", "OP1 DEC", "OP1 SUS", "OP1 REL", "OP2 ATK", "OP2 DEC", "OP2 SUS", "OP2 REL",
 		"OP3 ATK", "OP3 DEC", "OP3 SUS", "OP3 REL", "OP4 ATK", "OP4 DEC", "OP4 SUS", "OP4 REL"}}};
 static const PnlSub PNL_FILT[4] = {
-	{"FILTER", 4, {"FILTER", "FILTER 2", "OUT FILTER"}, {"CUTOFF", "RES", "KEYTRACK", "LOW CUT", "DRIVE AMT", "OUT CUTOFF", "OUT RES", "OUT DRIVE"}},
+	{"FILTER", 4, {"FILTER", "FILTER 2", "DRIVE", "OUT FILTER"}, {"CUTOFF", "RES", "KEYTRACK", "LOW CUT", "DRIVE AMT", "OUT CUTOFF", "OUT RES", "OUT DRIVE", "OUT ENV2"}},   // (two rows: the voice filter, then the OUT FILTER)
 	{"ENV 1", 4, {"DRIVE"}, {"ENV1 ATK", "ENV1 HOLD", "ENV1 DEC", "ENV1 SUS", "ENV1 REL"}},
 	{"ENV 2", 4, {"DRIVE"}, {"ENV2 ATK", "ENV2 DEC", "ENV2 SUS", "ENV2 REL", "OUT ENV2"}},
 	{"ENV 3+4", 4, {0}, {"ENV3 ATK", "ENV3 DEC", "ENV3 SUS", "ENV3 REL", "ENV4 ATK", "ENV4 DEC", "ENV4 SUS", "ENV4 REL"}}};
@@ -7216,7 +7215,7 @@ static const PnlSub PNL_FX[5] = {
 	{"EQ", 10, {"SPEAKER EQ"}, {"EQ LOW", "EQ MID", "EQ HIGH", "3D ORBIT", "ORBIT RATE"}},
 	{"SPACE", 10, {"REVERB TYPE", "DELAY TYPE", "DELAY SYNC"}, {"REVERB MIX", "REV SIZE", "REV DAMP", "DELAY MIX", "TAPE WOW", "TAPE SAT", "FX MIX"}},
 	{"OTT", 10, {"PUMP RATE", "SHIMMER", "FREEZE"}, {"OTT", "PUMP", "MASTER"}}};
-static int gPnlSub[3] = {0, 0, 3};   // FILT / FX: the sub-page (OSC's is its page; gPnlSub[0] on SUB+NOISE: 1 DIST, 2 FM, 3 OPS)
+static int gPnlSub[3] = {0, 0, 3};   // FILT / FX: the sub-page (OSC's is its page; gPnlSub[0] on SUB+NOISE: 1 FM, 2 ENV)
 static Param* gPnlReq = NULL; static float gPnlReqT = 0; static int gPnlReqDir = 0, gPnlReqV = -1;   // ReqV: an exact value (a list pick)   // a slider / choice asks the main loop
 static int gPnlSubDrag = -1, gPnlSubTo = -1, gPnlSubX0 = 0;   // FX: a block of the chain being dragged
 static int gPnlDrag = -1, gPnlHot = -1; static const Param* gPnlHotP = NULL;
@@ -7235,7 +7234,7 @@ static const u8* pnlAcc(int sec) {   // the section's colour: SYRUP themes have 
 static int pnlSec(void) { int p = gCurPage; return p >= 1 && p <= 3 ? 0 : p == 4 ? 1 : p == 10 ? 2 : -1; }
 static const PnlSub* pnlCur(int* n) {
 	int s = pnlSec();
-	if (s == 0) { if (n) *n = 6; if (gCurPage != 3 || gPnlSub[0] < 0 || gPnlSub[0] > 3) gPnlSub[0] = 0; return &PNL_OSC[gCurPage == 3 ? 2 + gPnlSub[0] : gCurPage - 1]; }   // (DIST, FM, OPS: tabs of the SUB+NOISE page)
+	if (s == 0) { if (n) *n = 5; if (gCurPage != 3 || gPnlSub[0] < 0 || gPnlSub[0] > 2) gPnlSub[0] = 0; return &PNL_OSC[gCurPage == 3 ? 2 + gPnlSub[0] : gCurPage - 1]; }   // (FM, ENV: tabs of the SUB+NOISE page; DIST lives on OSC A / B)
 	if (s == 1) { if (n) *n = 4; return &PNL_FILT[gPnlSub[1] & 3]; }
 	if (n) *n = 5; return &PNL_FX[gPnlSub[2] % 5];
 }
@@ -7266,7 +7265,7 @@ static void vfader(int cx, int top, int bot, int w, float t, float zero, const u
 static float vfaderT(int y, int top, int bot) { float t = (bot - y) / (float)(bot - top); return t < 0 ? 0 : t > 1 ? 1 : t; }
 static const char* pnlShort(const char* n) {   // a slider's name in 4 letters
 	static const char* L[][2] = {{"WT POS", "POS"}, {"WARP AMT", "WARP"}, {"LEVEL", "LVL"}, {"DETUNE", "DTUN"}, {"OCTAVE", "OCT"}, {"UNISON", "UNI"}, {"BLEND", "BLND"},
-		{"SUB LEVEL", "SUB"}, {"SUB OCTAVE", "SOCT"}, {"DIST A AMT", "A"}, {"DIST B AMT", "B"}, {"FEEDBACK", "FB"}, {"FM VEL", "VEL"}, {"OP LEVEL", "LVL"}, {"OP ATK", "ATK"}, {"OP DEC", "DEC"}, {"OP SUS", "SUS"}, {"OP REL", "REL"}, {"OP DETUNE", "DTUN"}, {"NOISE LEVEL", "NOIS"}, {"CHIP SQUARE", "CHIP"}, {"CHIP OCTAVE", "COCT"}, {"CUTOFF", "CUT"}, {"KEYTRACK", "KEY"},
+		{"SUB LEVEL", "SUB"}, {"SUB OCTAVE", "SOCT"}, {"DIST A AMT", "DAMT"}, {"DIST B AMT", "DAMT"}, {"DIST A", "DIST"}, {"DIST B", "DIST"}, {"WIDTH", "WDTH"}, {"FEEDBACK", "FB"}, {"FM VEL", "VEL"}, {"OP LEVEL", "LVL"}, {"OP ATK", "ATK"}, {"OP DEC", "DEC"}, {"OP SUS", "SUS"}, {"OP REL", "REL"}, {"OP DETUNE", "DTUN"}, {"NOISE LEVEL", "NOIS"}, {"CHIP SQUARE", "CHIP"}, {"CHIP OCTAVE", "COCT"}, {"CUTOFF", "CUT"}, {"KEYTRACK", "KEY"},
 		{"LOW CUT", "LOW"}, {"DRIVE AMT", "DRV"}, {"OUT CUTOFF", "OCUT"}, {"OUT RES", "ORES"}, {"OUT DRIVE", "ODRV"}, {"OUT ENV2", "OENV"}, {"LOFI RATE", "RATE"},
 		{"MIX OVERDRIVE", "OVDR"}, {"FILTER SCREAM", "SCRM"}, {"MOD RATE", "RATE"}, {"MOD DEPTH", "DPTH"}, {"MOD MIX", "MIX"}, {"FX COLOR", "COLR"}, {"CHORUS", "CHOR"},
 		{"EQ LOW", "LOW"}, {"EQ MID", "MID"}, {"EQ HIGH", "HIGH"}, {"3D ORBIT", "ORBT"}, {"ORBIT RATE", "ORAT"}, {"REVERB MIX", "REV"}, {"REV SIZE", "SIZE"},
@@ -7325,13 +7324,18 @@ static void drawPanelCard(int page, int sel) {   // the top screen's right side 
 }
 static int pnlFaders(const PnlSub* s) { int n = 0; while (n < 16 && s->fd[n]) n++; return n; }
 static int pnlChoices(const PnlSub* s) { int n = 0; while (n < 4 && s->ch[n]) n++; return n; }
-static void pnlGeom(int nf, int i, int* cx, int* top, int* bot, int* w) {   // where slider i sits: one row of up to 8, or two rows of 8 in two groups of 4
-	if (nf > 8) { int r = i / 8, c = i % 8; *cx = 4 + 39 * c + 19 + (c >= 4 ? 4 : 0); *top = PNL_FD_Y + r * 53 + 10; *bot = *top + 30; *w = 32; return; }
+static int pnlCols(int nf) { return nf > 8 ? (nf + 1) / 2 : nf; }   // two rows: half each (8 + 8 = two groups of 4 a row)
+static void pnlGeom(int nf, int i, int* cx, int* top, int* bot, int* w) {   // where slider i sits: one row of up to 8, or two rows
+	if (nf > 8) { int n = pnlCols(nf), r = i / n, c = i % n; *top = PNL_FD_Y + r * 53 + 10; *bot = *top + 30;
+		if (n == 8) { *cx = 4 + 39 * c + 19 + (c >= 4 ? 4 : 0); *w = 32; return; }
+		int sp = 312 / n; if (sp > 52) sp = 52; *cx = 160 - sp * n / 2 + c * sp + sp / 2; *w = sp - 8 > 40 ? 40 : sp - 8; return; }
 	int fw = nf ? 312 / nf : 312; if (fw > 52) fw = 52; int x0 = 160 - fw * nf / 2;
 	*cx = x0 + i * fw + fw / 2; *top = PNL_TT; *bot = PNL_TB; *w = fw - 6 > 46 ? 46 : fw - 6;
 }
 static int pnlAt(int nf, int x, int y) {   // which slider a touch is on (-1: none)
-	if (nf > 8) { if (y < PNL_FD_Y || y >= PNL_KR_Y) return -1; int r = (y - PNL_FD_Y) / 53, c = (x - 4 - (x >= 164 ? 4 : 0)) / 39; if (r > 1) r = 1; if (c < 0 || c > 7) return -1; int i = r * 8 + c; return i < nf ? i : -1; }
+	if (nf > 8) { if (y < PNL_FD_Y || y >= PNL_KR_Y) return -1; int n = pnlCols(nf), r = (y - PNL_FD_Y) / 53; if (r > 1) r = 1;
+		int c; if (n == 8) c = (x - 4 - (x >= 164 ? 4 : 0)) / 39; else { int sp = 312 / n; if (sp > 52) sp = 52; int x0 = 160 - sp * n / 2; if (x < x0) return -1; c = (x - x0) / sp; }
+		if (c < 0 || c >= n) return -1; int i = r * n + c; return i < nf ? i : -1; }
 	int fw = nf ? 312 / nf : 312; if (fw > 52) fw = 52; int x0 = 160 - fw * nf / 2;
 	if (y < PNL_FD_Y || y >= PNL_KR_Y || x < x0 || x >= x0 + fw * nf) return -1; return (x - x0) / fw;
 }
@@ -7361,14 +7365,14 @@ static void drawPanel(void) {
 		if (p->type != PT_F) downTri(x + w - 14, PNL_CH_Y + 7, TH->dim);
 	}
 	int nf = pnlFaders(S);
-	if (nf > 8) rect(162, PNL_FD_Y + 4, 1, 98, RGB3(TH->line));   // two rows: a line between the halves
+	if (nf > 8 && pnlCols(nf) == 8) rect(162, PNL_FD_Y + 4, 1, 98, RGB3(TH->line));   // two groups a row: a line between the halves
 	for (int i = 0; i < nf; i++) {
 		Param* p = pnlFind(S->fd[i], S->page); if (!p) continue;
 		int cx, top, bot, fwid, hot = p == gPnlHotP; pnlGeom(nf, i, &cx, &top, &bot, &fwid); float t = paramNorm(p); char v[16]; pnlFmt(p, v, sizeof(v));
 		vfader(cx, top, bot, fwid, t, p->mn < 0 ? (0 - p->mn) / (p->mx - p->mn) : 0, A, 0, v);   // wide bars: a thumb's width
 		const char* sh = pnlShort(p->name); int ly = nf > 8 ? bot + 3 : PNL_TB + 7;
 		text(cx - (int)strlen(sh) * 4, ly, sh, 1, (hot ? A : TH->dim)[0], (hot ? A : TH->dim)[1], (hot ? A : TH->dim)[2]);
-		if (nf > 8 && i % 4 == 0 && p->name[0] == 'O' && p->name[1] == 'P' && p->name[2] >= '1' && p->name[2] <= '4') { char d[2] = {p->name[2], 0}; text(cx - 22, ly, d, 1, A[0], A[1], A[2]); }   // the operator's number
+		if (nf > 8 && pnlCols(nf) == 8 && i % 4 == 0 && p->name[0] == 'O' && p->name[1] == 'P' && p->name[2] >= '1' && p->name[2] <= '4') { char d[2] = {p->name[2], 0}; text(cx - 22, ly, d, 1, A[0], A[1], A[2]); }   // the operator's number
 	}
 }
 static float gOctFlash[2];

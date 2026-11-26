@@ -136,7 +136,7 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | Section | What's there |
 |---|---|
 | OSC A / OSC B | Table, WT POS, warp + amount, level, octave / semi / fine, unison 1-3 with detune, blend, width |
-| OSC DIST | Each oscillator's own distortion (the DRIVE types + amount), baked into its wave before band-limiting: OSC > DIST |
+| OSC DIST | Each oscillator's own distortion (the DRIVE types + amount), baked into its wave before band-limiting: the DIST / DAMT sliders on OSC A and OSC B |
 | FM ENGINE | ENGINE A / B: WAVE (the wavetable) or FM. 4 operators, 8 algorithms, feedback on OP 4; each operator has a ratio (0.5 to 16, incl. 1.41 and 3.5 for bells), a wave (sine, half, abs, quarter), level, fine tune and its own ADSR, so the brightness moves through the note. FM VEL: harder notes brighter. Mod destination FM AMOUNT scales every modulator. OSC > FM: the engines, algorithm and feedback, and every operator's level, ratio, wave and fine tune; OSC > ENV: every operator's attack, decay, sustain and release. Both tabs show all four operators at once: two rows of thick sliders, an operator to each half. Presets: FM TINE PIANO, FM BELL, FM SLAP BASS, FM BRASS |
 | WT ARP | ARP+SEQ page: WT ARP (UP, DOWN, UP+DOWN, RANDOM) jumps the table position on every arp step, through WT STEPS positions (2-16) over WT DEPTH of the table, on OSC A, B or both |
 | Warps | Sync, Windowed Sync, Bend+, Bend-, Bend+/-, PWM, Asym+, Asym-, Asym+/-, Flip, Mirror, Remap 1-4, Quantize, FM / AM / RM from the other oscillator |
