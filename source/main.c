@@ -7339,6 +7339,66 @@ static int pnlAt(int nf, int x, int y) {   // which slider a touch is on (-1: no
 	int fw = nf ? 312 / nf : 312; if (fw > 52) fw = 52; int x0 = 160 - fw * nf / 2;
 	if (y < PNL_FD_Y || y >= PNL_KR_Y || x < x0 || x >= x0 + fw * nf) return -1; return (x - x0) / fw;
 }
+// ENVELOPES on the panel: the graphical editor (drag the handles: attack, hold, decay + sustain, release), not sliders.
+// ENV 1 / ENV 2: one big shape; ENV 3+4: two side by side; FM > ENV: the four operators' shapes, two by two.
+static int pnlEnvKind(const PnlSub* S, int sec) { if (sec == 1) return !strcmp(S->tab, "ENV 1") ? 1 : !strcmp(S->tab, "ENV 2") ? 2 : !strcmp(S->tab, "ENV 3+4") ? 3 : 0; return sec == 0 && !strcmp(S->tab, "ENV") ? 4 : 0; }
+typedef struct { int x, y, w, h; AHDSR* e; int hold, op; const char* nm; } EnvBox;
+static int pnlEnvBoxes(int kind, EnvBox* b) {   // the boxes for this tab (FM: a copy of each operator's envelope, written back after a drag)
+	static AHDSR op[4]; int Y = PNL_FD_Y, H = PNL_KR_Y - 4 - PNL_FD_Y;
+	if (kind == 1) { b[0] = (EnvBox){4, Y, 312, H, &gEnv1, 1, -1, "AMP"}; return 1; }
+	if (kind == 2) { b[0] = (EnvBox){4, Y, 312, H, &gEnv2, 0, -1, "MOD"}; return 1; }
+	if (kind == 3) { b[0] = (EnvBox){4, Y, 154, H, &gEnv3, 0, -1, "3"}; b[1] = (EnvBox){162, Y, 154, H, &gEnv4, 0, -1, "4"}; return 2; }
+	static const char* N[4] = {"1", "2", "3", "4"};
+	for (int j = 0; j < 4; j++) { op[j] = (AHDSR){gFm.a[j], 0, gFm.d[j], gFm.s[j], gFm.r[j]}; b[j] = (EnvBox){4 + (j & 1) * 158, Y + (j / 2) * (H / 2 + 1), 154, H / 2 - 1, &op[j], 0, j, N[j]}; }
+	return 4;
+}
+static void envBoxPts(const EnvBox* B, float* px, float* py) {   // 5 points, scaled into the box (as the full-size editor's)
+	const AHDSR* e = B->e; float sc = (B->w - 16) / 276.0f, x = B->x + 8, top = B->y + 18, bot = B->y + B->h - 5, sus = bot - (bot - top) * e->s;
+	x += ENV_SEGW[0] * sc * sqrtf(e->a / ENV_MAXT[0]); px[0] = x; py[0] = top;
+	x += B->hold ? ENV_SEGW[1] * sc * sqrtf(e->h / ENV_MAXT[1]) : 0; px[1] = x; py[1] = top;
+	x += ENV_SEGW[2] * sc * sqrtf(e->d / ENV_MAXT[2]); px[2] = x; py[2] = sus;
+	x += ENV_SEGW[3] * sc; px[3] = x; py[3] = sus;
+	x += ENV_SEGW[4] * sc * sqrtf(e->r / ENV_MAXT[4]); px[4] = x; py[4] = bot;
+}
+static int gEnvDragB = -1, gEnvDragH = -1;
+static void drawEnvBox(const EnvBox* B, int bi, const u8* A) {
+	rrect(B->x, B->y, B->w, B->h, 6, PC_PANEL);
+	float px[5], py[5]; envBoxPts(B, px, py); float bot = B->y + B->h - 5, lx = B->x + 8, ly = bot;
+	for (int k = 0; k < 5; k++) {   // the filled shape, then the line
+		int x0 = (int)lx, x1 = (int)px[k];
+		for (int x = x0; x < x1; x++) { float f = (x - lx) / (px[k] - lx + 1e-6f), y = ly + (py[k] - ly) * f; rect(x, (int)y, 1, (int)(bot - y) + 1, A[0] / 3, A[1] / 3, A[2] / 3); }
+		line((int)lx, (int)ly, (int)px[k], (int)py[k], A[0], A[1], A[2]); line((int)lx, (int)ly + 1, (int)px[k], (int)py[k] + 1, A[0], A[1], A[2]);
+		lx = px[k]; ly = py[k];
+	}
+	static const int HAND[4] = {0, 1, 2, 4};
+	for (int h = 0; h < 4; h++) { if (h == 1 && !B->hold) continue; int k = HAND[h], on = bi == gEnvDragB && h == gEnvDragH, r = B->h > 60 ? 4 : 3;
+		rect((int)px[k] - r, (int)py[k] - r, 2 * r + 1, 2 * r + 1, on ? 255 : A[0], on ? 255 : A[1], on ? 255 : A[2]); }
+	char t[48]; const AHDSR* e = B->e;
+	#define TS(v) ((v) < 1 ? (int)lroundf((v) * 1000) : 0), ((v) < 1 ? "MS" : "")
+	if (B->w > 200) { if (B->hold) snprintf(t, sizeof t, "A %.2f H %.2f D %.2f S %d%% R %.2f", e->a, e->h, e->d, (int)lroundf(e->s * 100), e->r); else snprintf(t, sizeof t, "A %.2f  D %.2f  S %d%%  R %.2f", e->a, e->d, (int)lroundf(e->s * 100), e->r); }
+	else if (bi == gEnvDragB) { static const char* HN[4] = {"ATK", "HOLD", "DEC", "REL"}; float v = gEnvDragH == 0 ? e->a : gEnvDragH == 1 ? e->h : gEnvDragH == 2 ? e->d : e->r;   // small: what you're dragging
+		if (gEnvDragH == 2) snprintf(t, sizeof t, "DEC %.2f S %d%%", v, (int)lroundf(e->s * 100)); else snprintf(t, sizeof t, "%s %.2fS", HN[gEnvDragH], v); }
+	else t[0] = 0;
+	#undef TS
+	text(B->x + 5, B->y + 3, B->nm, 1, A[0], A[1], A[2]); if (t[0]) text(B->x + B->w - 4 - (int)strlen(t) * 8, B->y + 3, t, 1, PC_TXT);
+}
+static int envBoxTouch(int kind, int x, int y, int press) {   // drag a handle (1 = redraw)
+	EnvBox b[4]; int n = pnlEnvBoxes(kind, b); static const int HAND[4] = {0, 1, 2, 4};
+	if (press) { gEnvDragB = -1; gEnvDragH = -1; float best = 30 * 30;
+		for (int i = 0; i < n; i++) { if (x < b[i].x || x >= b[i].x + b[i].w || y < b[i].y || y >= b[i].y + b[i].h) continue; float px[5], py[5]; envBoxPts(&b[i], px, py);
+			for (int h = 0; h < 4; h++) { if (h == 1 && !b[i].hold) continue; float dx = x - px[HAND[h]], dy = y - py[HAND[h]], d = dx * dx + dy * dy; if (d < best) { best = d; gEnvDragB = i; gEnvDragH = h; } } } }
+	if (gEnvDragB < 0 || gEnvDragB >= n) return 0;
+	EnvBox* B = &b[gEnvDragB]; AHDSR* e = B->e; float px[5], py[5]; envBoxPts(B, px, py); float sc = (B->w - 16) / 276.0f;
+	float start = gEnvDragH == 0 ? B->x + 8 : gEnvDragH == 1 ? px[0] : gEnvDragH == 2 ? px[1] : px[3];
+	int seg = gEnvDragH == 0 ? 0 : gEnvDragH == 1 ? 1 : gEnvDragH == 2 ? 2 : 4;
+	float f = (x - start) / (ENV_SEGW[seg] * sc); f = f < 0 ? 0 : f > 1 ? 1 : f; float tt = ENV_MAXT[seg] * f * f;
+	if (gEnvDragH == 0) e->a = roundf(tt * 1000) / 1000;
+	else if (gEnvDragH == 1) e->h = roundf(tt * 100) / 100;
+	else if (gEnvDragH == 2) { e->d = tt < 0.01f ? 0.01f : roundf(tt * 100) / 100; float top = B->y + 18, bot = B->y + B->h - 5, sv = (bot - y) / (bot - top); e->s = sv < 0 ? 0 : sv > 1 ? 1 : roundf(sv * 100) / 100; }
+	else e->r = tt < 0.01f ? 0.01f : roundf(tt * 100) / 100;
+	if (B->op >= 0) { int j = B->op; gFm.a[j] = e->a > 4 ? 4 : e->a; gFm.d[j] = e->d > 4 ? 4 : e->d; gFm.s[j] = e->s; gFm.r[j] = e->r > 4 ? 4 : e->r; }   // (FM: back to the operator)
+	gEdited = 1; return 1;
+}
 static void drawPanel(void) {
 	int ns, sec = pnlSec(); const PnlSub* S = pnlCur(&ns); const u8* A = pnlAcc(sec);
 	rect(0, TAB_H, 320, PNL_KB_Y - TAB_H, PC_BG);
@@ -7364,6 +7424,7 @@ static void drawPanel(void) {
 		text(x, PNL_CH_Y + 5, sh, 1, PC_DIM); text(x + (*sh ? ((int)strlen(sh) + 1) * 8 : 0), PNL_CH_Y + 5, v, 1, A[0], A[1], A[2]);
 		if (p->type != PT_F) downTri(x + w - 14, PNL_CH_Y + 7, TH->dim);
 	}
+	{ int ek = pnlEnvKind(S, sec); if (ek) { EnvBox b[4]; int n = pnlEnvBoxes(ek, b); for (int i = 0; i < n; i++) drawEnvBox(&b[i], i, A); return; } }   // envelopes: their shapes
 	int nf = pnlFaders(S);
 	if (nf > 8 && pnlCols(nf) == 8) rect(162, PNL_FD_Y + 4, 1, 98, RGB3(TH->line));   // two groups a row: a line between the halves
 	for (int i = 0; i < nf; i++) {
@@ -7390,7 +7451,7 @@ static int pnlKeyRowAt(int x, int y) { if (y < PNL_KR_Y || y >= PNL_KR_Y + 16) r
 static int pnlTouch(int x, int y, int press, int release) {   // 1 = redraw
 	int ns, sec = pnlSec(); const PnlSub* S = pnlCur(&ns);
 	if (release) {
-		gPnlDrag = -1;
+		gPnlDrag = -1; if (gEnvDragB >= 0) { gEnvDragB = gEnvDragH = -1; return 1; }
 		if (gPnlSubDrag >= 0) {   // FX: let go of a block - moved, or a tap (its settings)
 			int a = gPnlSubDrag, b = gPnlSubTo; gPnlSubDrag = -1;
 			if (a != b) { u8 o[NFXB]; int k = 0, m = gFxOrder[a]; for (int j = 0; j < NFXB; j++) if (j != a) o[k++] = (u8)gFxOrder[j];
@@ -7414,6 +7475,7 @@ static int pnlTouch(int x, int y, int press, int release) {   // 1 = redraw
 		if (p->type != PT_F && p->names != PRESS_RIGHT && (p->mx - p->mn < LS_MAX || p->names == TABLE_NAME_DUMMY)) { lsOpenParam(p); return 1; }
 		int w = 308 / nc, rx = x - 8 - i * w; gPnlReq = p; gPnlReqDir = rx < w * 2 / 5 ? -1 : 1; return 1;
 	}
+	{ int ek = pnlEnvKind(S, sec); if (ek) { if (press && (y < PNL_FD_Y || y >= PNL_KR_Y)) return 0; if (!press && gEnvDragB < 0) return 0; return envBoxTouch(ek, x, y, press); } }
 	int nf = pnlFaders(S);
 	if (press) { int i = pnlAt(nf, x, y); if (i < 0) return 0; gPnlDrag = i; }
 	if (gPnlDrag < 0 || gPnlDrag >= nf) return 0;
