@@ -53,7 +53,7 @@ static void webKitReload(void) { kitScanDirs(); for (int i = 0; i < gNKitDirs; i
 EMSCRIPTEN_KEEPALIVE int web_cam_want(void) { return gCamOn || gCamWant || gCamVid; }
 EMSCRIPTEN_KEEPALIVE u16* web_cam_buf(void) { return W_CAMBUF; }
 EMSCRIPTEN_KEEPALIVE void web_cam_frame(void) { W_CAMNEW = 1; }
-EMSCRIPTEN_KEEPALIVE void web_midi(int st, int a, int b) { midiPush((u8)st, (u8)a, (u8)b); }
+EMSCRIPTEN_KEEPALIVE void web_midi(int st, int a, int b) { if (st < 0x80) return; midiPush((u8)st, (u8)(a & 127), (u8)(b & 127)); }   // (data bytes are 7-bit)
 EMSCRIPTEN_KEEPALIVE void web_audio_on(int on) { W_AUDIO = on; }
 EMSCRIPTEN_KEEPALIVE int web_audio_avail(void) { return (int)(WRW - WRR); }
 EMSCRIPTEN_KEEPALIVE float* web_audio_ring(void) { return WRING; }

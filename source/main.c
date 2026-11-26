@@ -144,7 +144,7 @@ static int thStep(int t, int d) { return VTH[(thSlot(t) + NVTH + d) % NVTH]; }
 static int gTheme = TH_SYRUP,   /* SYRUP: the default look */ gScan = 0, gBright = 0;   // gBright: screen brightness 1..5, 0 = leave the system setting
 static const char* BRIGHT_NAMES[6] = {"SYSTEM", "1 DIM", "2", "3", "4", "5 BRIGHT"};
    // graphics-chip visuals (see visFrame); off by default while being tested on hardware
-static int gInAudioTick = 0;
+static __thread int gInAudioTick = 0;   // per thread: only the audio thread ever sees it set (another thread reading it mid-tick would skip gMipsLock)
 // crash guard: a marker file holds the last milestone reached; it is removed on a clean exit.
 // If it is still there at launch, the last run crashed -> SAFE MODE (new hardware features off).
 static const char* CRASH_PATH = "sdmc:/3ds/syrup/running.txt";
@@ -168,7 +168,7 @@ static void crashCheck(void) {
 #endif
 	gSafeMode = 1;
 }        // set while the audio thread runs the arp/seq clock (it holds gMipsLock)
-static LightLock gMipsLock; static volatile int gTickNoMips = 0;   // audio tick running without gMipsLock (a rebuild holds it)   // guards the shared FFT buffers (worker on core 1 vs main core)
+static LightLock gMipsLock; static __thread int gTickNoMips = 0;   // audio tick running without gMipsLock (a rebuild holds it)   // guards the shared FFT buffers (worker on core 1 vs main core)
 static Thread gWorker = NULL;
 #define SYRUP_VERSION "1.0 BETA"
 // safe saves: write NAME.new, then swap it in, so pulling the power mid-save can never leave a half-written file
@@ -1037,7 +1037,8 @@ static const float LOWCUT_HZ[6] = {30, 60, 120, 250, 500, 1000};
 static int masterActive(void);
 static u8 gScreamFlush[24]; static volatile int gDspStalled = 0;   // CONTAINMENT: one tick of a zero filter clears a voice's stale self-oscillation before its next note
 static void filterSet(int ch, float hz, float res) {
-	if (hz < 40) hz = 40;
+	if (!(hz >= 40)) hz = 40;   // (also catches a NaN from modulation: it would reach the DSP as garbage coefficients)
+	if (!(res >= 0)) res = 0; if (res > 1) res = 1;
 	if (hz > 15000) hz = 15000;
 	float q = 0.707f + res * 9.0f;
 	if (gQScream > 0.001f && gFiltType == 0 && ch != NOISE_CH && masterActive()) {   // only with the containment in the path
@@ -1052,7 +1053,7 @@ static void filterSet(int ch, float hz, float res) {
 		// could lock the DSP up: no sound, PANIC dead, the app unable to close (only a power-off cleared it). At
 		// r = 0.999 it still rings like mad off every note (a Q in the hundreds) but always dies away.
 		float w = TWO_PI * hz / DSPRATE, cw = cosf(w), r = 0.975f + gQScream * 0.022f + res * 0.002f;
-		if (r > 0.999f) r = 0.999f;
+		if (!(r <= 0.999f)) r = 0.999f;   // (NaN too)
 		float rmax = 0.9995f / (cw > 0.5f ? cw : 0.5f);   // ceiling: keep a1 inside the DSP's Q14 range (past it the coefficient wraps and the filter latches)
 		if (r > rmax) r = rmax;
 		float a1 = -2.0f * r * cw, a2 = r * r;
