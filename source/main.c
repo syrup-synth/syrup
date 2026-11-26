@@ -220,6 +220,7 @@ static void mipsFork(Mips* m) {   // gMipsLock held: the next copy carries on fr
 static volatile int gInWorker; static void fxService(void);   // the core-1 worker serves effects frames between steps
 static void mipsBuildLevel(Mips* m, int L) {
 	int N = LEVN[L], H = N / 4;
+	__atomic_and_fetch(&m->built, ~(1u << L), __ATOMIC_SEQ_CST);   // not trusted while it's being written (an audio tick without gMipsLock reads built)
 	memset(gTmp, 0, sizeof(cpx) * N);
 	for (int k = 1; k <= H; k++) { gTmp[k] = m->spec[k]; gTmp[N - k].re = m->spec[k].re; gTmp[N - k].im = -m->spec[k].im; }
 	fft(gTmp, N, 1);
@@ -231,12 +232,13 @@ static void mipsBuildLevel(Mips* m, int L) {
 		m->lev[L][n] = (s16)v;
 	}
 	DSP_FlushDataCache(m->lev[L], N * sizeof(s16));
-	m->built |= 1u << L;
+	__atomic_or_fetch(&m->built, 1u << L, __ATOMIC_SEQ_CST);   // (after the data: a reader that sees the bit sees the whole level)
 	if (gInWorker) fxService();   // a waiting effects frame goes between mip levels
 }
 
 // new cycle -> spectrum, normalise (from the 512-harmonic peak), rebuild the levels in use
 static void mipsSet(Mips* m, const float* cyc, u32 needMask) {
+	__atomic_store_n(&m->built, 0, __ATOMIC_SEQ_CST);   // first: the old levels stop counting as built for the new spectrum before anything changes
 	for (int n = 0; n < CYC; n++) { m->spec[n].re = cyc[n]; m->spec[n].im = 0; }
 	fft(m->spec, CYC, 0);
 	if (gInWorker) fxService();
@@ -900,7 +902,7 @@ static void softRender(void) {   // the DSP's audio callback, every frame; no vo
 		SoftCh* S = &gSoftC[ch]; if (!S->on) continue; any = 1;
 		if (S->out == -1) {   // faded out: once its last block has played, the channel is free
 			int busy = 0; for (int b = 0; b < SOFT_NB; b++) if (gSoftWB[ch][b].status == NDSP_WBUF_QUEUED || gSoftWB[ch][b].status == NDSP_WBUF_PLAYING) busy = 1;
-			if (!busy) { ndspChnWaveBufClear(ch); S->on = 0; S->out = 0; gDspOwner[ch] = -1;
+			if (!busy) { ndspChnWaveBufClear(ch); S->on = 0; S->out = 0; if (gDspOwner[ch] == -3) gDspOwner[ch] = -1;   // (only a fading carrier is released: a channel already handed on keeps its owner)
 				if (gQScream > 0.001f && ch < 24) { ndspChnIirBiquadSetParamsCustomFilter(ch, 1.0f, 0, 0, 0, 0, 0); gChClean[ch] = 1; } }   // (SCREAM: its filter flushed while silent, as stopCh does)
 			continue;
 		}
@@ -1023,8 +1025,10 @@ static int takeCh(int bk, int vi) {
 	if (bk == BK_DSP) {
 		for (int c = 0; c < NCH; c++) if (dspUsable(c) && gDspOwner[c] == -1) { gDspOwner[c] = vi; return c; }
 		for (int c = 0; c < NCH; c++) if (dspUsable(c) && gDspOwner[c] == -3) {   // only fading SOFT carriers left: cut one short
-			LightLock_Lock(&gSoftLock); ndspChnWaveBufClear(c); gSoftC[c].on = 0; gSoftC[c].out = 0; LightLock_Unlock(&gSoftLock);
-			gDspOwner[c] = vi; return c; }
+			LightLock_Lock(&gSoftLock);   // the handoff under the soft lock: the render can't release it (-1) between the check and the claim
+			if (gDspOwner[c] != -3 && gDspOwner[c] != -1) { LightLock_Unlock(&gSoftLock); continue; }
+			ndspChnWaveBufClear(c); gSoftC[c].on = 0; gSoftC[c].out = 0; gDspOwner[c] = vi;
+			LightLock_Unlock(&gSoftLock); return c; }
 	}
 	else for (int c = 0; c < NCS; c++) if (csUsable(c) && gCsOwner[c] == -1) { gCsOwner[c] = vi; return c; }
 	return -1;
@@ -1458,7 +1462,9 @@ static inline u32 csMono(u32 v) { if (gOutMode != 3) return v; u32 a = ((v & 0xF
 static void voicesUpdate(float dt, float bend) {
 	for (int i = 0; i < 2; i++) {
 		LFO* l = &gLfo[i];
-		if (l->shape == LS_WTA || l->shape == LS_WTB) lfoFill(l, gOsc[l->shape - LS_WTA].cyc, 1);   // follows the live cycle
+		if (l->shape == LS_WTA || l->shape == LS_WTB) {   // follows the live cycle (read only while no rebuild is writing it: busy = keep last frame's)
+			if (!LightLock_TryLock(&gMipsLock)) { lfoFill(l, gOsc[l->shape - LS_WTA].cyc, 1); LightLock_Unlock(&gMipsLock); }
+		}
 		else if (l->shape == LS_TABLE) {
 			int fi = (int)(l->pos * 63 + 0.5f), key = l->table * 100 + fi;
 			if (key != l->tabKey) { float* fr = builtinFrames(l->table); if (fr) { lfoFill(l, fr + fi * CYC, 1); l->tabKey = key; } }
@@ -1531,6 +1537,7 @@ static void voicesUpdate(float dt, float bend) {
 			int ch = v->ch[k], role = v->role[k]; if (ch < 0) continue;
 			if (role == R_SOFT) {   // SOFT LAYERS: each layer's level, pan and pitch go to the render; the channel is the filter
 				SoftCh* S = &gSoftC[ch];
+				LightLock_Lock(&gSoftLock);   // the render reads gl / gr / inc mid-block on the DSP thread (lock order: voice -> soft)
 				for (int j = 0; j < S->n; j++) {
 					int r = S->role[j], o = r >= R_B0, u = r - (o ? R_B0 : R_A0); float det = 0, pan = 0.5f, ug = 1;
 					uniParams(&gOsc[o], u, &det, &pan, &ug); ug /= sqrtf((float)gOsc[o].uni);
@@ -1541,7 +1548,8 @@ static void voicesUpdate(float dt, float bend) {
 					S->gl[j] = L; S->gr[j] = R; S->inc[j] = (u32)(rate / 32728.0f * 4294967296.0f);
 					gSoftLimS += L * L + R * R; gSoftLimA += L > R ? L : R;
 				}
-				S->armed = 1; dL[ch] = dR[ch] = SOFT_HEAD; gSoftLive[ch] = 1;
+				S->armed = 1; LightLock_Unlock(&gSoftLock);
+				dL[ch] = dR[ch] = SOFT_HEAD; gSoftLive[ch] = 1;
 				filterSet(ch, cutoff, res);
 				continue;
 			}
@@ -1689,10 +1697,17 @@ static const float REVT_LEN[NREVT] = {1.0f, 0.42f, 0.72f, 0.38f, 0.9f, 1.0f};
 static float gSprBuf[2][NSPR][104]; static int gSprI[2][NSPR];
 static const int SPR_N[NSPR] = {37, 53, 61, 71, 83, 94};
 static float gRevEnv = 0, gRevGate = 0, gRevHold = 0, gRevHp[2], gRevLp[2];
-static void revTypeApply(void) {   // audio side picks this up; clear the loops so a change never bursts
+// FX CLEARS: the main loop only asks (gFxClrReq); the effects path does the clearing at the start of its next frame,
+// on whichever thread runs it (DSP thread, core 1 or core 2), so a clear never lands in the middle of a frame.
+enum { FXC_TAILS = 1, FXC_REV = 2, FXC_DLY = 4, FXC_OF = 8 };
+static volatile int gFxClrReq = 0;
+static void fxClrAsk(int b) { __atomic_fetch_or(&gFxClrReq, b, __ATOMIC_RELEASE); }
+static void revTypeApply(void) {   // the main loop notices a new type; the effects path rebuilds the loops (revTypeNow)
 	static int last = -1;
 	if (last == gRevType) return;
-	last = gRevType;
+	last = gRevType; fxClrAsk(FXC_REV);
+}
+static void revTypeNow(void) {   // effects path: clear the loops so a change never bursts
 	for (int i = 0; i < NCOMB; i++) {
 		Comb* c[2] = {&gCbL[i], &gCbR[i]};
 		for (int k = 0; k < 2; k++) { if (!c[k]->b) continue; c[k]->ln = (int)(c[k]->n * REVT_LEN[gRevType]); if (c[k]->ln < 8) c[k]->ln = 8; c[k]->i = 0; c[k]->st = 0; memset(c[k]->b, 0, c[k]->n * sizeof(float)); }
@@ -1742,8 +1757,16 @@ static inline void revOut(float* l, float* r) {
 		*l *= gRevGate * 1.1f; *r *= gRevGate * 1.1f;
 	} else if (gRevType == 1) { *l *= 1.25f; *r *= 1.25f; }
 }
+static void dlyTypeNow(void); static void ofResetNow(void); static void fxTailsNow(void);
+static void fxClrDue(void) {   // the effects path, first thing each frame: the clears the main loop asked for
+	int r = __atomic_exchange_n(&gFxClrReq, 0, __ATOMIC_ACQ_REL); if (!r) return;
+	if (r & FXC_TAILS) fxTailsNow();
+	if (r & FXC_REV) revTypeNow();
+	if (r & FXC_DLY) dlyTypeNow();
+	if (r & FXC_OF) ofResetNow();
+}
 static void auxReverb(void* data, int n, void* samples[4]) {
-	(void)data;
+	(void)data; fxClrDue();
 	s32* L = (s32*)samples[0]; s32* R = (s32*)samples[1];
 	float fb, damp; revParams(&fb, &damp);
 	int seen = 0;
@@ -1765,7 +1788,7 @@ static void auxReverb(void* data, int n, void* samples[4]) {
 static float delayTime(void) { return ECHO_T[gEchoT]; }
 static int gMasterFX;
 static void auxDelay(void* data, int n, void* samples[4]) {
-	(void)data;
+	(void)data; if (!gMasterFX) fxClrDue();
 	if (gMasterFX) { for (int c = 0; c < 4; c++) memset(samples[c], 0, n * 4); return; }   // delay lives in the master chain
 	s32* L = (s32*)samples[0]; s32* R = (s32*)samples[1];
 	int d = (int)(delayTime() * DSPRATE); if (d >= DLMAX) d = DLMAX - 1;
@@ -1899,7 +1922,8 @@ static float gEqLow = 0, gEqMid = 0, gEqHigh = 0;
 static int gDlyType = 0; static float gRevK = 0, gDlHp[2];
 #define NDLYT 6
 static const char* DLYT_NAMES[NDLYT] = {"TAPE", "DIGITAL", "PING-PONG", "DUB", "LO-FI", "REVERSE"};
-static void dlyTypeChanged(void) {   // clear the line so switching type never replays old repeats through the new path
+static void dlyTypeChanged(void) { fxClrAsk(FXC_DLY); }   // (cleared by the effects path: dlyTypeNow)
+static void dlyTypeNow(void) {   // clear the line so switching type never replays old repeats through the new path
 	if (gDlL) memset(gDlL, 0, DLMAX * sizeof(float));
 	if (gDlR) memset(gDlR, 0, DLMAX * sizeof(float));
 	gDlLp[0] = gDlLp[1] = gDlHp[0] = gDlHp[1] = 0; gRevK = 0;
@@ -1959,7 +1983,8 @@ static const char* OFT_NAMES[NOFT] = {"OFF", "LADDER 24", "LADDER 12", "ACID 18"
 static int gOfType = 0; static float gOfCut = 0.6f, gOfRes = 0.2f, gOfDrive = 0.2f, gOfEnv = 0; static volatile float gOfMod = 0;
 static float gOfS[2][4], gOfSv[2][2], gOfAp[2][6], gOfFb[2]; static int gOfW = 0;
 static inline float ftanh(float x) { if (x > 3) return 1; if (x < -3) return -1; float x2 = x * x; return x * (27 + x2) / (27 + 9 * x2); }
-static void ofReset(void) { memset(gOfS, 0, sizeof(gOfS)); memset(gOfSv, 0, sizeof(gOfSv)); memset(gOfAp, 0, sizeof(gOfAp)); gOfFb[0] = gOfFb[1] = 0; for (int c = 0; c < 2; c++) if (gOfDl[c]) memset(gOfDl[c], 0, OFDL * sizeof(float)); }
+static void ofReset(void) { fxClrAsk(FXC_OF); }   // (cleared by the effects path: ofResetNow)
+static void ofResetNow(void) { memset(gOfS, 0, sizeof(gOfS)); memset(gOfSv, 0, sizeof(gOfSv)); memset(gOfAp, 0, sizeof(gOfAp)); gOfFb[0] = gOfFb[1] = 0; for (int c = 0; c < 2; c++) if (gOfDl[c]) memset(gOfDl[c], 0, OFDL * sizeof(float)); }
 static void ofBlock(s32* L, s32* R, int n) {   // audio thread, inside auxMaster
 	if (!gOfType) return;
 	if (gOfType >= 10 && !gOfDl[0]) return;
@@ -2033,6 +2058,7 @@ static int gSpkEq = 2;   // HARDWARE > SPEAKER EQ: OFF / ON / AUTO (on whenever 
 static const char* SPK_NAMES[3] = {"OFF", "ON", "AUTO"};
 static int gHeadphones;
 static void auxMaster(void* data, int n, void* samples[4]) {
+	fxClrDue();
 	int fxo[NFXB]; for (int i = 0; i < NFXB; i++) fxo[i] = __atomic_load_n(&gFxOrder[i], __ATOMIC_RELAXED);
 	(void)data;
 	u64 t0 = svcGetSystemTick();
@@ -2406,6 +2432,8 @@ static void arpStep(void) {
 }
 static float transportPos16(void);   // where the transport is, in 16ths since PLAY (with the sequencer's swing)
 static int gSeqPlaying;
+static long gArpLastIdx = -1;   // the arp step last played on the transport (-1 at PLAY: the first step always plays, once)
+static long gCtArpLast;   // (the CHORD part's arp step: defined with its part)
 static void arpTick(float dt) {
 	if (!gArp || !gArpN) { if (gArpOnN || gStrN) arpRelease(); gArpPh = 0; return; }
 	for (int i = 0; i < gStrN; i++) if ((gStrT[i] -= dt) <= 0) {   // strummed strings arriving
@@ -2414,9 +2442,8 @@ static void arpTick(float dt) {
 	}
 	if (gSeqPlaying) {   // ONE TRANSPORT: while it plays, the arp's steps sit on its grid (the first note of a new chord still goes at once)
 		float len = RATE_BEATS[gArpRate] * 4, pos = transportPos16() / len; long idx = (long)floorf(pos); float fr = pos - idx;
-		static long lastIdx = -1;
-		if (gArpFresh) { gArpFresh = 0; lastIdx = idx; arpStep(); gBeatFlash = 1; gArpPh = fr; return; }
-		if (idx != lastIdx) { lastIdx = idx; gArpPh = fr; arpStep(); gBeatFlash = 1; return; }
+		if (gArpFresh) { gArpFresh = 0; gArpLastIdx = idx; arpStep(); gBeatFlash = 1; gArpPh = fr; return; }
+		if (idx != gArpLastIdx) { gArpLastIdx = idx; gArpPh = fr; arpStep(); gBeatFlash = 1; return; }
 		if (gArpPh < gArpGate && fr >= gArpGate && gArpGate < 0.99f) arpRelease();
 		gArpPh = fr; return;
 	}
@@ -2703,7 +2730,7 @@ static void sqCompact(void) { int k = 0; for (int i = 0; i < gSqNn; i++) if (!(g
 static void sqAllOff(void) { for (int i = 0; i < gSqNn; i++) sqRelease(&gSqN[i]); gSqNn = 0; }
 static int gSlideOn;   // the step before asked to slide into this one
 static void plockApply(const Step* s);
-static void seqStop(void) { plockApply(NULL); if (gSeqPlaying) { sqAllOff(); if (gArp) playSet(NULL, 0, 0.8f); } gSlideOn = 0; gSeqPlaying = 0; gSeqPos = -1; gSeqPh = 0; gLockCut = gLockRes = 0; gPendFire = -1; gEarlyDone = 0; gFireOff = 0; }
+static void seqStop(void) { plockApply(NULL); if (gSeqPlaying) { sqAllOff(); if (gArp) playSet(NULL, 0, 0.8f); } gSlideOn = 0; gSeqPlaying = 0; gSeqPos = -1; gSeqPh = 0; gLockCut = gLockRes = 0; gPendFire = -1; gEarlyDone = 0; gFireOff = 0; gArpLastIdx = -1; }
 static int gridNote(int row);
 static int rowCustom(int r) { return gRowLen[r] || gRowHits[r]; }
 static int rowLenOf(int r) { int L = gRowLen[r] ? gRowLen[r] : gSeqLen; return L < 1 ? 1 : L > NSTEP ? NSTEP : L; }
@@ -2831,10 +2858,23 @@ static void transportToggle(void) {
 		if (tapeHasAny() && gTapeRec < 0) { if (gTapePlay && !gTapeCont) tapeStopPlay(); if (!gTapePlay) tapeStartPlay(-1); } }   // the tape's loops play with the sequence (RESTART: from the top)
 	say(gSeqMode == 1 ? "PLAY" : "STOP");
 }
+static void seqRateFollow(void) {   // SEQ RATE changed while playing: keep the transport where it is in 16ths (the synced LFOs, arp and gate
+	static int was = -1;                // read transportPos16: the step count alone would make them jump), and the pattern on that step
+	if (was == gSeqRate) return;
+	int old = was; was = gSeqRate; if (old < 0 || !gSeqPlaying) return;
+	float od = old == 1 ? 0.5f : old == 2 ? 2.0f : 1.0f, nd = seqDiv(); unsigned c = gSeqClock;
+	float p = (c / 2) * 2 * od + ((c & 1) ? (1.0f + gSwing) * od : 0) + gSeqPh;   // where it was, in 16ths
+	unsigned pairs = (unsigned)(p / (2 * nd)); float rem = p - pairs * 2 * nd, first = (1.0f + gSwing) * nd;
+	if (rem < first) { gSeqClock = pairs * 2; gSeqPh = rem; } else { gSeqClock = pairs * 2 + 1; gSeqPh = rem - first; }
+	if (gSeqPh < 0) gSeqPh = 0;
+	gSeqPos = (int)(gSeqClock % (unsigned)(gSeqLen < 1 ? 1 : gSeqLen));
+}
 static void seqTick(float dt) {
 	if (gSeqMode != 1) { if (gSeqPlaying) seqStop(); return; }
+	seqRateFollow();
 	if (!gSeqPlaying) {
 		gSeqPlaying = 1; gSeqPos = 0; gSeqPh = 0; gSeqClock = 0; gPendFire = -1; gEarlyDone = 0; gFireOff = 0; gSqNn = 0;
+		gArpLastIdx = -1; gCtArpLast = -1;   // the arps count from PLAY: a step index left over from the last run (often 0) skipped the first step
 		tapeSeqStarted();
 		if (gSongOn && gSongLen > 0) { gSongPos = 0; int np = gSong[0] < NPAT ? gSong[0] : NPAT - 1; if (np != gPatCur) patSwitch(np); }
 		else if (gPatNext >= 0) { patSwitch(gPatNext); gPatNext = -1; }
@@ -3689,6 +3729,7 @@ static void userLoad(void) {
 	}
 	fclose(f);
 }
+static int gUserSaveDue = 0;   // a user patch to write: done by the main loop with the voice lock let go
 static int userSave(void) {
 	mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777);
 	FILE* f = safeOpen(USER_PATH);
@@ -3931,7 +3972,7 @@ static void browseSave(void) {
 	}
 	gSaveArm = -1; gSaveSlot = slot;
 	char nm[24]; if (askName(gPatchName, nm, sizeof(nm))) snprintf(gPatchName, sizeof(gPatchName), "%s", nm);
-	patchCapture(&gUser[slot]); userSave();
+	patchCapture(&gUser[slot]); gUserSaveDue = 1;   // (written after the voice lock is let go)
 	gStyle = NSTYLES - 1; gPreset = slot; gStyleCur = gStyle; gPresetCur = slot; gEdited = 0; gGuard = 0;
 	char m[40]; snprintf(m, sizeof(m), "SAVED TO USER %d", slot + 1); say(m);
 }
@@ -4593,10 +4634,12 @@ static void drawFilterPlot(int x0, int y0, int w, int h) {
 	static const float DEC[3] = {100, 1000, 10000}; for (int k = 0; k < 3; k++) for (int y = iy; y < iy + ih; y += 3) px(FX(DEC[k]), y, RGB3(TH->grid));
 	// harmonics of OSC A's live cycle at the newest note (or A3), before / after the filter
 	const SVoice* v = newestVoice(); float f0 = v ? v->cur * oscTune(0) : 220.0f; const Mips* m = &gOsc[0].mips;
-	float top = 1e-6f; for (int k = 1; k < 128; k++) { float a = sqrtf(m->spec[k].re * m->spec[k].re + m->spec[k].im * m->spec[k].im); if (a > top) top = a; }
+	static float mag[128];   // a copy taken while no rebuild is writing the spectrum (busy: last copy)
+	if (!LightLock_TryLock(&gMipsLock)) { for (int k = 1; k < 128; k++) mag[k] = sqrtf(m->spec[k].re * m->spec[k].re + m->spec[k].im * m->spec[k].im); LightLock_Unlock(&gMipsLock); }
+	float top = 1e-6f; for (int k = 1; k < 128; k++) if (mag[k] > top) top = mag[k];
 	for (int k = 1; k < 128 && f0 * k < FHI; k++) {
 		float f = f0 * k; if (f < FLO) continue;
-		float a = sqrtf(m->spec[k].re * m->spec[k].re + m->spec[k].im * m->spec[k].im) / top; if (a < 1e-4f) continue;
+		float a = mag[k] / top; if (a < 1e-4f) continue;
 		float db = 20 * log10f(a), dbf = db + 20 * log10f(filterGain(f) + 1e-6f); int x = FX(f), yb = iy + ih - 1;
 		int y1 = DBY(db < -48 ? -48 : db); if (y1 < yb) rect(x, y1, 1, yb - y1, RGB3(TH->dim));
 		int y2 = DBY(dbf < -48 ? -48 : dbf > 12 ? 12 : dbf); if (y2 < yb) rect(x, y2, 1, yb - y2, RGB3(TH->txt));
@@ -7588,7 +7631,12 @@ static const float CSECHO_BEATS[4] = {0.5f, 0.75f, 1.0f, 1.5f};
 static int gEchoUnits[2] = {-1, -1}, gEchoCh[2] = {-1, -1}, gEchoOn = 0, gEchoLen = 0, gEchoBpm = 0;
 static s16* gEchoBuf[2];
 static int echoReserved(int c) { return gEchoOn && (c == gEchoCh[0] || c == gEchoCh[1]); }
-static void csWait(void) { csndExecCmds(false); svcSleepThread(6000000); }   // never spin on the chip's done flag: a wedged chip would hang Syrup forever
+static int gCsWaitFree = 0;   // set by the main loop's echo / CHIP > FX ticks (voice lock held): the wait lets the lock go meanwhile
+static void csWait(void) {   // never spin on the chip's done flag: a wedged chip would hang Syrup forever
+	csndExecCmds(false);
+	if (gCsWaitFree) { LightLock_Unlock(&gVoiceLock); svcSleepThread(6000000); LightLock_Lock(&gVoiceLock); }   // (the audio clock runs on through it)
+	else svcSleepThread(6000000);
+}   // never spin on the chip's done flag: a wedged chip would hang Syrup forever
 static u32 csSend(float l, float r) {   // capture volumes: the chip echo, or CHIP > FX
 	if (gThruOn) return (u32)(l * 0.5f * 0x7FFF) | ((u32)(r * 0.5f * 0x7FFF) << 16);   // half level: the capture sums every part
 	if (!gEchoOn) return 0;
@@ -7640,8 +7688,12 @@ static void echoStart(void) {
 static void echoTickL(void) {
 	int want = gCsEcho > 0.001f && gCsndOK && !gThruOn;   // CHIP > FX needs both capture units
 	static int pitchWas = 0;
-	if (want && (!gEchoOn || gEchoBpm != gBPM || pitchWas != gCsEchoPitch)) { pitchWas = gCsEchoPitch; echoStart(); }
+	static int bpmFor = 0, bpmLast = 0; if (gBPM != bpmLast) { bpmLast = gBPM; bpmFor = 0; } else if (bpmFor < 1000) bpmFor++;
+	int bpmMoved = gEchoOn && gEchoBpm != gBPM && bpmFor >= 15;   // a new tempo re-times the echo once it has settled (~1/4 s), not on every BPM step of a drag
+	gCsWaitFree = 1;
+	if (want && (!gEchoOn || bpmMoved || pitchWas != gCsEchoPitch)) { pitchWas = gCsEchoPitch; echoStart(); }
 	else if (!want && gEchoOn) echoStop();
+	gCsWaitFree = 0;
 	static float lastFb = -1;
 	if (gEchoOn && lastFb != gCsEchoFb) {
 		lastFb = gCsEchoFb; u32 fb = (u32)(gCsEchoFb * 0x7FFF);
@@ -8192,8 +8244,10 @@ static void thruStart(void) {
 }
 static void thruTick(void) {   // main loop, voice lock held
 	int want = gThru && gCsndOK && gAudioOK;
+	gCsWaitFree = 1;
 	if (want && !gThruOn) thruStart();
 	else if (!want && gThruOn) thruStop();
+	gCsWaitFree = 0;
 	if (!gThruOn) return;
 	float eff = gThruCut;
 	if (gThruEnv != 0) { float e = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && !gV[i].isEcho && gV[i].env2 > e) e = gV[i].env2; eff += gThruEnv * e; }   // the newest notes' ENV 2
@@ -9707,36 +9761,44 @@ static int kitFileDrum(const char* fname) {   // which drum a file is for, from 
 	return -1;
 }
 static int wavMono(const char* path, float* out, int cap) {   // any WAV -> mono at 32728 Hz; returns samples
+	// Reads only what's used: the chunk headers, then just the part of the data a drum can hold (a few seconds),
+	// never the whole file (a long WAV used to be read whole: up to 24 MB of heap and seconds of SD time per drum).
 	FILE* f = fopen(path, "rb"); if (!f) return 0;
 	fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);
-	if (len < 44 || len > 24 * 1024 * 1024) { fclose(f); return 0; }
-	u8* b = (u8*)malloc(len); if (!b) { fclose(f); return 0; }
-	if (fread(b, 1, len, f) != (size_t)len) { free(b); fclose(f); return 0; } fclose(f);
-	int fmt = 1, ch = 1, bits = 16; u32 rate = 32728; const u8* data = NULL; u32 dlen = 0;
-	if (!memcmp(b, "RIFF", 4) && !memcmp(b + 8, "WAVE", 4)) {
-		long o = 12;
-		while (o + 8 <= len) { u32 cl = rd32(b + o + 4); int isData = !memcmp(b + o, "data", 4);
-			if (!isData && cl > (u32)(len - o - 8)) break;   // corrupt chunk: stop
-			if (!memcmp(b + o, "fmt ", 4) && cl >= 16) { fmt = rd16(b + o + 8); ch = rd16(b + o + 10); rate = rd32(b + o + 12); bits = rd16(b + o + 22); if (fmt == 0xFFFE && cl >= 26) fmt = rd16(b + o + 32); }
-			else if (isData) { data = b + o + 8; dlen = cl; if (o + 8 + (long)dlen > len) { dlen = len - o - 8; break; } }
-			o += 8 + cl + (cl & 1); }
+	u8 h[12]; if (len < 44 || fread(h, 1, 12, f) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4)) { fclose(f); return 0; }
+	int fmt = 1, ch = 0, bits = 0; u32 rate = 0; long dOff = -1; u32 dlen = 0;
+	for (long o = 12; o + 8 <= len; ) {
+		u8 c[8]; fseek(f, o, SEEK_SET); if (fread(c, 1, 8, f) != 8) break;
+		u32 cl = rd32(c + 4); int isData = !memcmp(c, "data", 4);
+		if (!isData && cl > (u32)(len - o - 8)) break;   // corrupt chunk: stop
+		if (!memcmp(c, "fmt ", 4) && cl >= 16) { u8 fm[40]; int k = cl < 40 ? (int)cl : 40; if (fread(fm, 1, k, f) != (size_t)k) break;
+			fmt = rd16(fm); ch = rd16(fm + 2); rate = rd32(fm + 4); bits = rd16(fm + 14); if (fmt == 0xFFFE && k >= 26) fmt = rd16(fm + 24); }
+		else if (isData) { dOff = o + 8; dlen = cl; if (dOff + (long)dlen > len) { dlen = (u32)(len - dOff); break; } }
+		if (dOff >= 0 && ch) break;
+		o += 8 + (long)cl + (cl & 1);
 	}
 	int n = 0;
-	if (data && ch >= 1 && ch <= 8 && rate >= 4000 && rate <= 192000 && (bits == 8 || bits == 16 || bits == 24 || bits == 32)) {
-		int bps = bits / 8 * ch; u32 total = dlen / bps; double step = rate / 32728.0;
-		for (n = 0; n < cap; n++) {
-			double x = n * step; u32 i0 = (u32)x; if (i0 + 1 >= total) break; float u = (float)(x - i0), v[2];
-			for (int k = 0; k < 2; k++) { float acc = 0; const u8* sp = data + (i0 + k) * bps;
-				for (int c = 0; c < ch; c++, sp += bits / 8) {
-					if (bits == 8) acc += (sp[0] - 128) / 128.0f; else if (bits == 16) acc += (s16)rd16(sp) / 32768.0f;
-					else if (bits == 24) acc += ((int)((sp[0] << 8) | (sp[1] << 16) | ((u32)sp[2] << 24)) >> 8) / 8388608.0f;
-					else if (fmt == 3) { float fv; memcpy(&fv, sp, 4); acc += fv; } else acc += (int)rd32(sp) / 2147483648.0f; }
-				v[k] = acc / ch; }
-			out[n] = v[0] * (1 - u) + v[1] * u;
+	if (dOff >= 0 && ch >= 1 && ch <= 8 && rate >= 4000 && rate <= 192000 && (bits == 8 || bits == 16 || bits == 24 || bits == 32) && (fmt == 1 || fmt == 3)) {
+		int bps = bits / 8 * ch; double step = rate / 32728.0;
+		u32 need = ((u32)(cap * step) + 4) * (u32)bps; if (need > dlen) need = dlen;
+		u8* data = (u8*)malloc(need ? need : 1);
+		if (data && fseek(f, dOff, SEEK_SET) == 0 && fread(data, 1, need, f) == need) {
+			u32 total = need / bps;
+			for (n = 0; n < cap; n++) {
+				double x = n * step; u32 i0 = (u32)x; if (i0 + 1 >= total) break; float u = (float)(x - i0), v[2];
+				for (int k = 0; k < 2; k++) { float acc = 0; const u8* sp = data + (i0 + k) * bps;
+					for (int c = 0; c < ch; c++, sp += bits / 8) {
+						if (bits == 8) acc += (sp[0] - 128) / 128.0f; else if (bits == 16) acc += (s16)rd16(sp) / 32768.0f;
+						else if (bits == 24) acc += ((int)((sp[0] << 8) | (sp[1] << 16) | ((u32)sp[2] << 24)) >> 8) / 8388608.0f;
+						else if (fmt == 3) { float fv; memcpy(&fv, sp, 4); acc += fv; } else acc += (int)rd32(sp) / 2147483648.0f; }
+					v[k] = acc / ch; }
+				float y = v[0] * (1 - u) + v[1] * u; out[n] = y == y ? (y > 4 ? 4 : y < -4 ? -4 : y) : 0;   // (a NaN or a wild value in a float WAV can't blow up the drum)
+			}
+			if (n == cap) for (int i = 0; i < 256 && i < n; i++) out[n - 1 - i] *= i / 256.0f;   // cut short: fade the end
 		}
-		if (n == cap) for (int i = 0; i < 256 && i < n; i++) out[n - 1 - i] *= i / 256.0f;   // cut short: fade the end
+		free(data);
 	}
-	free(b); return n;
+	fclose(f); return n;
 }
 static int kitSampleLoad(int d, float* out, int cap) {   // the current SAMPLE folder's file for drum d
 	if (!gNKitDirs) return 0;
@@ -10119,10 +10181,11 @@ static void drumsChanged(void) {   // main thread
 static int gProgAuto;
 // PANIC really stops everything: notes cut (not released), the reverb / delay / FREEZE tails emptied, GRAINS off,
 // held MIDI keys, the arp, strummed strings, the sequencer's ringing notes - then the rest (panicRest)
-static void fxTailsClear(void) {
+static void fxTailsClear(void) { fxClrAsk(FXC_TAILS | FXC_DLY); }   // (cleared by the effects path: fxTailsNow)
+static void fxTailsNow(void) {
 	for (int i = 0; i < NCOMB; i++) { Comb* c[2] = {&gCbL[i], &gCbR[i]}; for (int k = 0; k < 2; k++) if (c[k]->b) { memset(c[k]->b, 0, c[k]->n * sizeof(float)); c[k]->st = 0; } }
 	for (int i = 0; i < NAP; i++) { APass* q[2] = {&gApL[i], &gApR[i]}; for (int k = 0; k < 2; k++) if (q[k]->b) memset(q[k]->b, 0, q[k]->n * sizeof(float)); }
-	memset(gSprBuf, 0, sizeof(gSprBuf)); dlyTypeChanged(); gRevEnv = gRevGate = gRevHold = 0;
+	memset(gSprBuf, 0, sizeof(gSprBuf)); gRevEnv = gRevGate = gRevHold = 0;
 	for (int c = 0; c < 2; c++) { if (gMdl[c]) memset(gMdl[c], 0, MDL * sizeof(float)); if (gOfDl[c]) memset(gOfDl[c], 0, OFDL * sizeof(float)); }
 	if (gPs) memset(gPs, 0, PSN * sizeof(float)); memset(gApZ, 0, sizeof(gApZ)); memset(gPhFb, 0, sizeof(gPhFb)); memset(gCombFb, 0, sizeof(gCombFb));
 }
@@ -12031,11 +12094,15 @@ static int sessionSaveNow(void) {   // main loop, voice lock let go: write what'
 	gSessAt = k; return ok ? k : 0;
 }
 static void tapeErase(int t); static void seqLoad(void);
-static void sessionLoadNext(void) {   // voice lock held
-	int n = sessionCount(); if (!n) { say("NO SAVED SESSIONS YET (START > SAVE SESSION)"); return; }
+static int sessionLoadFiles(void) {   // voice lock let go: copy the next session's files into place (0 = none saved)
+	int n = sessionCount(); if (!n) { say("NO SAVED SESSIONS YET (START > SAVE SESSION)"); return 0; }
 	gSessAt = gSessAt <= 1 || gSessAt > n ? n : gSessAt - 1;   // newest first, then back
-	if (gSeqMode == 1) transportToggle();
+	saverIdle();   // (the SAVER isn't halfway through one of these files)
 	for (int f = 0; f < 3; f++) { char a[96], b[96]; snprintf(a, sizeof(a), "sdmc:/3ds/syrup/sessions/S%02d-%s", gSessAt, SESS_F[f]); snprintf(b, sizeof(b), "sdmc:/3ds/syrup/%s", SESS_F[f]); fileCopy(a, b); }
+	return n;
+}
+static void sessionLoadApply(int n) {   // voice lock held: the copied files become the live session
+	if (gSeqMode == 1) transportToggle();
 	playSet(NULL, 0, 0.8f); lastLoad(); seqLoad(); gMyDrumLoaded = 0; myDrumLoad();
 	char m[48]; snprintf(m, sizeof(m), "SESSION %d OF %d (LOAD AGAIN: THE ONE BEFORE)", gSessAt, n); say(m);
 }
@@ -12129,6 +12196,14 @@ int main(void) {
 	for (int o = 0; o < 2; o++) { gOsc[o].tb.frames = (float*)malloc(sizeof(float) * CYC * MAXFR); mipsInit(&gOsc[o].mips); }
 	mipsInit(&gSubMips);
 	gNoise = (s16*)linearAlloc(gNoiseLen * sizeof(s16));
+	if (!gNoise || !gSubMips.bank[0] || !gOsc[0].mips.bank[0] || !gOsc[1].mips.bank[0] || !gOsc[0].tb.frames || !gOsc[1].tb.frames) {   // can't run without these: say so instead of crashing
+		while (aptMainLoop()) {
+			fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); fbW = 400; memset(fb, 0, 400 * 240 * 3);
+			text(200 - 26 * 4, 110, "NOT ENOUGH MEMORY TO START", 1, 255, 120, 80); text(200 - 19 * 4, 126, "PRESS START TO QUIT", 1, 200, 200, 200);
+			gfxFlushBuffers(); gfxSwapBuffers(); gspWaitForVBlank(); hidScanInput(); if (hidKeysDown() & KEY_START) break;
+		}
+		gfxExit(); return 0;
+	}
 	for (int c = 0; c < NCH; c++) gDspOwner[c] = -1;
 	for (int c = 0; c < NCS; c++) gCsOwner[c] = -1;
 	makeBusyTable();
@@ -12608,7 +12683,7 @@ int main(void) {
 				else { clrArm = 0; undoMark(); seqClear(); say("PATTERN CLEARED (SELECT+L UNDOES)"); }
 				topDirty = 1;
 			} else if ((p->dirty & (D_SAVE | D_INIT)) && dir > 0 && !fast) {
-				if (p->dirty & D_SAVE) { patchCapture(&gUser[gSaveSlot]); userSave(); gStyle = NSTYLES - 1; gPreset = gSaveSlot; }
+				if (p->dirty & D_SAVE) { patchCapture(&gUser[gSaveSlot]); gUserSaveDue = 1; gStyle = NSTYLES - 1; gPreset = gSaveSlot; }
 				else { SPatch ip; patchInit(&ip); initWire(&ip); patchApply(&ip); }
 				curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; topDirty = 1;
 			} else if ((p->dirty & (D_PRESET | D_STYLE)) && gEdited && !gGuard && !fast) {
@@ -12956,8 +13031,9 @@ int main(void) {
 		if (gLearnSaveDue) { gLearnSaveDue = 0; saverWant(SV_LEARN); }
 		{ static u64 at = 0; u64 tn = osGetTime(); if (tn - at > 5000) { at = tn; if (!(gSaveBusy & SV_LAST) && lastSnap()) saverWant(SV_LAST); gSeqSaveDue = 1; } }   // AUTOSAVE: the sound and the sequences every 5 s
 		if (gBrightSaveDue) { gBrightSaveDue = 0; gSavePage = page; gSaveMark[0] = 0; saverWant(SV_PAGE); }
+		if (gUserSaveDue) { gUserSaveDue = 0; WHERE("USER SAVE"); if (!userSave()) say("COULDN'T SAVE THE PATCH TO THE SD CARD"); }
 		if (gSessDue) { int w = gSessDue; gSessDue = 0;   // SESSIONS: the file work, with the voice lock let go
-			if (w == 3) { LightLock_Lock(&gVoiceLock); sessionLoadNext(); LightLock_Unlock(&gVoiceLock); topDirty = botDirty = 1; }
+			if (w == 3) { int n = sessionLoadFiles(); if (n) { LightLock_Lock(&gVoiceLock); sessionLoadApply(n); LightLock_Unlock(&gVoiceLock); } topDirty = botDirty = 1; }
 			else { LightLock_Lock(&gVoiceLock); seqSnap(); lastSnap(); LightLock_Unlock(&gVoiceLock); int n = sessionSaveNow(); char m[40];
 				if (w == 2) { gSessClear = 1; snprintf(m, sizeof(m), "SAVED AS SESSION %d - NEW SESSION", n); } else snprintf(m, sizeof(m), n > 0 ? "SESSION %d SAVED" : "COULDN'T SAVE THE SESSION", n); say(m); } }
 		if (gSeqSaveDue && !(gSaveBusy & SV_SEQ)) { gSeqSaveDue = 0; LightLock_Lock(&gVoiceLock); seqSnap(); LightLock_Unlock(&gVoiceLock); saverWant(SV_SEQ); }
