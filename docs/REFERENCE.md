@@ -21,7 +21,7 @@ Waveform rebuilds run on the 3DS's second CPU core (a worker thread on core 1, w
 
 - **ROOT / SCALE:** 14 scales (major, minor, modes, pentatonics, blues, whole tone, Japanese, Arabic). With a scale on, the keyboard becomes 14 pads, one per scale note, root pads highlighted, and chords stack inside the scale.
 - **ARP:** up, down, up+down, random, as played, chord repeat; rate 1/4 to 1/32 incl. triplets; 1-4 octaves; gate. Works with latch.
-- **SEQ:** 16 steps. REC: each key (or chord) you play writes the next step; ADD REST inserts a rest; the pattern length follows what you record. PLAY: keys transpose the pattern live. SEQ GATE, SWING and BPM. With ARP on, each step is arpeggiated.
+- **SEQ:** 16 steps. REC: each key (or chord) you play writes the next step; ADD REST inserts a rest; the pattern length follows what you record. PLAY: keys transpose the pattern live. SEQ GATE, SWING and BPM. **TAP TEMPO** (under BPM): press >, then clap or knock near the mic in time; two hits set the tempo, more average it, and it stops listening 3 s after the last hit. With ARP on, each step is arpeggiated.
 - **OCT+ / OCT-** (the column left of the keys) shift the keyboard an octave. **L / R** step the bottom screen's tabs (OSC, FILT, MOD, VOICE, FX, SEQ, PADS). **X / Y** step through the pages.
 
 ## Hardware effects and sensors
@@ -155,9 +155,13 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 
 | Input | DEVICE |
 |---|---|
-| Circle pad | The left of the top screen: the page's picture and its two main values (OSC: WT POS + cutoff, FILT: cutoff + res, FX: delay + reverb ...). A patch that routes STICK keeps bend + STICK |
-| A / B / X / Y | The right of the top screen, the settings list: X / B pick (up / down), Y / A change (down / up, hold to repeat) |
-| D-pad | Transport: > PLAY / STOP, < STOP, ^ REC (with the count-in), v TAP TEMPO |
+| Top screen | The left half only shows (the picture, what's loaded); the right half is what you change. On PATCH the styles + patches lists are on the right |
+| D-pad | The list on the right: up / down pick, left / right change (hold to repeat). With the sliders up, up / down walk the tab's own controls |
+| A | PLAY / STOP |
+| B | REC (with the count-in) |
+| X | CHORD (steps through the chord types) |
+| Y | LATCH |
+| Circle pad | The XY pad: pushes the dot for whatever the XY PAD mode moves (WT + CUTOFF, MACRO 1+2, CUTOFF + RES ...). Let go and it stays where it is |
 | C-stick (New 3DS) | Turns the knob that's picked (up / right = more); tap a slider on the bottom screen to pick it |
 | L / R | Through every part of the device: PATCH, OSC, FILT, MOD, VOICE, FX, SEQ, PADS, MIX, VIS, HW |
 | Top left | The transport: STP / RUN / REC. Top right: PATCH, VIS or HW when you're there |

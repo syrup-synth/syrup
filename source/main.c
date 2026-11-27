@@ -4144,9 +4144,9 @@ static int gStickMode = 0;
 enum { SM_DATA, SM_BEND, SM_PAGE, SM_MACROS };
 static const char* STICK_NAMES[4] = {"DATA", "BEND + MOD", "PAGE", "MACROS"};
 // CONTROLS: DEVICE = the 3DS as a hardware synth. The bottom screen is the panel, the top screen the unit's display:
-// the circle pad works the left of the top screen (the picture: this page's two main values), A B X Y the right (the
-// settings list: X / B pick, Y / A change), the D-pad is the transport (> PLAY / STOP, < STOP, ^ REC, v TAP TEMPO),
-// the C-stick turns the knob that's picked, L / R step through the tabs (the top's tabs sit right over the bottom's).
+// the top's left half only shows (the picture, what's loaded), its right half is what you change: the D-pad works that list
+// (up / down pick, left / right change). A PLAY / STOP, B REC, X CHORD, Y LATCH. The circle pad is the XY pad (whatever its
+// mode moves), the C-stick turns the knob that's picked, L / R step through the tabs (the top's tabs sit right over the bottom's).
 // CLASSIC: the D-pad edits, X / Y change page, A chord, B latch.
 static int gCtl = 0; static const char* CTL_NAMES[2] = {"DEVICE", "CLASSIC"};
 static int stickModeNow(void) { return !gCtl && gStickMode == SM_DATA ? SM_PAGE : gStickMode; }   // DEVICE: the circle pad is the picture's, not DATA
@@ -4191,7 +4191,7 @@ static Param P_PRESET[] = {
 	PEND};
 static Param P_PLAY[] = {
 	// most-reached first: tempo and the transport, then the arp, the key, then the details
-	PE("ROLL CHORD", &gRollChord, NCHORD, CHORD_NAMES, 0), PI_("BPM", &gBPM, 40, 240, 0), PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
+	PE("ROLL CHORD", &gRollChord, NCHORD, CHORD_NAMES, 0), PI_("BPM", &gBPM, 40, 240, 0), {"TAP TEMPO", PT_E, &gSaveSlot, 0, 0, 1, PRESS_RIGHT, "", D_DLWT}, PF("SWING", &gSwing, 0, 0.5f, 0.02f, "%", 0), PE("ARP", &gArp, NARPM, ARP_NAMES, D_SEQ),
 	PE("ARP RATE", &gArpRate, 6, RATE_NAMES, 0), PE("SEQ RATE", &gSeqRate, 3, SEQRATE_NAMES, 0), PE("SEQ KEYS", &gSeqKeys, 2, SEQKEYS_NAMES, 0), PF("PAD MORPH", &gPadMorph, 0, 1, 0.05f, "S", 0), PE("PAD BASS SOUND", &gPadBassSub, 4, BASSSND_NAMES, 0), PE("ROLL SCALE", &gRollScale, 3, RSC_NAMES, 0), PE("STRUM NOTES", &gStrumScale, 2, STRN_NAMES, 0), PE("STRUM VOICES", &gStrumVox, 4, STRUMVOX_NAMES, 0), PE("ROOT", &gRoot, 12, NOTE_NAMES, D_SCALE), PE("SCALE", &gScale, NSCALES, SCALE_NAMES, D_SCALE),
 	PF("SEQ GATE", &gSeqGate, 0.1f, 1, 0.05f, "%", 0), PI_("ARP OCTAVES", &gArpOct, 1, 4, 0), PF("ARP GATE", &gArpGate, 0.1f, 1, 0.05f, "%", 0), PF("ARP STRUM", &gArpStrum, 0, 150, 5, "MS", 0),
 	PE("RIFF CHORDS", &gRiffChords, 2, RIFFC_NAMES, 0), PE("WT ARP", &gWtArp, 5, WTARP_NAMES, 0), PI_("WT STEPS", &gWtArpSteps, 2, 16, 0), PF("WT DEPTH", &gWtArpDepth, 0, 1, 0.05f, "%", 0), PE("WT ARP OSC", &gWtArpOsc, 3, WTARPOSC_NAMES, 0),
@@ -4863,7 +4863,7 @@ static const char* paramHelp(const char* n) {
 		{"ARP RATE", "ARPEGGIATOR SPEED"}, {"ARP OCTAVES", "OCTAVES THE ARP CLIMBS"}, {"ARP GATE", "ARP NOTE LENGTH"}, {"ARP STRUM", "CHORD ARP: TIME BETWEEN STRINGS"}, {"RIFF CHORDS", "RIFF: FOLLOW THE CHORD PART, OR THE KEY ONLY"}, {"WT ARP", "EACH ARP STEP JUMPS TO THE NEXT WT POSITION"}, {"WT STEPS", "HOW MANY TABLE POSITIONS THE ARP WALKS"}, {"WT DEPTH", "HOW MUCH OF THE TABLE THE STEPS COVER"}, {"WT ARP OSC", "WHICH OSCILLATOR'S TABLE STEPS"}, {"STRUM DIR", "DOWN, UP, OR BOTH LIKE A GUITAR"}, {"BPM", "TEMPO"},
 		{"SEQ GATE", "STEP NOTE LENGTH"}, {"SEQ KEYS", "KEYS PLAY ALONG OR TRANSPOSE"}, {"PAD MORPH", "PADS: SLIDE GLIDES TO THE NEXT CHORD (0 = RETRIGGER)"}, {"PAD BASS SOUND", "PADS BASS: WHOLE PATCH, SUB OSC, OSC A OR OSC B ALONE"}, {"ROLL SCALE", "PIANO ROLL: SHOW THE SCALE, OR ONLY ITS NOTES"}, {"STRUM NOTES", "PADS STRUM STRIP: CHORD TONES OR THE SCALE"}, {"STRUM VOICES", "STRINGS RINGING AT ONCE (NEVER STEALS THE CHORD)"},
 		{"SWING", "SHUFFLE FEEL"},
-		{"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},
+		{"TAP TEMPO", "PRESS >, THEN CLAP OR KNOCK BY THE MIC IN TIME"}, {"VIS MODE", "VISUALIZER STYLE"}, {"VIS OSC", "OSCILLATOR SHOWN"}, {"OVERLAY", "SHOW TEXT OVER THE VISUALIZER"},
 		{"THEME", "COLOUR SCHEME"},
 		{"TAPE > TABLE", "PRESS >: THE LAST TAPE TRACK BECOMES A WAVETABLE"}, {"KIT > TABLE", "PRESS >: THE DRUM KIT BECOMES A WAVETABLE (8 DRUMS)"}, {"ECHO WOW", "CHIP ECHO SPEED DRIFTS: REPEATS BEND"}, {"CHIP > FX", "SUB, CHIP, DRUMS THROUGH THE FILTER + MASTER FX"}, {"CHIP CUTOFF", "LOW PASS ON THE CHIP PARTS (WITH CHIP > FX)"}, {"CHIP RES", "RESONANCE OF THAT FILTER"},
 		{"MIC > TABLE", "PRESS >, THEN SING 1 SECOND INTO THE MIC"},
@@ -4881,7 +4881,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS; KICK = SIDECHAIN FROM THE DRUMS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM PART ON / OFF: IT PLAYS WITH PLAY"}, {"KIT", "DRUM SOUNDS"}, {"ACCENT", "HOW MUCH LOUDER ACC STEPS HIT"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"MUTATE", "HOW MUCH THE MUT BUTTON CHANGES THE BEAT"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"SYNTH CH IN", "MIDI CHANNEL THE KEYS PLAY FROM (ALL = ANY FREE ONE)"}, {"SYNTH CH OUT", "KEYS, SEQUENCER, ARP NOTES SENT ON THIS CHANNEL"}, {"CHORD CH IN", "MIDI CHANNEL THAT PLAYS THE CHORD PART"}, {"CHORD CH OUT", "THE CHORD PART'S NOTES SENT ON THIS CHANNEL"}, {"BASS CH IN", "MIDI CHANNEL THAT PLAYS THE BASS PART"}, {"BASS CH OUT", "BASS LINE NOTES SENT ON THIS CHANNEL"}, {"DRUMS CH IN", "GENERAL MIDI DRUM NOTES (36 KICK, 38 SNARE...)"}, {"DRUMS CH OUT", "EVERY DRUM HIT SENT AS A GM NOTE"}, {"CONTROLS", "DEVICE: PAD=PICTURE ABXY=LIST DPAD=TRANSPORT"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"CLICK", "METRONOME: COUNT-IN / RECORDING / ALWAYS (NEVER ON TAPE)"}, {"CLICK LEVEL", "METRONOME VOLUME"}, {"SEQ RATE", "A STEP IS A 16TH, A 32ND OR AN 8TH"}, {"REC QUANT", "16TH, 8TH, 32ND, OR OFF (KEEPS YOUR TIMING)"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"LAYERS", "SOFT: A NOTE'S UNISON ON ONE CHANNEL (MANY MORE NOTES)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"MUTATE", "HOW MUCH THE MUT BUTTON CHANGES THE BEAT"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"SYNTH CH IN", "MIDI CHANNEL THE KEYS PLAY FROM (ALL = ANY FREE ONE)"}, {"SYNTH CH OUT", "KEYS, SEQUENCER, ARP NOTES SENT ON THIS CHANNEL"}, {"CHORD CH IN", "MIDI CHANNEL THAT PLAYS THE CHORD PART"}, {"CHORD CH OUT", "THE CHORD PART'S NOTES SENT ON THIS CHANNEL"}, {"BASS CH IN", "MIDI CHANNEL THAT PLAYS THE BASS PART"}, {"BASS CH OUT", "BASS LINE NOTES SENT ON THIS CHANNEL"}, {"DRUMS CH IN", "GENERAL MIDI DRUM NOTES (36 KICK, 38 SNARE...)"}, {"DRUMS CH OUT", "EVERY DRUM HIT SENT AS A GM NOTE"}, {"CONTROLS", "DEVICE: PAD=XY DPAD=LIST A PLAY B REC X CHD Y LATCH"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"CLICK", "METRONOME: COUNT-IN / RECORDING / ALWAYS (NEVER ON TAPE)"}, {"CLICK LEVEL", "METRONOME VOLUME"}, {"SEQ RATE", "A STEP IS A 16TH, A 32ND OR AN 8TH"}, {"REC QUANT", "16TH, 8TH, 32ND, OR OFF (KEEPS YOUR TIMING)"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"LAYERS", "SOFT: A NOTE'S UNISON ON ONE CHANNEL (MANY MORE NOTES)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -5045,7 +5045,7 @@ static void drawFooter(int page, int sel) {
 	if (gMsgT > 0) { text(4, 230, gMsg, 1, VAL); return; }
 	if (page == 0) { text(4, 230, "TAP A PATCH BELOW   D-PAD WORKS TOO", 1, DIM); return; }
 	const char* h = paramHelp(PAGES[page][sel].name);
-	char m[52]; snprintf(m, sizeof(m), "%.49s", *h ? h : gCtl ? "D-PAD: PICK / CHANGE   X/Y: PAGES" : "X/B PICK  Y/A CHANGE  D-PAD: PLAY STOP REC TAP");
+	char m[52]; snprintf(m, sizeof(m), "%.49s", *h ? h : gCtl ? "D-PAD: PICK / CHANGE   X/Y: PAGES" : "D-PAD: LIST  A PLAY B REC X CHORD Y LATCH");
 	text(4, 230, m, 1, DIM);
 }
 
@@ -5067,15 +5067,16 @@ static void drawTop(int page, int sel, int oct, int latch) {
 	if (page == 9) drawHardwarePanel();
 	else if (page == 10) drawMasterPanel();
 	else if (page == 11) drawDrumsPanel();
-	else if (page == 0) {   // preset browser: styles | patches
-		frame(4, 30, 196, 194);
+	else if (page == 0) {   // preset browser: styles | patches (DEVICE: on the right, where the things you change are)
+		int bx = gCtl ? 0 : 200;
+		frame(bx + 4, 30, 196, 194);
 		for (int k = 0; k < NVSTY; k++) {
 			int y = 34 + k * 10, i = VSTY[k];
-			if (i == gStyle && !gBrFocus) { rect(7, y - 2, 74, 10, HI); text(10, y, STYLE_NAMES[i], 1, HITXT); }
-			else if (i == gStyle) { outline(7, y - 2, 74, 10, HI); text(10, y, STYLE_NAMES[i], 1, VAL); }   // (the other list has the D-pad)
-			else text(10, y, STYLE_NAMES[i], 1, DIM);
+			if (i == gStyle && !gBrFocus) { rect(bx + 7, y - 2, 74, 10, HI); text(bx + 10, y, STYLE_NAMES[i], 1, HITXT); }
+			else if (i == gStyle) { outline(bx + 7, y - 2, 74, 10, HI); text(bx + 10, y, STYLE_NAMES[i], 1, VAL); }   // (the other list has the D-pad)
+			else text(bx + 10, y, STYLE_NAMES[i], 1, DIM);
 		}
-		rect(84, 33, 1, 186, LINE);
+		rect(bx + 84, 33, 1, 186, LINE);
 		int user = gStyle == NSTYLES - 1;
 		for (int i = 0; i < presetCount(gStyle) + user; i++) {
 			int y = 34 + i * 11, cur = i == gPreset;
@@ -5083,11 +5084,11 @@ static void drawTop(int page, int sel, int oct, int latch) {
 			if (user && i == NUSER) snprintf(nm, sizeof(nm), "INIT PATCH");
 			else if (user && gUser[i].magic != PATCH_MAGIC) snprintf(nm, sizeof(nm), "%d  - EMPTY -", i + 1);
 			else snprintf(nm, sizeof(nm), "%.13s", presetName(gStyle, i));
-			if (cur && gBrFocus) { rect(87, y - 2, 110, 11, HI); text(90, y, nm, 1, HITXT); }
-			else if (cur) { outline(87, y - 2, 110, 11, HI); text(90, y, nm, 1, VAL); }
-			else text(90, y, nm, 1, TXT);
+			if (cur && gBrFocus) { rect(bx + 87, y - 2, 110, 11, HI); text(bx + 90, y, nm, 1, HITXT); }
+			else if (cur) { outline(bx + 87, y - 2, 110, 11, HI); text(bx + 90, y, nm, 1, VAL); }
+			else text(bx + 90, y, nm, 1, TXT);
 		}
-		char cnt[40]; snprintf(cnt, sizeof(cnt), "%d PATCHES%s", presetCount(gStyle), gEdited ? " *" : ""); text(10, 212, cnt, 1, gEdited ? VAL : DIM);   /* (the build number is on the start screen and in HELP) */
+		char cnt[40]; snprintf(cnt, sizeof(cnt), "%d PATCHES%s", presetCount(gStyle), gEdited ? " *" : ""); text(bx + 10, 212, cnt, 1, gEdited ? VAL : DIM);   /* (the build number is on the start screen and in HELP) */
 	} else if (page == 7) {   // scale / arp / sequencer
 		char s[40];
 		frame(4, 30, 196, 194);
@@ -5134,21 +5135,22 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		}
 		}
 	}
-	if (page == 0) {   // browser info: what's loaded and how to drive the list
-		frame(204, 30, 194, 194);
-		text(212, 38, "NOW PLAYING", 1, DIM);
+	if (page == 0) {   // browser info: what's loaded and how to drive the list (DEVICE: on the left, it only shows)
+		int ix = gCtl ? 0 : -200;
+		frame(ix + 204, 30, 194, 194);
+		text(ix + 212, 38, "NOW PLAYING", 1, DIM);
 		int sc = strlen(gPatchName) <= 11 ? 2 : 1;
-		text(212, 52, gPatchName, sc, VAL);
+		text(ix + 212, 52, gPatchName, sc, VAL);
 		char s2[40]; snprintf(s2, sizeof(s2), "%s  %d / %d", STYLE_NAMES[gStyleCur], gPresetCur + 1, presetCount(gStyleCur));
-		text(212, 76, s2, 1, TXT);
-		if (gEdited) text(212, 88, "* EDITED (SAVE IT?)", 1, WARN);
-		rect(208, 104, 186, 1, LINE);
-		text(212, 112, "TAP A PATCH BELOW", 1, TXT);
-		text(212, 126, "TAP A STYLE TO SEE IT", 1, TXT);
-		text(212, 140, "SAVE TWICE: KEEP IT", 1, TXT);
-		text(212, 162, "UNDO A PATCH CHANGE:", 1, DIM);
-		text(212, 176, "SELECT + L", 1, DIM);
-		text(212, 192, "D-PAD WORKS TOO", 1, DIM);
+		text(ix + 212, 76, s2, 1, TXT);
+		if (gEdited) text(ix + 212, 88, "* EDITED (SAVE IT?)", 1, WARN);
+		rect(ix + 208, 104, 186, 1, LINE);
+		text(ix + 212, 112, "TAP A PATCH BELOW", 1, TXT);
+		text(ix + 212, 126, "TAP A STYLE TO SEE IT", 1, TXT);
+		text(ix + 212, 140, "SAVE TWICE: KEEP IT", 1, TXT);
+		text(ix + 212, 162, "UNDO A PATCH CHANGE:", 1, DIM);
+		text(ix + 212, 176, "SELECT + L", 1, DIM);
+		text(ix + 212, 192, "D-PAD WORKS TOO", 1, DIM);
 		drawFooter(page, sel);
 		if (!visActive(page)) scanlines();
 		return;
@@ -7233,7 +7235,7 @@ static void drawPanelCard(int page, int sel) {   // the top screen's right side 
 		int x = 214 + (i & 1) * 90, y = 116 + (i / 2) * (nf > 8 ? 11 : 14), hot = q == p;
 		text(x, y, pnlShort(q->name), 1, (hot ? A : TH->dim)[0], (hot ? A : TH->dim)[1], (hot ? A : TH->dim)[2]); text(x + 84 - (int)strlen(vv) * 8, y, vv, 1, PC_TXT);
 	}
-	text(214, 210, gCtl ? "D-PAD + SLIDERS BELOW" : "ABXY + SLIDERS BELOW", 1, RGB3(TH->dim));
+	text(214, 210, "D-PAD + SLIDERS BELOW", 1, RGB3(TH->dim));
 }
 static int pnlFaders(const PnlSub* s) { int n = 0; while (n < 16 && s->fd[n]) n++; return n; }
 static int pnlChoices(const PnlSub* s) { int n = 0; while (n < 4 && s->ch[n]) n++; return n; }
@@ -8256,7 +8258,7 @@ static void prerollStart(int what) {   // what: 1 tape, 2 live sequencer
 	char m[32]; snprintf(m, sizeof(m), "COUNT-IN: %d", (int)gPreBeats); say(m);
 }
 static void tapeRecStart(void) { prerollStart(1); }
-static void tapTempo(void) {   // D-pad down (DEVICE): tap it in time; 2 taps set the tempo, more taps average
+static void tapTempo(void) {   // a tap in time (TAP TEMPO: the mic hears them): 2 taps set the tempo, more taps average
 	static u64 t[5]; static int n = 0; u64 now = osGetTime(); char m[32];
 	if (n && now - t[n - 1] > 2000) n = 0;
 	if (n == 5) { memmove(t, t + 1, sizeof(u64) * 4); n = 4; }
@@ -8264,6 +8266,21 @@ static void tapTempo(void) {   // D-pad down (DEVICE): tap it in time; 2 taps se
 	if (n < 2) { say("TAP TEMPO: TAP AGAIN"); return; }
 	float ms = (float)(t[n - 1] - t[0]) / (n - 1); int b = (int)lroundf(60000.0f / ms); b = b < 40 ? 40 : b > 240 ? 240 : b;
 	gBPM = b; snprintf(m, sizeof m, "TAP TEMPO: %d BPM", b); say(m);
+}
+static float gMicTempoT = 0, gMicTempoHold = 0, gMicTempoLvl = 0;   // TAP TEMPO by the mic: listening for this long (s), and the gap after a hit
+static void micTempoArm(void) {
+	if (!gMicOK || !gMicBuf) { say("TAP TEMPO: NO MIC"); return; }
+	if (gMicTempoT > 0) { gMicTempoT = 0; say("TAP TEMPO OFF"); return; }
+	gMicTempoT = 6; gMicTempoHold = 0.3f; say("TAP TEMPO: CLAP OR KNOCK IN TIME");
+}
+static void micTempoTick(float dt) {   // main thread, 60 times a second: each knock the mic hears is a tap
+	if (gMicTempoT <= 0 || !gMicOK || !gMicBuf) return;
+	gMicTempoT -= dt; if (gMicTempoT <= 0) { gMicTempoT = 0; say("TAP TEMPO: DONE"); return; }
+	u32 N = gMicSize / 2, end = micGetLastSampleOffset() / 2; const s16* m = (const s16*)gMicBuf;
+	float pk = 0; for (int i = 0; i < 300; i++) { float v = fabsf(m[(end + N - 1 - i) % N] / 32768.0f); if (v > pk) pk = v; }   // the last ~18 ms
+	if (gMicTempoHold > 0) { gMicTempoHold -= dt; gMicTempoLvl += (pk - gMicTempoLvl) * 0.2f; return; }
+	if (pk > 0.2f && pk > gMicTempoLvl * 2.5f + 0.05f) { tapTempo(); gMicTempoHold = 0.15f; gMicTempoT = 3; gVisBeat = 1; }   // a hit: it keeps listening 3 s more
+	gMicTempoLvl += (pk - gMicTempoLvl) * 0.2f;
 }
 static void liveRecToggle(void) { if (gLiveRec || gPreFor >= 2) liveRecStop(); else prerollStart(2); }
 static void recOnNote(void) { if (gPreFor == 3) { gPreFor = 0; liveRecGo(); gRecFirst = 1; } }   // ON NOTE: this note starts the transport and the take
@@ -12735,7 +12752,7 @@ int main(void) {
 			else { gspWaitForVBlank(); continue; }
 		}
 		if (kDown & KEY_START) { gStartMenu = !gStartMenu; gStartSel = 0; topDirty = topAgain = 1; kDown &= ~KEY_START; }
-		gStickMenu = (gStartMenu || gThemePick || gLs || (page == 0 && stickModeNow() == SM_PAGE)) && !(kHeld & KEY_SELECT);
+		gStickMenu = (gStartMenu || gThemePick || gLs || (page == 0 && gCtl && stickModeNow() == SM_PAGE)) && !(kHeld & KEY_SELECT);
 		if (gStickMenu) kDown |= stickDpad(); else stickDpad();
 		if (gThemePick && !gStartMenu && (kDown & (KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT | KEY_A))) {   // the picker by buttons / circle pad: try them live, A keeps it
 			int d = (kDown & KEY_DRIGHT) ? 1 : (kDown & KEY_DLEFT) ? -1 : (kDown & KEY_DDOWN) ? TP_COLS : (kDown & KEY_DUP) ? -TP_COLS : 0;
@@ -12782,7 +12799,7 @@ int main(void) {
 				armed = 0; lastHit = tnow; }
 			if (gShakeD < 0.2f) armed = 1;
 		}
-		micRecTick(1.0f / 60); micPadTick(1.0f / 60); webUpTick(); if (gPanicClr > 0) { gPanicClr--; fxTailsClear(); } prerollTick(1.0f / 60); seqTapTick(1.0f / 60); tapeTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60);
+		micRecTick(1.0f / 60); micPadTick(1.0f / 60); webUpTick(); if (gPanicClr > 0) { gPanicClr--; fxTailsClear(); } prerollTick(1.0f / 60); seqTapTick(1.0f / 60); tapeTick(); thruTick(); linkTick(1.0f / 60); dlTick(); upTick(); echoTick(); grainsTick(); revTypeApply(); netTabTick(); drumTapTick(1.0f / 60); micTempoTick(1.0f / 60);
 		if (midiTick()) topDirty = botDirty = 1;
 		if (gOfType) {   // OUT FILTER cutoff mod: the mod matrix and ENV 2 of the newest note
 			const SVoice* nv = newestVoice(); float m = modSum(DST_OFCUT, (SVoice*)nv);
@@ -12893,6 +12910,7 @@ int main(void) {
 			if ((gDrumOnB || gDrumInSeq) && !gPads) mode = gDgEd ? 3 : 2;
 			else if (page == 7 && gGridOn && !gPatView && !gPads) mode = gStepEd >= 0 ? 1 : 4;
 			if (kHeld & KEY_SELECT) mode = 0;   // SELECT held: the pad is the QUICK ring
+			if (!gCtl && (mode == 2 || mode == 4)) mode = 0;   // DEVICE: the circle pad is the XY pad and A / B the transport, not the grid cursor (tap the grid)
 			if (mode == 1 && (kHeld & KEY_TOUCH) && gGtLong) mode = 0;   // the note still held: its PARAMETER LOCKS have the pad and B
 			// FLAVOR: a pad held, the circle pad reshapes its chord as you play - up 7TH, up-right 9TH, right SUS4, left INVERSION,
 			// down MAJOR <-> MINOR (down-left: that + 7TH), back to the middle: the chord you touched
@@ -13029,9 +13047,11 @@ int main(void) {
 		if (gSessClear) { gSessClear = 0; sessionClear(); latch = 0; curKey = -1; topDirty = botDirty = 1; }
 		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
 
-		if (page == 0 && !gCtl) {   // DEVICE: A B X Y browse too (X / B up / down, Y / A the styles / patches list), like the D-pad
-			kDown |= (kDown & KEY_X ? KEY_DUP : 0) | (kDown & KEY_B ? KEY_DDOWN : 0) | (kDown & KEY_Y ? KEY_DLEFT : 0) | (kDown & KEY_A ? KEY_DRIGHT : 0);
-			kHeld |= (kHeld & KEY_X ? KEY_DUP : 0) | (kHeld & KEY_B ? KEY_DDOWN : 0);
+		if (!gCtl) {   // DEVICE: A PLAY / STOP, B REC, X CHORD, Y LATCH (the D-pad is the list's)
+			if (kDown & KEY_A) { transportToggle(); topDirty = botDirty = 1; }
+			if (kDown & KEY_B) { liveRecToggle(); topDirty = botDirty = 1; }
+			if (kDown & KEY_X) { gChord = (gChord + 1) % NCHORD; say(gChord ? CHORD_NAMES[gChord] : "CHORD OFF"); topDirty = botDirty = 1; }
+			if (kDown & KEY_Y) { latch = !latch; gLatchShow = latch; say(latch ? "LATCH ON" : "LATCH OFF"); if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
 		}
 		if (page == 0) {   // preset browser: the D-pad moves through the list itself
 			int ds = 0, dp = 0, fresh = 0;
@@ -13049,9 +13069,10 @@ int main(void) {
 #ifdef FAKE_WEB
 		{   // the web version's top screen is a touch screen too: tap a setting to pick it, drag along it to change it
 			static int was = 0, ax = 0;
-			if (TTOUCH && !was && page == 0 && TTY >= 32 && TTY < 222) {   // the PATCH page's lists: a style shows its patches, a patch loads
-				if (TTX >= 6 && TTX < 84) { int k = (TTY - 32) / 10, i = k >= 0 && k < NVSTY ? VSTY[k] : -1; if (i >= 0 && i != gStyle) { gStyle = i; gPreset = 0; gBrStyle = -1; topDirty = botDirty = 1; } }
-				else if (TTX >= 86 && TTX < 200) { int i = (TTY - 32) / 11, n = presetCount(gStyle) + (gStyle == NSTYLES - 1);
+			if (TTOUCH && !was && page == 0 && TTY >= 32 && TTY < 222 && (gCtl ? TTX < 200 : TTX >= 200)) {   // the PATCH page's lists: a style shows its patches, a patch loads (DEVICE: on the right)
+				int bxT = TTX - (gCtl ? 0 : 200);
+				if (bxT >= 6 && bxT < 84) { int k = (TTY - 32) / 10, i = k >= 0 && k < NVSTY ? VSTY[k] : -1; if (i >= 0 && i != gStyle) { gStyle = i; gPreset = 0; gBrStyle = -1; topDirty = botDirty = 1; } }
+				else if (bxT >= 86 && bxT < 200) { int i = (TTY - 32) / 11, n = presetCount(gStyle) + (gStyle == NSTYLES - 1);
 					if (i < n) { gPreset = i - 1; if (browseStep(0, 1, 1)) { curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; } }
 			}
 			if (TTOUCH && !was && TTY < 14 && !gCtl) {   // DEVICE tabs: the transport, OSC ... MIX, PATCH / VIS / HW
@@ -13073,7 +13094,7 @@ int main(void) {
 					for (int q = 0; q < NPAGES; q++) { int p = NAV[q]; if (PAGE_SECT[p] != sect) continue; int w = strlen(SUB_NAMES[p]) * 8;
 						if (TTX >= sx - 4 && TTX < sx + w + 6) { gPageWant = p; break; } sx += w + 16; } }
 			}
-			if (TTOUCH && !was && TTX < 200 && ((page == 7 && ((gSeqPart == 1 || gSeqPart == 2) ? partTopTouch(TTX, TTY) : rollChordTouch(TTX, TTY))) || (page == 11 && beatListTouch(TTX, TTY)))) { topDirty = botDirty = 1; }
+			if (TTOUCH && !was && gCtl && TTX < 200 && ((page == 7 && ((gSeqPart == 1 || gSeqPart == 2) ? partTopTouch(TTX, TTY) : rollChordTouch(TTX, TTY))) || (page == 11 && beatListTouch(TTX, TTY)))) { topDirty = botDirty = 1; }
 			if (TTOUCH && page != 0 && TTX >= 204 && TTY >= 30 && TTY < 214) {
 				int np = pageLen(page), first = sel[page] - 14; if (first < 0) first = 0;
 				int r = first + (TTY - 31) / 12;
@@ -13086,17 +13107,8 @@ int main(void) {
 		BREATHE();
 		// parameter editing
 		int n = pageLen(page);
-		u32 eD = kDown, eH = kHeld;   // the buttons that edit the list: the D-pad (CLASSIC), or A B X Y as a second D-pad (DEVICE)
-		if (!gCtl && page != 0) {
-			eD = (kDown & KEY_X ? KEY_DUP : 0) | (kDown & KEY_B ? KEY_DDOWN : 0) | (kDown & KEY_Y ? KEY_DLEFT : 0) | (kDown & KEY_A ? KEY_DRIGHT : 0);
-			eH = (kHeld & KEY_X ? KEY_DUP : 0) | (kHeld & KEY_B ? KEY_DDOWN : 0) | (kHeld & KEY_Y ? KEY_DLEFT : 0) | (kHeld & KEY_A ? KEY_DRIGHT : 0);
-			// the D-pad: the TRANSPORT
-			if (kDown & KEY_DRIGHT) { transportToggle(); topDirty = botDirty = 1; }
-			if (kDown & KEY_DLEFT) { if (gSeqMode == 1) transportToggle(); if (gLiveRec || gPreFor >= 2) liveRecStop(); say("STOP"); topDirty = botDirty = 1; }
-			if (kDown & KEY_DUP) { liveRecToggle(); topDirty = botDirty = 1; }
-			if (kDown & KEY_DDOWN) { tapTempo(); topDirty = 1; }
-		}
-		int devPnl = !gCtl && gPnl && page != 0 && pnlSec() >= 0;   // DEVICE with the sliders up: X / B walk the tab's own controls (what the card on the right shows)
+		u32 eD = kDown, eH = kHeld;   // the D-pad edits the list on the right (both layouts)
+		int devPnl = !gCtl && gPnl && page != 0 && pnlSec() >= 0;   // DEVICE with the sliders up: up / down walk the tab's own controls (what the card on the right shows)
 		if (devPnl && (eD & (KEY_DUP | KEY_DDOWN))) {
 			const PnlSub* S = pnlCur(NULL); Param* L[20]; int m = 0, at = -1;
 			for (int i = 0; i < 4 && S->ch[i]; i++) { Param* q = pnlFind(S->ch[i], S->page); if (q) L[m++] = q; }
@@ -13120,20 +13132,21 @@ int main(void) {
 			}
 			if (dir && PAGES[page][sel[page]].p == &gBPM) {   // the circle pad never moves the tempo: too easy to knock while playing
 				dir = 0; acc = 0;
-				static float hintT = 0; if (hintT <= 0) { say(gCtl ? "TEMPO: USE THE D-PAD" : "TEMPO: A / Y, OR TAP IT ON D-PAD DOWN"); hintT = 3; }
+				static float hintT = 0; if (hintT <= 0) { say("TEMPO: USE THE D-PAD"); hintT = 3; }
 				hintT -= dt;
 			}
 		}
 		if (dir && PAGES[page][sel[page]].p == &gTheme) { dir = 0; gThemePick = !gThemePick; botDirty = 1; }   // THEME: < or > opens the picker
 		Param* pnlP = gPnlReq; gPnlReq = NULL;   // a PANEL slider / choice: through the same path as the D-pad
 		if (dir || pnlP) {
-			Param* p = pnlP ? pnlP : devPnl && gPnlHotP ? (Param*)gPnlHotP : &PAGES[page][sel[page]]; if (pnlP) dir = 0;   // (DEVICE sliders: Y / A and the C-stick turn the picked one)
+			Param* p = pnlP ? pnlP : devPnl && gPnlHotP ? (Param*)gPnlHotP : &PAGES[page][sel[page]]; if (pnlP) dir = 0;   // (DEVICE sliders: left / right and the C-stick turn the picked one)
 			if ((p->dirty & (D_LOOPTAB | D_MICTAB | D_CAMTAB | D_DLWT | D_UPDATE)) && dir > 0 && !fast) {
 				if (p->dirty & D_UPDATE) upStart();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "NET > TABLE")) netTabStart();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "RULE > TABLE")) ruleTable();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "KIT > TABLE")) kitToTable();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "MIC > PAD")) micPadStart();
+				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "TAP TEMPO")) micTempoArm();
 				else if ((p->dirty & D_DLWT) && !strcmp(p->name, "WEB UPLOAD")) webUpStart();
 				else if (p->dirty & D_DLWT) dlStart();
 				else if (p->dirty & D_LOOPTAB) loopToTable();
@@ -13222,13 +13235,17 @@ int main(void) {
 		int smNow = stickModeNow();
 		if (smNow == SM_DATA || gStepEd >= 0) { gStickDX = fabsf(sx) > 0.12f ? sx : 0; cx = 0; }   // DATA (and the step editor, any mode): X edits the selected value (no bend), Y stays the STICK source
 		else gStickDX = 0;
-		if (!gCtl && smNow == SM_PAGE && gStepEd < 0 && (page == 7 || page == 8 || page == 10 || page == 11) && !gEdStick) {   // DEVICE, the pages with a list on the left: up / down steps it
-			static float acc = 0; acc += sy * fabsf(sy) * dt * 10; int d = acc >= 1 ? -1 : acc <= -1 ? 1 : 0; if (d) acc = 0; if (fabsf(sy) < 0.05f) acc = 0;
-			if (d && page == 7) { gRollChord = (gRollChord + NCHORD + d) % NCHORD; say(gRollChord ? CHORD_NAMES[gRollChord] : "ROLL CHORD: 1 NOTE"); topDirty = 1; }
-			if (d && page == 11) { if (beatMayPaste()) { gBeatSel = (gBeatSel + NBEAT + d) % NBEAT; beatPaste(gBeatSel); gBeatFromPatch = 0; say(BEAT_NAMES_[gBeatSel]); } topDirty = botDirty = 1; }
-			if (d && page == 8) { gVisMode = (gVisMode + NVISM + d) % NVISM; say(VISM_NAMES[gVisMode]); topDirty = 1; }   // VIS: the mode
-			if (d && page == 10) { int j = 0; for (int f = 0; f < NFXB; f++) if (gFxOrder[f] == gPnlSub[2]) j = f; j = (j + d + NFXB) % NFXB; gPnlSub[2] = gFxOrder[j]; gChSel = gPnlSub[2]; gPnlHotP = NULL; topDirty = botDirty = 1; }   // MASTER FX: the block in the chain
-			cx = 0; gStick = 0;
+		if (!gCtl && gStepEd < 0) {   // DEVICE: the circle pad is the XY pad - it pushes the dot (held over, it keeps going; let go, it stays)
+			float* xp; float* yp; int xd, yd; xyAxes(&xp, &yp, &xd, &yd);
+			float dx_ = fabsf(sx) > 0.12f ? sx : 0, dy_ = fabsf(sy) > 0.12f ? sy : 0, rx = dx_ * fabsf(dx_) * 0.9f * dt, ry = dy_ * fabsf(dy_) * 0.9f * dt;   // (a dead zone: the pad settling back doesn't creep the dot)
+			if (xp && yp && (rx != 0 || ry != 0)) {
+				gXyTx = gXyTy = -1;
+				float nx = xyNorm(xp) + rx, ny = xyNorm(yp) + ry; nx = nx < 0 ? 0 : nx > 1 ? 1 : nx; ny = ny < 0 ? 0 : ny > 1 ? 1 : ny;
+				xySet(xp, nx); xySet(yp, ny); gXYmod = ny * 2 - 1; gEdited = 1; topDirty = botDirty = 1;
+				snprintf(gCallCtx, sizeof(gCallCtx), "CIRCLE PAD: XY %s", XY_NAMES[gXyMode]);
+				snprintf(gCallTxt, sizeof(gCallTxt), "X %d%%  Y %d%%", (int)lroundf(nx * 100), (int)lroundf(ny * 100)); gCallP = NULL; gCallT = 0.6f;
+			}
+			cx = 0; gStick = 0; gStickDX = 0;
 		}
 		else if ((smNow == SM_PAGE || smNow == SM_MACROS) && (!stickRouted || !gCtl) && gStepEd < 0) {   // (DEVICE: the pad always works the picture)   // PAGE / MACROS (a patch that routes STICK keeps bend + STICK): the pad pushes two values up and down (hold it over to keep moving)
 			float* px_ = NULL; float* py_ = NULL;
