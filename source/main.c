@@ -7790,7 +7790,7 @@ static void drawPhoneLink(void) {   // the bottom screen: a QR code the phone's 
 		for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) if (qrcodegen_getModule(qr, x, y)) rect(x0 + (x + 4) * sc, y0 + (y + 4) * sc, sc, sc, 0, 0, 0);
 		text(160 - (int)strlen(url) * 4, y0 + w + 6, url, 1, RGB3(TH->val));
 	}
-	text(160 - 30 * 4, 222, gPhoneLink == 2 ? "A WHOLE SYRUP, ON THIS CLOCK" : "POINT THE PHONE'S CAMERA HERE", 1, RGB3(TH->dim));
+	text(160 - (gPhoneLink == 2 ? 28 : 34) * 4, 222, gPhoneLink == 2 ? "A WHOLE SYRUP, ON THIS CLOCK" : "SCAN IT, OR TYPE THE ADDRESS ABOVE", 1, RGB3(TH->dim));
 }
 static int gWebUpSay = 0;
 static void webUpStart(void) {
