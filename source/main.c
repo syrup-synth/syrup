@@ -2119,6 +2119,7 @@ static void fxOrderSet(const u8* o) {   // only a full permutation is taken; any
 	for (int i = 0; i < NFXB; i++) { if (o[i] >= NFXB || (seen >> o[i] & 1)) { for (int k = 0; k < NFXB; k++) t[k] = k; goto ok; } seen |= 1 << o[i]; t[i] = o[i]; }
 ok:	for (int i = 0; i < NFXB; i++) __atomic_store_n(&gFxOrder[i], t[i], __ATOMIC_RELAXED);
 }
+static int gTapeRec;   // (the tape records flat: no SPEAKER EQ on its take)
 static int gSpkEq = 2;   // HARDWARE > SPEAKER EQ: OFF / ON / AUTO (on whenever the headphones are out); saved in settings.bin
 static const char* SPK_NAMES[3] = {"OFF", "ON", "AUTO"};
 static int gHeadphones;
@@ -2311,7 +2312,7 @@ static void auxMaster(void* data, int n, void* samples[4]) {
 			}
 		} break;
 		}
-		if (gSpkEq == 1 || (gSpkEq == 2 && !gHeadphones)) {   // SPEAKER EQ: one-pole high-pass ~120 Hz and low-pass ~12 kHz for the console's small speaker
+		if ((gSpkEq == 1 || (gSpkEq == 2 && !gHeadphones)) && gTapeRec < 0) {   // SPEAKER EQ: one-pole high-pass ~120 Hz and low-pass ~12 kHz for the console's small speaker (not while the tape records: CHIP > FX would put the SUB through it, and the take came out thin)
 			static float hpS[2], lpS[2];
 			for (int c = 0; c < 2; c++) { hpS[c] += (x[c] - hpS[c]) * 0.0228f; float h = x[c] - hpS[c]; lpS[c] += (h - lpS[c]) * 0.9f; x[c] = lpS[c]; }
 		}
@@ -8034,6 +8035,7 @@ static int chipInMix(void) { return gDrums || gVoiceMode >= 3 || gSubLevel > 0.0
 // so you change the patch and bounce the next part over them. SAVE WAV writes each track and the mix to the SD card.
 #define NTRK 4
 #define TAPE_MAX (32728 * 120)   // 2 minutes a track
+#define TAPE_GAIN 1.25f   // a track's level 80% (where they start) plays it back as loud as it went down; 100% is a little over
 static u8* gTp[NTRK][2]; static int gTpHave[NTRK], gTpMute[NTRK]; static float gTpLevel[NTRK] = {0.8f, 0.8f, 0.8f, 0.8f};
 static int gTapeCont = 0;   // TAPE LOOPS: 0 RESTART (they start from the top with PLAY, stop with STOP), 1 CONTINUE (they keep running through STOP / PLAY)
 static int gTapeLen = 0, gTapeLenSel = 7, gTapeArm = 0, gTapeRec = -1, gTapeRecLen = 0, gTapePos = 0, gTapePlay = 0, gTapeCh[NTRK * 2] = {-1, -1, -1, -1, -1, -1, -1, -1};
@@ -8090,7 +8092,7 @@ static int tapeAlloc(int t) {
 }
 static void tapeVol(int t) {
 	if (!gTapePlay || gTapeCh[t * 2 + 1] < 0) return;
-	u32 l = gTpMute[t] || (gSoloAny() && !gPartSolo[4 + t]) ? 0 : (u32)(gTpLevel[t] * 0x8000);
+	u32 l = gTpMute[t] || (gSoloAny() && !gPartSolo[4 + t]) ? 0 : (u32)(gTpLevel[t] * TAPE_GAIN * 0x8000);
 	CSND_SetVol(gTapeCh[t * 2], csMono(l), 0); CSND_SetVol(gTapeCh[t * 2 + 1], csMono(l << 16), 0); csndExecCmds(false);
 }
 static void tapeStopPlay(void) {
@@ -8106,7 +8108,7 @@ static void tapeStartPlay(int except) {   // every track on tape (but the one re
 	for (int t = 0; t < NTRK; t++) {
 		if (!gTpHave[t] || t == except) continue;
 		if (gTapeCh[t * 2 + 1] < 0) { short_ = 1; continue; }
-		u32 l = gTpMute[t] || (gSoloAny() && !gPartSolo[4 + t]) ? 0 : (u32)(gTpLevel[t] * 0x8000);
+		u32 l = gTpMute[t] || (gSoloAny() && !gPartSolo[4 + t]) ? 0 : (u32)(gTpLevel[t] * TAPE_GAIN * 0x8000);
 		for (int k = 0; k < 2; k++) {
 			int c = gTapeCh[t * 2 + k]; stealCh(BK_CSND, c);   // (now, not a SUB fade-out: the fade would stop the tape and pull its volume to 0 - MUTE never came back)
 			float sp = TSPD[gTpSpd[t]];   // every track loops; at a bar-multiple speed it keeps landing on the bar
@@ -8345,7 +8347,7 @@ static void tapeExport(void) {   // each track and the mix, 16-bit WAV at the co
 		int m = gTapeLen - p < 2048 ? gTapeLen - p : 2048; memset(mx, 0, sizeof(float) * m * 2);
 		for (int t = 0; t < NTRK; t++) {
 			if (!gTpHave[t]) continue;
-			float g = gTpMute[t] || (gSoloAny() && !gPartSolo[4 + t]) ? 0 : gTpLevel[t], sp = TSPD[gTpSpd[t]];
+			float g = gTpMute[t] || (gSoloAny() && !gPartSolo[4 + t]) ? 0 : gTpLevel[t] * TAPE_GAIN, sp = TSPD[gTpSpd[t]];
 			for (int k = 0; k < 2; k++) for (int i = 0; i < m; i++) {   // at its TRACK SPEED: read ahead / hold, faster ones wrap
 				double src = (double)(p + i) * sp; long long si = (long long)src;
 				if (sp > 1.001f) si %= gTapeLen;
