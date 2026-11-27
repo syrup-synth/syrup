@@ -953,28 +953,43 @@ static float fmEnvStep(SoftCh* S, int j, float dt) {   // an operator's envelope
 	S->fe[j] = e; S->fst[j] = st; return e;
 }
 static void fmLayer(SoftCh* S, int k, const float* g0, const float* g1, float* L, float* R, float gl, float dgl, float gr, float dgr) {   // one FM layer into the block
-	const FmP* P = &S->fp; int alg = P->algo < 0 || P->algo >= FM_NALG ? 0 : P->algo; const u8* M = FMALG_MOD[alg];
-	u32 ph[FM_OPS], inc[FM_OPS]; const float* W[FM_OPS]; float g[FM_OPS], dg[FM_OPS];
-	for (int j = 0; j < FM_OPS; j++) {
+	// (speed: the 2DS's CPU - each algorithm has its own loop, a modulator's gain is already in table steps and a
+	// carrier's in output level, so a sample is 4 lookups and a few adds; no per-sample branching)
+	const FmP* P = &S->fp; int alg = P->algo < 0 || P->algo >= FM_NALG ? 0 : P->algo; u8 car = FMALG_CAR[alg];
+	u32 ph0, ph1, ph2, ph3, in0, in1, in2, in3; float g[FM_OPS], dg[FM_OPS]; const float* W[FM_OPS];
+	{ u32 inc[FM_OPS];
+	  for (int j = 0; j < FM_OPS; j++) {
 		int ri = P->ratio[j] < 0 || P->ratio[j] >= FM_NRAT ? 1 : P->ratio[j];
 		inc[j] = (u32)((float)S->inc[k] * FMRAT[ri] * (P->det[j] ? powf(2.0f, P->det[j] / 1200.0f) : 1.0f));
-		ph[j] = S->fph[k][j]; W[j] = gFmWave[P->wave[j] & 3]; g[j] = g0[j]; dg[j] = (g1[j] - g0[j]) * (1.0f / SOFT_BLK);
-	}
+		float sc = (car & (1 << j)) ? 26000.0f : (float)FMW_N;   // carrier: output level; modulator: table steps
+		W[j] = gFmWave[P->wave[j] & 3]; g[j] = g0[j] * sc; dg[j] = (g1[j] - g0[j]) * sc * (1.0f / SOFT_BLK);
+	  }
+	  in0 = inc[0]; in1 = inc[1]; in2 = inc[2]; in3 = inc[3]; }
+	ph0 = S->fph[k][0]; ph1 = S->fph[k][1]; ph2 = S->fph[k][2]; ph3 = S->fph[k][3];
+	const float *W0 = W[0], *W1 = W[1], *W2 = W[2], *W3 = W[3];
+	float g0_ = g[0], g1_ = g[1], g2_ = g[2], g3_ = g[3], d0 = dg[0], d1 = dg[1], d2 = dg[2], d3 = dg[3];
 	float f0 = S->fprev[k][0], f1 = S->fprev[k][1], fb = P->fb * P->fb * 0.3f * FMW_N;
-	u8 car = FMALG_CAR[alg];
-	for (int i = 0; i < SOFT_BLK; i++) {
-		float o[FM_OPS], sum = 0;
-		{ float r = W[3][((ph[3] >> (32 - FMW_BITS)) + (int)((f0 + f1) * fb)) & (FMW_N - 1)]; f1 = f0; f0 = r; o[3] = r * g[3]; }   // OP 4: its own output fed back
-		for (int j = 2; j >= 0; j--) {
-			float in = 0; u8 m = M[j];
-			if (m & 2) in += o[1]; if (m & 4) in += o[2]; if (m & 8) in += o[3];
-			o[j] = W[j][((ph[j] >> (32 - FMW_BITS)) + (int)(in * FMW_N)) & (FMW_N - 1)] * g[j];
-		}
-		for (int j = 0; j < FM_OPS; j++) { if (car & (1 << j)) sum += o[j]; ph[j] += inc[j]; g[j] += dg[j]; }
-		float v = sum * 26000.0f;
-		L[i] += v * gl; R[i] += v * gr; gl += dgl; gr += dgr;
+	#define SH (32 - FMW_BITS)
+	#define OP(W_, ph_, g_, IN) (W_[((ph_ >> SH) + (int)(IN)) & (FMW_N - 1)] * g_)
+	#define FMLOOP(BODY) for (int i = 0; i < SOFT_BLK; i++) { \
+		float r3 = W3[((ph3 >> SH) + (int)((f0 + f1) * fb)) & (FMW_N - 1)]; f1 = f0; f0 = r3; float o3 = r3 * g3_, o2, o1, o0, v; \
+		BODY; \
+		ph0 += in0; ph1 += in1; ph2 += in2; ph3 += in3; g0_ += d0; g1_ += d1; g2_ += d2; g3_ += d3; \
+		L[i] += v * gl; R[i] += v * gr; gl += dgl; gr += dgr; }
+	switch (alg) {
+	default: FMLOOP(o2 = OP(W2, ph2, g2_, o3); o1 = OP(W1, ph1, g1_, o2); o0 = OP(W0, ph0, g0_, o1); v = o0); break;   // 4>3>2>1
+	case 1: FMLOOP(o2 = OP(W2, ph2, g2_, 0); o1 = OP(W1, ph1, g1_, o2 + o3); o0 = OP(W0, ph0, g0_, o1); v = o0); break;   // 3+4>2>1
+	case 2: FMLOOP(o2 = OP(W2, ph2, g2_, o3); o1 = OP(W1, ph1, g1_, 0); o0 = OP(W0, ph0, g0_, o1 + o2); v = o0); break;   // 4>3+2>1
+	case 3: FMLOOP(o2 = OP(W2, ph2, g2_, 0); o1 = OP(W1, ph1, g1_, 0); o0 = OP(W0, ph0, g0_, o1 + o2 + o3); v = o0); break;   // 2+3+4>1
+	case 4: FMLOOP(o2 = OP(W2, ph2, g2_, o3); o1 = OP(W1, ph1, g1_, 0); o0 = OP(W0, ph0, g0_, o1); v = o0 + o2); break;   // 4>3 2>1
+	case 5: FMLOOP(o2 = OP(W2, ph2, g2_, o3); o1 = OP(W1, ph1, g1_, o3); o0 = OP(W0, ph0, g0_, o3); v = o0 + o1 + o2); break;   // 4>3,2,1
+	case 6: FMLOOP(o2 = OP(W2, ph2, g2_, o3); o1 = OP(W1, ph1, g1_, 0); o0 = OP(W0, ph0, g0_, 0); v = o0 + o1 + o2); break;   // 4>3 2 1
+	case 7: FMLOOP(o2 = OP(W2, ph2, g2_, 0); o1 = OP(W1, ph1, g1_, 0); o0 = OP(W0, ph0, g0_, 0); v = o0 + o1 + o2 + o3); break;   // 1 2 3 4
 	}
-	for (int j = 0; j < FM_OPS; j++) S->fph[k][j] = ph[j];
+	#undef FMLOOP
+	#undef OP
+	#undef SH
+	S->fph[k][0] = ph0; S->fph[k][1] = ph1; S->fph[k][2] = ph2; S->fph[k][3] = ph3;
 	S->fprev[k][0] = f0; S->fprev[k][1] = f1;
 }
 static void softBlockS(SoftCh* S, s16* out);
@@ -1359,6 +1374,17 @@ static void startVoice(int vi) {
 		}
 	}
 	int fmv = !v->isEcho && gAudioClock && fmAny() && v->subOnly != 1;   // FM ENGINE: its operators only play on the SOFT path
+	if (fmv) {   // FM is the heaviest thing the render does: so many FM notes at once (2DS / 3DS: 5, New: 10, fewer when the render runs hot); the oldest gives way
+		static int n3 = -1; if (n3 < 0) { bool b = false; APT_CheckNew3DS(&b); n3 = b; }
+		int cap = n3 ? 10 : 5; if (gSoftCpu > 0.7f) cap -= 1; if (gSoftCpu > 0.85f) cap -= 2;
+		for (;;) { int n = 0, old = -1; unsigned best = 0xffffffff, bestR = 0xffffffff; int oldR = -1;
+			for (int i = 0; i < NVS; i++) { SVoice* u = &gV[i]; if (u == v || !u->active || !u->started || u->isEcho) continue;
+				int fm = 0; for (int k = 0; k < u->nch; k++) if (u->role[k] == R_SOFT && u->ch[k] >= 0) for (int j = 0; j < gSoftC[u->ch[k]].n; j++) fm |= gSoftC[u->ch[k]].fm[j];
+				if (!fm) continue; n++; if (u->age < best) { best = u->age; old = i; } if (u->stage == 4 && u->age < bestR) { bestR = u->age; oldR = i; } }
+			if (n < cap || old < 0) break;
+			freeVoice(&gV[oldR >= 0 ? oldR : old]);   // a releasing one first
+		}
+	}
 	int subSoft = 0; if (!v->isEcho && gAudioClock) for (int i = 0; i < nr; i++) if (roles[i] == R_SUB && bks[i] == BK_DSP) subSoft = 1;   // a SUB on the DSP is rendered (smooth level); the oscillators go with it, so the two start in step (in phase, as before)
 	if (fmv || subSoft || (!v->isEcho && gSoftMode && gAudioClock && gSoftCpu < 0.6f && gQScream < 0.001f)) {   // SOFT LAYERS: the oscillator layers ride one channel (SCREAM wants a filter per layer: hardware)
 		int no = 0; for (int i = 0; i < nr; i++) if (roles[i] <= R_B2) no++;
@@ -3286,7 +3312,7 @@ static void b_reese(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = 
 	lane(p, 0, 4, 2, 0.3f, 0.7f, 2); lane(p, 1, 5, 3, 0.1f, 0.4f, 2); p->xyMode = 3; }
 static void b_wobble(SPatch* p) { p->master = 0.55f; OA.table = T_GROWL; OA.oct = -1; p->voiceMode = 1; ENV1(0.003f, 0, 0.3f, 0.9f, 0.1f); LFO(0, LS_SINE, 0, 2); p->lfoSync[0] = LY_8;
 	MOD(2, SRC_LFO1, DST_APOS, 0.6f); MOD(3, SRC_LFO1, DST_OFCUT, 0.35f); OUTF(OF_L12, 0.4f, 0.45f, 0.5f, 0); p->ott = 0.5f; p->subLevel = 0.35f; NOSTICK; MOD(1, SRC_STICK, DST_AWARP, 0.6f); OA.warp = W_BENDPM; }
-static void b_fmslap(SPatch* p) { p->master = 0.7f; p->oscEngine[0] = 1; OA.on = 1; OA.oct = -1; p->voiceMode = 1; p->fm.algo = 0; p->fm.vel = 0.9f; p->fm.fb = 0.3f;   // a snapping 2-op bass, a little grit from OP 3
+static void b_fmslap(SPatch* p) { p->master = 0.7f; p->oscEngine[0] = 1; OA.on = 1; OA.uni = 1; OA.oct = -1; p->voiceMode = 1; p->fm.algo = 0; p->fm.vel = 0.9f; p->fm.fb = 0.3f;   // a snapping 2-op bass, a little grit from OP 3
 	FMOP(0, 1, 1.0f, 0.001f, 0.9f, 0.6f, 0.1f); FMOP(1, 1, 0.62f, 0.001f, 0.16f, 0.12f, 0.1f); FMOP(2, 4, 0.25f, 0.001f, 0.08f, 0, 0.1f); FMOP(3, 1, 0.2f, 0.001f, 0.05f, 0, 0.1f);
 	p->cutoff = 0.9f; ENV1(0.001f, 0, 1.0f, 0.75f, 0.12f); }
 static void b_fmknock(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -1; OA.warp = W_FM; OA.warpAmt = 0.25f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 0;
@@ -3306,7 +3332,7 @@ static void b_upright(SPatch* p) { p->master = 0.8f; OA.table = T_BASIC; OA.pos 
 static void b_chip(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = TRI; OA.oct = -1; CHIP(0.4f, 1, -1); p->voiceMode = 1; ENV1(0.002f, 0, 0.3f, 0.8f, 0.05f); p->lofiBits = 1; }
 
 // ---- LEAD
-static void l_fmbrass(SPatch* p) { p->master = 0.6f; p->oscEngine[0] = 1; OA.on = 1; p->fm.algo = 1; p->fm.vel = 0.5f; p->fm.fb = 0.35f;   // brass: the brightness swells in after the note
+static void l_fmbrass(SPatch* p) { p->master = 0.6f; p->oscEngine[0] = 1; OA.on = 1; OA.uni = 1; p->fm.algo = 1; p->fm.vel = 0.5f; p->fm.fb = 0.35f;   // brass: the brightness swells in after the note
 	FMOP(0, 1, 0.9f, 0.04f, 0.4f, 0.85f, 0.2f); FMOP(1, 1, 0.55f, 0.09f, 0.5f, 0.45f, 0.25f); FMOP(2, 1, 0.25f, 0.12f, 0.6f, 0.3f, 0.25f); FMOP(3, 1, 0.15f, 0.05f, 0.4f, 0.2f, 0.2f);
 	p->fm.det[2] = 7; p->cutoff = 0.95f; p->glide = 0.04f; ENV1(0.03f, 0, 0.5f, 0.9f, 0.25f); MOD(3, SRC_M1, DST_FMAMT, 1.0f); REVB(0.2f, RV_HALL); }   // MACRO 1: brighter
 static void l_gulfsync(SPatch* p) { p->master = 0.55f; OA.table = T_SYNC; OA.warp = W_SYNC; ENV2(0.0f, 0, 0.5f, 0.2f, 0.3f); MOD(2, SRC_ENV2, DST_AWARP, 0.6f);
@@ -3378,7 +3404,7 @@ static void k_epsat(SPatch* p) { p->master = 0.65f; OA.table = T_BASIC; OA.pos =
 	ENV2(0.0f, 0, 0.6f, 0.1f, 0.4f); MOD(2, SRC_ENV2, DST_AWARP, 0.35f); MOD(3, SRC_VEL, DST_AWARP, 0.3f); LFO(0, LS_SINE, 0, 4.5f); MOD2(0, SRC_LFO1, DST_PAN, 0.4f);
 	ENV1(0.002f, 0, 1.4f, 0.3f, 0.5f); DLYS(0.15f, S8D, DL_TAPE); REVB(0.18f, RV_ROOM); }
 // FM ENGINE presets: OSC A plays the 4 operators (FMOP: operator, ratio index, level, attack, decay, sustain, release)
-static void k_fmtine(SPatch* p) { p->master = 0.7f; p->oscEngine[0] = 1; OA.on = 1; p->fm.algo = 4; p->fm.vel = 0.8f;   // two stacks: a tine (14x) on the body, a soft bell on top
+static void k_fmtine(SPatch* p) { p->master = 0.7f; p->oscEngine[0] = 1; OA.on = 1; OA.uni = 1; p->fm.algo = 4; p->fm.vel = 0.8f;   // two stacks: a tine (14x) on the body, a soft bell on top
 	FMOP(0, 1, 0.9f, 0.001f, 2.6f, 0, 0.45f); FMOP(1, 18, 0.32f, 0.001f, 0.3f, 0, 0.2f); FMOP(2, 1, 0.6f, 0.001f, 1.8f, 0, 0.45f); FMOP(3, 1, 0.42f, 0.001f, 1.1f, 0.05f, 0.3f);
 	p->fm.det[2] = 6; p->cutoff = 1.0f; p->keytrack = 0; ENV1(0.001f, 0, 3.0f, 0.0f, 0.5f); LFO(0, LS_SINE, 0, 4.5f); MOD2(0, SRC_LFO1, DST_PAN, 0.35f); MOD(3, SRC_M1, DST_FMAMT, 1.0f); REVB(0.2f, RV_ROOM); }
 static void k_drawbar(SPatch* p) { p->master = 0.55f; OA.table = T_HARMONIX; OA.pos = 0.35f; ENV1(0.005f, 0, 0.1f, 1.0f, 0.06f); MFX(FX_CHORUS, 5.5f, 0.4f, 0.5f); DRV(1, 0.25f); REVB(0.18f, RV_SPRING); }
@@ -3404,7 +3430,7 @@ static void u_nylon(SPatch* p) { p->master = 0.7f; OA.table = wtFile("SP PLUCK D
 static void u_marimba(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.pos = SINE; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 2; OB.level = 0.2f; ENV1(0.001f, 0, 0.5f, 0.0f, 0.3f);
 	OUTF(OF_COMBP, 0.5f, 0.2f, 0, 0); REVB(0.2f, RV_ROOM); }
 static void u_kalimba(SPatch* p) { p->master = 0.7f; OA.table = T_DIGITAL; OA.pos = 0.45f; ENV1(0.001f, 0, 0.8f, 0.0f, 0.5f); MOD(2, SRC_RAND, DST_PITCH, 0.003f); REVB(0.25f, RV_PLATE); DLYS(0.15f, S8, DL_PING); }
-static void u_fmbell(SPatch* p) { p->master = 0.6f; p->oscEngine[0] = 1; OA.on = 1; p->fm.algo = 4; p->fm.vel = 0.6f;   // 3.5x and 13x: a struck bell
+static void u_fmbell(SPatch* p) { p->master = 0.6f; p->oscEngine[0] = 1; OA.on = 1; OA.uni = 1; p->fm.algo = 4; p->fm.vel = 0.6f;   // 3.5x and 13x: a struck bell
 	FMOP(0, 1, 0.85f, 0.001f, 4.0f, 0, 1.6f); FMOP(1, 7, 0.55f, 0.001f, 2.2f, 0, 1.2f); FMOP(2, 8, 0.4f, 0.001f, 2.5f, 0, 1.2f); FMOP(3, 18, 0.35f, 0.001f, 0.9f, 0, 0.6f);
 	p->cutoff = 1.0f; p->keytrack = 0; ENV1(0.001f, 0, 4.0f, 0.0f, 1.8f); REVB(0.35f, RV_HALL); }
 static void u_digiharp(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.pos = 0.6f; OA.warp = W_FM; OA.warpAmt = 0.3f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1;

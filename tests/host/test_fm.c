@@ -12,7 +12,7 @@ static SoftCh T;
 static void setup(float vel) {
 	memset(&T, 0, sizeof T); fmWaveInit(); T.n = 1; T.fm[0] = 1; T.inc[0] = (u32)(4294967296.0 / P); T.gl[0] = T.gr[0] = T.cl[0] = T.cr[0] = 1;
 	T.fp = gFm; T.fgate = 1; T.fvel = vel; T.famt = 1; for (int j = 0; j < FM_OPS; j++) { T.fe[j] = 0; T.fst[j] = 1; }
-	T.in = SOFT_FADE; T.armed = 1;
+	T.in = SOFT_FADE; T.armed = 1; T.ag = 1;
 }
 static float gBuf[SOFT_BLK * 80];
 static void render(int blocks) {   // the left channel, as floats
