@@ -541,49 +541,13 @@ typedef struct {
 	int on, table, warp, oct, semi, uni;
 	float pos, warpAmt, level, fine, detune, blend, width;
 	int dist; float distAmt;   // OSC DIST: this oscillator's own distortion (the DRIVE types), baked into its wavetable
-	int engine;   // ENGINE: 0 = WAVE (the wavetable), 1 = FM (the FM engine's 4 operators at this oscillator's pitch)
 	Table tb; Mips mips;
 	float raw[CYC], cyc[CYC];
 } Osc;
 static Osc gOsc[2];
-// ---------------------------------------------------------------- FM ENGINE: 4 operators, 8 algorithms, feedback on OP 4
-// An oscillator with ENGINE FM plays these operators instead of its wavetable, at its own pitch (OCTAVE / SEMI / FINE)
-// and unison. They're rendered sample by sample on the oscillator's SOFT channel, each operator with its own envelope, so
-// the brightness moves through the note (a wavetable can't). ENV 1 and the filter still shape the whole note on top.
+// (the FM engine was taken out - too heavy for a 2DS: the patch keeps its old fields, unused)
 #define FM_OPS 4
-#define FM_NALG 8
-#define FM_NRAT 22
-#define FM_NWAVE 4
 typedef struct { int algo; float fb, vel; int wave[FM_OPS], ratio[FM_OPS]; float lvl[FM_OPS], a[FM_OPS], d[FM_OPS], s[FM_OPS], r[FM_OPS], det[FM_OPS]; } FmP;
-#define FM_DEF_INIT {0, 0, 0.5f, {0, 0, 0, 0}, {1, 1, 4, 1}, {1.0f, 0.5f, 0, 0}, {0.002f, 0.002f, 0.002f, 0.002f}, {1.2f, 0.6f, 0.5f, 0.5f}, {0.7f, 0.3f, 0.3f, 0.3f}, {0.3f, 0.3f, 0.3f, 0.3f}, {0, 0, 0, 0}}
-static FmP gFm = FM_DEF_INIT; static const FmP FM_DEF = FM_DEF_INIT;
-static const char* ENGINE_NAMES[2] = {"WAVE", "FM"};
-static const char* FMALG_NAMES[FM_NALG] = {"4>3>2>1", "3+4>2>1", "4>3+2>1", "2+3+4>1", "4>3 2>1", "4>3,2,1", "4>3 2 1", "1 2 3 4"};
-// which operators modulate each one (bit k = OP k+1), and which are heard (carriers)
-static const u8 FMALG_MOD[FM_NALG][FM_OPS] = {{2, 4, 8, 0}, {2, 12, 0, 0}, {6, 0, 8, 0}, {14, 0, 0, 0}, {2, 0, 8, 0}, {8, 8, 8, 0}, {0, 0, 8, 0}, {0, 0, 0, 0}};
-static const u8 FMALG_CAR[FM_NALG] = {1, 1, 1, 1, 5, 7, 7, 15};
-static const float FMRAT[FM_NRAT] = {0.5f, 1, 1.41f, 1.5f, 2, 2.5f, 3, 3.5f, 4, 4.5f, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
-static const char* FMRAT_NAMES[FM_NRAT] = {"0.5", "1", "1.41", "1.5", "2", "2.5", "3", "3.5", "4", "4.5", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"};
-static const char* FMWAVE_NAMES[FM_NWAVE] = {"SINE", "HALF", "ABS", "QTR"};
-#define FMW_BITS 11
-#define FMW_N (1 << FMW_BITS)
-static float gFmWave[FM_NWAVE][FMW_N]; static int gFmWaveOK = 0;
-static void fmWaveInit(void) {
-	if (gFmWaveOK) return;
-	for (int i = 0; i < FMW_N; i++) { float x = sinf(6.28318531f * i / FMW_N);
-		gFmWave[0][i] = x; gFmWave[1][i] = x > 0 ? x : 0; gFmWave[2][i] = fabsf(x); gFmWave[3][i] = (i & (FMW_N / 2 - 1)) < FMW_N / 4 ? fabsf(x) : 0; }
-	gFmWaveOK = 1;
-}
-static void fmSet(const FmP* q) {   // a patch's FM settings, kept in range
-	FmP f = *q; f.algo = f.algo >= 0 && f.algo < FM_NALG ? f.algo : 0;
-	#define FMCL(x, lo, hi) x = (x == x && x >= lo) ? (x <= hi ? x : hi) : lo
-	FMCL(f.fb, 0, 1); FMCL(f.vel, 0, 1);
-	for (int j = 0; j < FM_OPS; j++) { f.wave[j] = f.wave[j] >= 0 && f.wave[j] < FM_NWAVE ? f.wave[j] : 0; f.ratio[j] = f.ratio[j] >= 0 && f.ratio[j] < FM_NRAT ? f.ratio[j] : 1;
-		FMCL(f.lvl[j], 0, 1); FMCL(f.a[j], 0, 4); FMCL(f.d[j], 0, 4); FMCL(f.s[j], 0, 1); FMCL(f.r[j], 0, 4); FMCL(f.det[j], -50, 50); }
-	#undef FMCL
-	gFm = f;
-}
-static int fmAny(void) { return (gOsc[0].on && gOsc[0].engine == 1) || (gOsc[1].on && gOsc[1].engine == 1); }
 
 static const char* SUB_SHAPES[6] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "PULSE 25", "ROUNDED"};
 static const char* NOISE_TYPES[6] = {"WHITE", "PINK", "CRACKLE", "BROWN", "BLUE", "CORRUPT"};
@@ -612,8 +576,8 @@ static const char* CURVE_NAMES[4] = {"LINEAR", "EXP", "LOG", "S-CURVE"};
 static float gTiltX, gTiltY, gMicEnv, gTwist, gShake, gShakeD, gCamLight, gCamColor;
 static float gSpinX, gSpinY, gMicBright, gCamMove;   // gyro pitch/roll speed, voice brightness ("ss" vs "oo"), how much the picture changes
 static int gHeadphones;   // (0 until the first check)
-enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_FXMIX, DST_GRPOS, DST_FMAMT, DST_COUNT };
-static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF", "FX MIX", "GRAIN POS", "FM AMOUNT"};   // GRAIN POS: an LFO sweeps where the grains read   // VOLUME: when routed, the source IS the loudness (breath control)
+enum { DST_APOS, DST_BPOS, DST_AWARP, DST_BWARP, DST_CUTOFF, DST_RES, DST_PITCH, DST_ALEV, DST_BLEV, DST_PAN, DST_FXP, DST_AMP, DST_OFCUT, DST_FXMIX, DST_GRPOS, DST_COUNT };
+static const char* DST_NAMES[DST_COUNT] = {"A WT POS", "B WT POS", "A WARP", "B WARP", "CUTOFF", "RES", "PITCH", "A LEVEL", "B LEVEL", "PAN", "FX COLOR", "VOLUME", "OUT CUTOFF", "FX MIX", "GRAIN POS"};   // GRAIN POS: an LFO sweeps where the grains read   // VOLUME: when routed, the source IS the loudness (breath control)
 static const char* VOICE_MODES[10] = {"POLY", "MONO", "LEGATO", "808 KIT", "909 KIT", "LOFI KIT", "CHIP KIT", "PERC KIT", "WAVE KIT", "SAMPLE KIT"};   // KIT: keys play the drum kit
 static const char* FX_NAMES[4] = {"OFF", "ECHO", "SPACE", "REVERB"};
 static const char* ECHO_T_NAMES[3] = {"250MS", "375MS", "500MS"};
@@ -922,9 +886,6 @@ typedef struct {
 	u32 ph[SOFT_L], inc[SOFT_L];
 	float gl[SOFT_L], gr[SOFT_L], cl[SOFT_L], cr[SOFT_L];   // targets (main loop) and where the render is
 	int role[SOFT_L];
-	// FM ENGINE: the layers of an ENGINE FM oscillator render the operators (fm[k]); one set of envelopes for the note
-	u8 fm[SOFT_L]; u32 fph[SOFT_L][FM_OPS]; float fprev[SOFT_L][2];
-	FmP fp; float fe[FM_OPS]; int fst[FM_OPS]; int fgate; float fvel, famt;
 	volatile float ag;   // the limiter (and TRANCE GATE): applied in the render, sample by sample - as a channel volume it stepped every 5 ms (clicks)
 } SoftCh;
 static u8 gSoftFresh[NCH], gSoftLive[NCH]; static float gSoftLimS = 0, gSoftLimA = 0;   // fresh: its mix goes straight on (the render fades it in); live: a carrier this frame
@@ -941,81 +902,13 @@ static void softInit(void) {
 	for (int i = 0; i <= SOFT_FADE; i++) gSCurve[i] = 0.5f - 0.5f * cosf(3.14159265f * i / SOFT_FADE);
 	gSoftInit = 1;
 }
-static float fmEnvStep(SoftCh* S, int j, float dt) {   // an operator's envelope over one block (gSoftLock held)
-	const FmP* P = &S->fp; float e = S->fe[j]; int st = S->fst[j];
-	if (!S->fgate && st != 4) st = 4;
-	switch (st) {
-	case 1: e += dt / (P->a[j] + 0.0005f); if (e >= 1) { e = 1; st = 2; } break;
-	case 2: e -= dt * (1 - P->s[j]) / (P->d[j] + 0.0005f); if (e <= P->s[j]) { e = P->s[j]; st = 3; } break;
-	case 3: e = P->s[j]; break;
-	case 4: e -= dt / (P->r[j] + 0.0005f); if (e < 0) e = 0; break;
-	}
-	S->fe[j] = e; S->fst[j] = st; return e;
-}
-static void fmLayer(SoftCh* S, int k, const float* g0, const float* g1, float* L, float* R, float gl, float dgl, float gr, float dgr) {   // one FM layer into the block
-	// (speed: the 2DS's CPU - each algorithm has its own loop, a modulator's gain is already in table steps and a
-	// carrier's in output level, so a sample is 4 lookups and a few adds; no per-sample branching)
-	const FmP* P = &S->fp; int alg = P->algo < 0 || P->algo >= FM_NALG ? 0 : P->algo; u8 car = FMALG_CAR[alg];
-	u32 ph0, ph1, ph2, ph3, in0, in1, in2, in3; float g[FM_OPS], dg[FM_OPS]; const float* W[FM_OPS];
-	{ u32 inc[FM_OPS];
-	  for (int j = 0; j < FM_OPS; j++) {
-		int ri = P->ratio[j] < 0 || P->ratio[j] >= FM_NRAT ? 1 : P->ratio[j];
-		inc[j] = (u32)((float)S->inc[k] * FMRAT[ri] * (P->det[j] ? powf(2.0f, P->det[j] / 1200.0f) : 1.0f));
-		float sc = (car & (1 << j)) ? 26000.0f : (float)FMW_N;   // carrier: output level; modulator: table steps
-		W[j] = gFmWave[P->wave[j] & 3]; g[j] = g0[j] * sc; dg[j] = (g1[j] - g0[j]) * sc * (1.0f / SOFT_BLK);
-	  }
-	  in0 = inc[0]; in1 = inc[1]; in2 = inc[2]; in3 = inc[3]; }
-	ph0 = S->fph[k][0]; ph1 = S->fph[k][1]; ph2 = S->fph[k][2]; ph3 = S->fph[k][3];
-	const float *W0 = W[0], *W1 = W[1], *W2 = W[2], *W3 = W[3];
-	float g0_ = g[0], g1_ = g[1], g2_ = g[2], g3_ = g[3], d0 = dg[0], d1 = dg[1], d2 = dg[2], d3 = dg[3];
-	float f0 = S->fprev[k][0], f1 = S->fprev[k][1], fb = P->fb * P->fb * 0.3f * FMW_N;
-	#define SH (32 - FMW_BITS)
-	#define OP(W_, ph_, g_, IN) (W_[((ph_ >> SH) + (int)(IN)) & (FMW_N - 1)] * g_)
-	#define FMLOOP(BODY) for (int i = 0; i < SOFT_BLK; i++) { \
-		float r3 = W3[((ph3 >> SH) + (int)((f0 + f1) * fb)) & (FMW_N - 1)]; f1 = f0; f0 = r3; float o3 = r3 * g3_, o2, o1, o0, v; \
-		BODY; \
-		ph0 += in0; ph1 += in1; ph2 += in2; ph3 += in3; g0_ += d0; g1_ += d1; g2_ += d2; g3_ += d3; \
-		L[i] += v * gl; R[i] += v * gr; gl += dgl; gr += dgr; }
-	switch (alg) {
-	default: FMLOOP(o2 = OP(W2, ph2, g2_, o3); o1 = OP(W1, ph1, g1_, o2); o0 = OP(W0, ph0, g0_, o1); v = o0); break;   // 4>3>2>1
-	case 1: FMLOOP(o2 = OP(W2, ph2, g2_, 0); o1 = OP(W1, ph1, g1_, o2 + o3); o0 = OP(W0, ph0, g0_, o1); v = o0); break;   // 3+4>2>1
-	case 2: FMLOOP(o2 = OP(W2, ph2, g2_, o3); o1 = OP(W1, ph1, g1_, 0); o0 = OP(W0, ph0, g0_, o1 + o2); v = o0); break;   // 4>3+2>1
-	case 3: FMLOOP(o2 = OP(W2, ph2, g2_, 0); o1 = OP(W1, ph1, g1_, 0); o0 = OP(W0, ph0, g0_, o1 + o2 + o3); v = o0); break;   // 2+3+4>1
-	case 4: FMLOOP(o2 = OP(W2, ph2, g2_, o3); o1 = OP(W1, ph1, g1_, 0); o0 = OP(W0, ph0, g0_, o1); v = o0 + o2); break;   // 4>3 2>1
-	case 5: FMLOOP(o2 = OP(W2, ph2, g2_, o3); o1 = OP(W1, ph1, g1_, o3); o0 = OP(W0, ph0, g0_, o3); v = o0 + o1 + o2); break;   // 4>3,2,1
-	case 6: FMLOOP(o2 = OP(W2, ph2, g2_, o3); o1 = OP(W1, ph1, g1_, 0); o0 = OP(W0, ph0, g0_, 0); v = o0 + o1 + o2); break;   // 4>3 2 1
-	case 7: FMLOOP(o2 = OP(W2, ph2, g2_, 0); o1 = OP(W1, ph1, g1_, 0); o0 = OP(W0, ph0, g0_, 0); v = o0 + o1 + o2 + o3); break;   // 1 2 3 4
-	}
-	#undef FMLOOP
-	#undef OP
-	#undef SH
-	S->fph[k][0] = ph0; S->fph[k][1] = ph1; S->fph[k][2] = ph2; S->fph[k][3] = ph3;
-	S->fprev[k][0] = f0; S->fprev[k][1] = f1;
-}
 static void softBlockS(SoftCh* S, s16* out);
 static void softBlock(int ch, s16* out) { softBlockS(&gSoftC[ch], out); }
 static void softBlockS(SoftCh* S, s16* out) {   // one block of one channel (gSoftLock held)
 	int n = S->n;
 	float L[SOFT_BLK], R[SOFT_BLK];
 	memset(L, 0, sizeof(L)); memset(R, 0, sizeof(R));
-	float fg0[FM_OPS], fg1[FM_OPS]; int anyFm = 0;
-	for (int k = 0; k < n; k++) if (S->fm[k]) anyFm = 1;
-	if (anyFm) {   // the operators' gains over this block: a carrier's is its level, a modulator's its index (in cycles)
-		const FmP* P = &S->fp; int alg = P->algo < 0 || P->algo >= FM_NALG ? 0 : P->algo; u8 car = FMALG_CAR[alg]; int nc = 0;
-		for (int j = 0; j < FM_OPS; j++) if (car & (1 << j)) nc++;
-		float cn = 1.0f / sqrtf((float)(nc ? nc : 1)), vs = 1 - P->vel * (1 - S->fvel), am = S->famt;
-		for (int j = 0; j < FM_OPS; j++) {
-			float e0 = S->fe[j], e1 = fmEnvStep(S, j, SOFT_BLK / 32728.0f), lv = P->lvl[j];
-			float sc = (car & (1 << j)) ? lv * cn : lv * lv * 1.6f * vs * am;
-			fg0[j] = e0 * sc; fg1[j] = e1 * sc;
-		}
-	}
 	for (int k = 0; k < n; k++) {
-		if (S->fm[k]) {
-			float ag = S->ag, tl = S->gl[k] * ag, tr = S->gr[k] * ag, gl = S->cl[k], gr = S->cr[k], dgl = (tl - gl) * (1.0f / SOFT_BLK), dgr = (tr - gr) * (1.0f / SOFT_BLK);
-			fmLayer(S, k, fg0, fg1, L, R, gl, dgl, gr, dgr);
-			S->cl[k] = tl; S->cr[k] = tr; continue;
-		}
 		const s16* t = S->tab[k]; if (!t) continue;
 		u32 ph = S->ph[k], inc = S->inc[k], sh = S->sh[k], mk = S->mask[k];
 		float ag = S->ag, tl = S->gl[k] * ag, tr = S->gr[k] * ag, gl = S->cl[k], gr = S->cr[k], dgl = (tl - gl) * (1.0f / SOFT_BLK), dgr = (tr - gr) * (1.0f / SOFT_BLK);
@@ -1338,10 +1231,7 @@ static void softStart(SVoice* v, int ch) {   // a SOFT carrier: its layers' tabl
 		int r = gSoftPend[k], u = r <= R_A2 ? r - R_A0 : r - R_B0;
 		S->role[k] = r; S->tab[k] = tab[k]; S->sh[k] = 32 - bits[k]; S->mask[k] = (1u << bits[k]) - 1;
 		S->ph[k] = 0; (void)u;   // every layer from the cycle's start, as the hardware layers do (the unison attack keeps its punch and the patches their level)
-		S->fm[k] = r <= R_B2 && gOsc[r >= R_B0].engine == 1;
 	}
-	{ int fm = 0; for (int k = 0; k < S->n; k++) fm |= S->fm[k];
-	  if (fm) { fmWaveInit(); S->fp = gFm; S->fgate = 1; S->fvel = v->vel; S->famt = 1; for (int j = 0; j < FM_OPS; j++) { S->fe[j] = 0; S->fst[j] = 1; } } }
 	for (int b = 0; b < SOFT_NB; b++) gSoftWB[ch][b].status = NDSP_WBUF_DONE;
 	ndspChnWaveBufClear(ch); ndspChnReset(ch); ndspChnSetFormat(ch, NDSP_FORMAT_STEREO_PCM16);
 	ndspChnSetInterp(ch, NDSP_INTERP_NONE); ndspChnSetRate(ch, 32728);
@@ -1373,22 +1263,10 @@ static void startVoice(int vi) {
 		if (gSubLevel > 0.01f) { roles[nr] = R_SUB; bks[nr++] = subBk(nr); }
 		}
 	}
-	int fmv = !v->isEcho && gAudioClock && fmAny() && v->subOnly != 1;   // FM ENGINE: its operators only play on the SOFT path
-	if (fmv) {   // FM is the heaviest thing the render does: so many FM notes at once (2DS / 3DS: 5, New: 10, fewer when the render runs hot); the oldest gives way
-		static int n3 = -1; if (n3 < 0) { bool b = false; APT_CheckNew3DS(&b); n3 = b; }
-		int cap = n3 ? 10 : 5; if (gSoftCpu > 0.7f) cap -= 1; if (gSoftCpu > 0.85f) cap -= 2;
-		for (;;) { int n = 0, old = -1; unsigned best = 0xffffffff, bestR = 0xffffffff; int oldR = -1;
-			for (int i = 0; i < NVS; i++) { SVoice* u = &gV[i]; if (u == v || !u->active || !u->started || u->isEcho) continue;
-				int fm = 0; for (int k = 0; k < u->nch; k++) if (u->role[k] == R_SOFT && u->ch[k] >= 0) for (int j = 0; j < gSoftC[u->ch[k]].n; j++) fm |= gSoftC[u->ch[k]].fm[j];
-				if (!fm) continue; n++; if (u->age < best) { best = u->age; old = i; } if (u->stage == 4 && u->age < bestR) { bestR = u->age; oldR = i; } }
-			if (n < cap || old < 0) break;
-			freeVoice(&gV[oldR >= 0 ? oldR : old]);   // a releasing one first
-		}
-	}
 	int subSoft = 0; if (!v->isEcho && gAudioClock) for (int i = 0; i < nr; i++) if (roles[i] == R_SUB && bks[i] == BK_DSP) subSoft = 1;   // a SUB on the DSP is rendered (smooth level); the oscillators go with it, so the two start in step (in phase, as before)
-	if (fmv || subSoft || (!v->isEcho && gSoftMode && gAudioClock && gSoftCpu < 0.6f && gQScream < 0.001f)) {   // SOFT LAYERS: the oscillator layers ride one channel (SCREAM wants a filter per layer: hardware)
+	if (subSoft || (!v->isEcho && gSoftMode && gAudioClock && gSoftCpu < 0.6f && gQScream < 0.001f)) {   // SOFT LAYERS: the oscillator layers ride one channel (SCREAM wants a filter per layer: hardware)
 		int no = 0; for (int i = 0; i < nr; i++) if (roles[i] <= R_B2) no++;
-		if (no >= 2 || ((fmv || subSoft) && no >= 1)) {
+		if (no >= 2 || (subSoft && no >= 1)) {
 			int k = 0, r2[R_COUNT], b2[R_COUNT], n2 = 0; gSoftPendN = 0;
 			for (int i = 0; i < nr; i++) if (roles[i] <= R_B2) { if (k < SOFT_L) gSoftPend[k++] = roles[i]; } else { r2[n2] = roles[i]; b2[n2++] = bks[i]; }
 			gSoftPendN = k; roles[0] = R_SOFT; bks[0] = BK_DSP; nr = 1;
@@ -1715,7 +1593,7 @@ static void voicesUpdate(float dt, float bend) {
 		for (int k = 0; k < v->nch; k++) {
 			int ch = v->ch[k], role = v->role[k]; if (ch < 0) continue;
 			if (role == R_SOFT || role == R_SSUB) {   // SOFT LAYERS: each layer's level, pan and pitch go to the render; the channel is the filter
-				SoftCh* S = &gSoftC[ch]; int fmOn = 0; for (int j = 0; j < S->n; j++) fmOn |= S->fm[j];
+				SoftCh* S = &gSoftC[ch];
 				LightLock_Lock(&gSoftLock);   // the render reads gl / gr / inc mid-block on the DSP thread (lock order: voice -> soft)
 				for (int j = 0; j < S->n; j++) {
 					if (S->role[j] == R_SUB) {   // the SUB: its level, centred, the note's pitch (no unison)
@@ -1733,7 +1611,6 @@ static void voicesUpdate(float dt, float bend) {
 					S->gl[j] = L; S->gr[j] = R; S->inc[j] = (u32)(rate / 32728.0f * 4294967296.0f);
 					gSoftLimS += L * L + R * R; gSoftLimA += L > R ? L : R;
 				}
-				if (fmOn) { S->fp = gFm; S->fgate = v->stage != 4; float a = 1 + modSum(DST_FMAMT, v); S->famt = a < 0 ? 0 : a > 3 ? 3 : a; }   // FM: the settings move live; the gate lets the operators' envelopes go
 				S->armed = 1; LightLock_Unlock(&gSoftLock);
 				dL[ch] = dR[ch] = SOFT_HEAD; gSoftLive[ch] = 1;
 				if (role == R_SSUB) filterSet(ch, gCsndOK ? 20000.0f : cutoff * 0.6f + 300, gCsndOK ? 0 : res);   // the SUB keeps the second chip's sound: unfiltered
@@ -3151,7 +3028,7 @@ typedef struct {
 	int gatePat, gateRate; float gateDepth;   // v15: TRANCE GATE
 	AHDSR env3, env4; int dlTrig[2];   // v16: ENV 3 / 4, drawn LFO 3 / 4 trigger (FREE / NOTE / ONCE)
 	int oscDist[2]; float oscDistAmt[2];   // v17: OSC DIST
-	int oscEngine[2]; FmP fm;   // v18: FM ENGINE
+	int oscEngine[2]; FmP fm;   // v18: the FM engine's (taken out: kept zero)
 	int wtArp, wtArpSteps, wtArpOsc; float wtArpDepth;   // v18: WT ARP
 } SPatch;
 #define PATCH_MAGIC 0x53595242   // "SYRB" (v18)
@@ -3204,7 +3081,7 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 	p->filtType = 0; p->cutoff = 0.8f; p->res = 0.1f; p->keytrack = 0.3f;
 	p->env1 = (AHDSR){0.005f, 0, 0.6f, 0.7f, 0.35f};
 	p->env2 = (AHDSR){0.002f, 0, 0.45f, 0.2f, 0.4f};
-	p->fm = FM_DEF; p->wtArpSteps = 4; p->wtArpDepth = 1.0f;
+	p->wtArpSteps = 4; p->wtArpDepth = 1.0f;
 	p->env3 = (AHDSR){0.0f, 0, 0.3f, 0.0f, 0.2f}; p->env4 = (AHDSR){0.5f, 0, 1.0f, 0.5f, 0.8f};
 	p->lfoShape[0] = 0; p->lfoRate[0] = 0.6f; p->lfoShape[1] = 0; p->lfoRate[1] = 5.0f;
 	p->mod[0] = (ModSlot){SRC_ENV2, DST_CUTOFF, 0.0f};
@@ -3234,7 +3111,6 @@ static void patchInit(SPatch* p) {   // the INIT patch: one saw, open filter, no
 
 #define OA p->osc[0]
 #define OB p->osc[1]
-#define FMOP(j, R, L, A, D, S, RL) do { p->fm.ratio[j] = R; p->fm.lvl[j] = L; p->fm.a[j] = A; p->fm.d[j] = D; p->fm.s[j] = S; p->fm.r[j] = RL; } while (0)
 #define MOD(i, s, d, a) p->mod[i] = (ModSlot){s, d, a}
 #define ENV1(A, H, D, S, R) p->env1 = (AHDSR){A, H, D, S, R}
 #define ENV2(A, H, D, S, R) p->env2 = (AHDSR){A, H, D, S, R}
@@ -3312,9 +3188,6 @@ static void b_reese(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = 
 	lane(p, 0, 4, 2, 0.3f, 0.7f, 2); lane(p, 1, 5, 3, 0.1f, 0.4f, 2); p->xyMode = 3; }
 static void b_wobble(SPatch* p) { p->master = 0.55f; OA.table = T_GROWL; OA.oct = -1; p->voiceMode = 1; ENV1(0.003f, 0, 0.3f, 0.9f, 0.1f); LFO(0, LS_SINE, 0, 2); p->lfoSync[0] = LY_8;
 	MOD(2, SRC_LFO1, DST_APOS, 0.6f); MOD(3, SRC_LFO1, DST_OFCUT, 0.35f); OUTF(OF_L12, 0.4f, 0.45f, 0.5f, 0); p->ott = 0.5f; p->subLevel = 0.35f; NOSTICK; MOD(1, SRC_STICK, DST_AWARP, 0.6f); OA.warp = W_BENDPM; }
-static void b_fmslap(SPatch* p) { p->master = 0.7f; p->oscEngine[0] = 1; OA.on = 1; OA.uni = 1; OA.oct = -1; p->voiceMode = 1; p->fm.algo = 0; p->fm.vel = 0.9f; p->fm.fb = 0.3f;   // a snapping 2-op bass, a little grit from OP 3
-	FMOP(0, 1, 1.0f, 0.001f, 0.9f, 0.6f, 0.1f); FMOP(1, 1, 0.62f, 0.001f, 0.16f, 0.12f, 0.1f); FMOP(2, 4, 0.25f, 0.001f, 0.08f, 0, 0.1f); FMOP(3, 1, 0.2f, 0.001f, 0.05f, 0, 0.1f);
-	p->cutoff = 0.9f; ENV1(0.001f, 0, 1.0f, 0.75f, 0.12f); }
 static void b_fmknock(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -1; OA.warp = W_FM; OA.warpAmt = 0.25f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 0;
 	ENV2(0.0f, 0, 0.14f, 0.0f, 0.1f); MOD(2, SRC_ENV2, DST_AWARP, 0.6f); ENV1(0.002f, 0, 0.35f, 0.4f, 0.12f); p->voiceMode = 1; p->eqLow = 1.5f; }
 static void b_diode(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SQR; OA.oct = -1; DRV(6, 0.55f); p->voiceMode = 1; ENV1(0.002f, 0, 0.35f, 0.6f, 0.1f);
@@ -3332,9 +3205,6 @@ static void b_upright(SPatch* p) { p->master = 0.8f; OA.table = T_BASIC; OA.pos 
 static void b_chip(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = TRI; OA.oct = -1; CHIP(0.4f, 1, -1); p->voiceMode = 1; ENV1(0.002f, 0, 0.3f, 0.8f, 0.05f); p->lofiBits = 1; }
 
 // ---- LEAD
-static void l_fmbrass(SPatch* p) { p->master = 0.6f; p->oscEngine[0] = 1; OA.on = 1; OA.uni = 1; p->fm.algo = 1; p->fm.vel = 0.5f; p->fm.fb = 0.35f;   // brass: the brightness swells in after the note
-	FMOP(0, 1, 0.9f, 0.04f, 0.4f, 0.85f, 0.2f); FMOP(1, 1, 0.55f, 0.09f, 0.5f, 0.45f, 0.25f); FMOP(2, 1, 0.25f, 0.12f, 0.6f, 0.3f, 0.25f); FMOP(3, 1, 0.15f, 0.05f, 0.4f, 0.2f, 0.2f);
-	p->fm.det[2] = 7; p->cutoff = 0.95f; p->glide = 0.04f; ENV1(0.03f, 0, 0.5f, 0.9f, 0.25f); MOD(3, SRC_M1, DST_FMAMT, 1.0f); REVB(0.2f, RV_HALL); }   // MACRO 1: brighter
 static void l_gulfsync(SPatch* p) { p->master = 0.55f; OA.table = T_SYNC; OA.warp = W_SYNC; ENV2(0.0f, 0, 0.5f, 0.2f, 0.3f); MOD(2, SRC_ENV2, DST_AWARP, 0.6f);
 	p->voiceMode = 2; p->glide = 0.04f; ENV1(0.004f, 0, 0.3f, 0.85f, 0.25f); DLYS(0.22f, S8D, DL_TAPE); REVB(0.15f, RV_PLATE); }
 static void l_talkbox(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA.uni = 2; OA.detune = 8; MFX(FX_FORMANT, 0.1f, 0.5f, 0.5f); p->voiceMode = 2; p->glide = 0.05f;
@@ -3403,10 +3273,6 @@ static void p_hallchoir(SPatch* p) { p->master = 0.7f; OA.table = T_VOWELS; OA.l
 static void k_epsat(SPatch* p) { p->master = 0.65f; OA.table = T_BASIC; OA.pos = SINE; OA.warp = W_FM; OA.warpAmt = 0.2f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 2;
 	ENV2(0.0f, 0, 0.6f, 0.1f, 0.4f); MOD(2, SRC_ENV2, DST_AWARP, 0.35f); MOD(3, SRC_VEL, DST_AWARP, 0.3f); LFO(0, LS_SINE, 0, 4.5f); MOD2(0, SRC_LFO1, DST_PAN, 0.4f);
 	ENV1(0.002f, 0, 1.4f, 0.3f, 0.5f); DLYS(0.15f, S8D, DL_TAPE); REVB(0.18f, RV_ROOM); }
-// FM ENGINE presets: OSC A plays the 4 operators (FMOP: operator, ratio index, level, attack, decay, sustain, release)
-static void k_fmtine(SPatch* p) { p->master = 0.7f; p->oscEngine[0] = 1; OA.on = 1; OA.uni = 1; p->fm.algo = 4; p->fm.vel = 0.8f;   // two stacks: a tine (14x) on the body, a soft bell on top
-	FMOP(0, 1, 0.9f, 0.001f, 2.6f, 0, 0.45f); FMOP(1, 18, 0.32f, 0.001f, 0.3f, 0, 0.2f); FMOP(2, 1, 0.6f, 0.001f, 1.8f, 0, 0.45f); FMOP(3, 1, 0.42f, 0.001f, 1.1f, 0.05f, 0.3f);
-	p->fm.det[2] = 6; p->cutoff = 1.0f; p->keytrack = 0; ENV1(0.001f, 0, 3.0f, 0.0f, 0.5f); LFO(0, LS_SINE, 0, 4.5f); MOD2(0, SRC_LFO1, DST_PAN, 0.35f); MOD(3, SRC_M1, DST_FMAMT, 1.0f); REVB(0.2f, RV_ROOM); }
 static void k_drawbar(SPatch* p) { p->master = 0.55f; OA.table = T_HARMONIX; OA.pos = 0.35f; ENV1(0.005f, 0, 0.1f, 1.0f, 0.06f); MFX(FX_CHORUS, 5.5f, 0.4f, 0.5f); DRV(1, 0.25f); REVB(0.18f, RV_SPRING); }
 static void k_lofiup(SPatch* p) { p->master = 0.75f; OA.table = T_DIGITAL; OA.pos = 0.2f; OB.on = 1; OB.table = T_BASIC; OB.pos = TRI; OB.level = 0.4f; ENV1(0.002f, 0, 1.6f, 0.0f, 0.6f);
 	MOD(2, SRC_VEL, DST_CUTOFF, 0.4f); p->cutoff = 0.55f; p->lofiBits = 1; p->lofiRate = 0.2f; DLYS(0.12f, S4, DL_TAPE); p->dlyWow = 0.7f; REVB(0.2f, RV_ROOM); }
@@ -3430,9 +3296,6 @@ static void u_nylon(SPatch* p) { p->master = 0.7f; OA.table = wtFile("SP PLUCK D
 static void u_marimba(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.pos = SINE; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 2; OB.level = 0.2f; ENV1(0.001f, 0, 0.5f, 0.0f, 0.3f);
 	OUTF(OF_COMBP, 0.5f, 0.2f, 0, 0); REVB(0.2f, RV_ROOM); }
 static void u_kalimba(SPatch* p) { p->master = 0.7f; OA.table = T_DIGITAL; OA.pos = 0.45f; ENV1(0.001f, 0, 0.8f, 0.0f, 0.5f); MOD(2, SRC_RAND, DST_PITCH, 0.003f); REVB(0.25f, RV_PLATE); DLYS(0.15f, S8, DL_PING); }
-static void u_fmbell(SPatch* p) { p->master = 0.6f; p->oscEngine[0] = 1; OA.on = 1; OA.uni = 1; p->fm.algo = 4; p->fm.vel = 0.6f;   // 3.5x and 13x: a struck bell
-	FMOP(0, 1, 0.85f, 0.001f, 4.0f, 0, 1.6f); FMOP(1, 7, 0.55f, 0.001f, 2.2f, 0, 1.2f); FMOP(2, 8, 0.4f, 0.001f, 2.5f, 0, 1.2f); FMOP(3, 18, 0.35f, 0.001f, 0.9f, 0, 0.6f);
-	p->cutoff = 1.0f; p->keytrack = 0; ENV1(0.001f, 0, 4.0f, 0.0f, 1.8f); REVB(0.35f, RV_HALL); }
 static void u_digiharp(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.pos = 0.6f; OA.warp = W_FM; OA.warpAmt = 0.3f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1;
 	ENV2(0.0f, 0, 0.3f, 0, 0.2f); MOD(2, SRC_ENV2, DST_AWARP, 0.5f); ENV1(0.001f, 0, 0.7f, 0.0f, 0.4f); DLYS(0.25f, S8D, DL_PING); REVB(0.2f, RV_HALL); }
 static void u_stab99(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 3; OA.detune = 14; p->chord = 1; ENV1(0.001f, 0, 0.25f, 0.0f, 0.15f); ENV2(0.0f, 0, 0.15f, 0, 0.1f);
@@ -3883,17 +3746,17 @@ static void i_allinone(SPatch* p) { p->master = 0.72f;   // bass + chord + lead 
 	REVB(0.18f, RV_HALL); DLYS(0.12f, S8D, DL_PING); NOSTICK; }
 static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	{{"SUB FLOOR", b_subfloor}, {"303 ON 3RD AVE", b_303}, {"REESE CRATE", b_reese}, {"WOBBLE TIDE", b_wobble}, {"FM KNOCK", b_fmknock}, {"DIODE BUZZ", b_diode},
-	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}, {"DARK 808", b_dark808}, {"303 SCREAM", b_303scream}, {"FM SLAP BASS", b_fmslap}},
+	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}, {"DARK 808", b_dark808}, {"303 SCREAM", b_303scream}},
 	{{"GULF SYNC", l_gulfsync}, {"TALK BOX", l_talkbox}, {"WIDE UNISON", l_bigunison}, {"WHISTLE", l_whistle}, {"FOLD SCREAM", l_scream}, {"LADDER TAPE", l_moogtape},
 	 {"CHIP HERO", l_chiphero}, {"G-FUNK SINE", l_glidesine}, {"RINGER", l_ringer}, {"ACID SCREAM", l_acidscream}, {"PAD BENDER", l_bender},
-	 {"FLUTE", l_flute}, {"STICK THEREMIN", l_theremin}, {"XY SCULPT", l_xysculpt}, {"BUSY BOY", l_busyboy}, {"FM BRASS", l_fmbrass}},
+	 {"FLUTE", l_flute}, {"STICK THEREMIN", l_theremin}, {"XY SCULPT", l_xysculpt}, {"BUSY BOY", l_busyboy}},
 	{{"WARM FELT", p_felt}, {"GLASS HOUR", p_glass}, {"VOWEL DUSK", p_vowel}, {"COMB WEATHER", p_combweather}, {"CLOUD BANK", p_cloudbank}, {"STRINGS 77", p_strings77},
 	 {"DRAWN SWELL", p_drawnswell}, {"MOTION HAZE", p_haze}, {"SWELL BACKWARD", p_reverse}, {"DEEP SONAR", p_sonar}, {"GRAIN CHOIR", p_hallchoir}, {"GATE 85", p_gate85}, {"SPIN PAD", p_spinpad}, {"XY MORPH", p_xymorph}, {"CINE SWELL", p_cineswell},
 	 {"TABLE TIDE", p_tabletide}, {"GRAIN HALO", p_grainhalo}, {"PRISM SHIFT", p_prismshift}, {"SHIMMER DRIFT", p_shimmerdrift}},
 	{{"EP SATURDAY", k_epsat}, {"DRAWBAR", k_drawbar}, {"LOFI UPRIGHT", k_lofiup}, {"CLAV FUNK", k_clav}, {"WURLI BARK", k_wurli}, {"VIBES", k_vibes},
-	 {"TOY KEYS", k_toy}, {"HARPSI", k_harpsi}, {"ROTARY", k_rotary}, {"CUMBIA ORGANO", k_cumbiaorg}, {"REEL PIANO", k_reel}, {"GLASS TOP", k_glasstop}, {"TAPE RHODES", k_taperhodes}, {"FM TINE PIANO", k_fmtine}},
+	 {"TOY KEYS", k_toy}, {"HARPSI", k_harpsi}, {"ROTARY", k_rotary}, {"CUMBIA ORGANO", k_cumbiaorg}, {"REEL PIANO", k_reel}, {"GLASS TOP", k_glasstop}, {"TAPE RHODES", k_taperhodes}},
 	{{"NYLON", u_nylon}, {"MARIMBA WOOD", u_marimba}, {"KALIMBA", u_kalimba}, {"DIGI HARP", u_digiharp}, {"STAB 1999", u_stab99}, {"KOTO SPRING", u_koto},
-	 {"CHIP PLINK", u_chipplink}, {"GRAIN PLUCK", u_grain}, {"STEEL PAN", u_steel}, {"RAIN ON TIN", u_raintin}, {"SOFT PLUCK", u_softpluck}, {"KS GUITAR", u_ksguitar}, {"KS BASS", u_ksbass}, {"KS HARP", u_ksharp}, {"FM BELL", u_fmbell}},
+	 {"CHIP PLINK", u_chipplink}, {"GRAIN PLUCK", u_grain}, {"STEEL PAN", u_steel}, {"RAIN ON TIN", u_raintin}, {"SOFT PLUCK", u_softpluck}, {"KS GUITAR", u_ksguitar}, {"KS BASS", u_ksbass}, {"KS HARP", u_ksharp}},
 	{{"ORGAN STAB", c_organstab}, {"NEO SOUL 9", c_neosoul}, {"DUB CHORD", c_dub}, {"TECHNO STAB", c_techno}, {"STRUM GUITAR", c_strum}, {"OMNI HARP", c_omni},
 	 {"PUMP CHORDS", c_pump}, {"GOSPEL ORGAN", c_gospel}, {"SHOEGAZE WALL", c_shoegaze},
 	 {"STRUM 8THS", c_strum8}, {"HARP ROLL", c_harproll}, {"RAKE 16THS", c_rake},
@@ -3970,9 +3833,9 @@ static void patchCapture(SPatch* p) {
 		Osc* s = &gOsc[o]; OscP* q = &p->osc[o];
 		q->on = s->on; q->table = s->table < T_BUILTIN ? s->table : T_BASIC; q->warp = s->warp; q->oct = s->oct; q->semi = s->semi; q->uni = s->uni;
 		q->pos = s->pos; q->warpAmt = s->warpAmt; q->level = s->level; q->fine = s->fine; q->detune = s->detune; q->blend = s->blend; q->width = s->width;
-		p->oscDist[o] = s->dist; p->oscDistAmt[o] = s->distAmt; p->oscEngine[o] = s->engine;
+		p->oscDist[o] = s->dist; p->oscDistAmt[o] = s->distAmt; p->oscEngine[o] = 0;
 	}
-	p->fm = gFm; p->wtArp = gWtArp; p->wtArpSteps = gWtArpSteps; p->wtArpOsc = gWtArpOsc; p->wtArpDepth = gWtArpDepth;
+	memset(&p->fm, 0, sizeof(p->fm)); p->wtArp = gWtArp; p->wtArpSteps = gWtArpSteps; p->wtArpOsc = gWtArpOsc; p->wtArpDepth = gWtArpDepth;
 	p->subShape = gSubShape; p->subOct = gSubOct; p->noiseType = gNoiseType; p->filtType = gFiltType;
 	p->subLevel = gSubLevel; p->noiseLevel = gNoiseLevel; p->cutoff = gCutoff; p->res = gRes; p->keytrack = gKeytrack;
 	p->env1 = gEnv1; p->env2 = gEnv2; p->env3 = gEnv3; p->env4 = gEnv4; p->dlTrig[0] = gDlTrig[0]; p->dlTrig[1] = gDlTrig[1];
@@ -4019,10 +3882,8 @@ static void patchApplyRaw(const SPatch* p) {
 		s->on = q->on; s->table = q->table; s->warp = q->warp; s->oct = q->oct; s->semi = q->semi; s->uni = q->uni < 1 ? 1 : (q->uni > 3 ? 3 : q->uni);
 		s->pos = q->pos; s->warpAmt = q->warpAmt; s->level = q->level; s->fine = q->fine; s->detune = q->detune; s->blend = q->blend; s->width = q->width;
 		s->dist = p->oscDist[o] >= 0 && p->oscDist[o] < 15 ? p->oscDist[o] : 0; s->distAmt = p->oscDistAmt[o] >= 0 && p->oscDistAmt[o] <= 1 ? p->oscDistAmt[o] : 0;
-		s->engine = p->oscEngine[o] == 1;
 		if (newTable || !s->tb.nFrames) tableSelect(&s->tb, s->table);
 	}
-	fmSet(&p->fm);
 	gWtArp = p->wtArp >= 0 && p->wtArp < 5 ? p->wtArp : 0; gWtArpSteps = p->wtArpSteps >= 2 && p->wtArpSteps <= 16 ? p->wtArpSteps : 4; gWtArpOsc = p->wtArpOsc >= 0 && p->wtArpOsc < 3 ? p->wtArpOsc : 0;
 	gWtArpDepth = p->wtArpDepth >= 0 && p->wtArpDepth <= 1 ? p->wtArpDepth : 1;
 	int subChg = p->subShape != gSubShape, noiseChg = p->noiseType != gNoiseType;
@@ -4076,8 +3937,8 @@ static void patchApplyRaw(const SPatch* p) {
 
 
 static const float PGAIN[NSTYLES - 1][MAXPRE] = {   // measured: brings every factory patch to a similar loudness
-	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.49f, 0.90f, 1.42f, 1.32f, 1.28f, 0.68f, 0.97f, 1.19f, 0.80f},
-	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f, 1.00f, 1.00f},
+	{0.49f, 0.79f, 0.91f, 0.81f, 0.59f, 0.60f, 0.49f, 0.90f, 1.42f, 1.32f, 1.28f, 0.68f, 0.97f, 1.19f},
+	{2.57f, 1.93f, 3.31f, 0.67f, 0.86f, 0.65f, 0.68f, 0.59f, 1.03f, 0.80f, 2.27f, 0.60f, 0.47f, 6.00f, 1.00f},
 	{6.00f, 1.00f, 3.07f, 3.77f, 4.25f, 3.46f, 1.76f, 6.00f, 0.84f, 3.48f, 3.53f, 1.64f, 1.35f, 2.50f, 1.31f, 2.00f, 1.35f, 2.00f, 1.30f},
 	{0.59f, 0.60f, 0.68f, 0.91f, 0.72f, 0.61f, 1.77f, 2.05f, 0.75f, 0.75f, 1.11f, 0.95f, 1.80f, 1.00f, 1.00f},
 	{0.79f, 1.50f, 0.64f, 1.21f, 2.44f, 0.93f, 1.07f, 2.21f, 0.59f, 1.63f, 1.58f, 1.56f, 0.62f, 1.07f, 1.00f},
@@ -4261,30 +4122,7 @@ static Param P_SUBN[] = {
 	PF("CHIP SQUARE", &gChipLevel, 0, 1, 0.02f, "%", D_CHIP), PE("CHIP WIDTH", &gChipDuty, 7, DUTY_NAMES, 0), PI_("CHIP OCTAVE", &gChipOct, -2, 5, 0),
 	PE("DIST A", &gOsc[0].dist, 15, DRIVE_TYPES, D_A), PF("DIST A AMT", &gOsc[0].distAmt, 0, 1, 0.02f, "%", D_A),   // (OSC > DIST: both oscillators' distortion side by side)
 	PE("DIST B", &gOsc[1].dist, 15, DRIVE_TYPES, D_B), PF("DIST B AMT", &gOsc[1].distAmt, 0, 1, 0.02f, "%", D_B),
-	// FM ENGINE (OSC > FM and OPS): either oscillator can play it
-	PE("ENGINE A", &gOsc[0].engine, 2, ENGINE_NAMES, 0), PE("ENGINE B", &gOsc[1].engine, 2, ENGINE_NAMES, 0), PE("ALGO", &gFm.algo, FM_NALG, FMALG_NAMES, 0),
-	PF("FEEDBACK", &gFm.fb, 0, 1, 0.01f, "%", 0), PF("FM VEL", &gFm.vel, 0, 1, 0.02f, "%", 0),
-	PE("OP1 RATIO", &gFm.ratio[0], FM_NRAT, FMRAT_NAMES, 0), PE("OP1 WAVE", &gFm.wave[0], FM_NWAVE, FMWAVE_NAMES, 0), PF("OP1 LEVEL", &gFm.lvl[0], 0, 1, 0.01f, "%", 0), PF("OP1 DETUNE", &gFm.det[0], -50, 50, 1, "CT", 0),
-	PF("OP1 ATK", &gFm.a[0], 0, 4, 0.005f, "S", 0), PF("OP1 DEC", &gFm.d[0], 0, 4, 0.01f, "S", 0), PF("OP1 SUS", &gFm.s[0], 0, 1, 0.01f, "%", 0), PF("OP1 REL", &gFm.r[0], 0, 4, 0.01f, "S", 0),
-	PE("OP2 RATIO", &gFm.ratio[1], FM_NRAT, FMRAT_NAMES, 0), PE("OP2 WAVE", &gFm.wave[1], FM_NWAVE, FMWAVE_NAMES, 0), PF("OP2 LEVEL", &gFm.lvl[1], 0, 1, 0.01f, "%", 0), PF("OP2 DETUNE", &gFm.det[1], -50, 50, 1, "CT", 0),
-	PF("OP2 ATK", &gFm.a[1], 0, 4, 0.005f, "S", 0), PF("OP2 DEC", &gFm.d[1], 0, 4, 0.01f, "S", 0), PF("OP2 SUS", &gFm.s[1], 0, 1, 0.01f, "%", 0), PF("OP2 REL", &gFm.r[1], 0, 4, 0.01f, "S", 0),
-	PE("OP3 RATIO", &gFm.ratio[2], FM_NRAT, FMRAT_NAMES, 0), PE("OP3 WAVE", &gFm.wave[2], FM_NWAVE, FMWAVE_NAMES, 0), PF("OP3 LEVEL", &gFm.lvl[2], 0, 1, 0.01f, "%", 0), PF("OP3 DETUNE", &gFm.det[2], -50, 50, 1, "CT", 0),
-	PF("OP3 ATK", &gFm.a[2], 0, 4, 0.005f, "S", 0), PF("OP3 DEC", &gFm.d[2], 0, 4, 0.01f, "S", 0), PF("OP3 SUS", &gFm.s[2], 0, 1, 0.01f, "%", 0), PF("OP3 REL", &gFm.r[2], 0, 4, 0.01f, "S", 0),
-	PE("OP4 RATIO", &gFm.ratio[3], FM_NRAT, FMRAT_NAMES, 0), PE("OP4 WAVE", &gFm.wave[3], FM_NWAVE, FMWAVE_NAMES, 0), PF("OP4 LEVEL", &gFm.lvl[3], 0, 1, 0.01f, "%", 0), PF("OP4 DETUNE", &gFm.det[3], -50, 50, 1, "CT", 0),
-	PF("OP4 ATK", &gFm.a[3], 0, 4, 0.005f, "S", 0), PF("OP4 DEC", &gFm.d[3], 0, 4, 0.01f, "S", 0), PF("OP4 SUS", &gFm.s[3], 0, 1, 0.01f, "%", 0), PF("OP4 REL", &gFm.r[3], 0, 4, 0.01f, "S", 0),
 	PEND};
-// OSC > OPS: the sliders edit the operator picked with OP (their pointers follow it: fmOpBind)
-static int gFmSel = 0; static const char* FMSEL_NAMES[FM_OPS] = {"1", "2", "3", "4"};
-static Param P_FMOP[] = {
-	PE("OP", &gFmSel, FM_OPS, FMSEL_NAMES, 0), PE("OP RATIO", &gFm.ratio[0], FM_NRAT, FMRAT_NAMES, 0), PE("OP WAVE", &gFm.wave[0], FM_NWAVE, FMWAVE_NAMES, 0),
-	PF("OP LEVEL", &gFm.lvl[0], 0, 1, 0.01f, "%", 0), PF("OP ATK", &gFm.a[0], 0, 4, 0.005f, "S", 0), PF("OP DEC", &gFm.d[0], 0, 4, 0.01f, "S", 0),
-	PF("OP SUS", &gFm.s[0], 0, 1, 0.01f, "%", 0), PF("OP REL", &gFm.r[0], 0, 4, 0.01f, "S", 0), PF("OP DETUNE", &gFm.det[0], -50, 50, 1, "CT", 0),
-	PEND};
-static void fmOpBind(void) {
-	int j = gFmSel < 0 || gFmSel >= FM_OPS ? 0 : gFmSel;
-	P_FMOP[1].p = &gFm.ratio[j]; P_FMOP[2].p = &gFm.wave[j]; P_FMOP[3].p = &gFm.lvl[j]; P_FMOP[4].p = &gFm.a[j]; P_FMOP[5].p = &gFm.d[j];
-	P_FMOP[6].p = &gFm.s[j]; P_FMOP[7].p = &gFm.r[j]; P_FMOP[8].p = &gFm.det[j];
-}
 static Param P_FILT[] = {
 	PE("FILTER", &gFiltType, 5, FILT_TYPES, 0), PF("CUTOFF", &gCutoff, 0, 1, 0.01f, "HZ", 0),
 	PE("FILTER 2", &gFilt2, 3, FILT2_NAMES, 0), PE("LOW CUT", &gLowCut, 6, LOWCUT_NAMES, 0),
@@ -4997,7 +4835,7 @@ static const char* paramHelp(const char* n) {
 	static const char* H[][2] = {
 		{"STYLE", "PICK A STYLE OF PATCH"}, {"PATCH", "PICK A PATCH - IT LOADS AS YOU SCROLL"}, {"SAVE SLOT", "WHICH USER SLOT TO SAVE INTO"},
 		{"SAVE NOW", "PRESS > TO SAVE THIS SOUND"}, {"INIT PATCH", "PRESS > FOR A PLAIN SAW TO START FROM"},
-		{"ON", "OSCILLATOR ON / OFF"}, {"TABLE", "WHICH WAVETABLE"}, {"WT POS", "POSITION IN THE WAVETABLE"}, {"WARP", "HOW THE WAVE IS BENT"}, {"DIST", "THIS OSCILLATOR'S DISTORTION"}, {"DIST AMT", "HOW HARD IT DISTORTS"}, {"DIST A", "OSC A'S DISTORTION"}, {"DIST B", "OSC B'S DISTORTION"}, {"DIST A AMT", "HOW HARD OSC A DISTORTS"}, {"DIST B AMT", "HOW HARD OSC B DISTORTS"}, {"ENGINE A", "OSC A: WAVETABLE OR THE FM ENGINE"}, {"ENGINE B", "OSC B: WAVETABLE OR THE FM ENGINE"}, {"ALGO", "HOW THE 4 OPERATORS MODULATE (> = INTO)"}, {"FEEDBACK", "OP 4 MODULATES ITSELF: GRIT, NOISE"}, {"FM VEL", "HARDER NOTES = BRIGHTER"}, {"OP", "WHICH OPERATOR THE SLIDERS EDIT"}, {"OP RATIO", "OPERATOR PITCH x THE NOTE"}, {"OP WAVE", "OPERATOR WAVE: SINE AND 3 BENT ONES"}, {"OP LEVEL", "CARRIER: VOLUME  MODULATOR: BRIGHTNESS"}, {"OP ATK", "OPERATOR ATTACK"}, {"OP DEC", "OPERATOR DECAY"}, {"OP SUS", "OPERATOR SUSTAIN LEVEL"}, {"OP REL", "OPERATOR RELEASE"}, {"OP DETUNE", "OPERATOR FINE TUNE, CENTS"},
+		{"ON", "OSCILLATOR ON / OFF"}, {"TABLE", "WHICH WAVETABLE"}, {"WT POS", "POSITION IN THE WAVETABLE"}, {"WARP", "HOW THE WAVE IS BENT"}, {"DIST", "THIS OSCILLATOR'S DISTORTION"}, {"DIST AMT", "HOW HARD IT DISTORTS"}, {"DIST A", "OSC A'S DISTORTION"}, {"DIST B", "OSC B'S DISTORTION"}, {"DIST A AMT", "HOW HARD OSC A DISTORTS"}, {"DIST B AMT", "HOW HARD OSC B DISTORTS"},
 		{"WARP AMT", "HOW MUCH WARP"}, {"LEVEL", "VOLUME OF THIS OSCILLATOR"}, {"OCTAVE", "OCTAVE UP / DOWN"}, {"SEMI", "SEMITONES UP / DOWN"},
 		{"FINE", "FINE TUNE IN CENTS"}, {"UNISON", "STACKED VOICES PER NOTE (1-3)"}, {"DETUNE", "SPREAD BETWEEN UNISON VOICES"},
 		{"BLEND", "LEVEL OF THE OUTER UNISON VOICES"}, {"WIDTH", "STEREO SPREAD OF UNISON"},
@@ -6077,6 +5915,7 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 				if (gRollChord > 0 && gRollChord < NCHORD && gVoiceMode < 3) { for (int i = 0; i < 4; i++) { int iv = CHORDS[gRollChord][i]; if (iv >= 0 && nt + iv <= 127) ch[k++] = nt + iv; } }
 				else ch[k++] = nt;
 				gAuditionT = 0; playSet(ch, k, 0.8f); gRollKeyOn = 1;
+				recOnNote(); if (gLiveRec) liveDown(ch, k, 0.8f);   // REC on: the roll's keys write, like the keyboard
 			}
 			gGtSt = -1; return 1;
 		}
@@ -6084,7 +5923,7 @@ static int gridTouch(int x, int y, int press, int release) {   // 1 = redraw
 		return 0;
 	}
 	if (gGtKeys) {   // drag the keyboard: scroll
-		if (release) { gGtKeys = 0; if (gRollKeyOn) { gRollKeyOn = 0; playSet(NULL, 0, 0.8f); return 1; } return 0; }
+		if (release) { gGtKeys = 0; if (gRollKeyOn) { gRollKeyOn = 0; if (gLiveRec) liveUp(); playSet(NULL, 0, 0.8f); return 1; } return 0; }
 		if (gVoiceMode >= 3) return 0;   // a kit's rows are fixed
 		int nl = gGtLow0 + (y - gGtY0) / ROLL_RH; nl = nl < 12 ? 12 : nl > 108 ? 108 : nl;
 		if (nl != gRollLow) { gRollLow = nl; return 1; }
@@ -7275,14 +7114,10 @@ static void drawSeqStrip(void) {
 // A section has sub-pages (OSC A | OSC B | SUB+NOISE, FILTER | ENV 1 | ..., LOFI | MOD | ...): a row of choices (tap the
 // left / right of one: back / on) and up to 8 sliders (drag). Each setting goes through the same path as the D-pad.
 typedef struct { const char* tab; int page; const char* ch[4]; const char* fd[16]; } PnlSub;   // more than 8 sliders: two rows of 8 (thick, shorter)
-static const PnlSub PNL_OSC[5] = {
+static const PnlSub PNL_OSC[3] = {
 	{"OSC A", 1, {"ON", "TABLE", "WARP"}, {"WT POS", "WARP AMT", "LEVEL", "OCTAVE", "SEMI", "FINE", "UNISON", "DETUNE", "BLEND", "WIDTH", "DIST A", "DIST A AMT"}},
 	{"OSC B", 2, {"ON", "TABLE", "WARP"}, {"WT POS", "WARP AMT", "LEVEL", "OCTAVE", "SEMI", "FINE", "UNISON", "DETUNE", "BLEND", "WIDTH", "DIST B", "DIST B AMT"}},   // (two rows: the wave, its pitch; its unison, its distortion)
-	{"SUB+NOISE", 3, {"SUB SHAPE", "NOISE TYPE", "CHIP WIDTH"}, {"SUB LEVEL", "SUB OCTAVE", "NOISE LEVEL", "CHIP SQUARE", "CHIP OCTAVE", "FINE"}},
-	{"FM", 3, {"ENGINE A", "ENGINE B", "ALGO", "FEEDBACK"}, {"OP1 LEVEL", "OP1 RATIO", "OP1 WAVE", "OP1 DETUNE", "OP2 LEVEL", "OP2 RATIO", "OP2 WAVE", "OP2 DETUNE",
-		"OP3 LEVEL", "OP3 RATIO", "OP3 WAVE", "OP3 DETUNE", "OP4 LEVEL", "OP4 RATIO", "OP4 WAVE", "OP4 DETUNE"}},   // all four operators: two rows, an operator to each half
-	{"ENV", 3, {"ALGO", "FM VEL", "FEEDBACK"}, {"OP1 ATK", "OP1 DEC", "OP1 SUS", "OP1 REL", "OP2 ATK", "OP2 DEC", "OP2 SUS", "OP2 REL",
-		"OP3 ATK", "OP3 DEC", "OP3 SUS", "OP3 REL", "OP4 ATK", "OP4 DEC", "OP4 SUS", "OP4 REL"}}};
+	{"SUB+NOISE", 3, {"SUB SHAPE", "NOISE TYPE", "CHIP WIDTH"}, {"SUB LEVEL", "SUB OCTAVE", "NOISE LEVEL", "CHIP SQUARE", "CHIP OCTAVE", "FINE"}}};
 static const PnlSub PNL_FILT[4] = {
 	{"FILTER", 4, {"FILTER", "FILTER 2", "DRIVE", "OUT FILTER"}, {"CUTOFF", "RES", "KEYTRACK", "LOW CUT", "DRIVE AMT", "OUT CUTOFF", "OUT RES", "OUT DRIVE", "OUT ENV2"}},   // (two rows: the voice filter, then the OUT FILTER)
 	{"ENV 1", 4, {"DRIVE"}, {"ENV1 ATK", "ENV1 HOLD", "ENV1 DEC", "ENV1 SUS", "ENV1 REL"}},
@@ -7313,7 +7148,7 @@ static const u8* pnlAcc(int sec) {   // the section's colour: SYRUP themes have 
 static int pnlSec(void) { int p = gCurPage; return p >= 1 && p <= 3 ? 0 : p == 4 ? 1 : p == 10 ? 2 : -1; }
 static const PnlSub* pnlCur(int* n) {
 	int s = pnlSec();
-	if (s == 0) { if (n) *n = 5; if (gCurPage != 3 || gPnlSub[0] < 0 || gPnlSub[0] > 2) gPnlSub[0] = 0; return &PNL_OSC[gCurPage == 3 ? 2 + gPnlSub[0] : gCurPage - 1]; }   // (FM, ENV: tabs of the SUB+NOISE page; DIST lives on OSC A / B)
+	if (s == 0) { if (n) *n = 3; gPnlSub[0] = 0; return &PNL_OSC[gCurPage - 1 > 2 ? 2 : gCurPage - 1 < 0 ? 0 : gCurPage - 1]; }
 	if (s == 1) { if (n) *n = 4; return &PNL_FILT[gPnlSub[1] & 3]; }
 	if (n) *n = 5; return &PNL_FX[gPnlSub[2] % 5];
 }
@@ -7321,7 +7156,6 @@ static Param* pnlFind(const char* name, int page) {
 	if (!name) return NULL;
 	for (int i = 0; PAGES[page][i].name; i++) if (!strcmp(PAGES[page][i].name, name)) return &PAGES[page][i];
 	for (int pg = 0; pg < NPAGES; pg++) for (int i = 0; PAGES[pg][i].name; i++) if (!strcmp(PAGES[pg][i].name, name)) return &PAGES[pg][i];
-	fmOpBind(); for (int i = 0; P_FMOP[i].name; i++) if (!strcmp(P_FMOP[i].name, name)) return &P_FMOP[i];   // OSC > OPS
 	return NULL;
 }
 static void rrect(int x, int y, int w, int h, int rad, u8 r, u8 g, u8 b) {   // a rounded rectangle
@@ -7344,13 +7178,12 @@ static void vfader(int cx, int top, int bot, int w, float t, float zero, const u
 static float vfaderT(int y, int top, int bot) { float t = (bot - y) / (float)(bot - top); return t < 0 ? 0 : t > 1 ? 1 : t; }
 static const char* pnlShort(const char* n) {   // a slider's name in 4 letters
 	static const char* L[][2] = {{"WT POS", "POS"}, {"WARP AMT", "WARP"}, {"LEVEL", "LVL"}, {"DETUNE", "DTUN"}, {"OCTAVE", "OCT"}, {"UNISON", "UNI"}, {"BLEND", "BLND"},
-		{"SUB LEVEL", "SUB"}, {"SUB OCTAVE", "SOCT"}, {"DIST A AMT", "DAMT"}, {"DIST B AMT", "DAMT"}, {"DIST A", "DIST"}, {"DIST B", "DIST"}, {"WIDTH", "WDTH"}, {"FEEDBACK", "FB"}, {"FM VEL", "VEL"}, {"OP LEVEL", "LVL"}, {"OP ATK", "ATK"}, {"OP DEC", "DEC"}, {"OP SUS", "SUS"}, {"OP REL", "REL"}, {"OP DETUNE", "DTUN"}, {"NOISE LEVEL", "NOIS"}, {"CHIP SQUARE", "CHIP"}, {"CHIP OCTAVE", "COCT"}, {"CUTOFF", "CUT"}, {"KEYTRACK", "KEY"},
+		{"SUB LEVEL", "SUB"}, {"SUB OCTAVE", "SOCT"}, {"DIST A AMT", "DAMT"}, {"DIST B AMT", "DAMT"}, {"DIST A", "DIST"}, {"DIST B", "DIST"}, {"WIDTH", "WDTH"}, {"NOISE LEVEL", "NOIS"}, {"CHIP SQUARE", "CHIP"}, {"CHIP OCTAVE", "COCT"}, {"CUTOFF", "CUT"}, {"KEYTRACK", "KEY"},
 		{"LOW CUT", "LOW"}, {"DRIVE AMT", "DRV"}, {"OUT CUTOFF", "OCUT"}, {"OUT RES", "ORES"}, {"OUT DRIVE", "ODRV"}, {"OUT ENV2", "OENV"}, {"LOFI RATE", "RATE"},
 		{"MIX OVERDRIVE", "OVDR"}, {"FILTER SCREAM", "SCRM"}, {"MOD RATE", "RATE"}, {"MOD DEPTH", "DPTH"}, {"MOD MIX", "MIX"}, {"FX COLOR", "COLR"}, {"CHORUS", "CHOR"},
 		{"EQ LOW", "LOW"}, {"EQ MID", "MID"}, {"EQ HIGH", "HIGH"}, {"3D ORBIT", "ORBT"}, {"ORBIT RATE", "ORAT"}, {"REVERB MIX", "REV"}, {"REV SIZE", "SIZE"},
 		{"REV DAMP", "DAMP"}, {"DELAY MIX", "DLY"}, {"TAPE WOW", "WOW"}, {"TAPE SAT", "SAT"}, {"FX MIX", "FX"}, {"MASTER", "VOL"}, {"PUMP", "PUMP"}, {"OTT", "OTT"}};
 	for (unsigned i = 0; i < sizeof(L) / sizeof(L[0]); i++) if (!strcmp(L[i][0], n)) return L[i][1];
-	if (n[0] == 'O' && n[1] == 'P' && n[2] >= '1' && n[2] <= '4' && n[3] == ' ') { const char* r = n + 4; return !strcmp(r, "LEVEL") ? "LVL" : !strcmp(r, "DETUNE") ? "DTUN" : !strcmp(r, "RATIO") ? "RAT" : r; }   // OP1 ATK -> ATK (the operator's number sits by its group)
 	if (!strncmp(n, "ENV", 3) && strlen(n) > 5) return n + 5;   // ENV1 ATK -> ATK
 	return n;
 }
@@ -7380,7 +7213,7 @@ static void pnlFmt(const Param* p, char* v, int len) {   // a value in 5 letters
 static const char* pnlChName(const char* n) {
 	static const char* L[][2] = {{"FILTER", "TYPE"}, {"FILTER 2", "F2"}, {"OUT FILTER", "OUT"}, {"REVERB TYPE", "REV"}, {"DELAY TYPE", "DLY"}, {"DELAY SYNC", "SYNC"},
 		{"SUB SHAPE", "SUB"}, {"NOISE TYPE", "NOISE"}, {"CHIP WIDTH", "CHIP"}, {"LOFI BITS", "BITS"}, {"DSP GRIT", "GRIT"}, {"MASTER FX", "FX"}, {"MOD FX", "TYPE"},
-		{"SPEAKER EQ", "SPKR"}, {"PUMP RATE", "PUMP"}, {"SHIMMER", "SHIM"}, {"FREEZE", "FRZ"}, {"ENGINE A", "A"}, {"ENGINE B", "B"}, {"FEEDBACK", "FB"}, {"FM VEL", "VEL"}, {"OP RATIO", "RATIO"}, {"OP WAVE", "WAVE"}, {"ALGO", "ALG"}};
+		{"SPEAKER EQ", "SPKR"}, {"PUMP RATE", "PUMP"}, {"SHIMMER", "SHIM"}, {"FREEZE", "FRZ"}};
 	for (unsigned i = 0; i < sizeof(L) / sizeof(L[0]); i++) if (!strcmp(L[i][0], n)) return L[i][1];
 	return n;
 }
@@ -7421,16 +7254,14 @@ static int pnlAt(int nf, int x, int y) {   // which slider a touch is on (-1: no
 }
 // ENVELOPES on the panel: the graphical editor (drag the handles: attack, hold, decay + sustain, release), not sliders.
 // ENV 1 / ENV 2: one big shape; ENV 3+4: two side by side; FM > ENV: the four operators' shapes, two by two.
-static int pnlEnvKind(const PnlSub* S, int sec) { if (sec == 1) return !strcmp(S->tab, "ENV 1") ? 1 : !strcmp(S->tab, "ENV 2") ? 2 : !strcmp(S->tab, "ENV 3+4") ? 3 : 0; return sec == 0 && !strcmp(S->tab, "ENV") ? 4 : 0; }
+static int pnlEnvKind(const PnlSub* S, int sec) { if (sec == 1) return !strcmp(S->tab, "ENV 1") ? 1 : !strcmp(S->tab, "ENV 2") ? 2 : !strcmp(S->tab, "ENV 3+4") ? 3 : 0; return 0; }
 typedef struct { int x, y, w, h; AHDSR* e; int hold, op; const char* nm; } EnvBox;
 static int pnlEnvBoxes(int kind, EnvBox* b) {   // the boxes for this tab (FM: a copy of each operator's envelope, written back after a drag)
-	static AHDSR op[4]; int Y = PNL_FD_Y, H = PNL_KR_Y - 4 - PNL_FD_Y;
+	int Y = PNL_FD_Y, H = PNL_KR_Y - 4 - PNL_FD_Y;
 	if (kind == 1) { b[0] = (EnvBox){4, Y, 312, H, &gEnv1, 1, -1, "AMP"}; return 1; }
 	if (kind == 2) { b[0] = (EnvBox){4, Y, 312, H, &gEnv2, 0, -1, "MOD"}; return 1; }
 	if (kind == 3) { b[0] = (EnvBox){4, Y, 154, H, &gEnv3, 0, -1, "3"}; b[1] = (EnvBox){162, Y, 154, H, &gEnv4, 0, -1, "4"}; return 2; }
-	static const char* N[4] = {"1", "2", "3", "4"};
-	for (int j = 0; j < 4; j++) { op[j] = (AHDSR){gFm.a[j], 0, gFm.d[j], gFm.s[j], gFm.r[j]}; b[j] = (EnvBox){4 + (j & 1) * 158, Y + (j / 2) * (H / 2 + 1), 154, H / 2 - 1, &op[j], 0, j, N[j]}; }
-	return 4;
+	return 0;
 }
 static void envBoxPts(const EnvBox* B, float* px, float* py) {   // 5 points, scaled into the box (as the full-size editor's)
 	const AHDSR* e = B->e; float sc = (B->w - 16) / 276.0f, x = B->x + 8, top = B->y + 18, bot = B->y + B->h - 5, sus = bot - (bot - top) * e->s;
@@ -7476,7 +7307,6 @@ static int envBoxTouch(int kind, int x, int y, int press) {   // drag a handle (
 	else if (gEnvDragH == 1) e->h = roundf(tt * 100) / 100;
 	else if (gEnvDragH == 2) { e->d = tt < 0.01f ? 0.01f : roundf(tt * 100) / 100; float top = B->y + 18, bot = B->y + B->h - 5, sv = (bot - y) / (bot - top); e->s = sv < 0 ? 0 : sv > 1 ? 1 : roundf(sv * 100) / 100; }
 	else e->r = tt < 0.01f ? 0.01f : roundf(tt * 100) / 100;
-	if (B->op >= 0) { int j = B->op; gFm.a[j] = e->a > 4 ? 4 : e->a; gFm.d[j] = e->d > 4 ? 4 : e->d; gFm.s[j] = e->s; gFm.r[j] = e->r > 4 ? 4 : e->r; }   // (FM: back to the operator)
 	gEdited = 1; return 1;
 }
 static void drawPanel(void) {
@@ -7545,7 +7375,7 @@ static int pnlTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (press && y >= PNL_SUB_Y && y < PNL_SUB_Y + 16) {
 		int i = (x - 4) * ns / 312; if (i < 0) i = 0; if (i >= ns) i = ns - 1;
 		if (sec == 2) { gPnlSubDrag = gPnlSubTo = i; gPnlSubX0 = x; return 1; }
-		if (sec == 0) { gPageWant = i < 3 ? i + 1 : 3; gPnlSub[0] = i < 3 ? 0 : i - 2; } else gPnlSub[sec] = i;
+		if (sec == 0) { gPageWant = i + 1; gPnlSub[0] = 0; } else gPnlSub[sec] = i;
 		gPnlHotP = NULL; return 1;
 	}
 	if (press && y >= PNL_CH_Y && y < PNL_CH_Y + 18) {
