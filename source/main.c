@@ -9778,6 +9778,84 @@ static void dlTick(void) {   // progress in the footer; when done, rescan so the
 }
 
 
+// ---- DEMO TRACK (LOAD SESSION > DEMO TRACK): the release video's song as four finished takes on the tape, to play,
+// mute, mix or record over. The takes come from GitHub once (about 12 MB, over Wi-Fi) and stay in 3ds/syrup/demo.
+// A take file: "SYTP", version 1, its length in samples, then the left and right IMA-ADPCM exactly as the tape holds them.
+#define TAKE_MAGIC 0x50545953
+#define DEMO_URL "https://raw.githubusercontent.com/syrup-synth/syrup/main/demo/"
+#define DEMO_DIR "sdmc:/3ds/syrup/demo"
+#define DEMO_BPM 156
+static volatile int gDemoState = 0, gDemoGot = 0;   // 1 downloading, 2 the takes are there (load them), 3 failed
+static char gDemoErr[32];
+static int tapeSaveTake(int t, const char* path) {
+	if (t < 0 || t >= NTRK || !gTpHave[t] || gTapeLen < 2) return 0;
+	FILE* f = fopen(path, "wb"); if (!f) return 0;
+	u32 h[4] = {TAKE_MAGIC, 1, (u32)gTapeLen, 0}; size_t n = (size_t)gTapeLen / 2;
+	int ok = fwrite(h, 4, 4, f) == 4 && fwrite(gTp[t][0], 1, n, f) == n && fwrite(gTp[t][1], 1, n, f) == n;
+	return fclose(f) == 0 && ok;
+}
+static int tapeLoadTake(int t, const char* path) {   // voice lock held. 0 = not loaded (missing, bad, or not the tape's length)
+	FILE* f = fopen(path, "rb"); if (!f) return 0;
+	u32 h[4]; int ok = fread(h, 4, 4, f) == 4 && h[0] == TAKE_MAGIC && h[1] == 1 && h[2] >= 2 && h[2] <= TAPE_MAX && !(h[2] & 1) && (!gTapeLen || (int)h[2] == gTapeLen) && tapeAlloc(t);
+	size_t n = ok ? h[2] / 2 : 0;
+	if (ok) ok = fread(gTp[t][0], 1, n, f) == n && fread(gTp[t][1], 1, n, f) == n;
+	fclose(f);
+	if (!ok) return 0;
+	if (gCsndOK) for (int k = 0; k < 2; k++) CSND_FlushDataCache(gTp[t][k], n);
+	gTapeLen = (int)h[2]; gTpHave[t] = 1; gTpMute[t] = 0; gTpLevel[t] = 0.8f; gTpSpd[t] = 5; gTapeLast = t;
+	return 1;
+}
+static int demoHave(void) { for (int t = 0; t < NTRK; t++) { char p[64]; snprintf(p, sizeof p, DEMO_DIR "/take%d.sytp", t + 1); FILE* f = fopen(p, "rb"); if (!f) return 0; fclose(f); } return 1; }
+#ifdef FAKE_WEB
+static void webDemoFetch(void);   // (web_main.c: the page fetches the takes into /sd/demo)
+#elif !defined(SYRUP_NO_NET)
+static Thread gDemoThread = NULL;
+static void demoMain(void* arg) {
+	(void)arg;
+	if (!netUp()) { snprintf(gDemoErr, sizeof(gDemoErr), "WI-FI NOT AVAILABLE"); gDemoState = 3; return; }
+	curl_global_init(CURL_GLOBAL_DEFAULT);
+	mkdir("sdmc:/3ds", 0777); mkdir("sdmc:/3ds/syrup", 0777); mkdir(DEMO_DIR, 0777);
+	int ok = 1;
+	for (int t = 0; t < NTRK && ok; t++) {
+		char path[64], part[72], url[160]; snprintf(path, sizeof path, DEMO_DIR "/take%d.sytp", t + 1); snprintf(part, sizeof part, "%s.part", path);
+		FILE* e = fopen(path, "rb"); if (e) { fclose(e); gDemoGot = t + 1; continue; }
+		snprintf(url, sizeof url, DEMO_URL "take%d.sytp", t + 1);
+		FILE* f = fopen(part, "wb"); ok = f && httpGet(url, f, 1); if (f) fclose(f);
+		if (ok) { rename(part, path); gDemoGot = t + 1; } else { remove(part); snprintf(gDemoErr, sizeof(gDemoErr), "TAKE %d", t + 1); }
+	}
+	curl_global_cleanup(); netDown();
+	gDemoState = ok ? 2 : 3;
+}
+#endif
+static void demoOpen(void) {   // LOAD SESSION > DEMO TRACK
+	if (gDemoState == 1) return;
+	if (demoHave()) { gDemoState = 2; return; }
+#ifdef FAKE_WEB
+	gDemoState = 1; gDemoGot = 0; webDemoFetch();
+#elif defined(SYRUP_NO_NET)
+	say("DEMO TRACK: NO NETWORK IN THIS BUILD");
+#else
+	if (gDemoThread) { threadJoin(gDemoThread, U64_MAX); threadFree(gDemoThread); gDemoThread = NULL; }
+	gDemoState = 1; gDemoGot = 0; gDemoErr[0] = 0;
+	gDemoThread = threadCreate(demoMain, NULL, 0x10000, 0x38, -2, false);
+	if (!gDemoThread) { gDemoState = 3; snprintf(gDemoErr, sizeof(gDemoErr), "COULD NOT START"); }
+#endif
+}
+static void sessionClear(void);
+static int demoTick(void) {   // main loop, voice lock held; 1 = the demo came in (redraw)
+	if (gDemoState == 1) { static int last = -1; if (gDemoGot != last) { last = gDemoGot; char m[48]; snprintf(m, sizeof m, "DOWNLOADING THE DEMO TRACK %d/%d", gDemoGot, NTRK); say(m); } return 0; }
+	if (gDemoState == 3) { gDemoState = 0; char m[48]; snprintf(m, sizeof m, "DEMO TRACK: DOWNLOAD FAILED (%.20s)", gDemoErr[0] ? gDemoErr : "?"); say(m); return 1; }
+	if (gDemoState != 2) return 0;
+	gDemoState = 0;
+	sessionClear(); gTapeLen = 0;
+	int n = 0; for (int t = 0; t < NTRK; t++) { char p[64]; snprintf(p, sizeof p, DEMO_DIR "/take%d.sytp", t + 1); n += tapeLoadTake(t, p); }
+	gBPM = DEMO_BPM; gRoot = 5; gScale = 2; gTapeArm = 0;
+	if (n == NTRK) say("DEMO TRACK: 4 TAKES ON THE TAPE - PRESS PLAY");
+	else { char m[48]; snprintf(m, sizeof m, "DEMO TRACK: ONLY %d OF 4 TAKES LOADED", n); say(m); }
+	return 1;
+}
+
+
 // ---- in-app updater: compare the release's version.txt with this build, then download and install the new CIA
 #define REL_URL "https://github.com/syrup-synth/syrup/releases/latest/download/"
 // where this copy of Syrup was launched from: the Homebrew Launcher passes the .3dsx path as argv[0]
@@ -10895,9 +10973,10 @@ static void lsOpenBars(void) {
 static int sessionCount(void); static void sessionNameRead(int k, char* name, int nn, char* when, int wn);
 static void lsOpenSessions(void) {   // LOAD SESSION: the saved sessions, newest first, then the EXAMPLE
 	int n = sessionCount(), m = 0;
-	for (int k = n; k >= 1 && m < LS_MAX - 1; k--) { char nm[24], wh[24]; sessionNameRead(k, nm, sizeof nm, wh, sizeof wh);
+	for (int k = n; k >= 1 && m < LS_MAX - 2; k--) { char nm[24], wh[24]; sessionNameRead(k, nm, sizeof nm, wh, sizeof wh);
 		if (nm[0]) snprintf(gLsNm[m], 14, "%.13s", nm); else snprintf(gLsNm[m], 14, "SESSION %d", k); gLsSess[m++] = k; }
 	snprintf(gLsNm[m], 14, "EXAMPLE"); gLsSess[m++] = 0;
+	snprintf(gLsNm[m], 14, "DEMO TRACK"); gLsSess[m++] = -2;   // the release video's song, four takes on the tape
 	lsOpen(n ? "LOAD SESSION (NEWEST FIRST)" : "LOAD SESSION: NONE SAVED YET", m, 0, LS_SESS);
 }
 static void lsOpenNewSession(void) {   // NEW SESSION: save this one first, or not
@@ -10951,7 +11030,7 @@ static void lsPick(int i) {
 	case LS_COND: drumGridMark(); gDrCond[r][gDgEdI] = (u8)i; gDrumSaveDue = 1; break;
 	case LS_RATE: gDrRate[r] = (u8)i; gDrumSaveDue = 1; break;
 	case LS_LEN: gDrLen[r] = (u8)(i + 1); gDrumSaveDue = 1; break;
-	case LS_SESS: gSessWant = gLsSess[i]; gSessDue = 3; snprintf(m, sizeof(m), "LOADING %s...", gLsNm[i]); say(m); return;
+	case LS_SESS: if (gLsSess[i] == -2) { gLs = 0; demoOpen(); return; } gSessWant = gLsSess[i]; gSessDue = 3; snprintf(m, sizeof(m), "LOADING %s...", gLsNm[i]); say(m); return;
 	case LS_NEWS: if (i == 0) { gSessDue = 2; say("SAVING, THEN A NEW SESSION..."); } else { gSessClear = 1; } return;
 	case LS_BARS: { int nb = NSTEP / ROLL_VIEW; undoMark();
 		if (i < nb) { gSeqLen = (i + 1) * ROLL_VIEW; if (gRollPg > i) gRollPg = i; snprintf(m, sizeof(m), "PATTERN: %d BAR%s (NOTES PAST IT STAY, UNPLAYED)", i + 1, i ? "S" : ""); }
@@ -13046,6 +13125,7 @@ int main(void) {
 		if (startAct == START_LINK) { gPhoneLink = 1; if (!gMidiNet) { gMidiNet = 1; netMidiChanged(); } botDirty = botAgain = 1; }   // LINK PHONE: Wi-Fi on, the QR up
 #endif   // one press: choosing it in the START menu is deliberate (and this one is saved first)
 		if (gSessClear) { gSessClear = 0; sessionClear(); latch = 0; curKey = -1; topDirty = botDirty = 1; }
+		if (demoTick()) { latch = 0; curKey = -1; topDirty = botDirty = 1; }
 		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
 
 		if (!gCtl) {   // DEVICE: X PLAY / STOP, Y REC, A CHORD, B LATCH (the D-pad is the list's; on the piano roll / drum grid A / B place and take away, above)

@@ -47,7 +47,11 @@ EMSCRIPTEN_KEEPALIVE double web_link_follow(double target) {   // returns how fa
 }
 // SAMPLES: the page wrote WAVs into sd/kits/WEB; use them
 static int W_KITRL = 0;
-EMSCRIPTEN_KEEPALIVE void web_kit_reload(void) { W_KITRL = 1; }   // done from the main loop (SCRIPT), not inside the page event
+EMSCRIPTEN_KEEPALIVE void web_kit_reload(void) { W_KITRL = 1; }
+// DEMO TRACK: the page fetches the four takes into /sd/demo (the browser has no curl), then says how it went
+static void webDemoFetch(void) { EM_ASM({ if (Module.demoFetch) Module.demoFetch(); else Module._web_demo_done(0); }); }
+EMSCRIPTEN_KEEPALIVE void web_demo_got(int n) { gDemoGot = n; }
+EMSCRIPTEN_KEEPALIVE void web_demo_done(int ok) { if (!ok) snprintf(gDemoErr, sizeof(gDemoErr), "NO INTERNET?"); gDemoState = ok ? 2 : 3; }   // done from the main loop (SCRIPT), not inside the page event
 static void webKitReload(void) { kitScanDirs(); for (int i = 0; i < gNKitDirs; i++) if (!strcmp(gKitDirs[i], "WEB")) gKitDir = i; gKit = KIT_SAMPLE; gDrumWant = KIT_SAMPLE + 100; if (!gDrums) { gDrums = 1; drumsChanged(); } say("SAMPLE KIT: YOUR FILES"); }
 // CAMERA: the page runs the browser camera while Syrup wants one (CAMERA, CAM > TABLE, CAM WAVE) and puts 160x120 frames here
 EMSCRIPTEN_KEEPALIVE int web_cam_want(void) { return gCamOn || gCamWant || gCamVid; }

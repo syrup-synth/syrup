@@ -318,6 +318,20 @@ mchSel.onchange = function () {
   try { localStorage.setItem('syrup-mch-' + (location.hash || '#1'), MCH); localStorage.setItem('syrup-min-' + (location.hash || '#1'), MIN); } catch (e) {}
   if (window.MIDIM) fillIns(window.MIDIM);
 };
+// ---- DEMO TRACK (LOAD SESSION > DEMO TRACK): the four takes, fetched once into /sd/demo (kept with the rest of /sd)
+Module.demoFetch = function () {
+  var U = 'https://raw.githubusercontent.com/syrup-synth/syrup/main/demo/', got = 0;
+  try { FS.mkdir('/sd/demo'); } catch (e) {}
+  var one = function (t) {
+    if (t > 4) { try { FS.syncfs(false, function () {}); } catch (e) {} Module._web_demo_done(1); return; }
+    var p = '/sd/demo/take' + t + '.sytp';
+    try { FS.stat(p); Module._web_demo_got(++got); one(t + 1); return; } catch (e) {}
+    fetch(U + 'take' + t + '.sytp').then(function (r) { if (!r.ok) throw 0; return r.arrayBuffer(); })
+      .then(function (b) { FS.writeFile(p, new Uint8Array(b)); Module._web_demo_got(++got); one(t + 1); })
+      .catch(function () { Module._web_demo_done(0); });
+  };
+  one(1);
+};
 // ---- SAMPLES: any audio files the browser can read become the SAMPLE kit (folder WEB), mono, 32728 Hz, up to 3 s
 document.getElementById('smp').onclick = function () { document.getElementById('smpf').click(); };
 document.getElementById('smpf').onchange = function () {
