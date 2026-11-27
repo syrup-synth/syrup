@@ -5211,8 +5211,24 @@ static void drawHelp(void) {   // L / R flip the slides; any other button closes
 	char h[40]; snprintf(h, sizeof(h), "HELP %d/%d: %s", gHelpSlide + 1, NHELP, T[gHelpSlide]);
 	text(4, 3, h, 1, TXT); rect(0, 13, 400, 1, LINE);
 	text(400 - 8 * 21, 3, "L/R: MORE  ANY: CLOSE", 1, DIM);
+	static const char* DEV[18] = {"BUTTONS (DEVICE)",   // the first slide in the DEVICE layout (HARDWARE > CONTROLS)
+		 "  D-PAD U/D .... PICK A SETTING (TOP, RIGHT)",
+		 "  D-PAD L/R .... CHANGE IT (HOLD = FAST)",
+		 "  X ............ PLAY / STOP",
+		 "  Y ............ REC",
+		 "  A ............ CHORD   (ROLL / DRUMS: PLACE)",
+		 "  B ............ LATCH   (ROLL / DRUMS: DELETE)",
+		 "  CIRCLE PAD ... XY PAD  (ROLL / DRUMS: CURSOR)",
+		 "  C-STICK ...... TURNS THE PICKED SLIDER",
+		 "  L / R ........ PATCH, OSC ... MIX, VIS, HW",
+		 "  START ........ MENU (SAVE, SESSIONS, QUIT)",
+		 "SELECT",
+		 "  TAP .......... PLAY / STOP",
+		 "  + L / + R .... UNDO / REDO",
+		 "  + DOWN ....... PANIC: EVERYTHING STOPS",
+		 "OLD BUTTONS: HARDWARE > CONTROLS > CLASSIC", NULL};
 	static const char* S[NHELP][18] = {
-		{"PAGES",
+		{"PAGES (CLASSIC BUTTONS)",
 		 "  X / Y ........ NEXT / PREVIOUS PAGE",
 		 "  D-PAD U/D .... PICK A CONTROL",
 		 "  D-PAD L/R .... CHANGE IT (HOLD = FAST)",
@@ -5247,6 +5263,7 @@ static void drawHelp(void) {   // L / R flip the slides; any other button closes
 		 "  PAT .......... PATTERNS, SONG, TOOLS, UNDO",
 		 "MENU",
 		 "  CLEAR ........ PRESS > TWICE",
+		 "  TAP TEMPO .... PRESS >, CLAP BY THE MIC",
 		 "  WHILE IT PLAYS: KEYS TRANSPOSE", NULL},
 		{"SOUND",
 		 "  OWN WAVETABLES: .WAV IN /3DS/SYRUP/",
@@ -5259,11 +5276,14 @@ static void drawHelp(void) {   // L / R flip the slides; any other button closes
 		 "STUCK NOTES",
 		 "  SELECT + DOWN, OR PANIC ON THE BOTTOM ROW",
 		 "MIDI LEARN",
-		 "  PICK A CONTROL, START > MIDI LEARN, TURN A KNOB", NULL},
+		 "  PICK A CONTROL, START > MIDI LEARN, TURN A KNOB",
+		 "DEMO SONG",
+		 "  START > LOAD SESSION > DEMO TRACK", NULL},
 	};
 	int y = 22;
-	for (int i = 0; S[gHelpSlide][i]; i++, y += 11) {
-		const char* l = S[gHelpSlide][i];
+	const char* const* SL = (gHelpSlide == 0 && !gCtl) ? DEV : S[gHelpSlide];
+	for (int i = 0; SL[i]; i++, y += 11) {
+		const char* l = SL[i];
 		if (l[0] != ' ') text(8, y, l, 1, VAL); else text(8, y, l, 1, TXT);
 	}
 	scanlines();
