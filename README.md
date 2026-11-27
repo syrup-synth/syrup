@@ -2,7 +2,7 @@
 
 ![SYRUP](art/syrup_logo.png)
 
-**A wavetable synth and groovebox for the 3DS and 2DS.** Two wavetable oscillators played by the console's DSP chip, filters, modulation, master effects, a piano-roll sequencer, a drum machine and a four-track tape, all running on the handheld. There's also a web version that runs in any browser.
+**A wavetable synth that plays on the 3DS's own sound chips.** For the 3DS and 2DS, with a groovebox built in: two wavetable oscillators on the console's DSP chip, filters, modulation, master effects, a piano-roll sequencer, a drum machine and a four-track tape, all running on the handheld. There's also a web version that runs in any browser.
 
 > **Open beta.** Things may still break; see [Reporting bugs](#reporting-bugs).
 

@@ -1,4 +1,4 @@
-**Syrup open beta**: a wavetable synth and groovebox for the 3DS and 2DS. Also playable in any browser: https://syrup-synth.github.io/syrup/
+**Syrup open beta**: a wavetable synth that plays on the 3DS's own sound chips, with a groovebox built in, for the 3DS and 2DS. Also playable in any browser: https://syrup-synth.github.io/syrup/
 
 This is a beta. Please report anything that breaks: open an issue and say which build you're on (shown on the splash screen and the HARDWARE page).
 
