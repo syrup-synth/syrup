@@ -7356,7 +7356,8 @@ static const char* pnlShort(const char* n) {   // a slider's name in 4 letters
 }
 // LIST: a choice opens every option at once; tap one (or D-pad + A, B closes)
 #define LS_MAX 64
-enum { LS_PARAM, LS_COND, LS_RATE, LS_LEN, LS_EUCL, LS_BARS };
+enum { LS_PARAM, LS_COND, LS_RATE, LS_LEN, LS_EUCL, LS_BARS, LS_SESS, LS_NEWS };
+static int gSessWant = -1, gSessDue = 0, gSessClear = 0; static int gLsSess[LS_MAX];   // LOAD SESSION: the one picked (0 = the EXAMPLE); the list's slots
 static int gLs = 0, gLsN, gLsCur, gLsTop, gLsKind; static Param* gLsP; static char gLsTitle[24]; static char gLsNm[LS_MAX][14];
 static void lsOpenParam(Param* p); static void lsOpenBars(void);
 static void drawPhoneLink(void);
@@ -11042,6 +11043,18 @@ static void lsOpenBars(void) {
 	snprintf(gLsNm[nb], 14, "CUT EMPTY"); snprintf(gLsNm[nb + 1], 14, "CLEAR ALL");
 	lsOpen("PATTERN BARS", nb + 2, (gSeqLen + ROLL_VIEW - 1) / ROLL_VIEW - 1, LS_BARS);
 }
+static int sessionCount(void); static void sessionNameRead(int k, char* name, int nn, char* when, int wn);
+static void lsOpenSessions(void) {   // LOAD SESSION: the saved sessions, newest first, then the EXAMPLE
+	int n = sessionCount(), m = 0;
+	for (int k = n; k >= 1 && m < LS_MAX - 1; k--) { char nm[24], wh[24]; sessionNameRead(k, nm, sizeof nm, wh, sizeof wh);
+		if (nm[0]) snprintf(gLsNm[m], 14, "%.13s", nm); else snprintf(gLsNm[m], 14, "SESSION %d", k); gLsSess[m++] = k; }
+	snprintf(gLsNm[m], 14, "EXAMPLE"); gLsSess[m++] = 0;
+	lsOpen(n ? "LOAD SESSION (NEWEST FIRST)" : "LOAD SESSION: NONE SAVED YET", m, 0, LS_SESS);
+}
+static void lsOpenNewSession(void) {   // NEW SESSION: save this one first, or not
+	snprintf(gLsNm[0], 14, "SAVE FIRST"); snprintf(gLsNm[1], 14, "DON'T SAVE");
+	lsOpen("NEW SESSION: SAVE THIS ONE?", 2, 0, LS_NEWS);
+}
 static void lsOpenDrum(int kind) {
 	int r = gDgEdR, L = gDrLen[r] < 1 ? 16 : gDrLen[r];
 	if (kind == LS_COND) { for (int i = 0; i < NCOND; i++) snprintf(gLsNm[i], 14, "%s", COND_NAMES[i]); lsOpen("PLAY IF", NCOND, gDrCond[r][gDgEdI], kind); }
@@ -11089,6 +11102,8 @@ static void lsPick(int i) {
 	case LS_COND: drumGridMark(); gDrCond[r][gDgEdI] = (u8)i; gDrumSaveDue = 1; break;
 	case LS_RATE: gDrRate[r] = (u8)i; gDrumSaveDue = 1; break;
 	case LS_LEN: gDrLen[r] = (u8)(i + 1); gDrumSaveDue = 1; break;
+	case LS_SESS: gSessWant = gLsSess[i]; gSessDue = 3; snprintf(m, sizeof(m), "LOADING %s...", gLsNm[i]); say(m); return;
+	case LS_NEWS: if (i == 0) { gSessDue = 2; say("SAVING, THEN A NEW SESSION..."); } else { gSessClear = 1; } return;
 	case LS_BARS: { int nb = NSTEP / ROLL_VIEW; undoMark();
 		if (i < nb) { gSeqLen = (i + 1) * ROLL_VIEW; if (gRollPg > i) gRollPg = i; snprintf(m, sizeof(m), "PATTERN: %d BAR%s (NOTES PAST IT STAY, UNPLAYED)", i + 1, i ? "S" : ""); }
 		else if (i == nb) { int b = seqUsedBars(); gSeqLen = b * ROLL_VIEW; if (gRollPg >= b) gRollPg = b - 1; snprintf(m, sizeof(m), "EMPTY BARS CUT: %d BAR%s", b, b > 1 ? "S" : ""); }
@@ -12612,7 +12627,7 @@ static int dspAsk(void) {   // the first start without the firmware: say what Sy
 // SESSIONS (START menu): a session is the sound (last.bin), the patterns + song (seq.bin) and the drum grid
 // (mydrums.bin), kept together as sessions/Snn-*.bin. SAVE adds the next number; LOAD steps through them (newest
 // first); NEW saves this one, then starts clean: INIT patch, no notes, no drums, an empty tape.
-static int gSessDue = 0, gSessClear = 0, gSessAt = -1; static void saverIdle(void);
+static int gSessAt = -1; static void saverIdle(void);
 static const char* SESS_F[3] = {"last.bin", "seq.bin", "mydrums.bin"};
 static int fileCopy(const char* a, const char* b) {
 	FILE* i = fopen(a, "rb"); if (!i) return 0; FILE* o = fopen(b, "wb"); if (!o) { fclose(i); return 0; }
@@ -12665,7 +12680,8 @@ static void tapeErase(int t); static void seqLoad(void);
 static int sessionLoadFiles(void) {   // voice lock let go: copy the next session's files into place (returns how many are saved, or -1: the example)
 	int n = sessionCount();
 	// newest first, then back, then the EXAMPLE (gSessAt 0), then the newest again
-	gSessAt = n == 0 ? 0 : gSessAt < 0 || gSessAt > n || gSessAt == 0 ? n : gSessAt - 1;
+	if (gSessWant >= 0 && gSessWant <= n) { gSessAt = gSessWant; gSessWant = -1; }   // picked from the LOAD SESSION list
+	else gSessAt = n == 0 ? 0 : gSessAt < 0 || gSessAt > n || gSessAt == 0 ? n : gSessAt - 1;
 	saverIdle();   // (the SAVER isn't halfway through one of these files)
 	if (gSessAt == 0) {
 		static const unsigned char* EX[3] = {EX_LAST, EX_SEQ, EX_DRUMS}; static const int EXN[3] = {sizeof(EX_LAST), sizeof(EX_SEQ), sizeof(EX_DRUMS)};
@@ -13173,8 +13189,8 @@ int main(void) {
 			say("PANIC: EVERYTHING STOPPED"); }
 		if (startAct == 4) { gThemePick = 1; botDirty = 1; }   // THEME: the picker, every theme at once
 		if (startAct == 6) { gSessDue = 1; say("SAVING THE SESSION..."); }
-		if (startAct == 7) { gSessDue = 3; }
-		if (startAct == 8) { gSessDue = 2; say("SAVING, THEN A NEW SESSION..."); }
+		if (startAct == 7) { lsOpenSessions(); }   // LOAD SESSION: the list, pick one
+		if (startAct == 8) { lsOpenNewSession(); }   // NEW SESSION: save this one first, or not
 #ifdef SYRUP_NO_NET
 		if (startAct == START_LINK) say("WEB: USE THE PHONE BUTTON ABOVE");
 #else

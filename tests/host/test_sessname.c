@@ -20,6 +20,12 @@ static void SCRIPT(int fr) {
 		if (!strstr(gMsg, "TEST NAME")) fail("SESSION NAME: saving should say the name (%s)", gMsg);
 		gSessAt = -1; gSessDue = 3;
 	}
-	if (fr == 22) { printf("sessname: load says '%s'\n", gMsg); if (!strstr(gMsg, "TEST NAME") || !strstr(gMsg, "1/1")) fail("SESSION NAME: LOAD should show it (%s)", gMsg); done = 1; }
+	if (fr == 22) { printf("sessname: load says '%s'\n", gMsg); if (!strstr(gMsg, "TEST NAME") || !strstr(gMsg, "1/1")) fail("SESSION NAME: LOAD should show it (%s)", gMsg);
+		lsOpenSessions(); if (!gLs || gLsN != 2 || strncmp(gLsNm[0], "TEST NAME", 9) || strcmp(gLsNm[1], "EXAMPLE")) fail("LOAD SESSION list: the saved one, then EXAMPLE (%d: %s / %s)", gLsN, gLsNm[0], gLsNm[1]);
+		lsPick(1); }   // the EXAMPLE, picked from the list
+	if (fr == 28) { if (!strstr(gMsg, "EXAMPLE") || gBPM != 156) fail("LOAD SESSION list: picking EXAMPLE should load it (%s)", gMsg);
+		lsOpenNewSession(); lsPick(1); }   // NEW SESSION, DON'T SAVE
+	if (fr == 32) { FILE* f = fopen("sd/sessions/S02-seq.bin", "rb"); if (f) { fclose(f); fail("NEW SESSION DON'T SAVE: nothing should be saved"); }
+		int notes = 0; for (int i = 0; i < NSTEP; i++) notes += gSeq[i].n; if (notes || !strstr(gMsg, "NEW SESSION")) fail("NEW SESSION DON'T SAVE: should clear (%d notes, %s)", notes, gMsg); done = 1; }
 }
-int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 24; app_main(); if (!done) fail("didn't run"); printf("sessname: name, date, shown on load\n"); return gFails ? 1 : 0; }
+int main(void) { mkdir("sd", 0777); loadFont(); FRMAX = 34; app_main(); if (!done) fail("didn't run"); printf("sessname: name, date, shown on load\n"); return gFails ? 1 : 0; }
