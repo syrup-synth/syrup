@@ -157,11 +157,11 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 |---|---|
 | Top screen | The left half only shows (the picture, what's loaded); the right half is what you change. On PATCH the styles + patches lists are on the right |
 | D-pad | The list on the right: up / down pick, left / right change (hold to repeat). With the sliders up, up / down walk the tab's own controls |
-| A | PLAY / STOP |
-| B | REC (with the count-in) |
-| X | CHORD (steps through the chord types) |
-| Y | LATCH |
-| Circle pad | The XY pad: pushes the dot for whatever the XY PAD mode moves (WT + CUTOFF, MACRO 1+2, CUTOFF + RES ...). Let go and it stays where it is |
+| X | PLAY / STOP |
+| Y | REC (with the count-in) |
+| A | CHORD (steps through the chord types). On the piano roll / drum grid: place a note / hit (hold: its editor) |
+| B | LATCH. On the piano roll / drum grid: take the note / hit away (hold on a drum: its SOUND) |
+| Circle pad | The XY pad: pushes the dot for whatever the XY PAD mode moves (WT + CUTOFF, MACRO 1+2, CUTOFF + RES ...). Let go and it stays where it is. On the piano roll and the drum grid it's the edit cursor |
 | C-stick (New 3DS) | Turns the knob that's picked (up / right = more); tap a slider on the bottom screen to pick it |
 | L / R | Through every part of the device: PATCH, OSC, FILT, MOD, VOICE, FX, SEQ, PADS, MIX, VIS, HW |
 | Top left | The transport: STP / RUN / REC. Top right: PATCH, VIS or HW when you're there |

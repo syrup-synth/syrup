@@ -4145,8 +4145,8 @@ enum { SM_DATA, SM_BEND, SM_PAGE, SM_MACROS };
 static const char* STICK_NAMES[4] = {"DATA", "BEND + MOD", "PAGE", "MACROS"};
 // CONTROLS: DEVICE = the 3DS as a hardware synth. The bottom screen is the panel, the top screen the unit's display:
 // the top's left half only shows (the picture, what's loaded), its right half is what you change: the D-pad works that list
-// (up / down pick, left / right change). A PLAY / STOP, B REC, X CHORD, Y LATCH. The circle pad is the XY pad (whatever its
-// mode moves), the C-stick turns the knob that's picked, L / R step through the tabs (the top's tabs sit right over the bottom's).
+// (up / down pick, left / right change). X PLAY / STOP, Y REC, A CHORD, B LATCH. The circle pad is the XY pad (whatever its
+// mode moves; on the piano roll / drum grid it's the edit cursor, A places, B takes away), the C-stick turns the knob that's picked, L / R step through the tabs (the top's tabs sit right over the bottom's).
 // CLASSIC: the D-pad edits, X / Y change page, A chord, B latch.
 static int gCtl = 0; static const char* CTL_NAMES[2] = {"DEVICE", "CLASSIC"};
 static int stickModeNow(void) { return !gCtl && gStickMode == SM_DATA ? SM_PAGE : gStickMode; }   // DEVICE: the circle pad is the picture's, not DATA
@@ -4881,7 +4881,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS; KICK = SIDECHAIN FROM THE DRUMS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM PART ON / OFF: IT PLAYS WITH PLAY"}, {"KIT", "DRUM SOUNDS"}, {"ACCENT", "HOW MUCH LOUDER ACC STEPS HIT"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"MUTATE", "HOW MUCH THE MUT BUTTON CHANGES THE BEAT"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"SYNTH CH IN", "MIDI CHANNEL THE KEYS PLAY FROM (ALL = ANY FREE ONE)"}, {"SYNTH CH OUT", "KEYS, SEQUENCER, ARP NOTES SENT ON THIS CHANNEL"}, {"CHORD CH IN", "MIDI CHANNEL THAT PLAYS THE CHORD PART"}, {"CHORD CH OUT", "THE CHORD PART'S NOTES SENT ON THIS CHANNEL"}, {"BASS CH IN", "MIDI CHANNEL THAT PLAYS THE BASS PART"}, {"BASS CH OUT", "BASS LINE NOTES SENT ON THIS CHANNEL"}, {"DRUMS CH IN", "GENERAL MIDI DRUM NOTES (36 KICK, 38 SNARE...)"}, {"DRUMS CH OUT", "EVERY DRUM HIT SENT AS A GM NOTE"}, {"CONTROLS", "DEVICE: PAD=XY DPAD=LIST A PLAY B REC X CHD Y LATCH"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"CLICK", "METRONOME: COUNT-IN / RECORDING / ALWAYS (NEVER ON TAPE)"}, {"CLICK LEVEL", "METRONOME VOLUME"}, {"SEQ RATE", "A STEP IS A 16TH, A 32ND OR AN 8TH"}, {"REC QUANT", "16TH, 8TH, 32ND, OR OFF (KEEPS YOUR TIMING)"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"LAYERS", "SOFT: A NOTE'S UNISON ON ONE CHANNEL (MANY MORE NOTES)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"MUTATE", "HOW MUCH THE MUT BUTTON CHANGES THE BEAT"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"SYNTH CH IN", "MIDI CHANNEL THE KEYS PLAY FROM (ALL = ANY FREE ONE)"}, {"SYNTH CH OUT", "KEYS, SEQUENCER, ARP NOTES SENT ON THIS CHANNEL"}, {"CHORD CH IN", "MIDI CHANNEL THAT PLAYS THE CHORD PART"}, {"CHORD CH OUT", "THE CHORD PART'S NOTES SENT ON THIS CHANNEL"}, {"BASS CH IN", "MIDI CHANNEL THAT PLAYS THE BASS PART"}, {"BASS CH OUT", "BASS LINE NOTES SENT ON THIS CHANNEL"}, {"DRUMS CH IN", "GENERAL MIDI DRUM NOTES (36 KICK, 38 SNARE...)"}, {"DRUMS CH OUT", "EVERY DRUM HIT SENT AS A GM NOTE"}, {"CONTROLS", "DEVICE: PAD=XY DPAD=LIST X PLAY Y REC A CHD B LATCH"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"CLICK", "METRONOME: COUNT-IN / RECORDING / ALWAYS (NEVER ON TAPE)"}, {"CLICK LEVEL", "METRONOME VOLUME"}, {"SEQ RATE", "A STEP IS A 16TH, A 32ND OR AN 8TH"}, {"REC QUANT", "16TH, 8TH, 32ND, OR OFF (KEEPS YOUR TIMING)"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"LAYERS", "SOFT: A NOTE'S UNISON ON ONE CHANNEL (MANY MORE NOTES)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -5045,7 +5045,7 @@ static void drawFooter(int page, int sel) {
 	if (gMsgT > 0) { text(4, 230, gMsg, 1, VAL); return; }
 	if (page == 0) { text(4, 230, "TAP A PATCH BELOW   D-PAD WORKS TOO", 1, DIM); return; }
 	const char* h = paramHelp(PAGES[page][sel].name);
-	char m[52]; snprintf(m, sizeof(m), "%.49s", *h ? h : gCtl ? "D-PAD: PICK / CHANGE   X/Y: PAGES" : "D-PAD: LIST  A PLAY B REC X CHORD Y LATCH");
+	char m[52]; snprintf(m, sizeof(m), "%.49s", *h ? h : gCtl ? "D-PAD: PICK / CHANGE   X/Y: PAGES" : "D-PAD: LIST  X PLAY Y REC A CHORD B LATCH");
 	text(4, 230, m, 1, DIM);
 }
 
@@ -12910,7 +12910,6 @@ int main(void) {
 			if ((gDrumOnB || gDrumInSeq) && !gPads) mode = gDgEd ? 3 : 2;
 			else if (page == 7 && gGridOn && !gPatView && !gPads) mode = gStepEd >= 0 ? 1 : 4;
 			if (kHeld & KEY_SELECT) mode = 0;   // SELECT held: the pad is the QUICK ring
-			if (!gCtl && (mode == 2 || mode == 4)) mode = 0;   // DEVICE: the circle pad is the XY pad and A / B the transport, not the grid cursor (tap the grid)
 			if (mode == 1 && (kHeld & KEY_TOUCH) && gGtLong) mode = 0;   // the note still held: its PARAMETER LOCKS have the pad and B
 			// FLAVOR: a pad held, the circle pad reshapes its chord as you play - up 7TH, up-right 9TH, right SUS4, left INVERSION,
 			// down MAJOR <-> MINOR (down-left: that + 7TH), back to the middle: the chord you touched
@@ -13047,11 +13046,11 @@ int main(void) {
 		if (gSessClear) { gSessClear = 0; sessionClear(); latch = 0; curKey = -1; topDirty = botDirty = 1; }
 		if (startAct >= 0) topDirty = topAgain = botDirty = botAgain = 1;
 
-		if (!gCtl) {   // DEVICE: A PLAY / STOP, B REC, X CHORD, Y LATCH (the D-pad is the list's)
-			if (kDown & KEY_A) { transportToggle(); topDirty = botDirty = 1; }
-			if (kDown & KEY_B) { liveRecToggle(); topDirty = botDirty = 1; }
-			if (kDown & KEY_X) { gChord = (gChord + 1) % NCHORD; say(gChord ? CHORD_NAMES[gChord] : "CHORD OFF"); topDirty = botDirty = 1; }
-			if (kDown & KEY_Y) { latch = !latch; gLatchShow = latch; say(latch ? "LATCH ON" : "LATCH OFF"); if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
+		if (!gCtl) {   // DEVICE: X PLAY / STOP, Y REC, A CHORD, B LATCH (the D-pad is the list's; on the piano roll / drum grid A / B place and take away, above)
+			if (kDown & KEY_X) { transportToggle(); topDirty = botDirty = 1; }
+			if (kDown & KEY_Y) { liveRecToggle(); topDirty = botDirty = 1; }
+			if (kDown & KEY_A) { gChord = (gChord + 1) % NCHORD; say(gChord ? CHORD_NAMES[gChord] : "CHORD OFF"); topDirty = botDirty = 1; }
+			if (kDown & KEY_B) { latch = !latch; gLatchShow = latch; say(latch ? "LATCH ON" : "LATCH OFF"); if (!latch) { allOff(); curKey = -1; gHeldN = 0; gArpN = 0; gArpOnN = 0; } topDirty = botDirty = 1; }
 		}
 		if (page == 0) {   // preset browser: the D-pad moves through the list itself
 			int ds = 0, dp = 0, fresh = 0;
