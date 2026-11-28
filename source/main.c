@@ -874,7 +874,7 @@ static float gMixTgt[NCH][12], gMixCur[NCH][12]; static u8 gMixLive[NCH];
 // voice lock (a lock it can't get would be a dropout); the main loop only writes targets. If the render gets too
 // heavy for the CPU, new notes go back to a channel per layer.
 #define SOFT_BLK 160          // one DSP frame
-#define SOFT_NB 2             // blocks queued per channel: ~10 ms ahead
+#define SOFT_NB 4             // blocks queued per channel: ~20 ms ahead (2 ran dry on the 3DS when a frame came late: gaps, the glitching)
 #define SOFT_L 6              // layers per note (3 + 3 unison)
 #define SOFT_FADE 96          // S-curve length, samples (~3 ms)
 #define SOFT_HEAD 4.0f        // the stream is s16: rendered at 1/4, the channel's mix gives it back
@@ -883,7 +883,7 @@ typedef struct {
 	volatile int armed;       // the main loop has set its first pitches and levels: rendering starts then (no silent blocks queued ahead of the note)
 	int n, in;                // layers; samples faded in so far
 	const s16* tab[SOFT_L]; u32 sh[SOFT_L], mask[SOFT_L];
-	u32 ph[SOFT_L], inc[SOFT_L];
+	u32 ph[SOFT_L], inc[SOFT_L], cinc[SOFT_L];   // inc: the main loop's target; cinc: where the render is (the pitch glides across a block instead of jumping each screen frame)
 	float gl[SOFT_L], gr[SOFT_L], cl[SOFT_L], cr[SOFT_L];   // targets (main loop) and where the render is
 	int role[SOFT_L];
 	volatile float ag;   // the limiter (and TRANCE GATE): applied in the render, sample by sample - as a channel volume it stepped every 5 ms (clicks)
@@ -911,14 +911,16 @@ static void softBlockS(SoftCh* S, s16* out) {   // one block of one channel (gSo
 	memset(L, 0, sizeof(L)); memset(R, 0, sizeof(R));
 	for (int k = 0; k < n; k++) {
 		const s16* t = S->tab[k]; if (!t) continue;
-		u32 ph = S->ph[k], inc = S->inc[k], sh = S->sh[k], mk = S->mask[k];
+		u32 ph = S->ph[k], ti = S->inc[k], sh = S->sh[k], mk = S->mask[k];
+		if (!S->cinc[k]) S->cinc[k] = ti;
+		u32 inc = S->cinc[k]; s32 dinc = (s32)(((s64)ti - (s64)inc) / SOFT_BLK);   // (integer: a float can't hold a 32-bit phase step)
 		float ag = S->ag, tl = S->gl[k] * ag, tr = S->gr[k] * ag, gl = S->cl[k], gr = S->cr[k], dgl = (tl - gl) * (1.0f / SOFT_BLK), dgr = (tr - gr) * (1.0f / SOFT_BLK);
 		for (int i = 0; i < SOFT_BLK; i++) {
 			u32 ix = ph >> sh; int a = t[ix], b = t[(ix + 1) & mk];
 			float v = a + (b - a) * (int)((ph << (32 - sh)) >> 17) * (1.0f / 32768.0f);   // linear, 15-bit fraction (signed: the difference can be negative)
-			L[i] += v * gl; R[i] += v * gr; gl += dgl; gr += dgr; ph += inc;
+			L[i] += v * gl; R[i] += v * gr; gl += dgl; gr += dgr; ph += inc; inc += (u32)dinc;
 		}
-		S->ph[k] = ph; S->cl[k] = tl; S->cr[k] = tr;
+		S->ph[k] = ph; S->cl[k] = tl; S->cr[k] = tr; S->cinc[k] = ti;
 	}
 	for (int i = 0; i < SOFT_BLK; i++) {
 		float e = 1;
@@ -1304,6 +1306,10 @@ static SVoice* newVoice(void) {
 	for (int i = 0; i < NVS; i++) if (!gV[i].active) return &gV[i];
 	int vi = 0; unsigned best = 0xffffffff;
 	for (int i = 0; i < NVS; i++) if (gV[i].isEcho && gV[i].age < best) { best = gV[i].age; vi = i; }
+	if (best == 0xffffffff) {   // no echo tap to take: the quietest note already letting go (cutting a sounding note dead clicked: lots of notes, the bass line over chords)
+		float lo = 2; for (int i = 0; i < NVS; i++) if (gV[i].stage == 4 && gV[i].env < lo) { lo = gV[i].env; vi = i; }
+		if (lo < 2) best = 0;
+	}
 	if (best == 0xffffffff) for (int i = 0; i < NVS; i++) if (gV[i].age < best) { best = gV[i].age; vi = i; }
 	freeVoice(&gV[vi]);
 	return &gV[vi];
@@ -1397,7 +1403,7 @@ static void voiceOn(int note, float vel) {
 	SVoice* v = newVoice(); initVoice(v);
 	v->note = note; v->freq = mtof((float)note); v->cur = v->freq; v->vel = vel; v->rnd = (rand() % 2001) / 1000.0f - 1; v->mch = gMidiChNow;
 	v->subOnly = note == gSubBassNote ? gPadBassSub : 0; v->part = gVoicePart;
-	lfoTrig();
+	if (gVoicePart != 2) lfoTrig();   // (a bass-line 16th restarted the LFOs under the chords: a jump in their filter / level every step - the clicks)
 	startVoice(v - gV);
 	if (v->active && !v->subOnly) addTaps(v);
 }
