@@ -1526,7 +1526,6 @@ static int chipRate(float f);
 static u32 csSend(float l, float r);
 static int gOutMode;
 static inline u32 csMono(u32 v) { if (gOutMode != 3) return v; u32 a = ((v & 0xFFFF) + (v >> 16)) / 2; return a | (a << 16); }   // OUTPUT MONO: the second chip's left / right averaged (the DSP does its own)
-static float gBendIn = 0;   // the bend the main loop last read (the audio tick runs voicesUpdate with it)
 static void voicesUpdate(float dt, float bend) {
 	for (int i = 0; i < 2; i++) {
 		LFO* l = &gLfo[i];
@@ -2627,7 +2626,6 @@ static void audioTick(void* data) {
 	lastId = id; init = 1;
 #endif
 	float dt = nf * 160.0f / DSPRATE + gClockDebt; gClockDebt = 0;
-	float dtTick = dt > 0.1f ? 0.1f : dt;
 	float late = 0; if (dt > 8.0f) dt = 8.0f; if (dt > 0.25f) { late = dt - 0.05f; gClockSkips++; }   // a long stall: the clock still catches up (it stays with the tape and MIDI), the notes it missed don't burst out
 	gInAudioTick = 1;
 	if (tqDrain(1)) gTqUi = 1;   // FM-1 LINK's timed notes, on time to the tick
@@ -2650,7 +2648,6 @@ static void audioTick(void* data) {
 	}
 	gClkSilent = 0;
 	if (gUnitClients) unitPublish();
-	if (gAudioOK) voicesUpdate(dtTick, gBendIn);   // the voices move on the audio clock: LFOs, envelopes, glide, bends, sweeps every 5 ms
 	mixRampTick(); csRampTick();
 	gInAudioTick = 0; gTickNoMips = 0;
 	if (mipsOk) LightLock_Unlock(&gMipsLock);
@@ -3210,9 +3207,9 @@ static void b_fmknock(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos 
 	ENV2(0.0f, 0, 0.14f, 0.0f, 0.1f); MOD(2, SRC_ENV2, DST_AWARP, 0.6f); ENV1(0.002f, 0, 0.35f, 0.4f, 0.12f); p->voiceMode = 1; p->eqLow = 1.5f; }
 static void b_diode(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = SQR; OA.oct = -1; DRV(6, 0.55f); p->voiceMode = 1; ENV1(0.002f, 0, 0.35f, 0.6f, 0.1f);
 	ENV2(0.0f, 0, 0.18f, 0.1f, 0.1f); OUTF(OF_L12, 0.3f, 0.5f, 0.3f, 0.45f); }
-static void b_sp12(SPatch* p) { p->master = 1.5f; OA.table = T_BASIC; OA.pos = TRI; OA.oct = -1; p->subLevel = 0.5f; p->voiceMode = 1; ENV1(0.002f, 0, 0.55f, 0.0f, 0.2f);
+static void b_sp12(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.pos = TRI; OA.oct = -1; p->subLevel = 0.5f; p->voiceMode = 1; ENV1(0.002f, 0, 0.55f, 0.0f, 0.2f);
 	p->lofiBits = 2; p->lofiRate = 0.35f; OUTF(OF_L24, 0.38f, 0.1f, 0.2f, 0); p->eqLow = 2; }
-static void b_cumbia(SPatch* p) { p->master = 1.5f; OA.table = T_BASIC; OA.pos = 0.15f; OA.oct = -1; p->subShape = 5; p->subLevel = 0.4f; ENV1(0.003f, 0, 0.35f, 0.25f, 0.15f);
+static void b_cumbia(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.pos = 0.15f; OA.oct = -1; p->subShape = 5; p->subLevel = 0.4f; ENV1(0.003f, 0, 0.35f, 0.25f, 0.15f);
 	p->voiceMode = 1; OUTF(OF_CREAMY, 0.4f, 0.2f, 0.1f, 0.15f); MFX(FX_CHORUS, 0.5f, 0.3f, 0.2f); }
 static void b_dnb(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; OA.oct = -1; OA.uni = 3; OA.detune = 16; OB.on = 1; OB.table = T_BASIC; OB.pos = SQR; OB.oct = -1; OB.level = 0.4f;
 	p->voiceMode = 1; ENV1(0.003f, 0, 0.4f, 0.9f, 0.12f); OUTF(OF_NOTCH, 0.45f, 0.5f, 0.3f, 0); MOD(2, SRC_CHAOSX, DST_OFCUT, 0.25f); p->ott = 0.45f; }
@@ -3317,7 +3314,7 @@ static void u_marimba(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.pos
 static void u_kalimba(SPatch* p) { p->master = 0.7f; OA.table = T_DIGITAL; OA.pos = 0.45f; ENV1(0.001f, 0, 0.8f, 0.0f, 0.5f); MOD(2, SRC_RAND, DST_PITCH, 0.003f); REVB(0.25f, RV_PLATE); DLYS(0.15f, S8, DL_PING); }
 static void u_digiharp(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.pos = 0.6f; OA.warp = W_FM; OA.warpAmt = 0.3f; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1;
 	ENV2(0.0f, 0, 0.3f, 0, 0.2f); MOD(2, SRC_ENV2, DST_AWARP, 0.5f); ENV1(0.001f, 0, 0.7f, 0.0f, 0.4f); DLYS(0.25f, S8D, DL_PING); REVB(0.2f, RV_HALL); }
-static void u_stab99(SPatch* p) { p->master = 0.69f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 3; OA.detune = 14; p->chord = 1; ENV1(0.001f, 0, 0.25f, 0.0f, 0.15f); ENV2(0.0f, 0, 0.15f, 0, 0.1f);
+static void u_stab99(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 3; OA.detune = 14; p->chord = 1; ENV1(0.001f, 0, 0.25f, 0.0f, 0.15f); ENV2(0.0f, 0, 0.15f, 0, 0.1f);
 	OUTF(OF_L12, 0.35f, 0.4f, 0.3f, 0.5f); REVB(0.2f, RV_ROOM); DLYS(0.15f, S8D, DL_DIGI); }
 static void u_koto(SPatch* p) { p->master = 0.6f; OA.table = T_SYNC; OA.pos = 0.3f; ENV2(0.0f, 0, 0.25f, 0, 0.1f); MOD(2, SRC_ENV2, DST_APOS, 0.5f); ENV1(0.001f, 0, 1.2f, 0.0f, 0.5f); REVB(0.3f, RV_SPRING); }
 static void u_chipplink(SPatch* p) { p->master = 0.6f; OA.table = T_PWM; OA.pos = 0.2f; OA.warp = W_QUANT; OA.warpAmt = 0.6f; CHIP(0.3f, 0, 1); ENV1(0.001f, 0, 0.25f, 0.0f, 0.1f); DLYS(0.2f, S16, DL_LOFI); }
@@ -3331,7 +3328,7 @@ static void u_raintin(SPatch* p) { p->master = 0.7f; OA.table = T_DIGITAL; OA.po
 static void c_organstab(SPatch* p) { p->master = 0.5f; OA.table = T_HARMONIX; OA.pos = 0.4f; ENV1(0.002f, 0, 0.25f, 0.3f, 0.12f); p->pump = 0.5f; REVB(0.15f, RV_ROOM); }
 static void c_neosoul(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = 0.1f; OB.on = 1; OB.table = T_HARMONIX; OB.oct = 1; OB.level = 0.15f; ENV1(0.01f, 0, 1.2f, 0.4f, 0.6f);
 	MFX(FX_CHORUS, 0.3f, 0.5f, 0.4f); DLYS(0.15f, S4D, DL_TAPE); p->dlyWow = 0.5f; REVB(0.2f, RV_ROOM); }
-static void c_dub(SPatch* p) { p->master = 0.66f; OA.table = T_BASIC; OA.pos = 0.5f; ENV1(0.002f, 0, 0.18f, 0.0f, 0.1f); OUTF(OF_BP, 0.5f, 0.3f, 0.2f, 0); DLYS(0.4f, S8D, DL_DUB); REVB(0.25f, RV_SPRING); }
+static void c_dub(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = 0.5f; ENV1(0.002f, 0, 0.18f, 0.0f, 0.1f); OUTF(OF_BP, 0.5f, 0.3f, 0.2f, 0); DLYS(0.4f, S8D, DL_DUB); REVB(0.25f, RV_SPRING); }
 static void c_techno(SPatch* p) { p->master = 0.5f; OA.table = T_DIGITAL; OA.pos = 0.6f; ENV1(0.001f, 0, 0.2f, 0.0f, 0.15f); OUTF(OF_COMBP, 0.4f, 0.45f, 0.2f, 0); REVB(0.3f, RV_HALL); DLYS(0.2f, S8D, DL_DIGI); }
 static void c_strum(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = 0.55f; OA.uni = 2; OA.detune = 6; ENV1(0.002f, 0, 1.4f, 0.0f, 0.8f); ENV2(0.0f, 0, 0.4f, 0, 0.3f);
 	MOD(0, SRC_ENV2, DST_CUTOFF, 0.35f); p->cutoff = 0.4f; MFX(FX_CHORUS, 0.4f, 0.3f, 0.25f); REVB(0.2f, RV_HALL); }
@@ -3354,7 +3351,7 @@ static void c_gallop(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos 
 	OUTF(OF_L12, 0.6f, 0.2f, 0.2f, 0.15f); REVB(0.15f, RV_ROOM); }
 static void c_omni(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = TRI; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1; OB.level = 0.3f; ENV1(0.002f, 0, 2.0f, 0.0f, 1.5f);
 	MFX(FX_CHORUS, 0.5f, 0.6f, 0.45f); REVB(0.35f, RV_HALL); }
-static void c_pump(SPatch* p) { p->master = 1.02f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 2; OA.detune = 18; OA.width = 0.8f; ENV1(0.01f, 0, 0.6f, 0.8f, 0.3f); OUTF(OF_L12, 0.5f, 0.2f, 0, 0); p->pump = 0.7f;   // (2 layers: 4 a note ran the 2DS out of voices on chords)
+static void c_pump(SPatch* p) { p->master = 0.77f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 2; OA.detune = 18; OA.width = 0.8f; ENV1(0.01f, 0, 0.6f, 0.8f, 0.3f); OUTF(OF_L12, 0.5f, 0.2f, 0, 0); p->pump = 0.7f;   // (2 layers: 4 a note ran the 2DS out of voices on chords)
 	MFX(FX_CHORUS, 0.3f, 0.4f, 0.3f); REVB(0.2f, RV_HALL); }
 static void c_gospel(SPatch* p) { p->master = 0.5f; OA.table = T_HARMONIX; OA.pos = 0.6f; OB.on = 1; OB.table = T_HARMONIX; OB.pos = 0.3f; OB.oct = -1; OB.level = 0.3f; ENV1(0.01f, 0, 0.1f, 1.0f, 0.15f);
 	MFX(FX_CHORUS, 5.0f, 0.5f, 0.5f); DRV(1, 0.3f); REVB(0.25f, RV_HALL); }
@@ -3411,7 +3408,7 @@ static void h_arcade(SPatch* p) { p->master = 0.55f; OA.level = 0.3f; OA.table =
 // the key's pitch. Drum g sits at WT POS 8g/63 .. (8g+7)/63: the patch rests at its tail, the envelope pulls it to the attack.
 #define DRUMSYN(g) do { OA.table = T_DRUMS; OA.pos = (8 * (g) + 7) / 63.0f; MOD(2, SRC_ENV2, DST_APOS, -7 / 63.0f); } while (0)
 static void q_tblkick(SPatch* p) { p->master = 0.7f; DRUMSYN(0); OA.oct = -1; ENV1(0.001f, 0, 0.45f, 0, 0.2f); ENV2(0, 0, 0.18f, 0, 0.1f); MOD(3, SRC_ENV2, DST_PITCH, 0.6f); p->cutoff = 0.7f; }
-static void q_tblsnare(SPatch* p) { p->master = 0.82f; DRUMSYN(1); ENV1(0.001f, 0, 0.25f, 0, 0.12f); ENV2(0, 0, 0.12f, 0, 0.08f); MOD(3, SRC_ENV2, DST_PITCH, 0.2f); REVB(0.18f, RV_ROOM); }
+static void q_tblsnare(SPatch* p) { p->master = 0.6f; DRUMSYN(1); ENV1(0.001f, 0, 0.25f, 0, 0.12f); ENV2(0, 0, 0.12f, 0, 0.08f); MOD(3, SRC_ENV2, DST_PITCH, 0.2f); REVB(0.18f, RV_ROOM); }
 static void q_tbltoms(SPatch* p) { p->master = 0.65f; DRUMSYN(2); ENV1(0.001f, 0, 0.5f, 0, 0.25f); ENV2(0, 0, 0.25f, 0, 0.1f); MOD(3, SRC_ENV2, DST_PITCH, 0.35f); REVB(0.2f, RV_PLATE); }
 static void q_tblmetal(SPatch* p) { p->master = 0.5f; DRUMSYN(6); OB.on = 1; OB.table = T_DRUMS; OB.pos = 39 / 63.0f; OB.semi = 7; OB.level = 0.5f; ENV1(0.001f, 0, 0.6f, 0, 0.3f); ENV2(0, 0, 0.3f, 0, 0.1f); DLYS(0.25f, S8D, DL_PING); }
 static void q_tblzap(SPatch* p) { p->master = 0.55f; DRUMSYN(7); ENV1(0.001f, 0, 0.3f, 0, 0.15f); ENV2(0, 0, 0.2f, 0, 0.1f); MOD(3, SRC_ENV2, DST_PITCH, 1.0f); p->lofiBits = 2; }
@@ -3650,7 +3647,7 @@ static void p_spinpad(SPatch* p) { p->master = 0.6f; OA.table = T_HARMONIX; OA.u
 static void h_gb4(SPatch* p) { p->master = 0.6f; OA.table = T_PWM; OA.pos = 0.5f; p->lofiBits = 5; p->qGrit = 2; CHIP(0.5f, 0, -1); ENV1(0.002f, 0, 0.3f, 0.7f, 0.1f); p->voiceMode = 2; }   // both crushers at once
 // ---- v12 patches: a beat, a loop setup, CHIP > FX or the XY pad mode come with the sound
 // GROOVE
-static void g_boombap(SPatch* p) { p->master = 1.08f; OA.table = T_BASIC; OA.pos = TRI; OA.oct = -1; p->subLevel = 0.45f; p->voiceMode = 1; p->glide = 0.03f;
+static void g_boombap(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.pos = TRI; OA.oct = -1; p->subLevel = 0.45f; p->voiceMode = 1; p->glide = 0.03f;
 	ENV1(0.004f, 0, 0.5f, 0.3f, 0.15f); OUTF(OF_L24, 0.32f, 0.2f, 0.25f, 0); p->eqLow = 1.5f;
 	p->hasBeat = 1; p->drums = 1; p->kit = 1; p->kickPat = 6; p->snarePat = 1; p->hatPat = 5; p->swing = 0.14f; p->bpm = 90; }   // 909: BOOM BAP, BACKBEAT, SHUFFLE
 static void g_trap(SPatch* p) { p->master = 0.7f; OA.table = T_BASIC; OA.pos = SINE; OA.oct = -1; p->voiceMode = 2; p->glide = 0.08f; p->lofiBits = 2; p->lofiRate = 0.35f;
@@ -13640,8 +13637,7 @@ int main(void) {
 			cx = gMirBend; gMidiBend = 0;
 		}
 		BREATHE();
-		gBendIn = cx + gMidiBend;
-		if (gAudioOK && !gAudioClock) voicesUpdate(dt, gBendIn);   // (with the audio clock: every 5 ms in the audio tick, not once a screen frame - a slow screen stepped LFOs, envelopes, glides and sweeps)
+		if (gAudioOK) voicesUpdate(dt, cx + gMidiBend);
 		// effect-bus self check: if notes are sending but the DSP never delivers aux audio, fall back to taps
 		if (gBusOK && !gBusFail && !gBusSeen && (masterActive() || busSend(0) > 0 || busSend(1) > 0)) {
 			int any = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho) any = 1;
