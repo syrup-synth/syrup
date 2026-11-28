@@ -1265,7 +1265,9 @@ static void startVoice(int vi) {
 		}
 	}
 	int subSoft = 0; if (!v->isEcho && gAudioClock) for (int i = 0; i < nr; i++) if (roles[i] == R_SUB && bks[i] == BK_DSP) subSoft = 1;   // a SUB on the DSP is rendered (smooth level); the oscillators go with it, so the two start in step (in phase, as before)
-	if (subSoft || (!v->isEcho && gSoftMode && gAudioClock && gQScream < 0.001f)) {   // SOFT LAYERS: the oscillator layers ride one channel (SCREAM wants a filter per layer: hardware)
+	int hwRoom = 0;   // an Old 2DS / 3DS: the layers go to the DSP's own channels while there's room (the DSP mixes them for free; mixing them in software on the main core is what made chords choppy there)
+	if (gOldHW && !subSoft) { int no_ = 0; for (int i = 0; i < nr; i++) if (roles[i] <= R_B2) no_++; hwRoom = freeCount(BK_DSP) >= no_ + 4; }
+	if (subSoft || (!v->isEcho && gSoftMode && gAudioClock && gQScream < 0.001f && !hwRoom)) {   // SOFT LAYERS: the oscillator layers ride one channel (SCREAM wants a filter per layer: hardware)
 		int no = 0; for (int i = 0; i < nr; i++) if (roles[i] <= R_B2) no++;
 		if (no >= 2 || (subSoft && no >= 1)) {
 			int k = 0, r2[R_COUNT], b2[R_COUNT], n2 = 0; gSoftPendN = 0;
@@ -5146,7 +5148,8 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		if (gGpuHung) { snprintf(s, sizeof(s), "GPU HUNG AFTER %d FRAMES", gGpuFrames); text(6, 210, s, 1, WARN); }
 		else {
 			int pct = cpuPct();
-			if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, gOldHW ? "CORE 1, LITE" : (!gFxCore2 || (gCore2Lim && gCore2Lim < 50)) ? "CORE 1" : (!(gFxThread || gFxOnWorker) || gFxC2Fail) ? "FELL BACK" : gFxThread ? "CORE 3" : "ON CORE 2");
+			if (gWorker && gOldHW) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %d%%  SOFT %d%%  LITE", pct, (int)(gFxTicks / (268111856.0f * 160 / DSPRATE) * 100), (int)(gSoftCpu * 100));   // an Old 2DS: what the main core spends on sound
+			else if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, gOldHW ? "CORE 1, LITE" : (!gFxCore2 || (gCore2Lim && gCore2Lim < 50)) ? "CORE 1" : (!(gFxThread || gFxOnWorker) || gFxC2Fail) ? "FELL BACK" : gFxThread ? "CORE 3" : "ON CORE 2");
 			if (gWorker) text(6, 210, s, 1, DIM);   // (no second core: nothing to say, everything runs on the first)
 		}
 		}
