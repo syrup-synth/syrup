@@ -57,6 +57,10 @@ static void SCRIPT(int fr) {
 	if (fr == 256) { sm0 = gStickMode; HD = KEY_SELECT; }
 	if (fr == 257) HD = KEY_SELECT | KEY_DUP;   // SELECT + UP while it plays: the circle pad's next mode
 	if (fr == 258) HD = KEY_SELECT;
-	if (fr == 260) { if (gStickMode != (sm0 + 1) % NSM) fail("SELECT + UP should step the circle pad mode (%d -> %d)", sm0, gStickMode); if (gSeqMode != 1) fail("SELECT + UP shouldn't stop playback"); done = 1; }
+	if (fr == 260) { if (gStickMode != (sm0 + 1) % NSM) fail("SELECT + UP should step the circle pad mode (%d -> %d)", sm0, gStickMode); if (gSeqMode != 1) fail("SELECT + UP shouldn't stop playback"); { int st, ix; if (findPreset("SYRUP PAD", &st, &ix)) presetLoad(st, ix); } gXyMode = 8; }
+	static float mc0;
+	if (fr == 262) { if (!gMorphOk) fail("PATCH MORPH: corners should be captured"); mc0 = gCutoff; gMorphX = 1; gMorphY = 1; }
+	if (fr == 264) { float want = gMorph[3].cutoff; if (fabsf(gCutoff - want) > 0.01f) fail("PATCH MORPH: top right = the fourth patch (cutoff %.3f, want %.3f)", gCutoff, want); if (gV[0].active == 0 && 0) ; gMorphX = 0; gMorphY = 0; }
+	if (fr == 266) { if (fabsf(gCutoff - mc0) > 0.01f) fail("PATCH MORPH: bottom left = the patch again (%.3f, %.3f)", gCutoff, mc0); gXyMode = 0; done = 1; }
 }
-int main(void) { TEST_DEVICE = 1; mkdir("sd", 0777); mkdir("shots", 0777); remove("sd/settings.bin"); loadFont(); FRMAX = 262; app_main(); if (!done) fail("didn't run"); printf("device: the DEVICE controls\n"); return gFails ? 1 : 0; }
+int main(void) { TEST_DEVICE = 1; mkdir("sd", 0777); mkdir("shots", 0777); remove("sd/settings.bin"); loadFont(); FRMAX = 270; app_main(); if (!done) fail("didn't run"); printf("device: the DEVICE controls\n"); return gFails ? 1 : 0; }

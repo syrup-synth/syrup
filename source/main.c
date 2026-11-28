@@ -4179,8 +4179,8 @@ static Param P_FILT[] = {
 	PF("ENV4 SUS", &gEnv4.s, 0, 1, 0.01f, "%", 0), PF("ENV4 REL", &gEnv4.r, 0.01f, 5, 0.02f, "S", 0),
 	PEND};
 static int gXyMode = 0;
-#define NXY 8
-static const char* XY_NAMES[NXY] = {"WT + CUTOFF", "MACRO 1+2", "MACRO 3+4", "CUTOFF + RES", "WT A + WT B", "FX MIX + COLOR", "PERF", "PAGE"};   // PAGE: two values of the page you're on
+#define NXY 9
+static const char* XY_NAMES[NXY] = {"WT + CUTOFF", "MACRO 1+2", "MACRO 3+4", "CUTOFF + RES", "WT A + WT B", "FX MIX + COLOR", "PERF", "PAGE", "PATCH MORPH"};   // PAGE: two values of the page you're on
 static int gStickMode = 4;   // (SM_XY) the circle pad: by default it drives the XY pad (whatever XY PAD moves; a patch that routes STICK keeps bend + STICK)
 enum { SM_DATA, SM_BEND, SM_PAGE, SM_MACROS, SM_XY, SM_XYS, NSM };
 static const char* STICK_NAMES[NSM] = {"DATA", "BEND + MOD", "PAGE", "MACROS", "XY PAD", "XY SPRING"};   // XY PAD: pushes the XY dot, it stays; XY SPRING: the dot follows the pad and goes back when you let go
@@ -5290,6 +5290,7 @@ static void drawHelp(void) {   // L / R flip the slides; any other button closes
 		 "  TABS ......... OSC FILT MOD VOICE FX SEQ PADS",
 		 "                 (TAP AGAIN FOR THE NEXT VIEW)",
 		 "  XY PAD ....... WHAT IT MOVES IS WRITTEN ON IT",
+		 "                 MORPH: BLENDS 4 PATCHES",
 		 "  ROW .......... OCT- OCT+ SCALE LATCH CHORD",
 		 "                 PLAY PANIC",
 		 "  KEYS ......... PLAY; LOWER ON A KEY = LOUDER",
@@ -6977,6 +6978,61 @@ static int gVisOnB = 0, gHwOnB = 0, gDrumOnB = 0, gDrumClrArm = 0; static u64 gD
 static void drawDrumGrid(void);
 static int gDrumInSeq = 0;   // the SEQ page's DRUMS view is up
 static int xyShown(void) { return !gPads && !gModOn && !gGridOn && !gAddEdit && !gShapeOn && !gChainOn && !gVisOnB && !gHwOnB && !gDrumOnB && !gPnl && !gMixOn; }
+// PATCH MORPH (XY PAD mode 8): the pad blends four patches - this one at the bottom left, the next three in its list at the
+// other corners. Every level, time, rate and position is mixed by where the dot is; the switches (tables, filter type, LFO
+// shapes, the mod matrix) come from the nearest corner. Notes keep playing through it. Browse to another patch: new corners
+static SPatch gMorph[4]; static int gMorphOk = 0, gMorphSt = -1, gMorphPre = -1, gMorphNear = -1; static float gMorphX = 0, gMorphY = 0, gMorphLx = -1, gMorphLy = -1;
+static int gTblDue;
+static void morphCapture(void) {
+	patchCapture(&gMorph[0]);
+	int st = gStyleCur, n = presetCount(st);
+	for (int k = 1; k < 4; k++) {
+		int i = n > 0 ? (gPresetCur + k) % n : 0; SPatch* q = &gMorph[k];
+		if (st == NSTYLES - 1) { if (n > 0 && gUser[i].magic == PATCH_MAGIC) *q = gUser[i]; else *q = gMorph[0]; continue; }
+		if (n <= 0) { *q = gMorph[0]; continue; }
+		patchInit(q); PRESETS[st][i].fn(q); q->master *= PGAIN[st][i]; snprintf(q->name, sizeof(q->name), "%s", PRESETS[st][i].name);
+	}
+	gMorphSt = gStyleCur; gMorphPre = gPresetCur; gMorphOk = 1; gMorphX = gMorphY = 0; gMorphLx = gMorphLy = -1; gMorphNear = 0;
+}
+static void morphTick(void) {   // main loop, under the voice lock
+	if (gXyMode != 8) { gMorphOk = 0; return; }
+	if (!gMorphOk || gStyleCur != gMorphSt || gPresetCur != gMorphPre) morphCapture();
+	float x = gMorphX < 0 ? 0 : gMorphX > 1 ? 1 : gMorphX, y = gMorphY < 0 ? 0 : gMorphY > 1 ? 1 : gMorphY;
+	if (fabsf(x - gMorphLx) < 0.002f && fabsf(y - gMorphLy) < 0.002f) return;
+	int first = gMorphLx < 0; gMorphLx = x; gMorphLy = y;
+	if (first && x == 0 && y == 0) return;   // at the first corner: the patch as it is
+	float w[4] = {(1 - x) * (1 - y), x * (1 - y), (1 - x) * y, x * y};
+	const SPatch* P[4] = {&gMorph[0], &gMorph[1], &gMorph[2], &gMorph[3]};
+	#define MIX(f) (w[0] * P[0]->f + w[1] * P[1]->f + w[2] * P[2]->f + w[3] * P[3]->f)
+	int nr = 0; for (int k = 1; k < 4; k++) if (w[k] > w[nr]) nr = k;
+	const SPatch* N = P[nr];
+	if (nr != gMorphNear) {   // the switches: from the corner the dot is nearest
+		gMorphNear = nr;
+		for (int o = 0; o < 2; o++) { Osc* s_ = &gOsc[o]; const OscP* q = &N->osc[o];
+			s_->on = q->on; s_->warp = q->warp; s_->oct = q->oct; s_->semi = q->semi;
+			if (q->table != s_->table) { s_->table = q->table; gTblDue |= 1 << o; } }
+		gFiltType = N->filtType;
+		for (int i = 0; i < 2; i++) { gLfo[i].shape = N->lfoShape[i] < NLFOSH ? N->lfoShape[i] : 0; gLfo[i].sync = N->lfoSync[i] < NSYNC ? N->lfoSync[i] : 0; gLfo[i].mode = N->lfoMode[i]; }
+		for (int i = 0; i < 4; i++) { gMod[i] = N->mod[i]; gMod[i + 4] = N->mod2[i]; }
+		for (int i = 0; i < 8; i++) gModCurve[i] = N->modCurve[i] & 3;
+		gForceBuild = 3;
+	}
+	for (int o = 0; o < 2; o++) { Osc* s_ = &gOsc[o];
+		s_->pos = MIX(osc[o].pos); s_->warpAmt = MIX(osc[o].warpAmt); s_->level = MIX(osc[o].level); s_->fine = MIX(osc[o].fine);
+		s_->detune = MIX(osc[o].detune); s_->blend = MIX(osc[o].blend); s_->width = MIX(osc[o].width); }
+	gSubLevel = MIX(subLevel); gNoiseLevel = MIX(noiseLevel); gCutoff = MIX(cutoff); gRes = MIX(res); gKeytrack = MIX(keytrack);
+	#define MIXENV(E, f) E.a = MIX(f.a); E.h = MIX(f.h); E.d = MIX(f.d); E.s = MIX(f.s); E.r = MIX(f.r)
+	MIXENV(gEnv1, env1); MIXENV(gEnv2, env2); MIXENV(gEnv3, env3); MIXENV(gEnv4, env4);
+	for (int i = 0; i < 2; i++) gLfo[i].rate = MIX(lfoRate[i]);
+	for (int i = 0; i < 4; i++) gMacro[i] = MIX(macro[i]);
+	gGlide = MIX(glide); gChorus = MIX(chorus); gRevSize = MIX(revSize); gRevDamp = MIX(revDamp); gFxMix = MIX(fxMix); gDriveAmt = MIX(driveAmt); gMaster = MIX(master);
+	gModRate = MIX(modRate); gModDepth = MIX(modDepth); gModMix = MIX(modMix); gFxColor = MIX(fxColor); gEqLow = MIX(eqLow); gEqMid = MIX(eqMid); gEqHigh = MIX(eqHigh);
+	gDlyMix = MIX(dlyMix); gDlyWow = MIX(dlyWow); gDlySat = MIX(dlySat); gRevMix = MIX(revMix); gOtt = MIX(ott); gPump = MIX(pump); gLofiRate = MIX(lofiRate);
+	gOfCut = MIX(ofCut); gOfRes = MIX(ofRes); gOfDrive = MIX(ofDrive); gOfEnv = MIX(ofEnv);
+	#undef MIXENV
+	#undef MIX
+	gEdited = 1;
+}
 // XY PAD modes: what the two axes move, and the matrix destination that can push them (for the ghost)
 static void xyAxes(float** xp, float** yp, int* xd, int* yd) {
 	switch (gXyMode) {
@@ -6985,6 +7041,7 @@ static void xyAxes(float** xp, float** yp, int* xd, int* yd) {
 	case 3: *xp = &gCutoff; *yp = &gRes; *xd = DST_CUTOFF; *yd = DST_RES; break;
 	case 4: *xp = &gOsc[0].pos; *yp = &gOsc[1].pos; *xd = DST_APOS; *yd = DST_BPOS; break;
 	case 5: *xp = &gFxMix; *yp = &gFxColor; *xd = DST_FXMIX; *yd = DST_FXP; break;
+	case 8: *xp = &gMorphX; *yp = &gMorphY; *xd = *yd = -1; break;   // PATCH MORPH
 	case 7:   // PAGE: OSC A / B = WT POS + WARP, SUB+NOISE = their levels, VOICE+FX = DRIVE + FX MIX, DRUMS = LEVEL + SWING
 		switch (gCurPage) {
 		case 1: case 2: { int o = gCurPage - 1; *xp = &gOsc[o].pos; *yp = &gOsc[o].warpAmt; *xd = o ? DST_BPOS : DST_APOS; *yd = o ? DST_BWARP : DST_AWARP; return; }
@@ -6996,8 +7053,8 @@ static void xyAxes(float** xp, float** yp, int* xd, int* yd) {
 	default: *xp = &gOsc[0].pos; *yp = &gCutoff; *xd = DST_APOS; *yd = DST_CUTOFF; break;
 	}
 }
-static const char* XY_XL[NXY] = {"WT POS >", "MACRO 1 >", "MACRO 3 >", "CUTOFF >", "A WT POS >", "FX MIX >", "MACRO 1 >", ""};
-static const char* XY_YL[NXY] = {"^ CUTOFF", "^ MACRO 2", "^ MACRO 4", "^ RES", "^ B WT POS", "^ FX COLOR", "^ MACRO 2", ""};
+static const char* XY_XL[NXY] = {"WT POS >", "MACRO 1 >", "MACRO 3 >", "CUTOFF >", "A WT POS >", "FX MIX >", "MACRO 1 >", "", ""};
+static const char* XY_YL[NXY] = {"^ CUTOFF", "^ MACRO 2", "^ MACRO 4", "^ RES", "^ B WT POS", "^ FX COLOR", "^ MACRO 2", "", ""};
 static void xyRange(const float* v, float* mn, float* mx, const char** nm) {   // the value's range (and name) from its param
 	*mn = 0; *mx = 1; if (nm) *nm = "";
 	for (int pg = 0; pg < NPAGES; pg++) for (const Param* p = PAGES[pg]; p->name; p++) if (p->p == v && p->type == PT_F) { *mn = p->mn; *mx = p->mx; if (nm) *nm = p->name; return; }
@@ -7096,8 +7153,12 @@ static void drawXyPad(void) {
 	char xl[24], yl[24];
 	if (gXyMode == 7) { float a, b; const char* nx; const char* ny; xyRange(xp, &a, &b, &nx); xyRange(yp, &a, &b, &ny); snprintf(xl, sizeof(xl), "%s >", nx); snprintf(yl, sizeof(yl), "^ %s", ny); }
 	else { snprintf(xl, sizeof(xl), "%s", XY_XL[gXyMode]); snprintf(yl, sizeof(yl), "%s", XY_YL[gXyMode]); }
-	text(8, top + 4, xl, 1, DIM); text(312 - (int)strlen(yl) * 8, top + h - 12, yl, 1, DIM);
-	static const char* M[NXY] = {"WT/CUT", "M1/M2", "M3/M4", "CUT/RES", "A/B", "FX", "PERF", "PAGE"};
+	if (gXyMode == 8 && gMorphOk) {   // PATCH MORPH: the four patches at their corners
+		char c[4][14]; for (int k = 0; k < 4; k++) snprintf(c[k], sizeof(c[k]), "%.13s", gMorph[k].name);
+		text(8, top + h - 12, c[0], 1, DIM); text(312 - (int)strlen(c[1]) * 8, top + h - 12, c[1], 1, DIM);
+		text(8, top + 4, c[2], 1, DIM); text(312 - XYB_W - 4 - (int)strlen(c[3]) * 8, top + 4, c[3], 1, DIM);
+	} else { text(8, top + 4, xl, 1, DIM); text(312 - (int)strlen(yl) * 8, top + h - 12, yl, 1, DIM); }
+	static const char* M[NXY] = {"WT/CUT", "M1/M2", "M3/M4", "CUT/RES", "A/B", "FX", "PERF", "PAGE", "MORPH"};
 	char t[12]; snprintf(t, sizeof(t), "%s>", M[gXyMode]);
 	rect(316 - XYB_W, top + 1, XYB_W - 1, 12, RGB3(TH->tab)); text(316 - XYB_W / 2 - (int)strlen(t) * 4, top + 3, t, 1, RGB3(TH->tabTxt));
 }
@@ -13558,6 +13619,7 @@ int main(void) {
 		if (gGridOn && prevTouch && !touching && gridTouch(gLastTX, gLastTY, 0, 1)) { botDirty = 1; topDirty = 1; }
 		if (gSlDrag >= 0 && prevTouch && !touching && xyTouch(gLastTX, gLastTY, 0, 1)) botDirty = 1;
 		if (xyGlideTick(dt) && xyShown()) botDirty = 1;
+		{ int was = gMorphOk; morphTick(); if (gMorphOk && !was && xyShown()) botDirty = 1; }   // PATCH MORPH
 		if (!touching) {   // FOLLOW: the piano roll and the drum grid turn the page with the playhead
 			if (gRollFollow && gSeqPlaying && gSeqPos >= 0 && gSeqPos / ROLL_VIEW != gRollPg) { gRollPg = gSeqPos / ROLL_VIEW; if (gGridOn) botDirty = 1; }
 			if (gDgFollow) { int pp = drumPlayPage(); if (pp >= 0 && pp != gDgPg) { gDgPg = pp; if (gDrumOnB || gDrumInSeq) botDirty = 1; } }
