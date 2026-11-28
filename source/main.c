@@ -7069,6 +7069,10 @@ static float xyEff(float v, int d) {   // where modulation has the value right n
 static int xyModulated(void) { float* a; float* b; int xd, yd; xyAxes(&a, &b, &xd, &yd); return fabsf(xyEff(*a, xd) - *a) > 0.01f || fabsf(xyEff(*b, yd) - *b) > 0.01f; }
 static int xyTop(void) { return gXyMode == 6 ? XY_Y + 28 : XY_Y; }
 #define XYB_W 64
+static int gXyMenu = 0;   // the XY PAD mode dropdown is open
+#define XYM_X 38
+#define XYM_W 139
+#define XYM_RH 17
 // PERF sliders: four values that matter most while playing, as bars you can slide
 static float* const SL_P[4] = {&gCutoff, &gRes, &gOsc[0].pos, &gFxMix};
 static const char* SL_N[4] = {"CUTOFF", "RES", "WT POS", "FX MIX"};
@@ -7160,7 +7164,17 @@ static void drawXyPad(void) {
 	} else { text(8, top + 4, xl, 1, DIM); text(312 - (int)strlen(yl) * 8, top + h - 12, yl, 1, DIM); }
 	static const char* M[NXY] = {"WT/CUT", "M1/M2", "M3/M4", "CUT/RES", "A/B", "FX", "PERF", "PAGE", "MORPH"};
 	char t[12]; snprintf(t, sizeof(t), "%s>", M[gXyMode]);
-	rect(316 - XYB_W, top + 1, XYB_W - 1, 12, RGB3(TH->tab)); text(316 - XYB_W / 2 - (int)strlen(t) * 4, top + 3, t, 1, RGB3(TH->tabTxt));
+	rect(316 - XYB_W, top + 1, XYB_W - 1, 12, RGB3(gXyMenu ? TH->keyOn : TH->tab)); text(316 - XYB_W / 2 - (int)strlen(t) * 4, top + 3, t, 1, RGB3(gXyMenu ? TH->ink : TH->tabTxt));
+	if (gXyMenu) {   // the dropdown: every mode, two columns, tap one
+		int y0 = XY_Y + 2, nr = (NXY + 1) / 2;
+		rect(XYM_X - 2, y0 - 2, XYM_W * 2 + 4, nr * XYM_RH + 3, RGB3(TH->txt));
+		if (NXY & 1) rect(XYM_X + XYM_W, y0 + (nr - 1) * XYM_RH, XYM_W - 1, XYM_RH - 1, RGB3(TH->bg));
+		for (int i = 0; i < NXY; i++) {
+			int x = XYM_X + (i / nr) * XYM_W, y = y0 + (i % nr) * XYM_RH, on = i == gXyMode;
+			rect(x, y, XYM_W - 1, XYM_RH - 1, RGB3(on ? TH->keyOn : TH->tab));
+			const u8* c = on ? TH->ink : TH->tabTxt; text(x + 4, y + 5, XY_NAMES[i], 1, c[0], c[1], c[2]);
+		}
+	}
 }
 static int xyGlideTick(float dt) {   // 1 = moved (redraw)
 	if (gXyTx < 0) return 0;
@@ -7177,7 +7191,13 @@ static int xyTouch(int x, int y, int press, int release) {   // 1 = redraw
 	if (release) { int r = gSlDrag >= 0; gSlDrag = -1; skip = 0; return r; }
 	if (press) skip = y >= XY_Y + XY_H - 8;
 	if (skip) return 0;
-	if (press && x >= 316 - XYB_W && y >= top && y < top + 14) { gXyMode = (gXyMode + 1) % NXY; gSlDrag = -1; say(XY_NAMES[gXyMode]); return 1; }
+	if (gXyMenu) {   // the dropdown takes the touch: a mode picks it, anywhere else closes it
+		if (!press) return 0;
+		int nr = (NXY + 1) / 2, c = x - XYM_X, r = y - (XY_Y + 2); gXyMenu = 0; gSlDrag = -1; skip = 1;
+		if (c >= 0 && c < XYM_W * 2 && r >= 0 && r < nr * XYM_RH) { int i = (c / XYM_W) * nr + r / XYM_RH; if (i < NXY) { gXyMode = i; say(XY_NAMES[i]); } }
+		return 1;
+	}
+	if (press && x >= 316 - XYB_W && y >= top && y < top + 14) { gXyMenu = 1; gSlDrag = -1; skip = 1; return 1; }
 	if (press && gXyMode == 6 && y < top) { gSlDrag = (x >= 160) + ((y - XY_Y) / 13 ? 2 : 0); }
 	if (gSlDrag >= 0) { float v = (x - (4 + (gSlDrag & 1) * 158 + 54)) / 96.0f; *SL_P[gSlDrag] = v < 0 ? 0 : v > 1 ? 1 : v; gEdited = 1; return 1; }
 	if (y < top) return 0;

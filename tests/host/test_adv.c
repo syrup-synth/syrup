@@ -10,8 +10,8 @@ static void SCRIPT(int fr) {
 	if (fr == 5) { gXyGlide = 0; if (!xyShown()) fail("VOICE should show the XY pad"); gXyMode = 0; }
 	// XY mode button steps the mode; PERF: sliders over the pad; CUTOFF + RES mode moves both
 	if (fr == 8) { TOUCH = 1; TX = 300; TY = XY_Y + 6; }
-	if (fr == 10) { if (gXyMode != 1) fail("XY mode button should step the XY PAD mode (%d)", gXyMode); gXyMode = 6; }
-	if (fr == 12) cut0 = gCutoff;
+	if (fr == 10) { shotBot("shots/xymenu.ppm"); if (!gXyMenu) fail("XY mode button should open the mode dropdown"); TOUCH = 1; TX = XYM_X + 10; TY = XY_Y + 2 + XYM_RH + 5; }   // MACRO 1+2
+	if (fr == 12) { if (gXyMode != 1 || gXyMenu) fail("XY dropdown: tapping a mode should pick it and close (%d)", gXyMode); gXyMode = 6; cut0 = gCutoff; }
 	if (fr >= 14 && fr < 18) { TOUCH = 1; TX = 4 + 54 + 90; TY = XY_Y + 6; }   // CUTOFF slider near the top
 	if (fr == 20 && gCutoff < 0.85f) fail("PERF: CUTOFF slider should follow the finger (%.2f)", gCutoff);
 	if (fr >= 22 && fr < 25) { TOUCH = 1; TX = 250; TY = xyTop() + 20; }   // pad: macros 1 + 2
