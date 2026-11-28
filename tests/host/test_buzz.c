@@ -24,6 +24,7 @@ int main(int c, char** v) {
 	if (c > 2) writeWav(v[2], 0, ON);
 	if (r < 300) fail("buzz test: no sound (rms %.1f)", r);
 	if (worst > -40) fail("buzz test: frame-rate tone at %.1f dB (limit -40; the old buzz was far above this)", worst);
-	if (USE_CORE2 && !ON_CORE2) fail("core-2 FX fell back to core 1 in the simulator");
+	if (USE_CORE2 && !ON_CORE2 && FAKE_NEW3DS) fail("core-2 FX fell back to core 1 in the simulator");   // (an Old 3DS / 2DS keeps the effects on its own core, light: gOldHW)
+	if (USE_CORE2 && !FAKE_NEW3DS && (!gOldHW || !gFxLite)) fail("Old 3DS / 2DS: the effects should stay local and light");
 	return gFails ? 1 : 0;
 }

@@ -895,6 +895,7 @@ static s16* gSoftBuf[NCH][SOFT_NB]; static ndspWaveBuf gSoftWB[NCH][SOFT_NB];
 static LightLock gSoftLock; static int gSoftInit = 0;
 static int gSoftMode = 1;   // LAYERS: 0 = HARDWARE (a channel per layer), 1 = SOFT
 static const char* SOFTMODE_NAMES[2] = {"HARDWARE", "SOFT"};
+static volatile int gFxLite = 0; static float gFxCpuS = 0; static int gOldHW = 0;   // FX LITE: the chain ran over budget (an Old 2DS / 3DS with a big reverb + chorus): half the reverb's combs and allpasses, HYPER with 2 taps. It stays on for the session (the console is the slow one)
 static volatile float gSoftCpu = 0;   // share of a DSP frame the render took (smoothed)
 static float gSCurve[SOFT_FADE + 1];
 static void softInit(void) {
@@ -1270,7 +1271,7 @@ static void startVoice(int vi) {
 			int k = 0, r2[R_COUNT], b2[R_COUNT], n2 = 0; gSoftPendN = 0;
 			// CPU budget (an Old 2DS / 3DS runs out on chords of fat patches): the busier the render, the fewer layers a new note gets -
 			// first each oscillator's first layer, then the rest. (It used to fall back to a channel per layer: notes got stolen and clicked.)
-			int cap = gSoftCpu > 0.65f ? 1 : gSoftCpu > 0.5f ? 2 : gSoftCpu > 0.38f ? 3 : SOFT_L;
+			int cap = gSoftCpu > 0.6f ? 1 : gSoftCpu > 0.4f ? 2 : (gSoftCpu > 0.28f || gOldHW) ? 3 : SOFT_L;   // (an Old 2DS: 3 at most)
 			for (int pass = 0; pass < 2; pass++) for (int i = 0; i < nr; i++) if (roles[i] <= R_B2) {
 				int first = roles[i] == R_A0 || roles[i] == R_B0;
 				if ((pass == 0) == first && k < SOFT_L && k < cap) gSoftPend[k++] = roles[i];
@@ -1925,7 +1926,7 @@ static void fxCore2Start(void) {
 	memset(gFxOut, 0, sizeof(gFxOut));
 	bool n3 = false; APT_CheckNew3DS(&n3);
 	if (n3) gFxThread = threadCreate(fxMain, NULL, 0x4000, 0x18, 2, false);   // New 3DS / New 2DS: a core of its own
-	if (!gFxThread) gFxOnWorker = 1;   // otherwise share core 1's one thread with the wavetable worker
+	if (!gFxThread) { gFxOnWorker = 0; gOldHW = 1; gFxLite = 1; }   // Old 3DS / 2DS: the effects stay on this core, light. (Sharing core 1 with the wavetable worker missed frames while tables rebuilt - 5 ms of silence each: the glitching on chords and pads)
 }
 static void fxCore2Stop(void) {
 	if (gFxOnWorker) { gFxOnWorker = 0; gFxPending = 0; gFxBusy = 0; return; }
@@ -2004,7 +2005,6 @@ static float gDlyMix = 0, gDlyWow = 0.25f, gDlySat = 0.3f, gRevMix = 0, gOtt = 0
 static volatile float gFxModVal = 0;   // FX COLOR modulation from the mod matrix (set by the main loop)
 static float gBeatPh = 0;              // quarter notes, advanced by the audio clock (sidechain pump)
 static volatile u32 gFxTicks = 0;      // CPU time of the chain per frame (for the meter)
-static volatile int gFxLite = 0; static float gFxCpuS = 0;   // FX LITE: the chain ran over budget (an Old 2DS / 3DS with a big reverb + chorus): half the reverb's combs and allpasses, HYPER with 2 taps. It stays on for the session (the console is the slow one)
 static const char* MODFX_NAMES[8] = {"OFF", "CHORUS", "FLANGER", "PHASER", "COMB", "FORMANT", "HYPER", "DIMENSION"};
 #define NDSYNC 9
 static const char* DSYNC_NAMES[NDSYNC] = {"FREE", "1/16", "1/8", "1/8 DOT", "1/4", "1/4 DOT", "1/2", "1/2 DOT", "1 BAR"};
@@ -3324,14 +3324,12 @@ static void u_raintin(SPatch* p) { p->master = 0.7f; OA.table = T_DIGITAL; OA.po
 
 // ---- CHORD (made for PADS and the strum strip)
 static void c_organstab(SPatch* p) { p->master = 0.5f; OA.table = T_HARMONIX; OA.pos = 0.4f; ENV1(0.002f, 0, 0.25f, 0.3f, 0.12f); p->pump = 0.5f; REVB(0.15f, RV_ROOM); }
-static void c_neosoul(SPatch* p) { p->master = 0.36f; OA.table = T_BASIC; OA.pos = SINE; OA.warp = W_FM; OA.warpAmt = 0.1f; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1; OB.level = 0.1f;   // a soft electric piano for 9th chords (was a pulse + tape wow: the wobble put the chord out of tune)
-	ENV2(0.0f, 0, 0.5f, 0.05f, 0.4f); MOD(2, SRC_ENV2, DST_AWARP, 0.22f); MOD(3, SRC_VEL, DST_AWARP, 0.15f); LFO(0, LS_SINE, 0, 3.5f); MOD2(0, SRC_LFO1, DST_PAN, 0.25f);
-	ENV1(0.004f, 0, 1.6f, 0.35f, 0.6f); MFX(FX_CHORUS, 0.15f, 0.35f, 0.25f); DLYS(0.1f, S4D, DL_PING); REVB(0.28f, RV_ROOM); }
+static void c_neosoul(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = 0.1f; OB.on = 1; OB.table = T_HARMONIX; OB.oct = 1; OB.level = 0.15f; ENV1(0.01f, 0, 1.2f, 0.4f, 0.6f);
+	MFX(FX_CHORUS, 0.3f, 0.5f, 0.4f); DLYS(0.15f, S4D, DL_TAPE); p->dlyWow = 0.5f; REVB(0.2f, RV_ROOM); }
 static void c_dub(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = 0.5f; ENV1(0.002f, 0, 0.18f, 0.0f, 0.1f); OUTF(OF_BP, 0.5f, 0.3f, 0.2f, 0); DLYS(0.4f, S8D, DL_DUB); REVB(0.25f, RV_SPRING); }
 static void c_techno(SPatch* p) { p->master = 0.5f; OA.table = T_DIGITAL; OA.pos = 0.6f; ENV1(0.001f, 0, 0.2f, 0.0f, 0.15f); OUTF(OF_COMBP, 0.4f, 0.45f, 0.2f, 0); REVB(0.3f, RV_HALL); DLYS(0.2f, S8D, DL_DIGI); }
-static void c_strum(SPatch* p) { p->master = 0.8f; OA.table = T_PLUCK; OA.pos = 1.0f; OA.uni = 2; OA.detune = 4; OA.width = 0.5f;   // a plucked string (KARPLUS) for strummed chords (was a filtered saw: it sounded like a synth, not a guitar)
-	ENV2(0.0f, 0, 0.8f, 0.0f, 0.4f); MOD(2, SRC_ENV2, DST_APOS, -1.0f); MOD(3, SRC_VEL, DST_APOS, -0.2f); ENV1(0.001f, 0, 2.0f, 0.0f, 0.4f);
-	OUTF(OF_LP, 0.7f, 0.1f, 0, 0); MFX(FX_CHORUS, 0.25f, 0.25f, 0.2f); REVB(0.22f, RV_ROOM); }
+static void c_strum(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = 0.55f; OA.uni = 2; OA.detune = 6; ENV1(0.002f, 0, 1.4f, 0.0f, 0.8f); ENV2(0.0f, 0, 0.4f, 0, 0.3f);
+	MOD(0, SRC_ENV2, DST_CUTOFF, 0.35f); p->cutoff = 0.4f; MFX(FX_CHORUS, 0.4f, 0.3f, 0.25f); REVB(0.2f, RV_HALL); }
 static void c_omni(SPatch* p);
 // ARP STRUM showcases: hold one key, the CHORD arp strums it
 static void c_strum8(SPatch* p) { c_strum(p); p->chord = 2; ARP(6, 1, 1, 0.85f); p->arpStrum = 22; p->arpStrumDir = 2; }   // MAJ7, eighths, down-up like a rhythm guitar
@@ -3353,9 +3351,8 @@ static void c_omni(SPatch* p) { p->master = 0.6f; OA.table = T_BASIC; OA.pos = T
 	MFX(FX_CHORUS, 0.5f, 0.6f, 0.45f); REVB(0.35f, RV_HALL); }
 static void c_pump(SPatch* p) { p->master = 0.77f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 2; OA.detune = 18; OA.width = 0.8f; ENV1(0.01f, 0, 0.6f, 0.8f, 0.3f); OUTF(OF_L12, 0.5f, 0.2f, 0, 0); p->pump = 0.7f;   // (2 layers: 4 a note ran the 2DS out of voices on chords)
 	MFX(FX_CHORUS, 0.3f, 0.4f, 0.3f); REVB(0.2f, RV_HALL); }
-static void c_gospel(SPatch* p) { p->master = 0.45f; OA.table = T_HARMONIX; OA.pos = 0.25f; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1; OB.level = 0.35f; ENV1(0.005f, 0, 0.1f, 1.0f, 0.08f);   // drawbars: a few harmonics + the 4' sine on B
-	ENV2(0.0f, 0, 0.18f, 0.0f, 0.1f); MOD(2, SRC_ENV2, DST_BLEV, 0.4f);   // percussion: B speaks first, then settles
-	MFX(FX_CHORUS, 5.5f, 0.3f, 0.45f); DRV(1, 0.3f); REVB(0.2f, RV_ROOM); }   // (the old one: two saw-like layers and a heavy wobble, not an organ)
+static void c_gospel(SPatch* p) { p->master = 0.5f; OA.table = T_HARMONIX; OA.pos = 0.6f; OB.on = 1; OB.table = T_HARMONIX; OB.pos = 0.3f; OB.oct = -1; OB.level = 0.3f; ENV1(0.01f, 0, 0.1f, 1.0f, 0.15f);
+	MFX(FX_CHORUS, 5.0f, 0.5f, 0.5f); DRV(1, 0.3f); REVB(0.25f, RV_HALL); }
 static void c_shoegaze(SPatch* p) { p->master = 0.5f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 2; OA.detune = 34; OA.width = 1; DRV(14, 0.5f); ENV1(0.15f, 0, 1.0f, 0.9f, 1.1f);   // (2 layers + a 1.1 s tail: 4 layers of driven saws on chords ran the 2DS out)
 	MFX(FX_HYPER, 0.3f, 0.7f, 0.5f); REVB(0.5f, RV_HALL); p->shimmer = 1; OUTF(OF_LP, 0.6f, 0.1f, 0, 0); p->xyMode = 5; }
 
@@ -5149,7 +5146,7 @@ static void drawTop(int page, int sel, int oct, int latch) {
 		if (gGpuHung) { snprintf(s, sizeof(s), "GPU HUNG AFTER %d FRAMES", gGpuFrames); text(6, 210, s, 1, WARN); }
 		else {
 			int pct = cpuPct();
-			if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, (!gFxCore2 || (gCore2Lim && gCore2Lim < 50)) ? "CORE 1" : (!(gFxThread || gFxOnWorker) || gFxC2Fail) ? "FELL BACK" : gFxThread ? "CORE 3" : "ON CORE 2");
+			if (gWorker) snprintf(s, sizeof(s), "CORE 2 %d%%  FX %s", pct, gOldHW ? "CORE 1, LITE" : (!gFxCore2 || (gCore2Lim && gCore2Lim < 50)) ? "CORE 1" : (!(gFxThread || gFxOnWorker) || gFxC2Fail) ? "FELL BACK" : gFxThread ? "CORE 3" : "ON CORE 2");
 			if (gWorker) text(6, 210, s, 1, DIM);   // (no second core: nothing to say, everything runs on the first)
 		}
 		}
