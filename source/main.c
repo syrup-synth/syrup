@@ -3210,12 +3210,13 @@ static void l_gulfsync(SPatch* p) { p->master = 0.55f; OA.table = T_SYNC; OA.war
 	p->voiceMode = 2; p->glide = 0.04f; ENV1(0.004f, 0, 0.3f, 0.85f, 0.25f); DLYS(0.22f, S8D, DL_TAPE); REVB(0.15f, RV_PLATE); }
 static void l_talkbox(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA.uni = 2; OA.detune = 8; MFX(FX_FORMANT, 0.1f, 0.5f, 0.5f); p->voiceMode = 2; p->glide = 0.05f;
 	MOD(2, SRC_STICK, DST_FXP, 0.8f); ENV1(0.01f, 0, 0.3f, 0.9f, 0.2f); REVB(0.12f, RV_ROOM); }
-static void l_bigunison(SPatch* p) { p->master = 0.45f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 5; OA.detune = 26; OA.width = 1; ENV1(0.01f, 0, 0.4f, 0.85f, 0.4f);   // 5 voices a note: 4 notes before stealing
+static void l_bigunison(SPatch* p) { p->master = 0.55f; OA.table = T_BASIC; OA.pos = SAW; OA.uni = 3; OA.detune = 30; OA.width = 1; ENV1(0.01f, 0, 0.4f, 0.85f, 0.4f);   // 3 layers a note (5 stole notes on chords on the 2DS)
 	MFX(FX_HYPER, 0.4f, 0.5f, 0.35f); DLYS(0.2f, S8D, DL_PING); REVB(0.2f, RV_HALL); OUTF(OF_LP, 0.75f, 0.1f, 0, 0); p->xyMode = 3; }
-// BUSY BOY: the Korg cumbia lead (M1 / N364 / X5D), matched to a recording: its own waveform (the BUSY BOY table, the 3rd
+// SCOOP LEAD (was BUSY BOY): the Korg cumbia lead (M1 / N364 / X5D), matched to a recording: its own waveform (the BUSY BOY table, the 3rd
 // harmonic on top), two slightly detuned layers (the original's harmonics drift in phase), and a pitch scoop of about 25
 // cents up into every note over ~60 ms. No glide and no vibrato: the original has neither.
-static void l_busyboy(SPatch* p) { p->master = 0.65f; OA.table = wtFile("BUSY BOY", T_PWM); OA.pos = 5.0f / 7.0f; OA.uni = 2; OA.detune = 4; OA.width = 0.4f;
+static void l_busyboy(SPatch* p) { p->master = 0.65f; OA.table = wtFile("BUSY BOY", -1); OA.pos = 5.0f / 7.0f; OA.uni = 2; OA.detune = 4; OA.width = 0.4f;
+	if (OA.table < 0) { OA.table = T_BASIC; OA.pos = SQR; OB.on = 1; OB.table = T_BASIC; OB.pos = SINE; OB.oct = 1; OB.semi = 7; OB.level = 0.45f; }   // (no pack: a square + a sine on the 3rd harmonic)
 	p->voiceMode = 0; p->glide = 0; ENV1(0.004f, 0, 0.3f, 1.0f, 0.08f); ENV2(0.0f, 0, 0.06f, 0.0f, 0.05f); MOD(2, SRC_ENV2, DST_PITCH, -0.021f);
 	p->cutoff = 1.0f; p->res = 0; REVB(0.12f, RV_ROOM); }
 static void l_whistle(SPatch* p) { p->master = 0.6f; OA.table = T_PWM; OA.pos = 0.4f; p->voiceMode = 2; p->glide = 0.07f; LFO(0, LS_SINE, 0, 5.5f); MOD(2, SRC_LFO1, DST_PITCH, 0.012f);
@@ -3414,7 +3415,7 @@ static void h_squarechoir(SPatch* p) { p->master = 0.6f; OA.table = T_VOWELS; OA
 
 // ---- performance leads: core control is the circle pad and touch; sensors only ever add a little on top
 static void l_flute(SPatch* p) { p->master = 0.8f; OA.table = T_BASIC; OA.pos = 0.15f; p->noiseLevel = 0.08f; p->cutoff = 0.5f; LFO(0, LS_SINE, 0, 5.0f); MOD(2, SRC_LFO1, DST_PITCH, 0.006f);
-	MOD(3, SRC_MIC, DST_CUTOFF, 0.2f); p->voiceMode = 2; p->glide = 0.05f; ENV1(0.06f, 0, 0.2f, 0.9f, 0.2f); REVB(0.25f, RV_PLATE); }   // breath into the mic brightens it (optional)
+	p->voiceMode = 2; p->glide = 0.05f; ENV1(0.06f, 0, 0.2f, 0.9f, 0.2f); REVB(0.25f, RV_PLATE); }   // (no MIC > CUTOFF: taps on the touch screen reached the mic and clicked the cutoff)
 static void l_theremin(SPatch* p) { p->master = 0.75f; OA.table = T_BASIC; OA.pos = SINE; OB.on = 1; OB.table = T_BASIC; OB.pos = TRI; OB.level = 0.2f; p->voiceMode = 2; p->glide = 0.25f;
 	NOSTICK; MOD(1, SRC_STICK, DST_PITCH, 0.25f); LFO(0, LS_SINE, 0, 6.0f); MOD(2, SRC_LFO1, DST_PITCH, 0.01f); MOD(3, SRC_TWIST, DST_PITCH, 0.05f); ENV1(0.08f, 0, 0.2f, 1.0f, 0.5f); REVB(0.3f, RV_HALL); }
 static void l_xysculpt(SPatch* p) { p->master = 0.6f; OA.table = T_SYNC; OA.uni = 3; OA.detune = 10; NOSTICK; MOD(1, SRC_XY, DST_OFCUT, 0.6f); MOD(2, SRC_STICK, DST_AWARP, 0.7f); OA.warp = W_BENDPM;
@@ -3750,7 +3751,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"SP-12 DROP", b_sp12}, {"CUMBIA BAJO", b_cumbia}, {"ROLLING NOTCH", b_dnb}, {"STICK GROWL", b_tiltgrowl}, {"UPRIGHT THUMB", b_upright}, {"CHIP BASS", b_chip}, {"DARK 808", b_dark808}, {"303 SCREAM", b_303scream}},
 	{{"GULF SYNC", l_gulfsync}, {"TALK BOX", l_talkbox}, {"WIDE UNISON", l_bigunison}, {"WHISTLE", l_whistle}, {"FOLD SCREAM", l_scream}, {"LADDER TAPE", l_moogtape},
 	 {"CHIP HERO", l_chiphero}, {"G-FUNK SINE", l_glidesine}, {"RINGER", l_ringer}, {"ACID SCREAM", l_acidscream}, {"PAD BENDER", l_bender},
-	 {"FLUTE", l_flute}, {"STICK THEREMIN", l_theremin}, {"XY SCULPT", l_xysculpt}, {"BUSY BOY", l_busyboy}},
+	 {"FLUTE", l_flute}, {"STICK THEREMIN", l_theremin}, {"XY SCULPT", l_xysculpt}, {"SCOOP LEAD", l_busyboy}},
 	{{"WARM FELT", p_felt}, {"GLASS HOUR", p_glass}, {"VOWEL DUSK", p_vowel}, {"COMB WEATHER", p_combweather}, {"CLOUD BANK", p_cloudbank}, {"STRINGS 77", p_strings77},
 	 {"DRAWN SWELL", p_drawnswell}, {"MOTION HAZE", p_haze}, {"SWELL BACKWARD", p_reverse}, {"DEEP SONAR", p_sonar}, {"GRAIN CHOIR", p_hallchoir}, {"GATE 85", p_gate85}, {"SPIN PAD", p_spinpad}, {"XY MORPH", p_xymorph}, {"CINE SWELL", p_cineswell},
 	 {"TABLE TIDE", p_tabletide}, {"GRAIN HALO", p_grainhalo}, {"PRISM SHIFT", p_prismshift}, {"SHIMMER DRIFT", p_shimmerdrift}},
@@ -3766,7 +3767,7 @@ static const PresetDef PRESETS[NSTYLES - 1][MAXPRE] = {
 	 {"OCTAVE BOUNCE", q_octbounce}, {"DRAWN STEPS", q_drawnsteps}, {"GRAIN RUN", q_grainrun}, {"POLYRHYTHM", q_polyrhythm},
 	 {"TABLE KICK", q_tblkick}, {"TABLE SNARE", q_tblsnare}, {"TABLE TOMS", q_tbltoms}, {"TABLE METAL", q_tblmetal}, {"TABLE ZAP", q_tblzap}},
 	{{"TIDE POOL", x_tidepool}, {"FROZEN TABLE", x_frozen}, {"NET STATIC", x_netstatic}, {"TAPE ROOM", x_taperoom}, {"BROWN SEA", x_sea}, {"GEIGER", x_geiger},
-	 {"DRONE 60", x_drone60}, {"SHIMMER CLOUD", x_shimmercloud}, {"SONAR PING", x_sonarping}, {"STORM FRONT", x_storm}, {"FREEZE GLASS", x_freezeglass}, {"JET COMB", x_jetcomb}, {"WIRE DRONE", x_wiredrone}, {"KITCHEN SINK2", m_sink2}, {"TENSION DRONE", x_tensiondrone}},
+	 {"DRONE 60", x_drone60}, {"SHIMMER CLOUD", x_shimmercloud}, {"SONAR PING", x_sonarping}, {"THUNDERHEAD", x_storm}, {"FREEZE GLASS", x_freezeglass}, {"JET COMB", x_jetcomb}, {"WIRE DRONE", x_wiredrone}, {"KITCHEN SINK2", m_sink2}, {"TENSION DRONE", x_tensiondrone}},
 	{{"GB WAVE", h_gbwave}, {"NES PULSE", h_nes}, {"C64 PWM", h_c64}, {"ARCADE ARP", h_arcade}, {"POWER UP", h_powerup}, {"LASER", h_laser},
 	 {"8-BIT BASS", h_bass8}, {"BIT ORGAN", h_bitorgan}, {"SQUARE CHOIR", h_squarechoir}, {"4-BIT GB", h_gb4}, {"CHIP SWEEP", h_chipsweep}, {"FILTER DRUMS", h_filtdrums}, {"OTT CHIP BASS", h_ottbass},
 	 {"C64 ARP", h_arpc64}, {"NES ARP", h_arpnes}, {"GB ARP", h_arpgb}, {"DEMO ARP", h_arpdemo}, {"POWER ARP", h_arppower}, {"TRACKER ARP", h_arptracker}},
@@ -4146,11 +4147,11 @@ enum { SM_DATA, SM_BEND, SM_PAGE, SM_MACROS };
 static const char* STICK_NAMES[4] = {"DATA", "BEND + MOD", "PAGE", "MACROS"};
 // CONTROLS: DEVICE = the 3DS as a hardware synth. The bottom screen is the panel, the top screen the unit's display:
 // the top's left half only shows (the picture, what's loaded), its right half is what you change: the D-pad works that list
-// (up / down pick, left / right change). X PLAY / STOP, Y REC, A CHORD, B LATCH. The circle pad is the XY pad (whatever its
-// mode moves; on the piano roll / drum grid it's the edit cursor, A places, B takes away), the C-stick turns the knob that's picked, L / R step through the tabs (the top's tabs sit right over the bottom's).
+// (up / down pick, left / right change). X PLAY / STOP, Y REC, A CHORD, B LATCH. The circle pad does what HARDWARE > CIRCLE PAD
+// says, as in CLASSIC (bend + STICK by default; on the piano roll / drum grid it's the edit cursor, A places, B takes away), the C-stick turns the knob that's picked, L / R step through the tabs (the top's tabs sit right over the bottom's).
 // CLASSIC: the D-pad edits, X / Y change page, A chord, B latch.
 static int gCtl = 0; static const char* CTL_NAMES[2] = {"DEVICE", "CLASSIC"};
-static int stickModeNow(void) { return !gCtl && gStickMode == SM_DATA ? SM_PAGE : gStickMode; }   // DEVICE: the circle pad is the picture's, not DATA
+static int stickModeNow(void) { return gStickMode; }   // the circle pad: HARDWARE > CIRCLE PAD, in both layouts
 static float gStickDX = 0;   // DATA: circle pad left / right, edits the selected value
 static Param P_MOD[] = {
 	PF("MACRO 1", &gMacro[0], 0, 1, 0.02f, "%", 0), PF("MACRO 2", &gMacro[1], 0, 1, 0.02f, "%", 0), PF("MACRO 3", &gMacro[2], 0, 1, 0.02f, "%", 0), PF("MACRO 4", &gMacro[3], 0, 1, 0.02f, "%", 0),
@@ -4882,7 +4883,7 @@ static const char* paramHelp(const char* n) {
 		{"FREEZE", "HOLD THE REVERB FOREVER"}, {"OTT", "MULTIBAND UP+DOWN COMPRESSION"}, {"PUMP", "SIDECHAIN DUCKING ON THE BEAT"},
 		{"PUMP RATE", "HOW OFTEN IT PUMPS; KICK = SIDECHAIN FROM THE DRUMS"}, {"LOFI BITS", "BIT CRUSH THE WHOLE SOUND"}, {"LOFI RATE", "SAMPLE RATE REDUCTION"},
 		{"DRUMS", "DRUM PART ON / OFF: IT PLAYS WITH PLAY"}, {"KIT", "DRUM SOUNDS"}, {"ACCENT", "HOW MUCH LOUDER ACC STEPS HIT"}, {"KICK", "KICK PATTERN"}, {"SNARE", "SNARE PATTERN"}, {"HAT", "HI-HAT PATTERN"},
-		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"MUTATE", "HOW MUCH THE MUT BUTTON CHANGES THE BEAT"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"SYNTH CH IN", "MIDI CHANNEL THE KEYS PLAY FROM (ALL = ANY FREE ONE)"}, {"SYNTH CH OUT", "KEYS, SEQUENCER, ARP NOTES SENT ON THIS CHANNEL"}, {"CHORD CH IN", "MIDI CHANNEL THAT PLAYS THE CHORD PART"}, {"CHORD CH OUT", "THE CHORD PART'S NOTES SENT ON THIS CHANNEL"}, {"BASS CH IN", "MIDI CHANNEL THAT PLAYS THE BASS PART"}, {"BASS CH OUT", "BASS LINE NOTES SENT ON THIS CHANNEL"}, {"DRUMS CH IN", "GENERAL MIDI DRUM NOTES (36 KICK, 38 SNARE...)"}, {"DRUMS CH OUT", "EVERY DRUM HIT SENT AS A GM NOTE"}, {"CONTROLS", "DEVICE: PAD=XY DPAD=LIST X PLAY Y REC A CHD B LATCH"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"CLICK", "METRONOME: COUNT-IN / RECORDING / ALWAYS (NEVER ON TAPE)"}, {"CLICK LEVEL", "METRONOME VOLUME"}, {"SEQ RATE", "A STEP IS A 16TH, A 32ND OR AN 8TH"}, {"REC QUANT", "16TH, 8TH, 32ND, OR OFF (KEEPS YOUR TIMING)"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"LAYERS", "SOFT: A NOTE'S UNISON ON ONE CHANNEL (MANY MORE NOTES)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
+		{"DRUM LEVEL", "DRUM VOLUME"}, {"KICK TUNE", "KICK PITCH, LIVE, IN SEMITONES"}, {"SNARE TUNE", "SNARE, CLAP, RIM PITCH"}, {"HAT TUNE", "HATS + CRASH PITCH"}, {"KICK CHANCE", "HOW OFTEN EACH KICK PLAYS"}, {"SNARE CHANCE", "HOW OFTEN EACH SNARE PLAYS"}, {"HAT CHANCE", "HOW OFTEN EACH HAT PLAYS: LOWER = LOOSER"}, {"MUTE", "SILENCE ROWS, KEEP THE PATTERN"}, {"DRUM POLY", "REPEATED HITS RING OVER EACH OTHER"}, {"MUTATE", "HOW MUCH THE MUT BUTTON CHANGES THE BEAT"}, {"GET WAVETABLES", "PRESS > TO DOWNLOAD THE SYRUP PACK (WI-FI)"}, {"UPDATE SYRUP", "PRESS > TO INSTALL THE NEWEST BUILD (WI-FI)"}, {"NET > TABLE", "PRESS >: RANDOM WEB PAGE BYTES -> WAVETABLE"}, {"GRAINS", "LOOP: PLAY THE SOURCE  KEYS: GRAIN OSCILLATOR"}, {"GRAIN SOURCE", "LOOP RECORDING, OSC A TABLE OR LAST SECOND OF MIC"}, {"CAM WAVE", "LIVE CAMERA TABLE, OR RECORD AN 8 S VIDEO TABLE"}, {"WT SCAN", "SWEEPS OSC A WT POS (1X = TABLE IN 8 S)"}, {"WI-FI MIDI", "PHONE REMOTE, NETWORK MIDI 5004, FM-1 LINK 5008"}, {"NET BUFFER", "FM-1 LINK TIMING: HIGHER = STEADIER, LOWER = SOONER"}, {"SYNTH CH IN", "MIDI CHANNEL THE KEYS PLAY FROM (ALL = ANY FREE ONE)"}, {"SYNTH CH OUT", "KEYS, SEQUENCER, ARP NOTES SENT ON THIS CHANNEL"}, {"CHORD CH IN", "MIDI CHANNEL THAT PLAYS THE CHORD PART"}, {"CHORD CH OUT", "THE CHORD PART'S NOTES SENT ON THIS CHANNEL"}, {"BASS CH IN", "MIDI CHANNEL THAT PLAYS THE BASS PART"}, {"BASS CH OUT", "BASS LINE NOTES SENT ON THIS CHANNEL"}, {"DRUMS CH IN", "GENERAL MIDI DRUM NOTES (36 KICK, 38 SNARE...)"}, {"DRUMS CH OUT", "EVERY DRUM HIT SENT AS A GM NOTE"}, {"CONTROLS", "DEVICE: DPAD=LIST X PLAY Y REC A CHORD B LATCH"}, {"BEAT LIGHT", "SCREENS FLASH ON ARP / SEQ STEPS"}, {"TAPE ALIGN", "MS: + PULLS NEW TAKES EARLIER, - LATER"}, {"CLICK", "METRONOME: COUNT-IN / RECORDING / ALWAYS (NEVER ON TAPE)"}, {"CLICK LEVEL", "METRONOME VOLUME"}, {"SEQ RATE", "A STEP IS A 16TH, A 32ND OR AN 8TH"}, {"REC QUANT", "16TH, 8TH, 32ND, OR OFF (KEEPS YOUR TIMING)"}, {"FX ON CORE 2", "MASTER EFFECTS ON THE SECOND CPU CORE (+5 MS)"}, {"LAYERS", "SOFT: A NOTE'S UNISON ON ONE CHANNEL (MANY MORE NOTES)"}, {"DSP GRIT", "DSP INTERPOLATION: LINEAR = DULLER, RAW = ALIASED CRUNCH"}, {"FILTER SCREAM", "LOW PASS RINGS BY ITSELF (NEEDS MASTER FX ON)"}, {"MIX OVERDRIVE", "DSP CHANNELS PAST FULL, CLIPPED AT 16 BITS"}, {"ECHO PITCH", "CHIP ECHO REPLAYED FASTER / SLOWER: REPEATS SHIFT"}, {"EUCLID STEPS", "LENGTH OF EUCLID ROWS: UNDER 16 = POLYRHYTHM"}, {"KICK HITS", "HITS SPREAD EVENLY - SETS KICK TO EUCLID"}, {"KICK ROTATE", "SHIFTS THE KICK EUCLID PATTERN"}, {"SNARE HITS", "HITS SPREAD EVENLY - SETS SNARE TO EUCLID"}, {"SNARE ROTATE", "SHIFTS THE SNARE EUCLID PATTERN"}, {"HAT HITS", "HITS SPREAD EVENLY - SETS HAT TO EUCLID"}, {"HAT ROTATE", "SHIFTS THE HAT EUCLID PATTERN"},
 		{"TRAILS", "VISUALIZER LEAVES TRAILS"}, {"PARTICLES", "SPARKS ON NOTES AND BEATS"}, {"SCANLINES", "CRT SCANLINES ON THE TOP SCREEN"},
 	};
 	for (unsigned i = 0; i < sizeof(H) / sizeof(H[0]); i++) if (!strcmp(H[i][0], n)) return H[i][1];
@@ -5218,7 +5219,7 @@ static void drawHelp(void) {   // L / R flip the slides; any other button closes
 		 "  Y ............ REC",
 		 "  A ............ CHORD   (ROLL / DRUMS: PLACE)",
 		 "  B ............ LATCH   (ROLL / DRUMS: DELETE)",
-		 "  CIRCLE PAD ... XY PAD  (ROLL / DRUMS: CURSOR)",
+		 "  CIRCLE PAD ... BEND + STICK (ROLL/DRUMS: CURSOR)",
 		 "  C-STICK ...... TURNS THE PICKED SLIDER",
 		 "  L / R ........ PATCH, OSC ... MIX, VIS, HW",
 		 "  START ........ MENU (SAVE, SESSIONS, QUIT)",
@@ -12853,7 +12854,7 @@ int main(void) {
 			else { gspWaitForVBlank(); continue; }
 		}
 		if (kDown & KEY_START) { gStartMenu = !gStartMenu; gStartSel = 0; topDirty = topAgain = 1; kDown &= ~KEY_START; }
-		gStickMenu = (gStartMenu || gThemePick || gLs || (page == 0 && gCtl && stickModeNow() == SM_PAGE)) && !(kHeld & KEY_SELECT);
+		gStickMenu = (gStartMenu || gThemePick || gLs || (page == 0 && stickModeNow() == SM_PAGE)) && !(kHeld & KEY_SELECT);
 		if (gStickMenu) kDown |= stickDpad(); else stickDpad();
 		if (gThemePick && !gStartMenu && (kDown & (KEY_DUP | KEY_DDOWN | KEY_DLEFT | KEY_DRIGHT | KEY_A))) {   // the picker by buttons / circle pad: try them live, A keeps it
 			int d = (kDown & KEY_DRIGHT) ? 1 : (kDown & KEY_DLEFT) ? -1 : (kDown & KEY_DDOWN) ? TP_COLS : (kDown & KEY_DUP) ? -TP_COLS : 0;
@@ -13336,19 +13337,7 @@ int main(void) {
 		int smNow = stickModeNow();
 		if (smNow == SM_DATA || gStepEd >= 0) { gStickDX = fabsf(sx) > 0.12f ? sx : 0; cx = 0; }   // DATA (and the step editor, any mode): X edits the selected value (no bend), Y stays the STICK source
 		else gStickDX = 0;
-		if (!gCtl && gStepEd < 0) {   // DEVICE: the circle pad is the XY pad - it pushes the dot (held over, it keeps going; let go, it stays)
-			float* xp; float* yp; int xd, yd; xyAxes(&xp, &yp, &xd, &yd);
-			float dx_ = fabsf(sx) > 0.12f ? sx : 0, dy_ = fabsf(sy) > 0.12f ? sy : 0, rx = dx_ * fabsf(dx_) * 0.9f * dt, ry = dy_ * fabsf(dy_) * 0.9f * dt;   // (a dead zone: the pad settling back doesn't creep the dot)
-			if (xp && yp && (rx != 0 || ry != 0)) {
-				gXyTx = gXyTy = -1;
-				float nx = xyNorm(xp) + rx, ny = xyNorm(yp) + ry; nx = nx < 0 ? 0 : nx > 1 ? 1 : nx; ny = ny < 0 ? 0 : ny > 1 ? 1 : ny;
-				xySet(xp, nx); xySet(yp, ny); gXYmod = ny * 2 - 1; gEdited = 1; topDirty = botDirty = 1;
-				snprintf(gCallCtx, sizeof(gCallCtx), "CIRCLE PAD: XY %s", XY_NAMES[gXyMode]);
-				snprintf(gCallTxt, sizeof(gCallTxt), "X %d%%  Y %d%%", (int)lroundf(nx * 100), (int)lroundf(ny * 100)); gCallP = NULL; gCallT = 0.6f;
-			}
-			cx = 0; gStick = 0; gStickDX = 0;
-		}
-		else if ((smNow == SM_PAGE || smNow == SM_MACROS) && (!stickRouted || !gCtl) && gStepEd < 0) {   // (DEVICE: the pad always works the picture)   // PAGE / MACROS (a patch that routes STICK keeps bend + STICK): the pad pushes two values up and down (hold it over to keep moving)
+		if ((smNow == SM_PAGE || smNow == SM_MACROS) && !stickRouted && gStepEd < 0) {   // PAGE / MACROS (a patch that routes STICK keeps bend + STICK): the pad pushes two values up and down (hold it over to keep moving)
 			float* px_ = NULL; float* py_ = NULL;
 			if (smNow == SM_MACROS) { px_ = &gMacro[0]; py_ = &gMacro[1]; }
 			else pagePair(page, &px_, &py_);
