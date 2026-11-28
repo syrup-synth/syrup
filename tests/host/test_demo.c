@@ -1,4 +1,4 @@
-// DEMO TRACK: LOAD SESSION > DEMO TRACK puts the release video's song on the tape as four takes (demo/take1-4.sytp,
+// DEMO TRACK: LOAD SESSION > DEMO TRACK loads the song (the EXAMPLE SESSION, parts muted) and puts its four takes on the tape (demo/take1-4.sytp,
 // fetched once into sd/demo), at 156 BPM; PLAY plays them. A take saved and loaded back comes back bit for bit.
 #include "syrup_host.c"
 #include "harness.h"
@@ -10,7 +10,8 @@ static void SCRIPT(int fr) {
 		int n = 0; for (int t = 0; t < NTRK; t++) n += gTpHave[t];
 		if (n != 4) fail("DEMO TRACK should put 4 takes on the tape (%d)", n);
 		if (gBPM != 156) fail("DEMO TRACK should be at 156 BPM (%d)", gBPM);
-		if (gSeq[0].n) fail("DEMO TRACK should start a clean session (a note was left)");
+		if (!gPartMute[0] || !gPartMute[3]) fail("DEMO TRACK: the song's parts should start muted (PLAY = the takes)");
+		{ int any = 0; for (int p = 0; p < NPAT; p++) for (int i = 0; i < 64; i++) any |= gPat[p].st[i].n > 0; any |= gSeq[0].n > 0 || gSeqLen > 0; if (!any) fail("DEMO TRACK should bring the song's patterns too"); }
 		if (gTapeLen < 32728 * 90) fail("the takes should be the whole song (%d samples)", gTapeLen);
 		transportToggle();
 	}
