@@ -2597,6 +2597,24 @@ static int gNdSt = -1, gNdNt = 0, gCgSel = -1, gBsSel = -1;   // NUDGE: the note
 static int nudgeArmed(void); static int nudgeDo(int dir);   // the roll shows the CHORD or the BASS part
 static int partStripShown(void); static void drawPartStrip(void); static int partTouch(int x, int y, int press, int release, int curPage); static void drawPartNotes(int k, int full);
 static int ctNotes(int d, int q, int* out); static void drawPartLane(void); static void drawChordLane(void); static int partDegAt(int st); static int partQAt(int st); static int partHasChords(void); static void drawChordGrid(void); static int chordGridTouch(int x, int y, int press, int release); static int partRollTouch(int x, int y, int press); static void drawPartsHead(int x0, int y0, int w); static void drawPartTopInfo(void); static int partTopTouch(int x, int y); static void partListSync(void);   // gPageWant: a touch asks the main loop for another page
+#ifndef SYRUP_HOST
+// SOUND OFF THE SCREEN: the voices (envelopes, LFOs, levels, pitch, the soft layers' targets) move once a frame in the main
+// loop - and a slow frame (drawing on a 2DS) used to stall them: the choppy pads and chords. A thread above the main loop
+// on this core steps them whenever the loop is more than 20 ms late, so the sound never waits for the screen
+static volatile float gVuBend = 0; static volatile u64 gVuT = 0; static volatile int gVuQuit = 0; static volatile u32 gVuFill = 0; static Thread gVuThread = NULL;
+static void voicesUpdate(float dt, float bend);
+static void voicesStep(float bend) { u64 t = svcGetSystemTick(); float d = gVuT ? (float)(t - gVuT) / SYSCLOCK_ARM11 : 1.0f / 60; if (d > 0.1f) d = 0.1f; gVuT = t; voicesUpdate(d, bend); }
+static void vuMain(void* a) {
+	(void)a;
+	while (!gVuQuit) {
+		svcSleepThread(4000000);
+		if (!gAudioOK || !gVuT || svcGetSystemTick() - gVuT < SYSCLOCK_ARM11 / 50) continue;
+		if (LightLock_TryLock(&gVoiceLock)) continue;   // the main loop has them: it steps them itself on its way out
+		voicesStep(gVuBend); gVuFill++;
+		LightLock_Unlock(&gVoiceLock);
+	}
+}
+#endif
 static void audioTick(void* data) {
 	(void)data;
 	softRender();   // SOFT LAYERS first, and without the voice lock: a block it can't render is a gap
@@ -12813,6 +12831,9 @@ int main(void) {
 		}
 		if (!gWorker) { Handle h; static u8 probeStack[4096] __attribute__((aligned(8))); gCore2ThRc = svcCreateThread(&h, probeMain, 0, (u32*)(probeStack + sizeof(probeStack)), 0x30, 1); if (R_SUCCEEDED(gCore2ThRc)) { svcWaitSynchronization(h, 1000000000LL); svcCloseHandle(h); } }
 		if (gWorker) fxCore2Start();   // the master effects on core 2 too
+#ifndef SYRUP_HOST
+		gVuThread = threadCreate(vuMain, NULL, 0x8000, prio - 2 < 0x18 ? 0x18 : prio - 2, 0, false);   // SOUND OFF THE SCREEN: above the main loop, on its core
+#endif
 	}
 	buildSub(); buildNoise();
 
@@ -13643,7 +13664,11 @@ int main(void) {
 			cx = gMirBend; gMidiBend = 0;
 		}
 		BREATHE();
+#ifdef SYRUP_HOST
 		if (gAudioOK) voicesUpdate(dt, cx + gMidiBend);
+#else
+		gVuBend = cx + gMidiBend; if (gAudioOK) voicesStep(gVuBend);   // (the time since the voices last moved: the sound thread may have stepped them)
+#endif
 		// effect-bus self check: if notes are sending but the DSP never delivers aux audio, fall back to taps
 		if (gBusOK && !gBusFail && !gBusSeen && (masterActive() || busSend(0) > 0 || busSend(1) > 0)) {
 			int any = 0; for (int i = 0; i < NVS; i++) if (gV[i].active && gV[i].started && !gV[i].isEcho) any = 1;
@@ -13780,6 +13805,9 @@ int main(void) {
 	if (gWorker) { ASET(gWorkerQuit, 1); LightEvent_Signal(&gJobEv); threadJoin(gWorker, U64_MAX); threadFree(gWorker); }
 	// shut the audio clock down first: the sound thread starts drum / arp / sequencer notes on the second
 	// sound chip, so it must be stopped (and out of its tick) before that chip's command memory goes away
+#ifndef SYRUP_HOST
+	if (gVuThread) { gVuQuit = 1; threadJoin(gVuThread, 1000000000ULL); threadFree(gVuThread); gVuThread = NULL; }
+#endif
 	if (gAudioOK) ndspSetCallback(NULL, NULL);
 	LightLock_Lock(&gVoiceLock);   // waits for a tick that's still running
 	gAudioClock = 0; gDrums = 0;
