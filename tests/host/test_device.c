@@ -18,9 +18,15 @@ static void SCRIPT(int fr) {
 	if (fr == 22) { if (gChord == i0) fail("A should change the chord"); i0 = gLatchShow; HD = KEY_B; }
 	if (fr == 24) { if (gLatchShow == i0) fail("B should toggle LATCH"); HD = KEY_B; cut1 = gCutoff; }
 	if (fr >= 25 && fr < 40) CSY = 150;   // C-stick up: the picked knob (CUTOFF) turns up
-	if (fr == 41) { if (gCutoff <= cut1 + 0.01f) fail("C-stick should turn the picked knob (%.3f -> %.3f)", cut1, gCutoff); c0 = gCutoff; }
-	if (fr >= 42 && fr < 60) CY = 150;   // the circle pad: as in CLASSIC (default DATA: up / down is the STICK source)
-	if (fr == 58) { if (gStick < 0.3f) fail("circle pad up should be the STICK source (%.2f)", gStick); if (fabsf(gCutoff - c0) > 0.001f) fail("the circle pad shouldn't move the XY pad"); }
+	static float r0_;
+	if (fr == 41) { if (gCutoff <= cut1 + 0.01f) fail("C-stick should turn the picked knob (%.3f -> %.3f)", cut1, gCutoff); if (gStickMode != SM_XY) fail("the circle pad should default to XY PAD (%d)", gStickMode);
+		for (int m = 0; m < NMOD; m++) if (gMod[m].src == SRC_STICK) gMod[m].src = SRC_OFF; gXyMode = 3; gCutoff = 0.4f; gRes = 0.2f; c0 = gCutoff; r0_ = gRes; }
+	if (fr >= 42 && fr < 52) { CX = 150; CY = 150; }   // XY PAD: pushes the dot (CUTOFF + RES)
+	if (fr == 54) { if (gCutoff <= c0 + 0.01f || gRes <= r0_ + 0.01f) fail("XY PAD: the circle pad should push the XY pad (cut %.3f -> %.3f, res %.3f -> %.3f)", c0, gCutoff, r0_, gRes); c0 = gCutoff; }
+	if (fr == 58) { if (fabsf(gCutoff - c0) > 0.002f) fail("XY PAD: let go, the dot stays (%.3f -> %.3f)", c0, gCutoff); gStickMode = SM_XYS; c0 = gCutoff; }
+	if (fr >= 59 && fr < 63) CX = 150;   // XY SPRING: follows the pad, back when let go
+	if (fr == 62) { if (gCutoff <= c0 + 0.05f) fail("XY SPRING: the dot should follow the pad (%.3f -> %.3f)", c0, gCutoff); }
+	if (fr == 66) { if (fabsf(gCutoff - c0) > 0.002f) fail("XY SPRING: let go, the dot goes back (%.3f -> %.3f)", c0, gCutoff); gStickMode = SM_XY; }
 	if (fr == 67) shotTop("shots/device_top.ppm");
 	if (fr == 68) HD = KEY_L;   // FILT -> OSC
 	if (fr == 70) { if (gCurPage != 1) fail("L from FILT should be OSC (%d)", gCurPage); HD = KEY_L; }
@@ -46,6 +52,11 @@ static void SCRIPT(int fr) {
 	if (fr == 240) { int any = 0; for (int i = 0; i < 16; i++) any |= gSeq[i].n > 0; if (any) fail("B on the piano roll should take the note away"); if (gLatchShow) fail("B on the roll shouldn't latch"); gPageWant = 1; }
 	if (fr == 242) { int st, ix; if (findPreset("STICK THEREMIN", &st, &ix)) presetLoad(st, ix); c0 = gCutoff; }
 	if (fr >= 246 && fr < 256) CY = 150;   // a patch that routes STICK gets the circle pad as STICK (not the XY pad)
-	if (fr == 254) { if (gStick < 0.3f) fail("STICK THEREMIN: the circle pad should be its STICK in DEVICE (%.2f)", gStick); done = 1; }
+	if (fr == 254) { if (gStick < 0.3f) fail("STICK THEREMIN: the circle pad should be its STICK in DEVICE (%.2f)", gStick); transportToggle(); }
+	static int sm0;
+	if (fr == 256) { sm0 = gStickMode; HD = KEY_SELECT; }
+	if (fr == 257) HD = KEY_SELECT | KEY_DUP;   // SELECT + UP while it plays: the circle pad's next mode
+	if (fr == 258) HD = KEY_SELECT;
+	if (fr == 260) { if (gStickMode != (sm0 + 1) % NSM) fail("SELECT + UP should step the circle pad mode (%d -> %d)", sm0, gStickMode); if (gSeqMode != 1) fail("SELECT + UP shouldn't stop playback"); done = 1; }
 }
-int main(void) { TEST_DEVICE = 1; mkdir("sd", 0777); mkdir("shots", 0777); remove("sd/settings.bin"); loadFont(); FRMAX = 258; app_main(); if (!done) fail("didn't run"); printf("device: the DEVICE controls\n"); return gFails ? 1 : 0; }
+int main(void) { TEST_DEVICE = 1; mkdir("sd", 0777); mkdir("shots", 0777); remove("sd/settings.bin"); loadFont(); FRMAX = 262; app_main(); if (!done) fail("didn't run"); printf("device: the DEVICE controls\n"); return gFails ? 1 : 0; }

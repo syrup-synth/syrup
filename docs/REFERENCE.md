@@ -161,7 +161,7 @@ To save, press A twice on the PATCH page: the first press shows which USER slot 
 | Y | REC (with the count-in) |
 | A | CHORD (steps through the chord types). On the piano roll / drum grid: place a note / hit (hold: its editor) |
 | B | LATCH. On the piano roll / drum grid: take the note / hit away (hold on a drum: its SOUND) |
-| Circle pad | As in CLASSIC: HARDWARE > CIRCLE PAD sets it (DATA by default: left / right edits the picked setting, up / down is the STICK mod source; BEND: pitch bend + STICK). On the piano roll and the drum grid it's the edit cursor |
+| Circle pad | HARDWARE > CIRCLE PAD, or SELECT + UP any time (playing, recording): XY PAD (the default: pushes the XY pad's dot, it stays), XY SPRING (the dot follows the pad and goes back when you let go), PAGE (the page's two main values), DATA, BEND + MOD, MACROS. A patch that uses STICK (STICK THEREMIN, TALK BOX) gets bend + STICK. On the piano roll and the drum grid it's the edit cursor |
 | C-stick (New 3DS) | Turns the knob that's picked (up / right = more); tap a slider on the bottom screen to pick it |
 | L / R | Through every part of the device: PATCH, OSC, FILT, MOD, VOICE, FX, SEQ, PADS, MIX, VIS, HW |
 | Top left | The transport: STP / RUN / REC. Top right: PATCH, VIS or HW when you're there |
@@ -179,7 +179,7 @@ CLASSIC (the old layout) is below.
 | Bottom top row | Jump chips: OSC, FILT, MOD, VOICE, FX, SEQ, PADS. One tap goes to that part of the synth; tapping the lit chip again steps inside it (OSC A, OSC B, SUB+NOISE; ENV 1 / ENV 2 / FILTER; the MOD views). PADS lays the chord pads over any page |
 | PERF row + key column | Above the keys: SCALE (scale on/off, back to the last one), PLAY/STOP (sequencer), PANIC. Left of the keys: OCT+, OCT-, CHRD (chord on/off, last chord), LTCH (latch). A touch that starts on the XY pad's bottom edge never moves the pad |
 | XY pad mode button | Top right of the XY pad steps through WT + CUTOFF, MACRO 1+2, MACRO 3+4, CUTOFF + RES, WT A + WT B, FX MIX + COLOR and PERF (four sliders: CUTOFF, RES, WT POS, FX MIX over a smaller pad that plays macros 1 + 2). When modulation is moving an axis, a ghost square shows where the sound really is, with a line back to your finger |
-| Circle pad | HARDWARE > CIRCLE PAD: DATA (default): left / right edits the value selected on the top screen (push further for faster), up / down stays the STICK mod source. BEND + MOD: pitch bend and STICK. PAGE: pushes two values on the page you're on. MACROS: M1 / M2 |
+| Circle pad | HARDWARE > CIRCLE PAD (or SELECT + UP): XY PAD (default), XY SPRING, PAGE: an XY pad on the page you're on. DATA: left / right edits the value selected on the top screen (push further for faster), up / down stays the STICK mod source. BEND + MOD: pitch bend and STICK. PAGE: pushes two values on the page you're on. MACROS: M1 / M2 |
 | Keyboard touch | Black keys answer 3 px past their drawn edges (the resistive screen and stylus wander); a key you hold keeps the note until the stylus is 3 px into the next key, so a slip doesn't retrigger |
 | Matrix slot | Tap a box to pick, hold it to clear the slot |
 | VISUALIZER / HARDWARE pages | Bottom screen: a tile per visualizer mode (plus OVERLAY); live sensor meters and the camera picture |

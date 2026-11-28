@@ -3239,8 +3239,8 @@ static void l_bender(SPatch* p) { p->master = 0.55f; OA.table = T_DIGITAL; OA.po
 // ---- PAD
 static void p_felt(SPatch* p) { p->master = 0.65f; OA.table = T_PWM; OA.uni = 4; OA.detune = 16; OA.width = 1; LFO(0, LS_TRI, 0, 0.3f); MOD(2, SRC_LFO1, DST_APOS, 0.35f);
 	ENV1(0.6f, 0, 1.0f, 0.9f, 1.4f); OUTF(OF_CREAMY, 0.66f, 0.15f, 0, 0); MFX(FX_DIM, 0.3f, 0.6f, 0.5f); REVB(0.3f, RV_HALL); }
-static void p_glass(SPatch* p) { p->master = 0.65f; OA.table = T_HARMONIX; OA.pos = 0.55f; OA.uni = 3; OA.detune = 9; OB.on = 1; OB.table = T_DIGITAL; OB.oct = 1; OB.level = 0.2f;
-	LFO(0, LS_SINE, 0, 0.07f); MOD(2, SRC_LFO1, DST_APOS, 0.4f); ENV1(0.4f, 0, 1.0f, 0.9f, 2.2f); REVB(0.35f, RV_PLATE); p->shimmer = 1; p->eqHigh = 1.5f; }
+static void p_glass(SPatch* p) { p->master = 0.7f; OA.table = T_HARMONIX; OA.pos = 0.55f; OA.uni = 2; OA.detune = 11; OB.on = 1; OB.table = T_DIGITAL; OB.oct = 1; OB.level = 0.2f;   // (2 layers + a 1.5 s tail: 3 layers + OSC B + 2.2 s crackled on the 2DS with chords)
+	LFO(0, LS_SINE, 0, 0.07f); MOD(2, SRC_LFO1, DST_APOS, 0.4f); ENV1(0.4f, 0, 1.0f, 0.9f, 1.5f); REVB(0.4f, RV_PLATE); p->shimmer = 1; p->eqHigh = 1.5f; }
 static void p_vowel(SPatch* p) { p->master = 0.7f; OA.table = T_VOWELS; OA.uni = 3; OA.detune = 12; LFO(0, LS_TRI, 0, 0.06f); MOD(2, SRC_LFO1, DST_APOS, 0.8f);
 	ENV1(0.7f, 0, 1.0f, 0.9f, 1.8f); MFX(FX_CHORUS, 0.25f, 0.5f, 0.35f); REVB(0.35f, RV_HALL); }
 static void p_combweather(SPatch* p) { p->master = 0.7f; OA.table = T_HARMONIX; OA.uni = 3; OA.detune = 10; p->noiseType = 1; p->noiseLevel = 0.08f; ENV1(0.8f, 0, 1.0f, 1.0f, 2.0f);
@@ -4142,13 +4142,13 @@ static Param P_FILT[] = {
 static int gXyMode = 0;
 #define NXY 8
 static const char* XY_NAMES[NXY] = {"WT + CUTOFF", "MACRO 1+2", "MACRO 3+4", "CUTOFF + RES", "WT A + WT B", "FX MIX + COLOR", "PERF", "PAGE"};   // PAGE: two values of the page you're on
-static int gStickMode = 0;
-enum { SM_DATA, SM_BEND, SM_PAGE, SM_MACROS };
-static const char* STICK_NAMES[4] = {"DATA", "BEND + MOD", "PAGE", "MACROS"};
+static int gStickMode = 4;   // (SM_XY) the circle pad: by default it drives the XY pad (whatever XY PAD moves; a patch that routes STICK keeps bend + STICK)
+enum { SM_DATA, SM_BEND, SM_PAGE, SM_MACROS, SM_XY, SM_XYS, NSM };
+static const char* STICK_NAMES[NSM] = {"DATA", "BEND + MOD", "PAGE", "MACROS", "XY PAD", "XY SPRING"};   // XY PAD: pushes the XY dot, it stays; XY SPRING: the dot follows the pad and goes back when you let go
 // CONTROLS: DEVICE = the 3DS as a hardware synth. The bottom screen is the panel, the top screen the unit's display:
 // the top's left half only shows (the picture, what's loaded), its right half is what you change: the D-pad works that list
 // (up / down pick, left / right change). X PLAY / STOP, Y REC, A CHORD, B LATCH. The circle pad does what HARDWARE > CIRCLE PAD
-// says, as in CLASSIC (bend + STICK by default; on the piano roll / drum grid it's the edit cursor, A places, B takes away), the C-stick turns the knob that's picked, L / R step through the tabs (the top's tabs sit right over the bottom's).
+// says (XY PAD by default: it drives the XY pad; on the piano roll / drum grid it's the edit cursor, A places, B takes away), the C-stick turns the knob that's picked, L / R step through the tabs (the top's tabs sit right over the bottom's).
 // CLASSIC: the D-pad edits, X / Y change page, A chord, B latch.
 static int gCtl = 0; static const char* CTL_NAMES[2] = {"DEVICE", "CLASSIC"};
 static int stickModeNow(void) { return gStickMode; }   // the circle pad: HARDWARE > CIRCLE PAD, in both layouts
@@ -4242,7 +4242,7 @@ static Param P_MASTER[] = {
 	PF("OTT", &gOtt, 0, 1, 0.02f, "%", 0), PF("PUMP", &gPump, 0, 1, 0.02f, "%", 0), PE("PUMP RATE", &gPumpRate, 4, PUMP_NAMES, 0),
 	PE("LOFI BITS", &gLofiBits, 6, BITS_NAMES, 0), PF("LOFI RATE", &gLofiRate, 0, 1, 0.02f, "%", 0),
 	PF("3D ORBIT", &gOrbit, 0, 1, 0.02f, "%", 0), PF("ORBIT RATE", &gOrbitRate, 0, 2, 0.02f, "HZ", 0),
-	PE("CONTROLS", &gCtl, 2, CTL_NAMES, D_THEME), PE("CIRCLE PAD", &gStickMode, 4, STICK_NAMES, 0), PE("NEW 3DS CONTROLS", &gN3, 2, ONOFF, 0), PE("XY GLIDE", &gXyGlide, 4, XYG_NAMES, 0), PE("SPEAKER EQ", &gSpkEq, 3, SPK_NAMES, 0), PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("LAYERS", &gSoftMode, 2, SOFTMODE_NAMES, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
+	PE("CONTROLS", &gCtl, 2, CTL_NAMES, D_THEME), PE("CIRCLE PAD", &gStickMode, NSM, STICK_NAMES, 0), PE("NEW 3DS CONTROLS", &gN3, 2, ONOFF, 0), PE("XY GLIDE", &gXyGlide, 4, XYG_NAMES, 0), PE("SPEAKER EQ", &gSpkEq, 3, SPK_NAMES, 0), PE("FX ON CORE 2", &gFxCore2, 2, ONOFF2, 0), PE("LAYERS", &gSoftMode, 2, SOFTMODE_NAMES, 0), PE("DSP GRIT", &gQGrit, 3, GRIT_NAMES, 0), PF("FILTER SCREAM", &gQScream, 0, 1, 0.02f, "%", 0), PF("MIX OVERDRIVE", &gQMixDrive, 0, 1, 0.02f, "%", 0),
 	PEND};
 static float gDrMutAmt = 0.25f; static int gMutFlash = 0;   // MUTATE: how much one tap of MUT changes the beat
 static Param P_DRUMS[] = {
@@ -4427,7 +4427,7 @@ static void splashDraw(void) {
 // TIPS on the bottom screen while Syrup loads (and on the start screen): one at random each time
 static const char* TIPS[] = {
 	"HOLD SELECT AND PUSH THE CIRCLE PAD: EVERY PAGE, THE TAPE AND THE TRANSPORT ARE ONE FLICK AWAY.",
-	"TAP SELECT TO PLAY / STOP. SELECT + L UNDOES, SELECT + R REDOES. SELECT + DOWN IS PANIC.",
+	"TAP SELECT TO PLAY / STOP. SELECT + L UNDOES, SELECT + R REDOES. SELECT + DOWN IS PANIC. SELECT + UP: CIRCLE PAD MODE.",
 	"HOLD A DRUM STEP FOR RATCHETS AND CONDITIONS LIKE 1:2 OR FILL.",
 	"HOLD A DRUM'S NAME TO SHAPE ITS SOUND: TUNE, PITCH ENVELOPE, DECAY, TONE, DRIVE, PAN.",
 	"BEAT IN THE DRUM GRID PASTES A WHOLE RHYTHM: CUMBIA, BOSSA, BOOM BAP, WALTZ AND 26 MORE.",
@@ -4873,7 +4873,7 @@ static const char* paramHelp(const char* n) {
 		{"LINK", "SYNC TEMPO WITH ANOTHER SYRUP"},
 		{"MACRO 1", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"}, {"MACRO 2", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"},
 		{"MACRO 3", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"}, {"MACRO 4", "MACRO: USE AS A MOD SOURCE, OR ON THE XY PAD"},
-		{"XY PAD", "WHAT THE TOUCH PAD CONTROLS"}, {"CIRCLE PAD", "DATA: LEFT/RIGHT EDITS THE SELECTED VALUE"}, {"SPEAKER EQ", "AUTO: ON WHEN THE HEADPHONES ARE OUT"},
+		{"XY PAD", "WHAT THE TOUCH PAD CONTROLS"}, {"CIRCLE PAD", "XY PAD, XY SPRING, PAGE, DATA, BEND, MACROS"}, {"SPEAKER EQ", "AUTO: ON WHEN THE HEADPHONES ARE OUT"},
 		{"5 SOURCE", "MOD SLOT 5: WHAT MOVES IT"}, {"5 DEST", "MOD SLOT 5: WHAT IT MOVES"}, {"5 AMOUNT", "MOD SLOT 5: HOW MUCH"}, {"6 SOURCE", "MOD SLOT 6: WHAT MOVES IT"}, {"6 DEST", "MOD SLOT 6: WHAT IT MOVES"}, {"6 AMOUNT", "MOD SLOT 6: HOW MUCH"}, {"7 SOURCE", "MOD SLOT 7: WHAT MOVES IT"}, {"7 DEST", "MOD SLOT 7: WHAT IT MOVES"}, {"7 AMOUNT", "MOD SLOT 7: HOW MUCH"}, {"8 SOURCE", "MOD SLOT 8: WHAT MOVES IT"}, {"8 DEST", "MOD SLOT 8: WHAT IT MOVES"}, {"8 AMOUNT", "MOD SLOT 8: HOW MUCH"}, {"1 CURVE", "MOD SLOT 1: RESPONSE CURVE"}, {"2 CURVE", "MOD SLOT 2: RESPONSE CURVE"}, {"3 CURVE", "MOD SLOT 3: RESPONSE CURVE"}, {"4 CURVE", "MOD SLOT 4: RESPONSE CURVE"}, {"5 CURVE", "MOD SLOT 5: RESPONSE CURVE"}, {"6 CURVE", "MOD SLOT 6: RESPONSE CURVE"}, {"7 CURVE", "MOD SLOT 7: RESPONSE CURVE"}, {"8 CURVE", "MOD SLOT 8: RESPONSE CURVE"}, 
 		{"MASTER FX", "WHOLE SOUND THROUGH THE EFFECT CHAIN"}, {"MOD FX", "CHORUS, FLANGER, PHASER, COMB, FORMANT"}, {"MOD RATE", "MOD FX SPEED"},
 		{"MOD DEPTH", "MOD FX DEPTH / FEEDBACK"}, {"MOD MIX", "MOD FX AMOUNT"}, {"FX COLOR", "COMB PITCH / FORMANT VOWEL (MOD DEST)"},
@@ -4916,12 +4916,13 @@ static int paramDst(const void* p) {   // the matrix destination that moves this
 	return -1;
 }
 static const char* SET_PATH = "sdmc:/3ds/syrup/settings.bin";
-static void settingsSave(int page) { FILE* f = safeOpen(SET_PATH); if (!f) return; int d[18] = {0x53455432, page, gStickMode, gSpkEq, gBright, gSeqRate, gTheme, gXyGlide, gN3, gChIn[0], gChIn[1], gChIn[2], gChIn[3], gChOut[0], gChOut[1], gChOut[2], gChOut[3], gCtl}; safeClose(f, SET_PATH, fwrite(d, sizeof(d), 1, f) == 1); }
+static void settingsSave(int page) { FILE* f = safeOpen(SET_PATH); if (!f) return; int d[18] = {0x53455433, page, gStickMode, gSpkEq, gBright, gSeqRate, gTheme, gXyGlide, gN3, gChIn[0], gChIn[1], gChIn[2], gChIn[3], gChOut[0], gChOut[1], gChOut[2], gChOut[3], gCtl}; safeClose(f, SET_PATH, fwrite(d, sizeof(d), 1, f) == 1); }
 static int settingsLoad(void) {   // returns the page you were on last time
 	FILE* f = safeRead(SET_PATH); int d[4] = {0}, pg = 0; if (!f) return pg;   // first run: the browser
-	if (fread(d, sizeof(d), 1, f) == 1 && (d[0] == 0x53455431 || d[0] == 0x53455432)) {
+	if (fread(d, sizeof(d), 1, f) == 1 && (d[0] == 0x53455431 || d[0] == 0x53455432 || d[0] == 0x53455433)) {
 		if (d[1] >= 0 && d[1] < NPAGES && d[1] != 8) pg = d[1]; gSpkEq = d[3] >= 0 && d[3] < 3 ? d[3] : 2;
-		gStickMode = d[0] == 0x53455432 && d[2] >= 0 && d[2] < 4 ? d[2] : SM_DATA;   // older settings: the new default, DATA
+		gStickMode = d[0] >= 0x53455432 && d[2] >= 0 && d[2] < NSM ? d[2] : SM_XY;   // older settings: XY PAD
+		if (d[0] == 0x53455432 && gStickMode == SM_DATA) gStickMode = SM_XY;   // DATA was the default until now: it becomes XY PAD (SET3 keeps what you pick)
 		int b = 0; if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 6) gBright = b;   // older settings: no brightness, SYSTEM
 		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < 3) gSeqRate = b;
 		if (fread(&b, sizeof(b), 1, f) == 1 && b >= 0 && b < NTHEMES) gTheme = b == 16 || b == 18 || b == 19 ? TH_SYRUP : b;   // the theme you picked stays picked (the old default, BBS: the new look)
@@ -5219,7 +5220,7 @@ static void drawHelp(void) {   // L / R flip the slides; any other button closes
 		 "  Y ............ REC",
 		 "  A ............ CHORD   (ROLL / DRUMS: PLACE)",
 		 "  B ............ LATCH   (ROLL / DRUMS: DELETE)",
-		 "  CIRCLE PAD ... BEND + STICK (ROLL/DRUMS: CURSOR)",
+		 "  CIRCLE PAD ... XY PAD   (ROLL / DRUMS: CURSOR)",
 		 "  C-STICK ...... TURNS THE PICKED SLIDER",
 		 "  L / R ........ PATCH, OSC ... MIX, VIS, HW",
 		 "  START ........ MENU (SAVE, SESSIONS, QUIT)",
@@ -5227,6 +5228,7 @@ static void drawHelp(void) {   // L / R flip the slides; any other button closes
 		 "  TAP .......... PLAY / STOP",
 		 "  + L / + R .... UNDO / REDO",
 		 "  + DOWN ....... PANIC: EVERYTHING STOPS",
+		 "  + UP ......... CIRCLE PAD MODE (XY, PAGE...)",
 		 "OLD BUTTONS: HARDWARE > CONTROLS > CLASSIC", NULL};
 	static const char* S[NHELP][18] = {
 		{"PAGES (CLASSIC BUTTONS)",
@@ -5242,7 +5244,8 @@ static void drawHelp(void) {   // L / R flip the slides; any other button closes
 		 "SELECT",
 		 "  TAP .......... PLAY / STOP (SEQ + DRUMS)",
 		 "  + L / + R .... UNDO / REDO",
-		 "  + DOWN ....... PANIC: EVERYTHING STOPS", NULL},
+		 "  + DOWN ....... PANIC: EVERYTHING STOPS",
+		 "  + UP ......... CIRCLE PAD MODE", NULL},
 		{"BOTTOM SCREEN",
 		 "  TABS ......... OSC FILT MOD VOICE FX SEQ PADS",
 		 "                 (TAP AGAIN FOR THE NEXT VIEW)",
@@ -12950,6 +12953,7 @@ int main(void) {
 				if (kDown & KEY_L) { selCombo = 1; int r = histStep(1); say(r == 1 ? "UNDO: PATTERN" : r == 2 ? "UNDO: PATCH EDIT" : r == 3 ? "UNDO: DRUMS" : "NOTHING TO UNDO"); topDirty = botDirty = 1; }
 				if (kDown & KEY_R) { selCombo = 1; int r = histStep(0); say(r == 1 ? "REDO: PATTERN" : r == 2 ? "REDO: PATCH EDIT" : r == 3 ? "REDO: DRUMS" : "NOTHING TO REDO"); topDirty = botDirty = 1; }
 				if (kDown & KEY_DDOWN) { selCombo = 1; startAct = 2; }   // PANIC, below
+				if (kDown & KEY_DUP) { selCombo = 1; gStickMode = (gStickMode + 1) % NSM; char m[40]; snprintf(m, sizeof m, "CIRCLE PAD: %s", STICK_NAMES[gStickMode]); say(m); topDirty = botDirty = 1; }   // SELECT + UP: the circle pad's next mode (any time: playing, recording)
 				if ((kDown & KEY_B) && gQuickBar < 0) { selCombo = 1; liveRecToggle(); kDown &= ~KEY_B; topDirty = botDirty = 1; }   // SELECT + B: RECORD
 				if ((kDown & (KEY_DLEFT | KEY_DRIGHT)) && page == 7 && gQuickBar < 0 && nudgeArmed()) { nudgeDo(kDown & KEY_DLEFT ? -1 : 1); topDirty = botDirty = 1; }   // SELECT + < >: NUDGE
 				if (kDown & (KEY_DUP | KEY_DLEFT | KEY_DRIGHT)) selCombo = 1;
@@ -13337,7 +13341,25 @@ int main(void) {
 		int smNow = stickModeNow();
 		if (smNow == SM_DATA || gStepEd >= 0) { gStickDX = fabsf(sx) > 0.12f ? sx : 0; cx = 0; }   // DATA (and the step editor, any mode): X edits the selected value (no bend), Y stays the STICK source
 		else gStickDX = 0;
-		if ((smNow == SM_PAGE || smNow == SM_MACROS) && !stickRouted && gStepEd < 0) {   // PAGE / MACROS (a patch that routes STICK keeps bend + STICK): the pad pushes two values up and down (hold it over to keep moving)
+		static int xyCap = 0; static float xyBX, xyBY;   // XY SPRING: where the dot was when the pad left the middle
+		if ((smNow == SM_XY || smNow == SM_XYS) && !stickRouted && gStepEd < 0) {   // XY PAD / XY SPRING: the circle pad drives the XY pad
+			float* xp; float* yp; int xd, yd; xyAxes(&xp, &yp, &xd, &yd);
+			float dx_ = fabsf(sx) > 0.12f ? sx : 0, dy_ = fabsf(sy) > 0.12f ? sy : 0;
+			if (xp && yp) {
+				float nx = -1, ny = -1;
+				if (smNow == SM_XY) { if (dx_ != 0 || dy_ != 0) { nx = xyNorm(xp) + dx_ * fabsf(dx_) * 0.9f * dt; ny = xyNorm(yp) + dy_ * fabsf(dy_) * 0.9f * dt; } }   // pushes it; let go, it stays
+				else if (rx != 0 || ry != 0) { if (!xyCap) { xyCap = 1; xyBX = xyNorm(xp); xyBY = xyNorm(yp); } nx = xyBX + sx * 0.5f; ny = xyBY + sy * 0.5f; }   // follows the pad
+				else if (xyCap) { xyCap = 0; nx = xyBX; ny = xyBY; }   // let go: back where it was
+				if (nx >= 0) {
+					gXyTx = gXyTy = -1; nx = nx < 0 ? 0 : nx > 1 ? 1 : nx; ny = ny < 0 ? 0 : ny > 1 ? 1 : ny;
+					xySet(xp, nx); xySet(yp, ny); gXYmod = ny * 2 - 1; gEdited = 1; topDirty = botDirty = 1;
+					snprintf(gCallCtx, sizeof(gCallCtx), "CIRCLE PAD: XY %s", XY_NAMES[gXyMode]);
+					snprintf(gCallTxt, sizeof(gCallTxt), "X %d%%  Y %d%%", (int)lroundf(nx * 100), (int)lroundf(ny * 100)); gCallP = NULL; gCallT = 0.6f;
+				}
+			}
+			cx = 0; gStick = 0;
+		}
+		else if ((smNow == SM_PAGE || smNow == SM_MACROS) && !stickRouted && gStepEd < 0) {   // PAGE / MACROS (a patch that routes STICK keeps bend + STICK): the pad pushes two values up and down (hold it over to keep moving)
 			float* px_ = NULL; float* py_ = NULL;
 			if (smNow == SM_MACROS) { px_ = &gMacro[0]; py_ = &gMacro[1]; }
 			else pagePair(page, &px_, &py_);
